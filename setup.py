@@ -13,7 +13,7 @@ except Exception as error:
 
 INSTALL_REQUIRES = [
     "optimum",
-    "transformers",
+    "transformers >= 4.15.0, < 4.17.0",
     "datasets",
     "torch",
     "sentencepiece",
