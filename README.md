@@ -86,3 +86,6 @@ loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrain
     "echarlaix/distilbert-sst2-inc-dynamic-quantization-magnitude-pruning-0.1"
 )
 ```
+
+Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/update-readme/examples) directory for more sophisticated usage.
+
