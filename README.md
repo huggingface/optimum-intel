@@ -35,6 +35,7 @@ Here is an example on how to combine magnitude pruning with dynamic quantization
 Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in this example.
 
 To apply our pruning methodology, we need to create an instance of IncTrainer, which is very similar to the 🤗 Transformers [Trainer](https://huggingface.co/docs/transformers/main_classes/trainer).
+We will fine-tune our model for 3 epochs while applying pruning.
 
 ```diff
 # Initialize our IncTrainer
@@ -44,7 +45,7 @@ To apply our pruning methodology, we need to create an instance of IncTrainer, w
 -trainer = Trainer(
 +trainer = IncTrainer(
     model=model,
-    args=TrainingArguments(save_dir, num_train_epochs=3.0),
+    args=TrainingArguments(output_dir, num_train_epochs=3.0),
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
     compute_metrics=compute_metrics,
@@ -59,7 +60,7 @@ To apply our quantization and pruning methodologies, we first need to create the
 from optimum.intel.neural_compressor import IncOptimizer, IncPruner, IncQuantizer
 from optimum.intel.neural_compressor.configuration import IncPruningConfig, IncQuantizationConfig
 
-# The targeted sparsity is chosen to be 10%
+# The targeted sparsity is set to 10%
 target_sparsity = 0.1
 config_path = "echarlaix/distilbert-sst2-inc-dynamic-quantization-magnitude-pruning-0.1"
 # Load the quantization configuration detailing the quantization we wish to apply
