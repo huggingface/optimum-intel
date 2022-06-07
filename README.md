@@ -88,5 +88,5 @@ loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrain
 )
 ```
 
-Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/update-readme/examples) directory for more sophisticated usage.
+Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
 
