@@ -38,10 +38,10 @@ To apply our pruning methodology, we need to create an instance of IncTrainer, w
 We will fine-tune our model for 3 epochs while applying pruning.
 
 ```diff
-# Initialize our IncTrainer
 -from transformers import Trainer
 +from optimum.intel.neural_compressor import IncTrainer
 
+# Initialize our IncTrainer
 -trainer = Trainer(
 +trainer = IncTrainer(
     model=model,
