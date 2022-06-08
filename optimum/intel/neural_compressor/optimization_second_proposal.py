@@ -18,11 +18,12 @@ from typing import Optional, Union
 import torch
 from transformers import AutoModel, PreTrainedModel
 
+import neural_compressor
 from neural_compressor.experimental import Pruning, Quantization, common
 from neural_compressor.experimental.scheduler import Scheduler
 
-from .pruning import IncPruner
-from .quantization import IncQuantizer
+from .quantization import IncQuantizationMode
+from .utils import IncDataLoader, _cfgs_to_fx_cfgs
 
 
 logger = logging.getLogger(__name__)
@@ -35,27 +36,31 @@ class IncOptimizer:
     def __init__(
         self,
         model: Union[PreTrainedModel, torch.nn.Module],
-        quantizer: Optional[IncQuantizer] = None,
-        pruner: Optional[IncPruner] = None,
+        eval_func=None,
+        train_func=None,
+        calib_dataloader=None,
+        quantization_config=None,
+        pruning_config=None,
     ):
-        """
-        Args:
-            model (:obj:`Union[PreTrainedModel, torch.nn.Module]`):
-                Model to quantize and/or prune.
-            quantizer (:obj:`IncQuantizer`, `optional`):
-                Quantization object which handles the quantization process.
-            pruner (:obj:`IncPruner`, `optional`):
-                Pruning object which handles the pruning process.
-        """
+        self.eval_func = eval_func
+        self.train_func = train_func
+        self.calib_dataloader = calib_dataloader
+        self.quantization_config = quantization_config
+        self.pruning_config = pruning_config
         self.model = model
+        self.pruner = None
+
         self.scheduler = Scheduler()
+
+        if quantization_config is not None:
+            quantizer = self.get_quantizer()
+            self.scheduler.append(quantizer)
+
+        if pruning_config is not None:
+            self.pruner = self.get_pruner()
+            self.scheduler.append(self.pruner)
+
         self.scheduler.model = common.Model(self.model)
-
-        if pruner is not None and isinstance(pruner.pruner, Pruning):
-            self.scheduler.append(pruner.pruner)
-
-        if quantizer is not None and isinstance(quantizer.quantizer, Quantization):
-            self.scheduler.append(quantizer.quantizer)
 
     def fit(self):
         # If no optimization, the original model is returned
@@ -64,15 +69,48 @@ class IncOptimizer:
         opt_model = self.scheduler()
         return opt_model
 
+    def get_quantizer(self):
+        approach = IncQuantizationMode(self.quantization_config.usr_cfg.quantization.approach)
+
+        if self.quantization_config.usr_cfg.model.framework == "pytorch_fx":
+            neural_compressor.adaptor.pytorch._cfgs_to_fx_cfgs = _cfgs_to_fx_cfgs
+
+        quantizer = Quantization(self.quantization_config.config)
+
+        if self.eval_func is None:
+            raise ValueError("eval_func must be provided for quantization.")
+
+        quantizer.eval_func = self.eval_func
+
+        if approach == IncQuantizationMode.STATIC:
+            if self.calib_dataloader is None:
+                raise ValueError("calib_dataloader must be provided for static quantization.")
+            quantizer._calib_dataloader = IncDataLoader.from_pytorch_dataloader(self.calib_dataloader)
+
+        if approach == IncQuantizationMode.AWARE_TRAINING:
+            if self.train_func is None:
+                raise ValueError("train_func must be provided for quantization aware training.")
+            quantizer.q_func = self.train_func
+
+        return quantizer
+
+    def get_pruner(self):
+        if self.eval_func is None:
+            raise ValueError("eval_func must be provided for pruning.")
+
+        if self.train_func is None:
+            raise ValueError("train_func must be provided for pruning.")
+
+        pruner = Pruning(self.pruning_config.config)
+        pruner.pruning_func = self.train_func
+        pruner.eval_func = self.eval_func
+
+        return pruner
+
     @classmethod
-    def from_pretrained(
-        cls,
-        model_name_or_path: str,
-        quantizer: Optional[IncQuantizer] = None,
-        pruner: Optional[IncPruner] = None,
-    ):
+    def from_pretrained(cls, model_name_or_path: str, kwargs):
         model = cls.TRANSFORMERS_AUTO_CLASS.from_pretrained(model_name_or_path)
-        return cls(model, quantizer=quantizer, pruner=pruner)
+        return cls(model, **kwargs)
 
 
 class IncOptimizerForQuestionAnswering(IncOptimizer):

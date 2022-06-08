@@ -52,8 +52,6 @@ SUPPORTED_QUANT_MODE = set([approach.value for approach in IncQuantizationMode])
 
 class IncQuantizer:
 
-    TRANSFORMERS_AUTO_CLASS: ClassVar
-
     def __init__(
         self,
         model: Union[PreTrainedModel, torch.nn.Module],
@@ -91,206 +89,32 @@ class IncQuantizer:
         self.approach = IncQuantizationMode(self.config.usr_cfg.quantization.approach)
         self.model = model
         self.tokenizer = tokenizer
-        self._eval_func = eval_func
-        self._train_func = train_func
+        self.eval_func = eval_func
+        self.train_func = train_func
         if calib_dataloader is not None:
             calib_dataloader = IncDataLoader.from_pytorch_dataloader(calib_dataloader)
-        self._calib_dataloader = calib_dataloader
+        self.calib_dataloader = calib_dataloader
 
-    @property
-    def eval_func(self):
-        return self._eval_func
-
-    @property
-    def train_func(self):
-        return self._train_func
-
-    @property
-    def calib_dataloader(self):
-        return self._calib_dataloader
-
-    @eval_func.setter
-    def eval_func(self, func: Callable):
-        self._eval_func = func
-
-    @train_func.setter
-    def train_func(self, func: Callable):
-        self._train_func = func
-
-    @calib_dataloader.setter
-    def calib_dataloader(self, dataloader: DataLoader):
-        self._calib_dataloader = IncDataLoader.from_pytorch_dataloader(dataloader)
-
-    def init_quantizer(self):
         if self.config.usr_cfg.model.framework == "pytorch_fx":
-
-            # TODO : Change this to apply quantization on other part of the model other that Linears
             neural_compressor.adaptor.pytorch._cfgs_to_fx_cfgs = _cfgs_to_fx_cfgs
 
-        quantizer = Quantization(self.config)
-        quantizer.model = common.Model(self.model)
+        self.quantizer = Quantization(self.config)
+        self.quantizer.model = common.Model(self.model)
 
-        if self._eval_func is None:
+        if self.eval_func is None:
             raise ValueError("eval_func must be provided for quantization.")
 
-        quantizer.eval_func = self._eval_func
-        return quantizer
+        self.quantizer.eval_func = self.eval_func
 
-    def fit_dynamic(self):
-        quantizer = self.init_quantizer()
-        model = quantizer()
-        return model
-
-    def fit_static(self):
-        quantizer = self.init_quantizer()
-
-        if self._calib_dataloader is None:
-            raise ValueError("calib_dataloader must be provided for post-training quantization.")
-
-        quantizer.calib_dataloader = self._calib_dataloader
-        model = quantizer()
-        return model
-
-    def fit_aware_training(self):
-        quantizer = self.init_quantizer()
-
-        if self._train_func is None:
-            raise ValueError("train_func must be provided for quantization aware training.")
-
-        quantizer.q_func = self._train_func
-
-        model = quantizer()
-        return model
-
-    def fit(self):
-        quantizer = self.init_quantizer()
         if self.approach == IncQuantizationMode.STATIC:
-            if self._calib_dataloader is None:
-                raise ValueError("calib_dataloader must be provided for post-training quantization.")
-            quantizer.calib_dataloader = self._calib_dataloader
+            if self.calib_dataloader is None:
+                raise ValueError("calib_dataloader must be provided for static quantization.")
+            self.quantizer._calib_dataloader = self.calib_dataloader
 
         if self.approach == IncQuantizationMode.AWARE_TRAINING:
-            if self._train_func is None:
+            if self.train_func is None:
                 raise ValueError("train_func must be provided for quantization aware training.")
-            quantizer.q_func = self._train_func
-
-        return quantizer
-
-    @classmethod
-    def from_config(
-        cls,
-        model_name_or_path: str,
-        inc_config: Optional[Union[IncQuantizationConfig, str]] = None,
-        config_name: str = None,
-        **kwargs
-    ):
-        """
-        Instantiate a IncQuantizer object from a configuration file which can either be hosted on huggingface.co or
-        from a local directory path.
-
-        Args:
-            model_name_or_path (:obj:`str`):
-                Repository name in the Hugging Face Hub or path to a local directory hosting the model.
-            inc_config (:obj:`Union[IncQuantizationConfig, str]`, `optional`):
-                Configuration file containing all the information related to the model quantization.
-                Can be either:
-                    - an instance of the class :class:`IncQuantizationConfig`,
-                    - a string valid as input to :func:`IncQuantizationConfig.from_pretrained`.
-            config_name (:obj:`str`, `optional`):
-                Name of the configuration file.
-            cache_dir (:obj:`str`, `optional`):
-                Path to a directory in which a downloaded configuration should be cached if the standard cache should
-                not be used.
-            force_download (:obj:`bool`, `optional`, defaults to :obj:`False`):
-                Whether or not to force to (re-)download the configuration files and override the cached versions if
-                they exist.
-            resume_download (:obj:`bool`, `optional`, defaults to :obj:`False`):
-                Whether or not to delete incompletely received file. Attempts to resume the download if such a file
-                exists.
-            revision(:obj:`str`, `optional`):
-                The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a
-                git-based system for storing models and other artifacts on huggingface.co, so ``revision`` can be any
-                identifier allowed by git.
-            calib_dataloader (:obj:`DataLoader`, `optional`):
-                DataLoader for post-training quantization calibration.
-            eval_func (:obj:`Callable`, `optional`):
-                Evaluation function to evaluate the tuning objective.
-            train_func (:obj:`Callable`, `optional`):
-                Training function for quantization aware training approach.
-        Returns:
-            quantizer: IncQuantizer object.
-        """
-
-        config_kwargs_default = [
-            ("cache_dir", None),
-            ("force_download", False),
-            ("resume_download", False),
-            ("revision", None),
-        ]
-        config_kwargs = {name: kwargs.get(name, default_value) for (name, default_value) in config_kwargs_default}
-        quantizer_kwargs_names = ["eval_func", "train_func", "calib_dataloader"]
-        quantizer_kwargs = {name: kwargs.pop(name, None) for name in quantizer_kwargs_names}
-
-        if not isinstance(inc_config, IncQuantizationConfig):
-            config_path = inc_config if inc_config is not None else model_name_or_path
-            inc_config = IncQuantizationConfig.from_pretrained(
-                config_path,
-                config_file_name=config_name,
-                **config_kwargs,
-            )
-        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        model = cls.TRANSFORMERS_AUTO_CLASS.from_pretrained(model_name_or_path, **kwargs)
-        quantizer_kwargs["tokenizer"] = tokenizer
-        quantizer = cls(model, inc_config, **quantizer_kwargs)
-        return quantizer
-
-
-class IncQuantizerForQuestionAnswering(IncQuantizer):
-    from transformers import AutoModelForQuestionAnswering
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
-
-
-class IncQuantizerForSequenceClassification(IncQuantizer):
-    from transformers import AutoModelForSequenceClassification
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
-
-
-class IncQuantizerForTokenClassification(IncQuantizer):
-    from transformers import AutoModelForTokenClassification
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
-
-
-class IncQuantizerForMultipleChoice(IncQuantizer):
-    from transformers import AutoModelForMultipleChoice
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForMultipleChoice
-
-
-class IncQuantizerForSeq2SeqLM(IncQuantizer):
-    from transformers import AutoModelForSeq2SeqLM
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
-
-
-class IncQuantizerForCausalLM(IncQuantizer):
-    from transformers import AutoModelForCausalLM
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
-
-
-class IncQuantizerForMaskedLM(IncQuantizer):
-    from transformers import AutoModelForMaskedLM
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForMaskedLM
-
-
-class IncQuantizerForXLNetLM(IncQuantizer):
-    from transformers import XLNetLMHeadModel
-
-    TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel
+            self.quantizer.q_func = self.train_func
 
 
 def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> torch.nn.Module:
