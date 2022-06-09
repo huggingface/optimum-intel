@@ -51,10 +51,10 @@ class IncOptimizer:
         self.scheduler = Scheduler()
         self.scheduler.model = common.Model(self.model)
 
-        if pruner is not None and isinstance(pruner.pruner, Pruning):
+        if pruner is not None:
             self.scheduler.append(pruner.pruner)
 
-        if quantizer is not None and isinstance(quantizer.quantizer, Quantization):
+        if quantizer is not None:
             self.scheduler.append(quantizer.quantizer)
 
     def fit(self):
