@@ -31,7 +31,10 @@ from transformers.utils.fx import symbolic_trace
 import yaml
 from optimum.intel.neural_compressor import IncOptimizer, IncPruner, IncQuantizer, IncTrainer
 from optimum.intel.neural_compressor.configuration import IncPruningConfig, IncQuantizationConfig
-from optimum.intel.neural_compressor.quantization import IncQuantizationMode, IncQuantizedModelForSequenceClassification
+from optimum.intel.neural_compressor.quantization import (
+    IncQuantizationMode,
+    IncQuantizedModelForSequenceClassification,
+)
 from optimum.intel.neural_compressor.utils import CONFIG_NAME
 
 
@@ -39,7 +42,6 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
 class TestINCQuantization(unittest.TestCase):
-
     @staticmethod
     def helper(model_name, output_dir, do_train=False, max_train_samples=128, max_eval_samples=128):
         task = "sst2"
@@ -136,7 +138,9 @@ class TestINCQuantization(unittest.TestCase):
                 batch_size=8,
                 sequence_length=128,
             )
-            quantizer = IncQuantizer(model, q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader())
+            quantizer = IncQuantizer(
+                model, q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader()
+            )
             optimizer = IncOptimizer(model, quantizer=quantizer)
             q_model = optimizer.fit()
             q_model_result = eval_func(q_model.model)

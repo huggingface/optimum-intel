@@ -51,7 +51,6 @@ SUPPORTED_QUANT_MODE = set([approach.value for approach in IncQuantizationMode])
 
 
 class IncQuantizer:
-
     def __init__(
         self,
         model: Union[PreTrainedModel, torch.nn.Module],

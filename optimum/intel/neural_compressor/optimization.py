@@ -80,35 +80,42 @@ class IncOptimizerForQuestionAnswering(IncOptimizer):
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
 
+
 class IncOptimizerForSequenceClassification(IncOptimizer):
     from transformers import AutoModelForSequenceClassification
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
+
 
 class IncOptimizerForTokenClassification(IncOptimizer):
     from transformers import AutoModelForTokenClassification
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
 
+
 class IncOptimizerForMultipleChoice(IncOptimizer):
     from transformers import AutoModelForMultipleChoice
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForMultipleChoice
+
 
 class IncOptimizerForSeq2SeqLM(IncOptimizer):
     from transformers import AutoModelForSeq2SeqLM
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
 
+
 class IncOptimizerForCausalLM(IncOptimizer):
     from transformers import AutoModelForCausalLM
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
 
+
 class IncOptimizerForMaskedLM(IncOptimizer):
     from transformers import AutoModelForMaskedLM
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForMaskedLM
+
 
 class IncOptimizerForXLNetLM(IncOptimizer):
     from transformers import XLNetLMHeadModel
