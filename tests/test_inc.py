@@ -193,7 +193,7 @@ class TestINCOptimizer(unittest.TestCase):
         def train_func(model):
             trainer.model_wrapped = model
             trainer.model = model
-            _ = trainer.train(pruner)
+            _ = trainer.train(pruner.pruner)
             return trainer.model
 
         def eval_func(model):
