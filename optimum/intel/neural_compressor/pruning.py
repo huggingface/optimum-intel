@@ -13,18 +13,12 @@
 #  limitations under the License.
 
 import logging
-import os
 from enum import Enum
-from typing import Callable, ClassVar, Dict, List, Optional, Tuple, Union
-
-import torch
-from torch.utils.data import DataLoader
-from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
+from typing import Callable, ClassVar, Optional, Union
 
 from neural_compressor.conf.config import Pruning_Conf
 from neural_compressor.experimental import Pruning, common
-from optimum.intel.neural_compressor.configuration import IncOptimizedConfig, IncPruningConfig
-from optimum.intel.neural_compressor.utils import IncDataLoader
+from .configuration import IncPruningConfig
 
 
 logger = logging.getLogger(__name__)
@@ -43,21 +37,15 @@ class IncPruner:
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, torch.nn.Module],
         config_path_or_obj: Union[str, IncPruningConfig],
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
         eval_func: Optional[Callable] = None,
         train_func: Optional[Callable] = None,
     ):
         """
-        Args:
-            model (:obj:`Union[PreTrainedModel, torch.nn.Module]`):
-                Model to prune.
+        Arguments:
             config_path_or_obj (:obj:`Union[str, IncPruningConfig]` ):
                 Path to the YAML configuration file or an instance of the class :class:`IncPruningConfig`, used to
                 control the tuning behavior.
-            tokenizer (:obj:`PreTrainedTokenizerBase`, `optional`):
-                Tokenizer used to preprocess the data.
             eval_func (:obj:`Callable`, `optional`):
                 Evaluation function to evaluate the tuning objective.
             train_func (:obj:`Callable`, `optional`):
@@ -71,12 +59,9 @@ class IncPruner:
             if isinstance(config_path_or_obj, IncPruningConfig)
             else Pruning_Conf(config_path_or_obj)
         )
-        self.model = model
-        self.tokenizer = tokenizer
         self.eval_func = eval_func
         self.train_func = train_func
         self.pruner = Pruning(self.config)
-        self.pruner.model = common.Model(self.model)
 
         if self.eval_func is None:
             raise ValueError("eval_func must be provided for pruning.")

@@ -14,14 +14,9 @@
 
 import logging
 from collections import UserDict
-from typing import Dict, List, Tuple
-
-import torch
+from typing import Dict, List
 from torch.fx import GraphModule
 from torch.utils.data import DataLoader
-from transformers.utils.fx_transformations import deepcopy_graph
-
-from neural_compressor.adaptor.pytorch import unify_op_type_mapping
 
 
 logger = logging.getLogger(__name__)
@@ -85,6 +80,7 @@ def remove_inputs_from_graph(gm_original: GraphModule, inputs_to_remove: List[st
         gm (:obj:`GraphModule`):
             GraphModule with the removed inputs.
     """
+    from transformers.utils.fx_transformations import deepcopy_graph
 
     try:
         gm = deepcopy_graph(gm_original)
