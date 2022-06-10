@@ -22,15 +22,24 @@ import torch
 from torch.quantization import add_observer_, convert
 from torch.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_fx
 from torch.utils.data import DataLoader
-from transformers import AutoConfig, AutoModelForQuestionAnswering, AutoModelForSequenceClassification, AutoModelForTokenClassification, AutoModelForMultipleChoice, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoModelForMaskedLM, XLNetLMHeadModel
-
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForMaskedLM,
+    AutoModelForMultipleChoice,
+    AutoModelForQuestionAnswering,
+    AutoModelForSeq2SeqLM,
+    AutoModelForSequenceClassification,
+    AutoModelForTokenClassification,
+    XLNetLMHeadModel,
+)
 from transformers.file_utils import cached_path, hf_bucket_url
 from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils.fx import symbolic_trace
 from transformers.utils.versions import require_version
 
 import neural_compressor
-from neural_compressor.adaptor.pytorch import _cfg_to_qconfig, _propagate_qconfig, PyTorch_FXAdaptor
+from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization, common
 
@@ -150,12 +159,12 @@ def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> to
 
         else:
             sub_module_list = q_config["fx_sub_module_list"]
-            if q_config['approach'] == "quant_aware_training":
+            if q_config["approach"] == "quant_aware_training":
                 q_model.train()
-                PyTorch_FXAdaptor.prepare_sub_graph(sub_module_list, fx_op_cfgs, q_model, prefix='', is_qat=True)
+                PyTorch_FXAdaptor.prepare_sub_graph(sub_module_list, fx_op_cfgs, q_model, prefix="", is_qat=True)
             else:
-                PyTorch_FXAdaptor.prepare_sub_graph(sub_module_list, fx_op_cfgs, q_model, prefix='')
-            PyTorch_FXAdaptor.convert_sub_graph(sub_module_list, q_model, prefix='')
+                PyTorch_FXAdaptor.prepare_sub_graph(sub_module_list, fx_op_cfgs, q_model, prefix="")
+            PyTorch_FXAdaptor.convert_sub_graph(sub_module_list, q_model, prefix="")
 
     else:
         if quant_mode == IncQuantizationMode.DYNAMIC:

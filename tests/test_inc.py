@@ -26,6 +26,7 @@ from transformers import (
     TrainingArguments,
     default_data_collator,
 )
+
 from optimum.intel.neural_compressor import IncOptimizer, IncPruner, IncQuantizer, IncTrainer
 from optimum.intel.neural_compressor.configuration import IncPruningConfig, IncQuantizationConfig
 from optimum.intel.neural_compressor.quantization import (

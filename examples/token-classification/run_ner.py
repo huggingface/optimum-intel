@@ -590,7 +590,9 @@ def main():
             checkpoint = resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
-        train_result = trainer.train(pruner.pruner if hasattr(pruner, "pruner") else None, resume_from_checkpoint=checkpoint)
+        train_result = trainer.train(
+            pruner.pruner if hasattr(pruner, "pruner") else None, resume_from_checkpoint=checkpoint
+        )
         metrics = train_result.metrics
         trainer.save_model()  # Saves the tokenizer too for easy upload
         trainer.log_metrics("train", metrics)

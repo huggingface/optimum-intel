@@ -12,19 +12,31 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import os
 import logging
-import torch
-import yaml
+import os
 from typing import Optional, Union
-from transformers import AutoModel, PreTrainedModel
+
+import torch
+from transformers import (
+    AutoModel,
+    AutoModelForCausalLM,
+    AutoModelForMaskedLM,
+    AutoModelForMultipleChoice,
+    AutoModelForQuestionAnswering,
+    AutoModelForSeq2SeqLM,
+    AutoModelForSequenceClassification,
+    AutoModelForTokenClassification,
+    PreTrainedModel,
+    XLNetLMHeadModel,
+)
+
+import yaml
 from neural_compressor.experimental import Pruning, Quantization, common
 from neural_compressor.experimental.scheduler import Scheduler
-from .utils import WEIGHTS_NAME
+
 from .pruning import IncPruner
 from .quantization import IncQuantizer
-from transformers import AutoModelForQuestionAnswering, AutoModelForSequenceClassification, AutoModelForTokenClassification, AutoModelForMultipleChoice, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoModelForMaskedLM, XLNetLMHeadModel
-from .utils import CONFIG_NAME
+from .utils import CONFIG_NAME, WEIGHTS_NAME
 
 
 logger = logging.getLogger(__name__)

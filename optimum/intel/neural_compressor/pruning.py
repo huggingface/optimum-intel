@@ -18,6 +18,7 @@ from typing import Callable, ClassVar, Optional, Union
 
 from neural_compressor.conf.config import Pruning_Conf
 from neural_compressor.experimental import Pruning, common
+
 from .configuration import IncPruningConfig
 
 
