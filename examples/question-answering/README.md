@@ -35,7 +35,6 @@ python run_qa.py \
     --quantization_approach static \
     --do_train \
     --do_eval \
-    --dataloader_drop_last \
     --verify_loading \
     --output_dir /tmp/squad_output
 ```

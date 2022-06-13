@@ -38,18 +38,11 @@ from transformers import (
     default_data_collator,
     set_seed,
 )
-from transformers.utils.versions import require_version
-
-
-require_version("transformers<4.17.0")
-
 from transformers.file_utils import PaddingStrategy
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
-from transformers.utils.fx import symbolic_trace
 
-import yaml
 from optimum.intel.neural_compressor import (
     IncOptimizer,
     IncPruner,
@@ -60,13 +53,12 @@ from optimum.intel.neural_compressor import (
     IncTrainer,
 )
 from optimum.intel.neural_compressor.quantization import IncQuantizedModelForMultipleChoice
-from optimum.intel.neural_compressor.utils import CONFIG_NAME
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.12.0")
+check_min_version("4.15.0")
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +138,7 @@ class OptimizationArguments:
         default="eval_accuracy",
         metadata={"help": "Metric used for the tuning strategy."},
     )
-    perf_tol: Optional[float] = field(
+    tolerance_criterion: Optional[float] = field(
         default=None,
         metadata={"help": "Performance tolerance when optimizing the model."},
     )
@@ -469,17 +461,6 @@ def main():
         compute_metrics=compute_metrics,
     )
 
-    eval_dataloader = trainer.get_eval_dataloader()
-    it = iter(eval_dataloader)
-    try:
-        input_names = next(it).keys()
-    except StopIteration:
-        input_names = None
-        logger.warning(
-            "Unable to determine the names of the inputs of the model to trace, input_names is set to None and "
-            "model.dummy_inputs().keys() will be used instead."
-        )
-
     resume_from_checkpoint = training_args.resume_from_checkpoint
     metric_name = optim_args.tune_metric
 
@@ -503,7 +484,9 @@ def main():
             checkpoint = resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
-        train_result = trainer.train(pruner, resume_from_checkpoint=checkpoint)
+        train_result = trainer.train(
+            pruner.pruner if hasattr(pruner, "pruner") else None, resume_from_checkpoint=checkpoint
+        )
         metrics = train_result.metrics
         trainer.save_model()  # Saves the tokenizer too for easy upload
         trainer.log_metrics("train", metrics)
@@ -537,8 +520,8 @@ def main():
         )
 
         # Set metric tolerance if specified
-        if optim_args.perf_tol is not None:
-            q8_config.set_tolerance(optim_args.perf_tol)
+        if optim_args.tolerance_criterion is not None:
+            q8_config.set_tolerance(optim_args.tolerance_criterion)
 
         # Set quantization approach if specified
         if optim_args.quantization_approach is not None:
@@ -557,35 +540,17 @@ def main():
             if not training_args.do_train:
                 raise ValueError("do_train must be set to True for static and aware training quantization.")
 
-            # TODO : Remove when dynamic axes support
-            if (
-                not training_args.dataloader_drop_last
-                and eval_dataset.shape[0] % training_args.per_device_eval_batch_size != 0
-            ):
-                raise ValueError(
-                    "The number of samples of the dataset is not a multiple of the batch size."
-                    "Use --dataloader_drop_last to overcome."
-                )
             if not data_args.pad_to_max_length:
                 raise ValueError(
                     "All the samples must have the same sequence length, use --pad_to_max_length to overcome."
                 )
 
             q8_config.set_config("model.framework", "pytorch_fx")
-            model.config.save_pretrained(training_args.output_dir)
-            model = symbolic_trace(
-                model,
-                input_names=input_names,
-                batch_size=training_args.per_device_eval_batch_size,
-                sequence_length=max_seq_length,
-                num_choices=num_choices,
-            )
 
         calib_dataloader = trainer.get_train_dataloader() if quant_approach == IncQuantizationMode.STATIC else None
-        inc_quantizer = IncQuantizer(
-            model, q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
+        quantizer = IncQuantizer(
+            q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
         )
-        quantizer = inc_quantizer.fit()
 
     if optim_args.prune:
 
@@ -618,40 +583,29 @@ def main():
                 f"Pruning end epoch {pruning_end_epoch} is higher than the total number of training epoch "
                 f"{training_args.num_train_epochs}. The target sparsity will not be reached."
             )
-
-        inc_pruner = IncPruner(model, pruning_config, eval_func=eval_func, train_func=train_func)
-
         # Creation Pruning object used for IncTrainer training loop
-        pruner = inc_pruner.fit()
+        pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
 
-    inc_optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
-    opt_model = inc_optimizer.fit()
-    result_opt_model = take_eval_steps(opt_model.model, trainer, metric_name, save_metrics=True)
+    optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
+    optimized_model = optimizer.fit()
+    result_optimized_model = take_eval_steps(optimized_model.model, trainer, metric_name, save_metrics=True)
 
-    trainer.save_model(training_args.output_dir)
-    with open(os.path.join(training_args.output_dir, CONFIG_NAME), "w") as f:
-        yaml.dump(opt_model.tune_cfg, f, default_flow_style=False)
+    optimizer.save_pretrained(training_args.output_dir)
 
     logger.info(
-        f"Optimized model with {metric_name} of {result_opt_model} saved to: {training_args.output_dir}."
+        f"Optimized model with {metric_name} of {result_optimized_model} saved to: {training_args.output_dir}."
         f" Original model had an {metric_name} of {result_baseline_model}."
     )
 
     if optim_args.quantize and optim_args.verify_loading:
 
         # Load the model obtained after Intel Neural Compressor (INC) quantization
-        loaded_model = IncQuantizedModelForMultipleChoice.from_pretrained(
-            training_args.output_dir,
-            input_names=input_names,
-            batch_size=training_args.per_device_eval_batch_size,
-            sequence_length=max_seq_length,
-            num_choices=num_choices,
-        )
+        loaded_model = IncQuantizedModelForMultipleChoice.from_pretrained(training_args.output_dir)
         loaded_model.eval()
         result_loaded_model = take_eval_steps(loaded_model, trainer, metric_name)
 
-        if result_loaded_model != result_opt_model:
-            raise ValueError("The quantized model was not successfully loaded.")
+        if result_loaded_model != result_optimized_model:
+            logger.error("The quantized model was not successfully loaded.")
         else:
             logger.info(f"The quantized model was successfully loaded.")
 

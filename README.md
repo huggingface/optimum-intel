@@ -69,14 +69,16 @@ quantization_config = IncQuantizationConfig.from_pretrained(config_path, config_
 pruning_config = IncPruningConfig.from_pretrained(config_path, config_file_name="prune.yml")
 
 # Instantiate our IncQuantizer using the desired configuration
-inc_quantizer = IncQuantizer(model, quantization_config, eval_func=eval_func)
-quantizer = inc_quantizer.fit()
+quantizer = IncQuantizer(quantization_config, eval_func=eval_func)
 # Instantiate our IncPruner using the desired configuration
-inc_pruner = IncPruner(model, pruning_config, eval_func=eval_func, train_func=train_func)
-pruner = inc_pruner.fit()
-inc_optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
+pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
+optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
 # Apply pruning and quantization 
-opt_model = inc_optimizer.fit()
+optimized_model = optimizer.fit()
+
+# Save the resulting model and corresponding configuration in the directory output_dir
+optimizer.save_pretrained(output_dir)
+
 ```
 
 To load a quantized model hosted locally or on the 🤗 hub, you can do as follows :
@@ -84,9 +86,11 @@ To load a quantized model hosted locally or on the 🤗 hub, you can do as follo
 from optimum.intel.neural_compressor.quantization import IncQuantizedModelForSequenceClassification
 
 loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrained(
-    "echarlaix/distilbert-sst2-inc-dynamic-quantization-magnitude-pruning-0.1"
+    "Intel/albert-base-v2-sst2-int8-static"
 )
 ```
+
+You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
 

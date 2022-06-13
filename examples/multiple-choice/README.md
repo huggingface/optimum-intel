@@ -31,7 +31,6 @@ python run_swag.py \
     --do_train \
     --do_eval \
     --pad_to_max_length \
-    --dataloader_drop_last \
     --verify_loading \
     --output_dir /tmp/swag_output
 ```

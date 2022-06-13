@@ -22,18 +22,29 @@ import torch
 from torch.quantization import add_observer_, convert
 from torch.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_fx
 from torch.utils.data import DataLoader
-from transformers import AutoConfig, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForMaskedLM,
+    AutoModelForMultipleChoice,
+    AutoModelForQuestionAnswering,
+    AutoModelForSeq2SeqLM,
+    AutoModelForSequenceClassification,
+    AutoModelForTokenClassification,
+    XLNetLMHeadModel,
+)
 from transformers.file_utils import cached_path, hf_bucket_url
 from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils.fx import symbolic_trace
 from transformers.utils.versions import require_version
 
 import neural_compressor
-from neural_compressor.adaptor.pytorch import _cfg_to_qconfig, _propagate_qconfig
+from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization, common
-from optimum.intel.neural_compressor.configuration import IncOptimizedConfig, IncQuantizationConfig
-from optimum.intel.neural_compressor.utils import WEIGHTS_NAME, IncDataLoader, _cfgs_to_fx_cfgs
+
+from .configuration import IncOptimizedConfig, IncQuantizationConfig
+from .utils import WEIGHTS_NAME, IncDataLoader, _cfgs_to_fx_cfgs
 
 
 logger = logging.getLogger(__name__)
@@ -51,27 +62,18 @@ SUPPORTED_QUANT_MODE = set([approach.value for approach in IncQuantizationMode])
 
 
 class IncQuantizer:
-
-    TRANSFORMERS_AUTO_CLASS: ClassVar
-
     def __init__(
         self,
-        model: Union[PreTrainedModel, torch.nn.Module],
         config_path_or_obj: Union[str, IncQuantizationConfig],
-        tokenizer: Optional[PreTrainedTokenizerBase] = None,
         eval_func: Optional[Callable] = None,
         train_func: Optional[Callable] = None,
         calib_dataloader: Optional[DataLoader] = None,
     ):
         """
-        Args:
-            model (:obj:`Union[PreTrainedModel, torch.nn.Module]`):
-                FP32 model specified for low precision tuning.
+        Arguments:
             config_path_or_obj (:obj:`Union[str, IncQuantizationConfig]`):
                 Path to the YAML configuration file or an instance of the class :class:`IncQuantizationConfig`, used to
                 control the tuning behavior.
-            tokenizer (:obj:`PreTrainedTokenizerBase`, `optional`):
-                Tokenizer used to preprocess the data.
             eval_func (:obj:`Callable`, `optional`):
                 Evaluation function to evaluate the tuning objective.
             train_func (:obj:`Callable`, `optional`):
@@ -89,215 +91,39 @@ class IncQuantizer:
             else Quantization_Conf(config_path_or_obj)
         )
         self.approach = IncQuantizationMode(self.config.usr_cfg.quantization.approach)
-        self.model = model
-        self.tokenizer = tokenizer
-        self._eval_func = eval_func
-        self._train_func = train_func
+        self.eval_func = eval_func
+        self.train_func = train_func
         if calib_dataloader is not None:
             calib_dataloader = IncDataLoader.from_pytorch_dataloader(calib_dataloader)
-        self._calib_dataloader = calib_dataloader
+        self.calib_dataloader = calib_dataloader
 
-    @property
-    def eval_func(self):
-        return self._eval_func
-
-    @property
-    def train_func(self):
-        return self._train_func
-
-    @property
-    def calib_dataloader(self):
-        return self._calib_dataloader
-
-    @eval_func.setter
-    def eval_func(self, func: Callable):
-        self._eval_func = func
-
-    @train_func.setter
-    def train_func(self, func: Callable):
-        self._train_func = func
-
-    @calib_dataloader.setter
-    def calib_dataloader(self, dataloader: DataLoader):
-        self._calib_dataloader = IncDataLoader.from_pytorch_dataloader(dataloader)
-
-    def init_quantizer(self):
         if self.config.usr_cfg.model.framework == "pytorch_fx":
-
-            # TODO : Change this to apply quantization on other part of the model other that Linears
             neural_compressor.adaptor.pytorch._cfgs_to_fx_cfgs = _cfgs_to_fx_cfgs
 
-        quantizer = Quantization(self.config)
-        quantizer.model = common.Model(self.model)
+        self.quantizer = Quantization(self.config)
 
-        if self._eval_func is None:
+        if self.eval_func is None:
             raise ValueError("eval_func must be provided for quantization.")
 
-        quantizer.eval_func = self._eval_func
-        return quantizer
+        self.quantizer.eval_func = self.eval_func
 
-    def fit_dynamic(self):
-        quantizer = self.init_quantizer()
-        model = quantizer()
-        return model
-
-    def fit_static(self):
-        quantizer = self.init_quantizer()
-
-        if self._calib_dataloader is None:
-            raise ValueError("calib_dataloader must be provided for post-training quantization.")
-
-        quantizer.calib_dataloader = self._calib_dataloader
-        model = quantizer()
-        return model
-
-    def fit_aware_training(self):
-        quantizer = self.init_quantizer()
-
-        if self._train_func is None:
-            raise ValueError("train_func must be provided for quantization aware training.")
-
-        quantizer.q_func = self._train_func
-
-        model = quantizer()
-        return model
-
-    def fit(self):
-        quantizer = self.init_quantizer()
         if self.approach == IncQuantizationMode.STATIC:
-            if self._calib_dataloader is None:
-                raise ValueError("calib_dataloader must be provided for post-training quantization.")
-            quantizer.calib_dataloader = self._calib_dataloader
+            if self.calib_dataloader is None:
+                raise ValueError("calib_dataloader must be provided for static quantization.")
+            self.quantizer._calib_dataloader = self.calib_dataloader
 
         if self.approach == IncQuantizationMode.AWARE_TRAINING:
-            if self._train_func is None:
+            if self.train_func is None:
                 raise ValueError("train_func must be provided for quantization aware training.")
-            quantizer.q_func = self._train_func
-
-        return quantizer
-
-    @classmethod
-    def from_config(
-        cls,
-        model_name_or_path: str,
-        inc_config: Optional[Union[IncQuantizationConfig, str]] = None,
-        config_name: str = None,
-        **kwargs
-    ):
-        """
-        Instantiate a IncQuantizer object from a configuration file which can either be hosted on huggingface.co or
-        from a local directory path.
-
-        Args:
-            model_name_or_path (:obj:`str`):
-                Repository name in the Hugging Face Hub or path to a local directory hosting the model.
-            inc_config (:obj:`Union[IncQuantizationConfig, str]`, `optional`):
-                Configuration file containing all the information related to the model quantization.
-                Can be either:
-                    - an instance of the class :class:`IncQuantizationConfig`,
-                    - a string valid as input to :func:`IncQuantizationConfig.from_pretrained`.
-            config_name (:obj:`str`, `optional`):
-                Name of the configuration file.
-            cache_dir (:obj:`str`, `optional`):
-                Path to a directory in which a downloaded configuration should be cached if the standard cache should
-                not be used.
-            force_download (:obj:`bool`, `optional`, defaults to :obj:`False`):
-                Whether or not to force to (re-)download the configuration files and override the cached versions if
-                they exist.
-            resume_download (:obj:`bool`, `optional`, defaults to :obj:`False`):
-                Whether or not to delete incompletely received file. Attempts to resume the download if such a file
-                exists.
-            revision(:obj:`str`, `optional`):
-                The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a
-                git-based system for storing models and other artifacts on huggingface.co, so ``revision`` can be any
-                identifier allowed by git.
-            calib_dataloader (:obj:`DataLoader`, `optional`):
-                DataLoader for post-training quantization calibration.
-            eval_func (:obj:`Callable`, `optional`):
-                Evaluation function to evaluate the tuning objective.
-            train_func (:obj:`Callable`, `optional`):
-                Training function for quantization aware training approach.
-        Returns:
-            quantizer: IncQuantizer object.
-        """
-
-        config_kwargs_default = [
-            ("cache_dir", None),
-            ("force_download", False),
-            ("resume_download", False),
-            ("revision", None),
-        ]
-        config_kwargs = {name: kwargs.get(name, default_value) for (name, default_value) in config_kwargs_default}
-        quantizer_kwargs_names = ["eval_func", "train_func", "calib_dataloader"]
-        quantizer_kwargs = {name: kwargs.pop(name, None) for name in quantizer_kwargs_names}
-
-        if not isinstance(inc_config, IncQuantizationConfig):
-            config_path = inc_config if inc_config is not None else model_name_or_path
-            inc_config = IncQuantizationConfig.from_pretrained(
-                config_path,
-                config_file_name=config_name,
-                **config_kwargs,
-            )
-        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-        model = cls.TRANSFORMERS_AUTO_CLASS.from_pretrained(model_name_or_path, **kwargs)
-        quantizer_kwargs["tokenizer"] = tokenizer
-        quantizer = cls(model, inc_config, **quantizer_kwargs)
-        return quantizer
+            self.quantizer.q_func = self.train_func
 
 
-class IncQuantizerForQuestionAnswering(IncQuantizer):
-    from transformers import AutoModelForQuestionAnswering
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
-
-
-class IncQuantizerForSequenceClassification(IncQuantizer):
-    from transformers import AutoModelForSequenceClassification
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
-
-
-class IncQuantizerForTokenClassification(IncQuantizer):
-    from transformers import AutoModelForTokenClassification
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
-
-
-class IncQuantizerForMultipleChoice(IncQuantizer):
-    from transformers import AutoModelForMultipleChoice
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForMultipleChoice
-
-
-class IncQuantizerForSeq2SeqLM(IncQuantizer):
-    from transformers import AutoModelForSeq2SeqLM
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
-
-
-class IncQuantizerForCausalLM(IncQuantizer):
-    from transformers import AutoModelForCausalLM
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
-
-
-class IncQuantizerForMaskedLM(IncQuantizer):
-    from transformers import AutoModelForMaskedLM
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForMaskedLM
-
-
-class IncQuantizerForXLNetLM(IncQuantizer):
-    from transformers import XLNetLMHeadModel
-
-    TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel
-
-
+# Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
 def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> torch.nn.Module:
     """
     Apply Intel Neural Compressor (INC) quantization steps on the given model.
 
-    Args:
+    Arguments:
         q_config (:obj:`Dict`):
             Dictionary containing all quantization information such as approach, dtype, scheme and granularity.
         model (:obj:`torch.nn.Module`):
@@ -322,26 +148,37 @@ def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> to
     if framework == "pytorch_fx":
         op_cfgs = _cfg_to_qconfig(q_config, approach)
         fx_op_cfgs = _cfgs_to_fx_cfgs(op_cfgs, approach)
-        if quant_mode == IncQuantizationMode.AWARE_TRAINING:
-            q_model.train()
-            q_model = prepare_qat_fx(q_model, fx_op_cfgs)
+
+        if not q_config["fx_sub_module_list"]:
+            if quant_mode == IncQuantizationMode.AWARE_TRAINING:
+                q_model.train()
+                q_model = prepare_qat_fx(q_model, fx_op_cfgs)
+            else:
+                q_model = prepare_fx(q_model, fx_op_cfgs)
+            q_model = convert_fx(q_model)
+
         else:
-            q_model = prepare_fx(q_model, fx_op_cfgs)
-        q_model = convert_fx(q_model)
-        return q_model
+            sub_module_list = q_config["fx_sub_module_list"]
+            if q_config["approach"] == "quant_aware_training":
+                q_model.train()
+                PyTorch_FXAdaptor.prepare_sub_graph(sub_module_list, fx_op_cfgs, q_model, prefix="", is_qat=True)
+            else:
+                PyTorch_FXAdaptor.prepare_sub_graph(sub_module_list, fx_op_cfgs, q_model, prefix="")
+            PyTorch_FXAdaptor.convert_sub_graph(sub_module_list, q_model, prefix="")
 
-    if quant_mode == IncQuantizationMode.DYNAMIC:
-        q_mapping = torch.quantization.quantization_mappings.get_default_dynamic_quant_module_mappings()
-        op_cfgs = _cfg_to_qconfig(q_config, approach)
     else:
-        q_mapping = torch.quantization.quantization_mappings.get_default_static_quant_module_mappings()
-        op_cfgs = _cfg_to_qconfig(q_config)
+        if quant_mode == IncQuantizationMode.DYNAMIC:
+            q_mapping = torch.quantization.quantization_mappings.get_default_dynamic_quant_module_mappings()
+            op_cfgs = _cfg_to_qconfig(q_config, approach)
+        else:
+            q_mapping = torch.quantization.quantization_mappings.get_default_static_quant_module_mappings()
+            op_cfgs = _cfg_to_qconfig(q_config)
 
-    _propagate_qconfig(q_model, op_cfgs, approach=approach)
+        _propagate_qconfig(q_model, op_cfgs, approach=approach)
 
-    if quant_mode != IncQuantizationMode.DYNAMIC:
-        add_observer_(q_model)
-    q_model = convert(q_model, mapping=q_mapping, inplace=True)
+        if quant_mode != IncQuantizationMode.DYNAMIC:
+            add_observer_(q_model)
+        q_model = convert(q_model, mapping=q_mapping, inplace=True)
 
     return q_model
 
@@ -370,7 +207,7 @@ class IncQuantizedModel:
     ) -> torch.nn.Module:
         """
         Instantiate a quantized pytorch model from a given Intel Neural Compressor (INC) configuration file.
-        Args:
+        Arguments:
             model_name_or_path (:obj:`str`):
                 Repository name in the Hugging Face Hub or path to a local directory hosting the model.
             inc_config (:obj:`Union[IncOptimizedConfig, str]`, `optional`):
@@ -420,10 +257,6 @@ class IncQuantizedModel:
         download_kwargs = {name: kwargs.get(name, default_value) for (name, default_value) in download_kwarg_default}
         state_dict = kwargs.get("state_dict", None)
 
-        if not isinstance(inc_config, IncOptimizedConfig):
-            config_path = inc_config if inc_config is not None else model_name_or_path
-            inc_config = IncOptimizedConfig.from_pretrained(config_path, **download_kwargs)
-
         config = AutoConfig.from_pretrained(model_name_or_path)
         model_class = _get_model_class(config, cls.TRANSFORMERS_AUTO_CLASS._model_mapping)
         keys_to_ignore_on_load_unexpected = copy.deepcopy(
@@ -447,21 +280,6 @@ class IncQuantizedModel:
         model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
         model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
 
-        if inc_config.get_config("framework") == "pytorch_fx":
-
-            if batch_size is None or sequence_length is None:
-                raise ValueError("Need batch_size and sequence_length for tracing the model with torch fx.")
-
-            model = symbolic_trace(
-                model,
-                input_names=input_names,
-                batch_size=batch_size,
-                sequence_length=sequence_length,
-                num_choices=num_choices,
-            )
-
-        q_model = apply_quantization_from_config(inc_config.config, model)
-
         if state_dict is None:
 
             q_model_name = q_model_name if q_model_name is not None else WEIGHTS_NAME
@@ -474,10 +292,7 @@ class IncQuantizedModel:
                 state_dict_path = hf_bucket_url(model_name_or_path, filename=q_model_name, revision=revision)
 
             try:
-                state_dict_path = cached_path(
-                    state_dict_path,
-                    **download_kwargs,
-                )
+                state_dict_path = cached_path(state_dict_path, **download_kwargs)
             except EnvironmentError as err:
                 logger.error(err)
                 msg = (
@@ -496,54 +311,68 @@ class IncQuantizedModel:
                 raise EnvironmentError(msg)
 
             state_dict = torch.load(state_dict_path)
+
+        if "best_configure" in state_dict:
+            inc_config = state_dict.pop("best_configure")
+        elif isinstance(inc_config, IncOptimizedConfig):
+            inc_config = inc_config.config
+        else:
+            config_path = inc_config if inc_config is not None else model_name_or_path
+            inc_config = IncOptimizedConfig.from_pretrained(config_path, **download_kwargs).config
+
+        # if inc_config.get("framework") == "pytorch_fx":
+        #     if batch_size is None or sequence_length is None:
+        #         raise ValueError("Need batch_size and sequence_length for tracing the model with torch fx.")
+        #     model = symbolic_trace(
+        #         model,
+        #         input_names=input_names,
+        #         batch_size=batch_size,
+        #         sequence_length=sequence_length,
+        #         num_choices=num_choices,
+        #     )
+
+        q_model = apply_quantization_from_config(inc_config, model)
+
         q_model.load_state_dict(state_dict, strict=False)
 
         return q_model
 
 
 class IncQuantizedModelForQuestionAnswering(IncQuantizedModel):
-    from transformers import AutoModelForQuestionAnswering
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
 
 
 class IncQuantizedModelForSequenceClassification(IncQuantizedModel):
-    from transformers import AutoModelForSequenceClassification
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
 
 
 class IncQuantizedModelForTokenClassification(IncQuantizedModel):
-    from transformers import AutoModelForTokenClassification
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
 
 
 class IncQuantizedModelForMultipleChoice(IncQuantizedModel):
-    from transformers import AutoModelForMultipleChoice
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForMultipleChoice
 
 
 class IncQuantizedModelForSeq2SeqLM(IncQuantizedModel):
-    from transformers import AutoModelForSeq2SeqLM
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
 
 
 class IncQuantizedModelForCausalLM(IncQuantizedModel):
-    from transformers import AutoModelForCausalLM
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
 
 
 class IncQuantizedModelForMaskedLM(IncQuantizedModel):
-    from transformers import AutoModelForMaskedLM
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForMaskedLM
 
 
 class IncQuantizedModelForXLNetLM(IncQuantizedModel):
-    from transformers import XLNetLMHeadModel
 
     TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel

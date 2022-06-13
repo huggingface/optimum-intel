@@ -26,37 +26,19 @@ from transformers import (
     TrainingArguments,
     default_data_collator,
 )
-from transformers.utils.fx import symbolic_trace
 
-import yaml
 from optimum.intel.neural_compressor import IncOptimizer, IncPruner, IncQuantizer, IncTrainer
 from optimum.intel.neural_compressor.configuration import IncPruningConfig, IncQuantizationConfig
-from optimum.intel.neural_compressor.pruning import IncPrunerForSequenceClassification
 from optimum.intel.neural_compressor.quantization import (
     IncQuantizationMode,
     IncQuantizedModelForSequenceClassification,
-    IncQuantizer,
-    IncQuantizerForSequenceClassification,
 )
-from optimum.intel.neural_compressor.trainer import IncTrainer
-from optimum.intel.neural_compressor.utils import CONFIG_NAME
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
 class TestINCQuantization(unittest.TestCase):
-    def test_quantizer_from_config(self):
-        model_name = "bert-base-uncased"
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization.yml")
-        model = AutoModelForSequenceClassification.from_pretrained(model_name)
-        q8_config = IncQuantizationConfig.from_pretrained(config_path)
-        quantizer = IncQuantizer(model, q8_config)
-        quantizer_from_config = IncQuantizerForSequenceClassification.from_config(model_name, inc_config=config_path)
-        self.assertEqual(quantizer_from_config.approach, quantizer.approach)
-        self.assertEqual(quantizer_from_config.config.usr_cfg, quantizer.config.usr_cfg)
-        self.assertIsInstance(quantizer_from_config.model, BertForSequenceClassification)
-
     @staticmethod
     def helper(model_name, output_dir, do_train=False, max_train_samples=128, max_eval_samples=128):
         task = "sst2"
@@ -114,19 +96,15 @@ class TestINCQuantization(unittest.TestCase):
             model_result = eval_func(model)
             q8_config = IncQuantizationConfig.from_pretrained(config_path)
             q8_config.set_config("quantization.approach", IncQuantizationMode.DYNAMIC.value)
-
-            quantizer = IncQuantizer(model, q8_config, eval_func=eval_func)
-
-            q_model = quantizer.fit_dynamic()
+            quantizer = IncQuantizer(q8_config, eval_func=eval_func)
+            optimizer = IncOptimizer(model, quantizer=quantizer)
+            q_model = optimizer.fit()
             q_model_result = eval_func(q_model.model)
 
             # Verification accuracy loss is under 2%
             self.assertGreaterEqual(q_model_result, model_result * 0.98)
 
-            trainer.save_model(tmp_dir)
-            with open(os.path.join(tmp_dir, CONFIG_NAME), "w") as f:
-                yaml.dump(q_model.tune_cfg, f, default_flow_style=False)
-
+            optimizer.save_pretrained(tmp_dir)
             loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
             loaded_model.eval()
             loaded_model_result = eval_func(loaded_model)
@@ -146,34 +124,17 @@ class TestINCQuantization(unittest.TestCase):
             q8_config.set_config("quantization.approach", IncQuantizationMode.STATIC.value)
             q8_config.set_config("tuning.accuracy_criterion.relative", 0.04)
             q8_config.set_config("model.framework", "pytorch_fx")
-            input_names = ["input_ids", "attention_mask", "token_type_ids", "labels"]
-
-            model = symbolic_trace(
-                model,
-                input_names=input_names,
-                batch_size=8,
-                sequence_length=128,
-            )
-
-            quantizer = IncQuantizer(model, q8_config)
-            quantizer.eval_func = eval_func
-            quantizer.calib_dataloader = trainer.get_eval_dataloader()
-            q_model = quantizer.fit_static()
+            quantizer = IncQuantizer(q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader())
+            optimizer = IncOptimizer(model, quantizer=quantizer)
+            q_model = optimizer.fit()
             q_model_result = eval_func(q_model.model)
 
             # Verification accuracy loss is under 4%
             self.assertGreaterEqual(q_model_result, model_result * 0.96)
 
-            trainer.save_model(tmp_dir)
-            with open(os.path.join(tmp_dir, CONFIG_NAME), "w") as f:
-                yaml.dump(q_model.tune_cfg, f, default_flow_style=False)
+            optimizer.save_pretrained(tmp_dir)
 
-            loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(
-                tmp_dir,
-                input_names=input_names,
-                batch_size=8,
-                sequence_length=128,
-            )
+            loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
             loaded_model.eval()
             loaded_model_result = eval_func(loaded_model)
 
@@ -209,7 +170,7 @@ class TestINCOptimizer(unittest.TestCase):
         def train_func(model):
             trainer.model_wrapped = model
             trainer.model = model
-            _ = trainer.train(pruner)
+            _ = trainer.train(pruner.pruner)
             return trainer.model
 
         def eval_func(model):
@@ -228,13 +189,9 @@ class TestINCOptimizer(unittest.TestCase):
         pruning_config.set_config("pruning.approach.weight_compression.initial_sparsity", 0.0)
         pruning_config.set_config("pruning.approach.weight_compression.target_sparsity", target_sparsity)
 
-        inc_quantizer = IncQuantizer(model, q8_config, eval_func=eval_func)
-        quantizer = inc_quantizer.fit()
-
-        inc_pruner = IncPruner(model, pruning_config, eval_func=eval_func, train_func=train_func)
-        pruner = inc_pruner.fit()
-
-        inc_optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
+        quantizer = IncQuantizer(q8_config, eval_func=eval_func)
+        pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
+        optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(tmp_dir, num_train_epochs=2.0)
@@ -250,14 +207,12 @@ class TestINCOptimizer(unittest.TestCase):
             )
 
             model_result = eval_func(model)
-            opt_model = inc_optimizer.fit()
+            opt_model = optimizer.fit()
 
             opt_model_result = eval_func(opt_model.model)
             _, sparsity = opt_model.report_sparsity()
 
-            trainer.save_model(tmp_dir)
-            with open(os.path.join(tmp_dir, CONFIG_NAME), "w") as f:
-                yaml.dump(opt_model.tune_cfg, f, default_flow_style=False)
+            optimizer.save_pretrained(tmp_dir)
 
             loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
             loaded_model.eval()
