@@ -41,7 +41,7 @@ python run_clm.py \
     --quantization_approach aware_training \
     --prune \
     --target_sparsity 0.02 \
-    --perf_tol 0.5 \
+    --tolerance_criterion 0.5 \
     --do_train \
     --do_eval \
     --verify_loading \
@@ -63,7 +63,7 @@ python run_mlm.py \
     --quantization_approach aware_training \
     --prune \
     --target_sparsity 0.1 \
-    --perf_tol 0.5 \
+    --tolerance_criterion 0.5 \
     --do_train \
     --do_eval \
     --verify_loading \

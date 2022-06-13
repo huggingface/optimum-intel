@@ -52,15 +52,17 @@ class IncConfig:
             d = d.setdefault(key, {})
         d[keys[-1]] = value
 
-    def set_tolerance(self, perf_tol: Union[int, float]):
-        if not isinstance(perf_tol, (int, float)):
-            raise TypeError(f"Supported type for performance tolerance are int and float, got {type(perf_tol)}")
+    def set_tolerance(self, tolerance_criterion: Union[int, float]):
+        if not isinstance(tolerance_criterion, (int, float)):
+            raise TypeError(
+                f"Supported type for performance tolerance are int and float, got {type(tolerance_criterion)}"
+            )
         if "absolute" in self.get_config("tuning.accuracy_criterion"):
-            self.set_config("tuning.accuracy_criterion.absolute", perf_tol)
+            self.set_config("tuning.accuracy_criterion.absolute", tolerance_criterion)
         else:
-            if not -1 < perf_tol < 1:
+            if not -1 < tolerance_criterion < 1:
                 raise ValueError("Relative performance tolerance must not be <=-1 or >=1.")
-            self.set_config("tuning.accuracy_criterion.relative", perf_tol)
+            self.set_config("tuning.accuracy_criterion.relative", tolerance_criterion)
 
     @classmethod
     def from_pretrained(cls, config_name_or_path: str, config_file_name: Optional[str] = None, **kwargs):

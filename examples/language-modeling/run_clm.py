@@ -41,17 +41,11 @@ from transformers import (
     default_data_collator,
     set_seed,
 )
-from transformers.utils.versions import require_version
-
-
-require_version("transformers<4.17.0")
-
 from transformers.testing_utils import CaptureLogger
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
-from transformers.utils.fx import symbolic_trace
+from transformers.utils.versions import require_version
 
-import yaml
 from optimum.intel.neural_compressor import (
     IncOptimizer,
     IncPruner,
@@ -68,7 +62,7 @@ from optimum.intel.neural_compressor.utils import CONFIG_NAME
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.12.0")
+check_min_version("4.15.0")
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/language-modeling/requirements.txt")
 
@@ -174,7 +168,7 @@ class OptimizationArguments:
         default="eval_loss",
         metadata={"help": "Metric used for the tuning strategy."},
     )
-    perf_tol: Optional[float] = field(
+    tolerance_criterion: Optional[float] = field(
         default=None,
         metadata={"help": "Performance tolerance when optimizing the model."},
     )
@@ -593,8 +587,8 @@ def main():
         )
 
         # Set metric tolerance if specified
-        if optim_args.perf_tol is not None:
-            q8_config.set_tolerance(optim_args.perf_tol)
+        if optim_args.tolerance_criterion is not None:
+            q8_config.set_tolerance(optim_args.tolerance_criterion)
 
         # Set quantization approach if specified
         if optim_args.quantization_approach is not None:
@@ -614,15 +608,6 @@ def main():
         if quant_approach != IncQuantizationMode.DYNAMIC:
             if not training_args.do_train:
                 raise ValueError("do_train must be set to True for static and aware training quantization.")
-
-            if (
-                not training_args.dataloader_drop_last
-                and eval_dataset.shape[0] % training_args.per_device_eval_batch_size != 0
-            ):
-                raise ValueError(
-                    "The number of samples of the dataset is not a multiple of the batch size."
-                    "Use --dataloader_drop_last to overcome."
-                )
 
             q8_config.set_config("model.framework", "pytorch_fx")
 

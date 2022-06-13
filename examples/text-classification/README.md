@@ -33,7 +33,6 @@ python run_glue.py \
     --quantization_approach static \
     --do_train \
     --do_eval \
-    --dataloader_drop_last \
     --verify_loading \
     --output_dir /tmp/sst2_output
 ```

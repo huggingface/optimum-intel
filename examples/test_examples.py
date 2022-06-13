@@ -66,7 +66,7 @@ class TestExamples(unittest.TestCase):
                 --quantize
                 --quantization_approach {quantization_approach}
                 --tune_metric eval_accuracy
-                --perf_tol 0.1
+                --tolerance_criterion 0.1
                 --prune
                 --target_sparsity 0.02
                 --do_eval
@@ -97,7 +97,7 @@ class TestExamples(unittest.TestCase):
                 --quantize
                 --quantization_approach {quantization_approach}
                 --tune_metric eval_f1
-                --perf_tol 0.1
+                --tolerance_criterion 0.1
                 --prune
                 --target_sparsity 0.02
                 --do_eval
@@ -129,7 +129,7 @@ class TestExamples(unittest.TestCase):
                 --quantize
                 --quantization_approach {quantization_approach}
                 --tune_metric eval_f1
-                --perf_tol 0.1
+                --tolerance_criterion 0.1
                 --prune
                 --target_sparsity 0.02
                 --do_eval
@@ -163,7 +163,7 @@ class TestExamples(unittest.TestCase):
                 --quantize
                 --quantization_approach {quantization_approach}
                 --tune_metric eval_accuracy
-                --perf_tol 0.1
+                --tolerance_criterion 0.1
                 --prune
                 --target_sparsity 0.02
                 --do_eval
@@ -198,7 +198,7 @@ class TestExamples(unittest.TestCase):
                 --prune
                 --target_sparsity 0.02
                 --tune_metric eval_loss
-                --perf_tol 0.8
+                --tolerance_criterion 0.8
                 --do_eval
                 --do_train
                 --per_device_eval_batch_size 1
@@ -230,7 +230,7 @@ class TestExamples(unittest.TestCase):
                 --prune
                 --target_sparsity 0.02
                 --tune_metric eval_loss
-                --perf_tol 0.8
+                --tolerance_criterion 0.8
                 --do_eval
                 --do_train
                 --per_device_eval_batch_size 1
