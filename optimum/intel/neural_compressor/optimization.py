@@ -81,28 +81,9 @@ class IncOptimizer:
         self.model = self.scheduler()
         return self.model
 
-    @classmethod
-    def from_pretrained(
-        cls,
-        model_name_or_path: str,
-        quantizer: Optional[IncQuantizer] = None,
-        pruner: Optional[IncPruner] = None,
-    ):
-        """
-        Arguments:
-            model_name_or_path (:obj:`str`):
-                Repository name in the Hugging Face Hub or path to a local directory hosting the model.
-            quantizer (:obj:`IncQuantizer`, `optional`):
-                Quantization object which handles the quantization process.
-            pruner (:obj:`IncPruner`, `optional`):
-                Pruning object which handles the pruning process.
-        """
-        model = cls.TRANSFORMERS_AUTO_CLASS.from_pretrained(model_name_or_path)
-        return cls(model, quantizer=quantizer, pruner=pruner)
-
     def save_pretrained(self, save_directory: Optional[Union[str, os.PathLike]] = None):
         """
-        Save the optimized model to a directory, so that it can be re-loaded using `from_pretrained()`.
+        Save the optimized model as well as its corresponding configuration to a directory, so that it can be re-loaded.
 
         Arguments:
             save_directory (`str` or `os.PathLike`):
@@ -126,43 +107,3 @@ class IncOptimizer:
 
         torch.save(state_dict, os.path.join(save_directory, WEIGHTS_NAME))
         logger.info(f"Model weights saved to {save_directory}")
-
-
-class IncOptimizerForQuestionAnswering(IncOptimizer):
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
-
-
-class IncOptimizerForSequenceClassification(IncOptimizer):
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
-
-
-class IncOptimizerForTokenClassification(IncOptimizer):
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
-
-
-class IncOptimizerForMultipleChoice(IncOptimizer):
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForMultipleChoice
-
-
-class IncOptimizerForSeq2SeqLM(IncOptimizer):
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
-
-
-class IncOptimizerForCausalLM(IncOptimizer):
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
-
-
-class IncOptimizerForMaskedLM(IncOptimizer):
-
-    TRANSFORMERS_AUTO_CLASS = AutoModelForMaskedLM
-
-
-class IncOptimizerForXLNetLM(IncOptimizer):
-
-    TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel
