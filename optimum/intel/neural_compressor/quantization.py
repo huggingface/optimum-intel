@@ -16,7 +16,7 @@ import copy
 import logging
 import os
 from enum import Enum
-from typing import Callable, ClassVar, Dict, List, Optional, Tuple, Union
+from typing import Callable, ClassVar, Dict, Optional, Union
 
 import torch
 from torch.quantization import add_observer_, convert
@@ -35,7 +35,6 @@ from transformers import (
 )
 from transformers.file_utils import cached_path, hf_bucket_url
 from transformers.models.auto.auto_factory import _get_model_class
-from transformers.utils.fx import symbolic_trace
 from transformers.utils.versions import require_version
 
 import neural_compressor
@@ -199,10 +198,6 @@ class IncQuantizedModel:
         model_name_or_path: str,
         inc_config: Union[IncOptimizedConfig, str] = None,
         q_model_name: Optional[str] = None,
-        input_names: Optional[List[str]] = None,
-        batch_size: Optional[int] = None,
-        sequence_length: Optional[Union[int, List[int], Tuple[int]]] = None,
-        num_choices: Optional[int] = -1,
         **kwargs
     ) -> torch.nn.Module:
         """
@@ -218,17 +213,6 @@ class IncQuantizedModel:
             q_model_name (:obj:`str`, `optional`):
                 Name of the state dictionary located in model_name_or_path used to load the quantized model. If
                 state_dict is specified, the latter will not be used.
-            input_names (:obj:`List[str]`, `optional`):
-                List of names of the inputs used when tracing the model. If unset, model.dummy_inputs().keys() are used
-                instead.
-            batch_size (:obj:`int`, `optional`):
-                Batch size of the traced model inputs.
-            sequence_length (:obj:`Union[int, List[int], Tuple[int]]`, `optional`):
-                Sequence length of the traced model inputs. For sequence-to-sequence models with different sequence
-                lengths between the encoder and the decoder inputs, this must be :obj:`[encoder_sequence_length,
-                decoder_sequence_length]`.
-            num_choices (:obj:`int`, `optional`, defaults to -1):
-                The number of possible choices for a multiple choice task.
             cache_dir (:obj:`str`, `optional`):
                 Path to a directory in which a downloaded configuration should be cached if the standard cache should
                 not be used.
@@ -264,7 +248,14 @@ class IncQuantizedModel:
         )
         keys_to_ignore_on_load_missing = copy.deepcopy(getattr(model_class, "_keys_to_ignore_on_load_missing", None))
         # Avoid unnecessary warnings resulting from quantized model initialization
-        quantized_keys_to_ignore_on_load = [r"zero_point", r"scale", r"packed_params", r"constant"]
+        quantized_keys_to_ignore_on_load = [
+            r"zero_point",
+            r"scale",
+            r"packed_params",
+            r"constant",
+            r"module",
+            r"best_configure",
+        ]
         if keys_to_ignore_on_load_unexpected is None:
             model_class._keys_to_ignore_on_load_unexpected = quantized_keys_to_ignore_on_load
         else:
@@ -319,17 +310,6 @@ class IncQuantizedModel:
         else:
             config_path = inc_config if inc_config is not None else model_name_or_path
             inc_config = IncOptimizedConfig.from_pretrained(config_path, **download_kwargs).config
-
-        # if inc_config.get("framework") == "pytorch_fx":
-        #     if batch_size is None or sequence_length is None:
-        #         raise ValueError("Need batch_size and sequence_length for tracing the model with torch fx.")
-        #     model = symbolic_trace(
-        #         model,
-        #         input_names=input_names,
-        #         batch_size=batch_size,
-        #         sequence_length=sequence_length,
-        #         num_choices=num_choices,
-        #     )
 
         q_model = apply_quantization_from_config(inc_config, model)
 

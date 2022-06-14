@@ -86,7 +86,7 @@ To load a quantized model hosted locally or on the 🤗 hub, you can do as follo
 from optimum.intel.neural_compressor.quantization import IncQuantizedModelForSequenceClassification
 
 loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrained(
-    "Intel/albert-base-v2-sst2-int8-static"
+    "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-static"
 )
 ```
 
