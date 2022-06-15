@@ -18,8 +18,7 @@ import os
 import sys
 import time
 import warnings
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import torch
 import torch.distributed as dist
@@ -27,7 +26,6 @@ import torch.distributed as dist
 # from packaging import version
 from torch import nn
 from torch.utils.data.dataloader import DataLoader
-from torch.utils.data.dataset import Dataset, IterableDataset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 from transformers import Trainer
@@ -49,9 +47,9 @@ from transformers.trainer_utils import (
     speed_metrics,
 )
 from transformers.utils import logging
-
 from neural_compressor.experimental import Pruning
-
+from .utils import TRAINING_ARGS_NAME
+from transformers.modeling_utils import get_parameter_dtype
 
 if TYPE_CHECKING:
     import optuna
@@ -75,16 +73,16 @@ class IncTrainer(Trainer):
         Main training entry point.
 
         Args:
-            pruner (:obj:`Pruning`, `optional`):
+            pruner (`Pruning`, *optional*):
                 Pruning object handling the pruning process.
-            resume_from_checkpoint (:obj:`str` or :obj:`bool`, `optional`):
-                If a :obj:`str`, local path to a saved checkpoint as saved by a previous instance of
-                :class:`~transformers.Trainer`. If a :obj:`bool` and equals `True`, load the last checkpoint in
+            resume_from_checkpoint (`str` or `bool`, *optional*):
+                If a `str`, local path to a saved checkpoint as saved by a previous instance of
+                :class:`~transformers.Trainer`. If a `bool` and equals `True`, load the last checkpoint in
                 `args.output_dir` as saved by a previous instance of :class:`~transformers.Trainer`. If present,
                 training will resume from the model/optimizer/scheduler states loaded here.
-            trial (:obj:`optuna.Trial` or :obj:`Dict[str, Any]`, `optional`):
+            trial (`optuna.Trial` or `Dict[str, Any]`, *optional*):
                 The trial run or the hyperparameter dictionary for hyperparameter search.
-            ignore_keys_for_eval (:obj:`List[str]`, `optional`)
+            ignore_keys_for_eval (`List[str]`, *optional*):
                 A list of keys in the output of your model (if it is a dictionary) that should be ignored when
                 gathering predictions for evaluation during the training.
             kwargs:
@@ -466,3 +464,53 @@ class IncTrainer(Trainer):
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
+
+    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+        """
+        Will save the model, so you can reload it using `from_pretrained()`.
+        Will only save from the main process.
+        """
+
+        if output_dir is None:
+            output_dir = self.args.output_dir
+
+        if self.args.should_save:
+            self._save(output_dir)
+
+    def _save(self, output_dir: Optional[str] = None, state_dict=None):
+        # If we are executing this function, we are the process zero, so we don't check for that.
+        output_dir = output_dir if output_dir is not None else self.args.output_dir
+
+        if os.path.isfile(output_dir):
+            logger.error(f"Provided path ({output_dir}) should be a directory, not a file")
+            return
+
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"Saving model checkpoint to {output_dir}")
+
+        # Save the string version of dtype to the config, e.g. convert torch.float32 => "float32"
+        dtype = get_parameter_dtype(self.model)
+        self.model.config.torch_dtype = str(dtype).split(".")[1]
+
+        # Attach architecture to the config
+        self.model.config.architectures = [self.model.__class__.__name__]
+
+        # Save the config
+        self.model.config.save_pretrained(output_dir)
+
+        # Save the model
+        if state_dict is None:
+            state_dict = self.model.state_dict()
+
+        # If we save using the predefined names, we can load using `from_pretrained`
+        output_model_file = os.path.join(output_dir, WEIGHTS_NAME)
+
+        torch.save(state_dict, output_model_file)
+
+        logger.info(f"Model weights saved in {output_model_file}")
+
+        if self.tokenizer is not None:
+            self.tokenizer.save_pretrained(output_dir)
+
+        # Good practice: save your training arguments together with the trained model
+        torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))

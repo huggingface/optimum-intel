@@ -63,10 +63,7 @@ class TestINCQuantization(unittest.TestCase):
             eval_dataset = dataset.select(range(max_eval_samples))
 
         def compute_metrics(p: EvalPrediction):
-            preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
-            preds = np.argmax(preds, axis=1)
-            result = metric.compute(predictions=preds, references=p.label_ids)
-            return result
+            return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
 
         training_args = TrainingArguments(output_dir, num_train_epochs=1.0 if do_train else 0.0)
 
@@ -141,10 +138,78 @@ class TestINCQuantization(unittest.TestCase):
             # Verification quantized model was correctly loaded
             self.assertEqual(q_model_result, loaded_model_result)
 
+    def test_quantization_aware_training(self):
+        model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+        task = "sst2"
+        max_eval_samples = 64
+        max_train_samples = 64
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        metric = load_metric("glue", task)
+        dataset = load_dataset("glue", task)
+        dataset = dataset.map(
+            lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
+        )
+        train_dataset = dataset["train"].select(range(max_train_samples))
+        eval_dataset = dataset["validation"].select(range(max_eval_samples))
+
+        def compute_metrics(p: EvalPrediction):
+            return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
+
+        def train_func(model):
+            trainer.model_wrapped = model
+            trainer.model = model
+            _ = trainer.train()
+            return trainer.model
+
+        def eval_func(model):
+            trainer.model = model
+            metrics = trainer.evaluate()
+            return metrics.get("eval_accuracy")
+
+        config_path = os.path.dirname(os.path.abspath(__file__))
+
+        q8_config = IncQuantizationConfig.from_pretrained(config_path, config_file_name="quantization.yml")
+        q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
+        q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
+        q8_config.set_config("model.framework", "pytorch_fx")
+        quantizer = IncQuantizer(q8_config, eval_func=eval_func, train_func=train_func)
+        optimizer = IncOptimizer(model, quantizer=quantizer)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(tmp_dir, num_train_epochs=1.0)
+
+            trainer = IncTrainer(
+                model=model,
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                compute_metrics=compute_metrics,
+                tokenizer=tokenizer,
+                data_collator=default_data_collator,
+            )
+
+            model_result = eval_func(model)
+            optimized_model = optimizer.fit()
+
+            optimized_model_result = eval_func(optimized_model.model)
+
+            optimizer.save_pretrained(tmp_dir)
+
+            loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
+            loaded_model.eval()
+            loaded_model_result = eval_func(loaded_model)
+
+            # Verification accuracy loss is under 20%
+            self.assertGreaterEqual(optimized_model_result, model_result * 0.80)
+
+            # Verification quantized model was correctly loaded
+            self.assertEqual(optimized_model_result, loaded_model_result)
+
 
 class TestINCOptimizer(unittest.TestCase):
-    def test_pruning_quantization_aware_training(self):
-
+    def test_pruning_quantization_dynamic(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
         task = "sst2"
         max_eval_samples = 64
@@ -162,10 +227,7 @@ class TestINCOptimizer(unittest.TestCase):
         eval_dataset = dataset["validation"].select(range(max_eval_samples))
 
         def compute_metrics(p: EvalPrediction):
-            preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
-            preds = np.argmax(preds, axis=1)
-            result = metric.compute(predictions=preds, references=p.label_ids)
-            return result
+            return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
 
         def train_func(model):
             trainer.model_wrapped = model
@@ -207,10 +269,10 @@ class TestINCOptimizer(unittest.TestCase):
             )
 
             model_result = eval_func(model)
-            opt_model = optimizer.fit()
+            optimized_model = optimizer.fit()
 
-            opt_model_result = eval_func(opt_model.model)
-            _, sparsity = opt_model.report_sparsity()
+            optimized_model_result = eval_func(optimized_model.model)
+            _, sparsity = optimized_model.report_sparsity()
 
             optimizer.save_pretrained(tmp_dir)
 
@@ -222,10 +284,10 @@ class TestINCOptimizer(unittest.TestCase):
             self.assertEqual(round(sparsity), target_sparsity * 100)
 
             # Verification accuracy loss is under 5%
-            self.assertGreaterEqual(opt_model_result, model_result * 0.95)
+            self.assertGreaterEqual(optimized_model_result, model_result * 0.95)
 
             # Verification quantized model was correctly loaded
-            self.assertEqual(opt_model_result, loaded_model_result)
+            self.assertEqual(optimized_model_result, loaded_model_result)
 
 
 if __name__ == "__main__":

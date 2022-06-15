@@ -76,7 +76,7 @@ optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
 # Apply pruning and quantization 
 optimized_model = optimizer.fit()
 
-# Save the resulting model and corresponding configuration in the directory output_dir
+# Save the resulting model and its corresponding configuration in the given directory
 optimizer.save_pretrained(output_dir)
 
 ```

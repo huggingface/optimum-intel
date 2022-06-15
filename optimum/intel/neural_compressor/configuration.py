@@ -19,7 +19,6 @@ from typing import Any, Optional, Union
 
 from transformers.file_utils import cached_path, hf_bucket_url
 
-import requests
 import yaml
 from neural_compressor.conf.config import Conf, Pruning_Conf, Quantization_Conf
 from optimum.intel.neural_compressor.utils import CONFIG_NAME
@@ -32,7 +31,7 @@ class IncConfig:
     def __init__(self, config_path: str):
         """
         Args:
-            config_path (:obj:`str`):
+            config_path (`str`):
                 Path to the YAML configuration file used to control the tuning behavior.
         Returns:
             config: IncConfig object.
@@ -71,20 +70,20 @@ class IncConfig:
         huggingface.co or from a local directory path.
 
         Args:
-            config_name_or_path (:obj:`str`):
+            config_name_or_path (`str`):
                 Repository name in the Hugging Face Hub or path to a local directory containing the configuration file.
-            config_file_name (:obj:`str`, `optional`):
+            config_file_name (`str`, *optional*):
                 Name of the configuration file.
-            cache_dir (:obj:`str`, `optional`):
+            cache_dir (`str`, *optional*):
                 Path to a directory in which a downloaded configuration should be cached if the standard cache should
                 not be used.
-            force_download (:obj:`bool`, `optional`, defaults to :obj:`False`):
+            force_download (`bool`, *optional*, defaults to `False`):
                 Whether or not to force to (re-)download the configuration files and override the cached versions if
                 they exist.
-            resume_download (:obj:`bool`, `optional`, defaults to :obj:`False`):
+            resume_download (`bool`, *optional*, defaults to `False`):
                 Whether or not to delete incompletely received file. Attempts to resume the download if such a file
                 exists.
-            revision(:obj:`str`, `optional`):
+            revision(`str`, *optional*):
                 The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a
                 git-based system for storing models and other artifacts on huggingface.co, so ``revision`` can be any
                 identifier allowed by git.
@@ -137,7 +136,7 @@ class IncOptimizedConfig(IncConfig):
     def __init__(self, config_path: str):
         """
         Args:
-            config_path (:obj:`str`):
+            config_path (`str`):
                 Path to the YAML configuration file used to control the tuning behavior.
         Returns:
             config: IncOptimizedConfig object.
@@ -161,7 +160,7 @@ class IncQuantizationConfig(IncConfig):
     def __init__(self, config_path: str):
         """
         Args:
-            config_path (:obj:`str`):
+            config_path (`str`):
                 Path to the YAML configuration file used to control the tuning behavior.
         Returns:
             config: IncQuantizationConfig object.
@@ -176,7 +175,7 @@ class IncPruningConfig(IncConfig):
     def __init__(self, config_path: str):
         """
         Args:
-            config_path (:obj:`str`):
+            config_path (`str`):
                 Path to the YAML configuration file used to control the tuning behavior.
         Returns:
             config: IncPruningConfig object.

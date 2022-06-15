@@ -70,14 +70,14 @@ class IncQuantizer:
     ):
         """
         Arguments:
-            config_path_or_obj (:obj:`Union[str, IncQuantizationConfig]`):
+            config_path_or_obj (`Union[str, IncQuantizationConfig]`):
                 Path to the YAML configuration file or an instance of the class :class:`IncQuantizationConfig`, used to
                 control the tuning behavior.
-            eval_func (:obj:`Callable`, `optional`):
+            eval_func (`Callable`, *optional*):
                 Evaluation function to evaluate the tuning objective.
-            train_func (:obj:`Callable`, `optional`):
+            train_func (`Callable`, *optional*):
                 Training function for quantization aware training approach.
-            calib_dataloader (:obj:`DataLoader`, `optional`):
+            calib_dataloader (`DataLoader`, *optional*):
                 DataLoader for post-training quantization calibration.
 
         Returns:
@@ -123,12 +123,12 @@ def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> to
     Apply Intel Neural Compressor (INC) quantization steps on the given model.
 
     Arguments:
-        q_config (:obj:`Dict`):
+        q_config (`Dict`):
             Dictionary containing all quantization information such as approach, dtype, scheme and granularity.
-        model (:obj:`torch.nn.Module`):
+        model (`torch.nn.Module`):
             Model to quantize.
     Returns:
-        q_model (:obj:`torch.nn.Module`):
+        q_model (`torch.nn.Module`):
             Quantized model.
     """
 
@@ -203,30 +203,30 @@ class IncQuantizedModel:
         """
         Instantiate a quantized pytorch model from a given Intel Neural Compressor (INC) configuration file.
         Arguments:
-            model_name_or_path (:obj:`str`):
+            model_name_or_path (`str`):
                 Repository name in the Hugging Face Hub or path to a local directory hosting the model.
-            inc_config (:obj:`Union[IncOptimizedConfig, str]`, `optional`):
+            inc_config (`Union[IncOptimizedConfig, str]`, *optional*):
                 Configuration file containing all the information related to the model quantization.
                 Can be either:
                     - an instance of the class :class:`IncOptimizedConfig`,
                     - a string valid as input to :func:`IncOptimizedConfig.from_pretrained`.
-            q_model_name (:obj:`str`, `optional`):
+            q_model_name (`str`, *optional*):
                 Name of the state dictionary located in model_name_or_path used to load the quantized model. If
                 state_dict is specified, the latter will not be used.
-            cache_dir (:obj:`str`, `optional`):
+            cache_dir (`str`, *optional*):
                 Path to a directory in which a downloaded configuration should be cached if the standard cache should
                 not be used.
-            force_download (:obj:`bool`, `optional`, defaults to :obj:`False`):
+            force_download (`bool`, *optional*, defaults to `False`):
                 Whether or not to force to (re-)download the configuration files and override the cached versions if
                 they exist.
-            resume_download (:obj:`bool`, `optional`, defaults to :obj:`False`):
+            resume_download (`bool`, *optional*, defaults to `False`):
                 Whether or not to delete incompletely received file. Attempts to resume the download if such a file
                 exists.
-            revision(:obj:`str`, `optional`):
+            revision(`str`, *optional*):
                 The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a
                 git-based system for storing models and other artifacts on huggingface.co, so ``revision`` can be any
                 identifier allowed by git.
-            state_dict (:obj:`Dict[str, torch.Tensor]`, `optional`):
+            state_dict (`Dict[str, torch.Tensor]`, *optional*):
                 State dictionary of the quantized model, if not specified q_model_name will be used to load the
                 state dictionary.
         Returns:
