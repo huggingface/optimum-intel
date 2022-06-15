@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 CONFIG_NAME = "best_configure.yaml"
 WEIGHTS_NAME = "pytorch_model.bin"
+TRAINING_ARGS_NAME = "training_args.bin"
 
 
 class IncDataLoader(DataLoader):
@@ -47,12 +48,12 @@ class IncDataLoader(DataLoader):
 def _cfgs_to_fx_cfgs(op_cfgs: Dict, observer_type: str = "post_training_static_quant") -> Dict:
     """Inc function which convert a quantization config to a format that meets the requirements of torch.fx.
     Args:
-        op_cfgs (:obj:`dict`):
+        op_cfgs (`dict`):
             Dictionary of quantization configure for each op.
-        observer_type (:obj:`str`):
+        observer_type (`str`):
             Specify observer type.
     Returns:
-        fx_op_cfgs (:obj:`dict`):
+        fx_op_cfgs (`dict`):
             Dictionary of quantization configure that meets the requirements of torch.fx.
     """
     fx_op_cfgs = dict()

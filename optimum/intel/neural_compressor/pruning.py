@@ -44,12 +44,12 @@ class IncPruner:
     ):
         """
         Arguments:
-            config_path_or_obj (:obj:`Union[str, IncPruningConfig]` ):
+            config_path_or_obj (`Union[str, IncPruningConfig]`):
                 Path to the YAML configuration file or an instance of the class :class:`IncPruningConfig`, used to
                 control the tuning behavior.
-            eval_func (:obj:`Callable`, `optional`):
+            eval_func (`Callable`, *optional*):
                 Evaluation function to evaluate the tuning objective.
-            train_func (:obj:`Callable`, `optional`):
+            train_func (`Callable`, *optional*):
                 Training function which will be combined with pruning.
         Returns:
             pruner: IncPruner object.

@@ -14,7 +14,7 @@
 
 import logging
 import os
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 import torch
 from transformers import (
@@ -48,17 +48,17 @@ class IncOptimizer:
 
     def __init__(
         self,
-        model: Union[PreTrainedModel],
+        model: PreTrainedModel,
         quantizer: Optional[IncQuantizer] = None,
         pruner: Optional[IncPruner] = None,
     ):
         """
         Arguments:
-            model (:obj:`Union[PreTrainedModel]`):
+            model (`PreTrainedModel`):
                 Model to quantize and/or prune.
-            quantizer (:obj:`IncQuantizer`, `optional`):
+            quantizer (`IncQuantizer`, *optional*):
                 Quantization object which handles the quantization process.
-            pruner (:obj:`IncPruner`, `optional`):
+            pruner (`IncPruner`, *optional*):
                 Pruning object which handles the pruning process.
         """
         self.config = model.config
