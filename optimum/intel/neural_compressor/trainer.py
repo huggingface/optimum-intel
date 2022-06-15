@@ -35,6 +35,7 @@ from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
 
 # Integrations must be imported before ML frameworks:
 from transformers.integrations import hp_params
+from transformers.modeling_utils import get_parameter_dtype
 from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_callback import TrainerState
 from transformers.trainer_pt_utils import IterableDatasetShard
@@ -47,9 +48,11 @@ from transformers.trainer_utils import (
     speed_metrics,
 )
 from transformers.utils import logging
+
 from neural_compressor.experimental import Pruning
+
 from .utils import TRAINING_ARGS_NAME
-from transformers.modeling_utils import get_parameter_dtype
+
 
 if TYPE_CHECKING:
     import optuna
