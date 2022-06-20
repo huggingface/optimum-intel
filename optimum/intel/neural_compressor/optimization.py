@@ -51,6 +51,9 @@ class IncOptimizer:
         model: PreTrainedModel,
         quantizer: Optional[IncQuantizer] = None,
         pruner: Optional[IncPruner] = None,
+        one_shot_optimization: bool = True,
+        eval_func: Optional[Callable] = None,
+        train_func: Optional[Callable] = None,
     ):
         """
         Arguments:
@@ -60,19 +63,37 @@ class IncOptimizer:
                 Quantization object which handles the quantization process.
             pruner (`IncPruner`, *optional*):
                 Pruning object which handles the pruning process.
+            one_shot_optimization (`bool`, *optional*, defaults to True):
+                Whether to apply the compression processes all together.
+            eval_func (`Callable`, *optional*):
+                Evaluation function to evaluate the tuning objective.
+            train_func (`Callable`, *optional*):
+                Training function which will be combined with pruning.
         """
         self.config = model.config
         self.scheduler = Scheduler()
         self.scheduler.model = common.Model(model)
-        self.pruner = pruner
         self.model = None
+        self.do_prune = False
+        self.do_quantize = False
 
+        components = []
         if pruner is not None:
-            self.scheduler.append(pruner.pruner)
+            components.append(pruner.pruner)
+            self.do_prune = True
 
         if quantizer is not None:
-            self.scheduler.append(quantizer.quantizer)
+            components.append(quantizer.quantizer)
+            self.do_quantize = True
             self.config.torch_dtype = "int8"
+
+        if one_shot_optimization and len(components) > 1:
+            agent = self.scheduler.combine(*components)
+            agent.train_func = train_func
+            agent.eval_func = eval_func
+            self.scheduler.append(agent)
+        else:
+            self.scheduler.append(*components)
 
     def fit(self):
         # If no optimization, the original model is returned
@@ -80,6 +101,9 @@ class IncOptimizer:
             logger.error("No optimization applied.`IncOptimizer` requires either a `quantizer` or `pruner` argument")
         self.model = self.scheduler()
         return self.model
+
+    def get_agent(self):
+        return self.scheduler.components[0] if self.do_prune else None
 
     def save_pretrained(self, save_directory: Optional[Union[str, os.PathLike]] = None):
         """
