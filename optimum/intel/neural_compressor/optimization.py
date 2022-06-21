@@ -73,7 +73,7 @@ class IncOptimizer:
         self.config = model.config
         self.scheduler = Scheduler()
         self.scheduler.model = common.Model(model)
-        self.model = None
+        self._model = None
         self.do_prune = False
         self.do_quantize = False
 
@@ -99,11 +99,19 @@ class IncOptimizer:
         # If no optimization, the original model is returned
         if len(self.scheduler.components) == 0:
             logger.error("No optimization applied.`IncOptimizer` requires either a `quantizer` or `pruner` argument")
-        self.model = self.scheduler()
+        self._model = self.scheduler()
         return self.model
+
+    @property
+    def model(self):
+        return self._model.model
 
     def get_agent(self):
         return self.scheduler.components[0] if self.do_prune else None
+
+    def get_sparsity(self):
+        sparsity = self._model.report_sparsity()
+        return sparsity[-1]
 
     def save_pretrained(self, save_directory: Optional[Union[str, os.PathLike]] = None):
         """
@@ -117,17 +125,17 @@ class IncOptimizer:
             logger.error(f"Provided path ({save_directory}) should be a directory, not a file")
             return
 
-        if self.model is None:
+        if self._model is None:
             logger.error(f"The model was not optimized, please call the `fit` method before saving.")
             return
 
         os.makedirs(save_directory, exist_ok=True)
         self.config.save_pretrained(save_directory)
-        state_dict = self.model.model.state_dict()
-        if hasattr(self.model, "tune_cfg"):
-            state_dict["best_configure"] = self.model.tune_cfg
+        state_dict = self._model.model.state_dict()
+        if hasattr(self._model, "tune_cfg"):
+            state_dict["best_configure"] = self._model.tune_cfg
             with open(os.path.join(save_directory, CONFIG_NAME), "w") as f:
-                yaml.dump(self.model.tune_cfg, f, default_flow_style=False)
+                yaml.dump(self._model.tune_cfg, f, default_flow_style=False)
 
         torch.save(state_dict, os.path.join(save_directory, WEIGHTS_NAME))
         logger.info(f"Model weights saved to {save_directory}")
