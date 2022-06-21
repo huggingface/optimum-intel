@@ -97,7 +97,7 @@ class IncOptimizer:
             self.scheduler.append(*components)
 
         if self.do_quantize and quantizer.approach != IncQuantizationMode.AWARE_TRAINING:
-            self.scheduler.append(quantizer)
+            self.scheduler.append(quantizer.quantizer)
 
     def fit(self):
         # If no optimization, the original model is returned
