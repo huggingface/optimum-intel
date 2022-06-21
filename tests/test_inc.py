@@ -96,7 +96,7 @@ class TestINCQuantization(unittest.TestCase):
             quantizer = IncQuantizer(q8_config, eval_func=eval_func)
             optimizer = IncOptimizer(model, quantizer=quantizer)
             q_model = optimizer.fit()
-            q_model_result = eval_func(q_model.model)
+            q_model_result = eval_func(q_model)
 
             # Verification accuracy loss is under 2%
             self.assertGreaterEqual(q_model_result, model_result * 0.98)
@@ -124,7 +124,7 @@ class TestINCQuantization(unittest.TestCase):
             quantizer = IncQuantizer(q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader())
             optimizer = IncOptimizer(model, quantizer=quantizer)
             q_model = optimizer.fit()
-            q_model_result = eval_func(q_model.model)
+            q_model_result = eval_func(q_model)
 
             # Verification accuracy loss is under 4%
             self.assertGreaterEqual(q_model_result, model_result * 0.96)
@@ -193,7 +193,7 @@ class TestINCQuantization(unittest.TestCase):
             model_result = eval_func(model)
             optimized_model = optimizer.fit()
 
-            optimized_model_result = eval_func(optimized_model.model)
+            optimized_model_result = eval_func(optimized_model)
 
             optimizer.save_pretrained(tmp_dir)
 
@@ -271,7 +271,7 @@ class TestINCOptimizer(unittest.TestCase):
             model_result = eval_func(model)
             optimized_model = optimizer.fit()
 
-            optimized_model_result = eval_func(optimized_model.model)
+            optimized_model_result = eval_func(optimized_model)
             _, sparsity = optimized_model.report_sparsity()
 
             optimizer.save_pretrained(tmp_dir)
