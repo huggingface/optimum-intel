@@ -17,7 +17,7 @@ version: 1.0
 
 model:
   name: bert_prune
-  framework: pytorch
+  framework: pytorch_fx
 
 pruning:
   approach:
