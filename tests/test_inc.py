@@ -272,7 +272,7 @@ class TestINCOptimizer(unittest.TestCase):
             optimized_model = optimizer.fit()
 
             optimized_model_result = eval_func(optimized_model)
-            _, sparsity = optimized_model.report_sparsity()
+            sparsity = optimizer.get_sparsity()
 
             optimizer.save_pretrained(tmp_dir)
 
