@@ -35,7 +35,7 @@ from neural_compressor.experimental import Pruning, Quantization, common
 from neural_compressor.experimental.scheduler import Scheduler
 
 from .pruning import IncPruner
-from .quantization import IncQuantizer
+from .quantization import IncQuantizationMode, IncQuantizer
 from .utils import CONFIG_NAME, WEIGHTS_NAME
 
 
@@ -83,7 +83,8 @@ class IncOptimizer:
             self.do_prune = True
 
         if quantizer is not None:
-            components.append(quantizer.quantizer)
+            if quantizer.approach == IncQuantizationMode.AWARE_TRAINING:
+                components.append(quantizer.quantizer)
             self.do_quantize = True
             self.config.torch_dtype = "int8"
 
@@ -94,6 +95,9 @@ class IncOptimizer:
             self.scheduler.append(agent)
         else:
             self.scheduler.append(*components)
+
+        if self.do_quantize and quantizer.approach != IncQuantizationMode.AWARE_TRAINING:
+            self.scheduler.append(quantizer)
 
     def fit(self):
         # If no optimization, the original model is returned
