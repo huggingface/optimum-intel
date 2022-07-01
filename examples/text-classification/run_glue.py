@@ -532,8 +532,8 @@ def main():
     resume_from_checkpoint = training_args.resume_from_checkpoint
     metric_name = optim_args.metric
     if metric_name is None:
-        metric_name = (
-            "eval_" + "pearson"
+        metric_name = "eval_" + (
+            "pearson"
             if data_args.task_name == "stsb"
             else "matthews_correlation"
             if data_args.task_name == "cola"
@@ -547,7 +547,7 @@ def main():
             trainer.save_metrics("eval", metrics)
         logger.info("{}: {}".format(metric_name, metrics.get(metric_name)))
         logger.info("Throughput: {} samples/sec".format(metrics.get("eval_samples_per_second")))
-        return metrics.get(metric_name)
+        return metrics[metric_name]
 
     def eval_func(model):
         return take_eval_steps(model, trainer, metric_name)

@@ -643,7 +643,7 @@ def main():
         if save_metrics:
             trainer.save_metrics("eval", metrics)
         logger.info("{}: {}".format(metric_name, metrics.get(metric_name)))
-        return metrics.get(metric_name)
+        return metrics[metric_name]
 
     def eval_func(model):
         return take_eval_steps(model, trainer, metric_name)
