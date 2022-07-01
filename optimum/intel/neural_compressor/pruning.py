@@ -17,7 +17,7 @@ from enum import Enum
 from typing import Callable, ClassVar, Optional, Union
 
 from neural_compressor.conf.config import Pruning_Conf
-from neural_compressor.experimental import Pruning, common
+from neural_compressor.experimental import Pruning
 
 from .configuration import IncPruningConfig
 
@@ -39,37 +39,26 @@ class IncPruner:
 
     def __init__(
         self,
-        config_path_or_obj: Union[str, IncPruningConfig],
-        eval_func: Optional[Callable] = None,
-        train_func: Optional[Callable] = None,
+        config: Union[str, IncPruningConfig],
+        eval_func: Optional[Callable],
+        train_func: Optional[Callable],
     ):
         """
         Arguments:
-            config_path_or_obj (`Union[str, IncPruningConfig]`):
+            config (`Union[str, IncPruningConfig]`):
                 Path to the YAML configuration file or an instance of the class :class:`IncPruningConfig`, used to
                 control the tuning behavior.
-            eval_func (`Callable`, *optional*):
+            eval_func (`Callable`):
                 Evaluation function to evaluate the tuning objective.
-            train_func (`Callable`, *optional*):
+            train_func (`Callable`):
                 Training function which will be combined with pruning.
         Returns:
             pruner: IncPruner object.
         """
 
-        self.config = (
-            config_path_or_obj.config
-            if isinstance(config_path_or_obj, IncPruningConfig)
-            else Pruning_Conf(config_path_or_obj)
-        )
+        self.config = config.config if isinstance(config, IncPruningConfig) else Pruning_Conf(config)
         self.eval_func = eval_func
         self.train_func = train_func
         self.pruner = Pruning(self.config)
-
-        if self.eval_func is None:
-            raise ValueError("eval_func must be provided for pruning.")
-
-        if self.train_func is None:
-            raise ValueError("train_func must be provided for pruning.")
-
         self.pruner.pruning_func = self.train_func
         self.pruner.eval_func = self.eval_func

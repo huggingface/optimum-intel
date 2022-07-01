@@ -44,6 +44,8 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 from optimum.intel.neural_compressor import (
+    IncDistillation,
+    IncDistillationConfig,
     IncOptimizer,
     IncPruner,
     IncPruningConfig,
@@ -201,7 +203,7 @@ class OptimizationArguments:
     Arguments pertaining to what type of optimization we are going to apply on the model.
     """
 
-    quantize: bool = field(
+    apply_quantization: bool = field(
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
     )
@@ -209,13 +211,20 @@ class OptimizationArguments:
         default=None,
         metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
     )
-    prune: bool = field(
+    apply_pruning: bool = field(
         default=False,
         metadata={"help": "Whether or not to apply pruning."},
     )
     target_sparsity: Optional[float] = field(
         default=None,
         metadata={"help": "Targeted sparsity when pruning the model."},
+    )
+    apply_distillation: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to apply distillation."},
+    )
+    teacher_model_name_or_path: str = field(
+        default=False, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
     quantization_config: Optional[str] = field(
         default=None,
@@ -230,7 +239,14 @@ class OptimizationArguments:
             "help": "Path to the directory containing the YAML configuration file used to control the pruning behavior."
         },
     )
-    tune_metric: str = field(
+    distillation_config: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Path to the directory containing the YAML configuration file used to control the distillation"
+            "behavior."
+        },
+    )
+    metric: str = field(
         default="eval_f1",
         metadata={"help": "Metric used for the tuning strategy."},
     )
@@ -561,7 +577,7 @@ def main():
     )
 
     resume_from_checkpoint = training_args.resume_from_checkpoint
-    metric_name = optim_args.tune_metric
+    metric_name = optim_args.metric
 
     def take_eval_steps(model, trainer, metric_name, save_metrics=False):
         trainer.model = model
@@ -583,9 +599,7 @@ def main():
             checkpoint = resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
-        train_result = trainer.train(
-            pruner.pruner if hasattr(pruner, "pruner") else None, resume_from_checkpoint=checkpoint
-        )
+        train_result = trainer.train(agent, resume_from_checkpoint=checkpoint)
         metrics = train_result.metrics
         trainer.save_model()  # Saves the tokenizer too for easy upload
         trainer.log_metrics("train", metrics)
@@ -598,15 +612,16 @@ def main():
 
     quantizer = None
     pruner = None
+    distillation = None
 
-    if not optim_args.quantize and not optim_args.prune:
-        raise ValueError("quantize and prune are both set to False.")
+    if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
+        raise ValueError("No optimization activated.")
 
     result_baseline_model = take_eval_steps(model, trainer, metric_name)
 
     default_config = os.path.join(os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir)), "config")
 
-    if optim_args.quantize:
+    if optim_args.apply_quantization:
 
         if not training_args.do_eval:
             raise ValueError("do_eval must be set to True for quantization.")
@@ -650,7 +665,7 @@ def main():
             q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
         )
 
-    if optim_args.prune:
+    if optim_args.apply_pruning:
 
         if not training_args.do_train:
             raise ValueError("do_train must be set to True for pruning.")
@@ -685,7 +700,55 @@ def main():
         # Creation Pruning object used for IncTrainer training loop
         pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
 
-    optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
+    if optim_args.apply_distillation:
+
+        if optim_args.teacher_model_name_or_path is None:
+            raise ValueError("A teacher model is needed to apply distillation.")
+
+        if not training_args.do_train:
+            raise ValueError("do_train must be set to True for distillation.")
+
+        teacher_config = AutoConfig.from_pretrained(
+            optim_args.teacher_model_name_or_path,
+            num_labels=num_labels,
+            label2id=label_to_id,
+            id2label={i: l for l, i in label_to_id.items()},
+            finetuning_task=data_args.task_name,
+        )
+        teacher_tokenizer = AutoTokenizer.from_pretrained(optim_args.teacher_model_name_or_path, use_fast=True)
+        teacher_model = AutoModelForTokenClassification.from_pretrained(
+            optim_args.teacher_model_name_or_path,
+            from_tf=bool(".ckpt" in model_args.model_name_or_path),
+            config=teacher_config,
+        )
+
+        teacher_model.to(training_args.device)
+
+        if teacher_tokenizer.vocab != tokenizer.vocab:
+            raise ValueError("Teacher model and student model should have same tokenizer.")
+
+        distillation_config = IncDistillationConfig.from_pretrained(
+            optim_args.distillation_config if optim_args.distillation_config is not None else default_config,
+            config_file_name="distillation.yml",
+            cache_dir=model_args.cache_dir,
+        )
+
+        # Creation Distillation object used for IncTrainer training loop
+        distillation = IncDistillation(
+            teacher_model=teacher_model, config=distillation_config, eval_func=eval_func, train_func=train_func
+        )
+
+    optimizer = IncOptimizer(
+        model,
+        quantizer=quantizer,
+        pruner=pruner,
+        distillation=distillation,
+        one_shot_optimization=True,
+        eval_func=eval_func,
+        train_func=train_func,
+    )
+
+    agent = optimizer.get_agent()
     optimized_model = optimizer.fit()
     result_optimized_model = take_eval_steps(optimized_model, trainer, metric_name, save_metrics=True)
 
@@ -696,7 +759,7 @@ def main():
         f" Original model had an {metric_name} of {result_baseline_model}."
     )
 
-    if optim_args.quantize and optim_args.verify_loading:
+    if optim_args.apply_quantization and optim_args.verify_loading:
 
         # Load the model obtained after Intel Neural Compressor (INC) quantization
         loaded_model = IncQuantizedModelForTokenClassification.from_pretrained(training_args.output_dir)

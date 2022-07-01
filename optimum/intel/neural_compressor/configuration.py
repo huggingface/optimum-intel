@@ -20,7 +20,7 @@ from typing import Any, Optional, Union
 from transformers.file_utils import cached_path, hf_bucket_url
 
 import yaml
-from neural_compressor.conf.config import Conf, Pruning_Conf, Quantization_Conf
+from neural_compressor.conf.config import Conf, Distillation_Conf, Pruning_Conf, Quantization_Conf
 from optimum.intel.neural_compressor.utils import CONFIG_NAME
 
 
@@ -138,8 +138,6 @@ class IncOptimizedConfig(IncConfig):
         Args:
             config_path (`str`):
                 Path to the YAML configuration file used to control the tuning behavior.
-        Returns:
-            config: IncOptimizedConfig object.
         """
 
         self.path = config_path
@@ -162,8 +160,6 @@ class IncQuantizationConfig(IncConfig):
         Args:
             config_path (`str`):
                 Path to the YAML configuration file used to control the tuning behavior.
-        Returns:
-            config: IncQuantizationConfig object.
         """
 
         self.path = config_path
@@ -177,10 +173,21 @@ class IncPruningConfig(IncConfig):
         Args:
             config_path (`str`):
                 Path to the YAML configuration file used to control the tuning behavior.
-        Returns:
-            config: IncPruningConfig object.
         """
 
         self.path = config_path
         self.config = Pruning_Conf(config_path)
+        self.usr_cfg = self.config.usr_cfg
+
+
+class IncDistillationConfig(IncConfig):
+    def __init__(self, config_path: str):
+        """
+        Args:
+            config_path (:obj:`str`):
+                Path to the YAML configuration file used to control the tuning behavior.
+        """
+
+        self.path = config_path
+        self.config = Distillation_Conf(config_path)
         self.usr_cfg = self.config.usr_cfg

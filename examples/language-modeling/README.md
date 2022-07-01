@@ -37,7 +37,7 @@ python run_clm.py \
     --model_name_or_path EleutherAI/gpt-neo-125M \
     --dataset_name wikitext \
     --dataset_config_name wikitext-2-raw-v1 \
-    --quantize \
+    --apply_quantization \
     --quantization_approach aware_training \
     --prune \
     --target_sparsity 0.02 \
@@ -59,9 +59,9 @@ python run_mlm.py \
     --model_name_or_path bert-base-uncased  \
     --dataset_name wikitext \
     --dataset_config_name wikitext-2-raw-v1 \
-    --quantize \
+    --apply_quantization \
     --quantization_approach aware_training \
-    --prune \
+    --apply_pruning \
     --target_sparsity 0.1 \
     --tolerance_criterion 0.5 \
     --do_train \

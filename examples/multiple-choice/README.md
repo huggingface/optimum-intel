@@ -26,7 +26,7 @@ The following example applies post-training static quantization on a BERT fine-t
 ```bash
 python run_swag.py \
     --model_name_or_path ehdwns1516/bert-base-uncased_SWAG \
-    --quantize \
+    --apply_quantization \
     --quantization_approach static \
     --do_train \
     --do_eval \
@@ -42,9 +42,9 @@ dynamic quantization as a second step.
 ```bash
 python run_swag.py \
     --model_name_or_path ehdwns1516/bert-base-uncased_SWAG \
-    --quantize \
+    --apply_quantization \
     --quantization_approach dynamic \
-    --prune \
+    --apply_pruning \
     --target_sparsity 0.1 \
     --do_train \
     --do_eval \
