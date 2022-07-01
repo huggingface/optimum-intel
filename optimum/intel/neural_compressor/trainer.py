@@ -64,7 +64,6 @@ logger = logging.get_logger(__name__)
 
 
 class IncTrainer(Trainer):
-
     def train(
         self,
         agent: Optional[Component] = None,
@@ -550,7 +549,12 @@ class IncTrainer(Trainer):
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
-        if self.is_in_train and hasattr(self, "agent") and hasattr(self.agent, "criterion") and hasattr(self.agent, "on_post_forward"):
+        if (
+            self.is_in_train
+            and hasattr(self, "agent")
+            and hasattr(self.agent, "criterion")
+            and hasattr(self.agent, "on_post_forward")
+        ):
             logits = self.get_logits(outputs)
             teacher_logits = inputs.pop("teacher_logits", None)
             # Compute teacher model outputs
@@ -581,5 +585,5 @@ class IncTrainer(Trainer):
             teacher_output = teacher_output / self.agent.criterion.temperature
             loss = self.agent.criterion.teacher_student_loss_cal(student_output, teacher_output)
             distillation_loss = loss if distillation_loss is None else distillation_loss + loss
-        distillation_loss *= self.agent.criterion.temperature ** 2
+        distillation_loss *= self.agent.criterion.temperature**2
         return distillation_loss
