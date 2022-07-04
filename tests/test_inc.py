@@ -248,6 +248,7 @@ class IncOptimizerTest(unittest.TestCase):
 
         q8_config = IncQuantizationConfig.from_pretrained(config_path, config_file_name="quantization.yml")
         q8_config.set_config("quantization.approach", IncQuantizationMode.DYNAMIC.value)
+        q8_config.set_config("tuning.accuracy_criterion.relative", 0.06)
 
         pruning_config = IncPruningConfig.from_pretrained(config_path, config_file_name="prune.yml")
         pruning_config.set_config("pruning.approach.weight_compression.start_epoch", 0)
@@ -287,8 +288,8 @@ class IncOptimizerTest(unittest.TestCase):
             # Verification final sparsity is equal to the targeted sparsity
             self.assertEqual(round(sparsity), target_sparsity * 100)
 
-            # Verification accuracy loss is under 5%
-            self.assertGreaterEqual(optimized_model_result, model_result * 0.95)
+            # Verification accuracy loss is under 6%
+            self.assertGreaterEqual(optimized_model_result, model_result * 0.94)
 
             # Verification quantized model was correctly loaded
             self.assertEqual(optimized_model_result, loaded_model_result)
