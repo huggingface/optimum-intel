@@ -19,8 +19,8 @@ model:                                               # Mandatory: used to specif
   name: bert
   framework: pytorch                                 # Mandatory: possible values are pytorch and pytorch_fx.
 
-quantization:                                        # Optional: tuning constraints on model-wise for advance user to reduce tuning space.
-  approach: post_training_dynamic_quant
+quantization:
+  approach: post_training_dynamic_quant              # Mandatory: Quantization approach, default to dynamic quantization.
 
 tuning:
   accuracy_criterion:

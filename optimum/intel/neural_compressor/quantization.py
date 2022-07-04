@@ -79,9 +79,6 @@ class IncQuantizer:
                 Training function for quantization aware training approach.
             calib_dataloader (`DataLoader`, *optional*):
                 DataLoader for post-training quantization calibration.
-
-        Returns:
-            quantizer: IncQuantizer object.
         """
 
         self.config = config.config if isinstance(config, IncQuantizationConfig) else Quantization_Conf(config)
@@ -95,19 +92,19 @@ class IncQuantizer:
         if self.config.usr_cfg.model.framework == "pytorch_fx":
             neural_compressor.adaptor.pytorch._cfgs_to_fx_cfgs = _cfgs_to_fx_cfgs
 
-        self.quantizer = Quantization(self.config)
+        self.quantization = Quantization(self.config)
 
-        self.quantizer.eval_func = self.eval_func
+        self.quantization.eval_func = self.eval_func
 
         if self.approach == IncQuantizationMode.STATIC:
             if self.calib_dataloader is None:
                 raise ValueError("calib_dataloader must be provided for static quantization.")
-            self.quantizer._calib_dataloader = self.calib_dataloader
+            self.quantization._calib_dataloader = self.calib_dataloader
 
         if self.approach == IncQuantizationMode.AWARE_TRAINING:
             if self.train_func is None:
                 raise ValueError("train_func must be provided for quantization aware training.")
-            self.quantizer.q_func = self.train_func
+            self.quantization.q_func = self.train_func
 
 
 # Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96

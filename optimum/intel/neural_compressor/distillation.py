@@ -26,7 +26,7 @@ from .configuration import IncDistillationConfig
 logger = logging.getLogger(__name__)
 
 
-class IncDistillation:
+class IncDistiller:
     def __init__(
         self,
         config: Union[str, IncDistillationConfig],
@@ -45,14 +45,12 @@ class IncDistillation:
                 Evaluation function to evaluate the tuning objective.
             train_func (`Callable`):
                 Training function which will be combined with knowledge distillation.
-        Returns:
-            distiller: IncDistiller object.
         """
 
         self.config = config.config if isinstance(config, IncDistillationConfig) else Distillation_Conf(config)
         self.eval_func = eval_func
         self.train_func = train_func
-        self.distiller = Distillation(self.config)
-        self.distiller.train_func = self.train_func
-        self.distiller.eval_func = self.eval_func
-        self.distiller.teacher_model = common.Model(teacher_model)
+        self.distillation = Distillation(self.config)
+        self.distillation.train_func = self.train_func
+        self.distillation.eval_func = self.eval_func
+        self.distillation.teacher_model = common.Model(teacher_model)

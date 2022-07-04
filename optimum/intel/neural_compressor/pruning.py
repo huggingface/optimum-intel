@@ -34,9 +34,6 @@ SUPPORTED_PRUNING_MODE = set([approach.value for approach in IncPruningMode])
 
 
 class IncPruner:
-
-    TRANSFORMERS_AUTO_CLASS: ClassVar
-
     def __init__(
         self,
         config: Union[str, IncPruningConfig],
@@ -52,13 +49,11 @@ class IncPruner:
                 Evaluation function to evaluate the tuning objective.
             train_func (`Callable`):
                 Training function which will be combined with pruning.
-        Returns:
-            pruner: IncPruner object.
         """
 
         self.config = config.config if isinstance(config, IncPruningConfig) else Pruning_Conf(config)
         self.eval_func = eval_func
         self.train_func = train_func
-        self.pruner = Pruning(self.config)
-        self.pruner.pruning_func = self.train_func
-        self.pruner.eval_func = self.eval_func
+        self.pruning = Pruning(self.config)
+        self.pruning.pruning_func = self.train_func
+        self.pruning.eval_func = self.eval_func

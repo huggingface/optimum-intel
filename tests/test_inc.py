@@ -27,7 +27,7 @@ from transformers import (
     default_data_collator,
 )
 
-from optimum.intel.neural_compressor import IncDistillation, IncOptimizer, IncPruner, IncQuantizer, IncTrainer
+from optimum.intel.neural_compressor import IncDistiller, IncOptimizer, IncPruner, IncQuantizer, IncTrainer
 from optimum.intel.neural_compressor.configuration import (
     IncDistillationConfig,
     IncPruningConfig,
@@ -330,13 +330,13 @@ class IncDistillationTest(unittest.TestCase):
 
         config_path = os.path.dirname(os.path.abspath(__file__))
         distillation_config = IncDistillationConfig.from_pretrained(config_path, config_file_name="distillation.yml")
-        distillation = IncDistillation(
+        distiller = IncDistiller(
             teacher_model=teacher_model,
             config=distillation_config,
             eval_func=eval_func,
             train_func=train_func,
         )
-        optimizer = IncOptimizer(model, distillation=distillation)
+        optimizer = IncOptimizer(model, distiller=distiller)
         agent = optimizer.get_agent()
 
         with tempfile.TemporaryDirectory() as tmp_dir:

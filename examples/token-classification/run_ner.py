@@ -44,8 +44,8 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 from optimum.intel.neural_compressor import (
-    IncDistillation,
     IncDistillationConfig,
+    IncDistiller,
     IncOptimizer,
     IncPruner,
     IncPruningConfig,
@@ -612,7 +612,7 @@ def main():
 
     quantizer = None
     pruner = None
-    distillation = None
+    distiller = None
 
     if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
         raise ValueError("No optimization activated.")
@@ -734,7 +734,7 @@ def main():
         )
 
         # Creation Distillation object used for IncTrainer training loop
-        distillation = IncDistillation(
+        distiller = IncDistiller(
             teacher_model=teacher_model, config=distillation_config, eval_func=eval_func, train_func=train_func
         )
 
@@ -742,7 +742,7 @@ def main():
         model,
         quantizer=quantizer,
         pruner=pruner,
-        distillation=distillation,
+        distiller=distiller,
         one_shot_optimization=True,
         eval_func=eval_func,
         train_func=train_func,

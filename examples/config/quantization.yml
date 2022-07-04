@@ -15,19 +15,19 @@
 
 version: 1.0
 
-model:                                               # mandatory.
+model:
   name: bert
-  framework: pytorch                                 # mandatory. possible values are pytorch and pytorch_fx.
+  framework: pytorch                                 # Mandatory: possible values are pytorch and pytorch_fx.
 
 device: cpu
 
-quantization:                                        # optional.
-  approach: post_training_dynamic_quant
+quantization:
+  approach: post_training_dynamic_quant              # Mandatory: Quantization approach, default to dynamic quantization.
 
 tuning:
   accuracy_criterion:
-    relative: 0.05                                   # optional. default value is relative, can also be set to absolute. this example allows relative accuracy loss: 5%.
+    relative: 0.05                                   # Optional: default value is relative, other value is absolute. this example allows relative accuracy loss: 5%.
   exit_policy:
-    timeout: 0                                       # optional. tuning timeout (seconds). default value is 0 which means early stop. combine with max_trials field to decide when to exit.
+    timeout: 0                                       # Optional: tuning timeout (seconds). default value is 0 which means early stop. combine with max_trials field to decide when to exit.
     max_trials: 4
-  random_seed: 9527                                  # optional. random seed for deterministic tuning.
+  random_seed: 9527                                  # Optional: random seed for deterministic tuning.
