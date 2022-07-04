@@ -799,11 +799,14 @@ def main():
     optimized_model = optimizer.fit()
     result_optimized_model = take_eval_steps(optimized_model, trainer, metric_name, save_metrics=True)
 
+    # Save the resulting model and its corresponding configuration in the given directory
     optimizer.save_pretrained(training_args.output_dir)
+    # Compute the model's sparsity
+    sparsity = optimizer.get_sparsity()
 
     logger.info(
-        f"Optimized model with {metric_name} of {result_optimized_model} saved to: {training_args.output_dir}."
-        f" Original model had an {metric_name} of {result_baseline_model}."
+        f"Optimized model with {metric_name} of {result_optimized_model} and sparsity of {round(sparsity, 2)}% "
+        f"saved to: {training_args.output_dir}. Original model had an {metric_name} of {result_baseline_model}."
     )
 
     if optim_args.apply_quantization and optim_args.verify_loading:

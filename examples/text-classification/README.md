@@ -37,6 +37,22 @@ python run_glue.py \
     --output_dir /tmp/sst2_output
 ```
 
+The following example fine-tunes DistilBERT on the sst-2 task while applying knowledge distillation with quantization aware training.
+
+```bash
+python run_glue.py \
+    --model_name_or_path distilbert-base-uncased \
+    --task_name sst2 \
+    --apply_distillation \
+    --teacher_model_name_or_path distilbert-base-uncased-finetuned-sst-2-english \
+    --apply_quantization \
+    --quantization_approach aware_training \
+    --do_train \
+    --do_eval \
+    --verify_loading \
+    --output_dir /tmp/sst2_output
+```
+
 The following example fine-tunes DistilBERT on the sst-2 task while applying magnitude pruning and then applies 
 dynamic quantization as a second step.
 
@@ -57,10 +73,11 @@ python run_glue.py \
 In order to apply dynamic, static or aware-training quantization, `quantization_approach` must be set to 
 respectively `dynamic`, `static` or `aware_training`.
 
-The configuration file containing all the information related to the model quantization and pruning objectives can be 
-specified using respectively `quantization_config` and `pruning_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum/blob/main/examples/config/quantization.yml) 
+The configuration file containing all the information related to the model quantization, distillation and pruning objectives can be 
+specified using respectively `quantization_config`, `distillation_config` and `pruning_config`. If not specified, the default
+[quantization](https://github.com/huggingface/optimum/blob/main/examples/config/quantization.yml),
+[distillation](https://github.com/huggingface/optimum/blob/main/examples/config/distillation.yml),
 and [pruning](https://github.com/huggingface/optimum/blob/main/examples/config/prune.yml) 
-config files will be used.
+configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
