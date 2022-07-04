@@ -236,7 +236,7 @@ class IncOptimizerTest(unittest.TestCase):
         def train_func(model):
             trainer.model_wrapped = model
             trainer.model = model
-            _ = trainer.train(pruner.pruner)
+            _ = trainer.train(agent)
             return trainer.model
 
         def eval_func(model):
@@ -259,6 +259,7 @@ class IncOptimizerTest(unittest.TestCase):
         quantizer = IncQuantizer(q8_config, eval_func=eval_func)
         pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
         optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
+        agent = optimizer.get_agent()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(tmp_dir, num_train_epochs=2.0)
