@@ -213,7 +213,7 @@ class IncQuantizationTest(unittest.TestCase):
 
 
 class IncOptimizerTest(unittest.TestCase):
-    def test_pruning_quantization_dynamic(self):
+    def test_one_shot_optimization_pruning_quantization_while_training(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
         task = "sst2"
         max_eval_samples = 64
@@ -247,8 +247,10 @@ class IncOptimizerTest(unittest.TestCase):
         config_path = os.path.dirname(os.path.abspath(__file__))
 
         q8_config = IncQuantizationConfig.from_pretrained(config_path, config_file_name="quantization.yml")
-        q8_config.set_config("quantization.approach", IncQuantizationMode.DYNAMIC.value)
-        q8_config.set_config("tuning.accuracy_criterion.relative", 0.06)
+        q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
+        q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
+        q8_config.set_config("model.framework", "pytorch_fx")
+        quantizer = IncQuantizer(q8_config, eval_func=eval_func, train_func=train_func)
 
         pruning_config = IncPruningConfig.from_pretrained(config_path, config_file_name="prune.yml")
         pruning_config.set_config("pruning.approach.weight_compression.start_epoch", 0)
@@ -256,9 +258,15 @@ class IncOptimizerTest(unittest.TestCase):
         pruning_config.set_config("pruning.approach.weight_compression.initial_sparsity", 0.0)
         pruning_config.set_config("pruning.approach.weight_compression.target_sparsity", target_sparsity)
 
-        quantizer = IncQuantizer(q8_config, eval_func=eval_func)
         pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
-        optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
+        optimizer = IncOptimizer(
+            model,
+            quantizer=quantizer,
+            pruner=pruner,
+            one_shot_optimization=True,
+            eval_func=eval_func,
+            train_func=train_func,
+        )
         agent = optimizer.get_agent()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -281,16 +289,15 @@ class IncOptimizerTest(unittest.TestCase):
             sparsity = optimizer.get_sparsity()
 
             optimizer.save_pretrained(tmp_dir)
-
             loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
             loaded_model.eval()
             loaded_model_result = eval_func(loaded_model)
 
             # Verification final sparsity is equal to the targeted sparsity
-            self.assertEqual(round(sparsity), target_sparsity * 100)
+            self.assertGreaterEqual(round(sparsity), target_sparsity * 100)
 
-            # Verification accuracy loss is under 6%
-            self.assertGreaterEqual(optimized_model_result, model_result * 0.94)
+            # Verification accuracy loss is under 20%
+            self.assertGreaterEqual(optimized_model_result, model_result * 0.80)
 
             # Verification quantized model was correctly loaded
             self.assertEqual(optimized_model_result, loaded_model_result)
