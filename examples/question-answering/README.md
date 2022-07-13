@@ -19,7 +19,7 @@ limitations under the License.
 
 The script [`run_qa.py`](https://github.com/huggingface/optimum/blob/main/examples/question-answering/run_qa.py)
 allows us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning 
-using the [Intel Neural Compressor (INC)](https://github.com/intel/neural-compressor) library for
+using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for
 question answering tasks.
 
 Note that if your dataset contains samples with no possible answers (like SQuAD version 2), you need to pass along 

@@ -19,7 +19,7 @@ limitations under the License.
 
 The script [`run_ner.py`](https://github.com/huggingface/optimum/blob/main/examples/token-classification/run_ner.py)
 allows us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning
-using the [Intel Neural Compressor (INC)](https://github.com/intel/neural-compressor) library for token classification tasks.
+using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for token classification tasks.
 
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the CoNLL-2003 task
 ```bash
