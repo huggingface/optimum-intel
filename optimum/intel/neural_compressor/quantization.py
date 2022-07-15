@@ -120,7 +120,7 @@ class IncQuantizer:
 # Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
 def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> torch.nn.Module:
     """
-    Apply Intel Neural Compressor (INC) quantization steps on the given model.
+    Apply Intel Neural Compressor quantization steps on the given model.
 
     Arguments:
         q_config (`Dict`):
@@ -201,7 +201,7 @@ class IncQuantizedModel:
         **kwargs
     ) -> torch.nn.Module:
         """
-        Instantiate a quantized pytorch model from a given Intel Neural Compressor (INC) configuration file.
+        Instantiate a quantized pytorch model from a given Intel Neural Compressor configuration file.
         Arguments:
             model_name_or_path (`str`):
                 Repository name in the Hugging Face Hub or path to a local directory hosting the model.
