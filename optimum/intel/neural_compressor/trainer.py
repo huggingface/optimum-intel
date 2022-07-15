@@ -49,7 +49,7 @@ from transformers.trainer_utils import (
 )
 from transformers.utils import logging
 
-from neural_compressor.experimental import Pruning
+from neural_compressor.experimental import Component
 
 from .utils import TRAINING_ARGS_NAME
 
@@ -66,7 +66,7 @@ logger = logging.get_logger(__name__)
 class IncTrainer(Trainer):
     def train(
         self,
-        pruner: Optional[Pruning] = None,
+        agent: Optional[Component] = None,
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
         trial: Union["optuna.Trial", Dict[str, Any]] = None,
         ignore_keys_for_eval: Optional[List[str]] = None,
@@ -76,8 +76,8 @@ class IncTrainer(Trainer):
         Main training entry point.
 
         Args:
-            pruner (`Pruning`, *optional*):
-                Pruning object handling the pruning process.
+            agent (:obj:`Component`, *optional*):
+                Component object containing the compression objects to apply during the training process.
             resume_from_checkpoint (`str` or `bool`, *optional*):
                 If a `str`, local path to a saved checkpoint as saved by a previous instance of
                 :class:`~transformers.Trainer`. If a `bool` and equals `True`, load the last checkpoint in
@@ -98,7 +98,11 @@ class IncTrainer(Trainer):
 
         args = self.args
 
+        if isinstance(agent, Component):
+            agent.pre_epoch_begin()
+
         self.is_in_train = True
+        self.agent = agent
 
         # do_train is not a reliable argument, as it might not be set and .train() still called, so
         # the following is a workaround:
@@ -328,8 +332,8 @@ class IncTrainer(Trainer):
                 len(epoch_iterator) if train_dataset_is_sized else args.max_steps * args.gradient_accumulation_steps
             )
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
-            if isinstance(pruner, Pruning):
-                pruner.on_epoch_begin(epoch)
+            if isinstance(agent, Component):
+                agent.on_epoch_begin(epoch)
 
             for step, inputs in enumerate(epoch_iterator):
 
@@ -347,8 +351,8 @@ class IncTrainer(Trainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-                    if isinstance(pruner, Pruning):
-                        pruner.on_batch_begin(step)
+                    if isinstance(agent, Component):
+                        agent.on_batch_begin(step)
                 if (
                     ((step + 1) % args.gradient_accumulation_steps != 0)
                     and args.local_rank != -1
@@ -359,6 +363,9 @@ class IncTrainer(Trainer):
                         tr_loss_step = self.training_step(model, inputs)
                 else:
                     tr_loss_step = self.training_step(model, inputs)
+
+                if isinstance(agent, Component):
+                    agent.on_post_grad()
 
                 if args.logging_nan_inf_filter and (torch.isnan(tr_loss_step) or torch.isinf(tr_loss_step)):
                     # if loss is nan or inf simply add the average of previous logged losses
@@ -400,8 +407,8 @@ class IncTrainer(Trainer):
                     self.state.global_step += 1
                     self.state.epoch = epoch + (step + 1) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
-                    if isinstance(pruner, Pruning):
-                        pruner.on_batch_end()
+                    if isinstance(agent, Component):
+                        agent.on_batch_end()
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
@@ -410,8 +417,8 @@ class IncTrainer(Trainer):
                     break
 
             self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
-            if isinstance(pruner, Pruning):
-                pruner.on_epoch_end()
+            if isinstance(agent, Component):
+                agent.on_epoch_end()
             self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
 
             if DebugOption.TPU_METRICS_DEBUG in self.args.debug:
@@ -422,6 +429,9 @@ class IncTrainer(Trainer):
 
             if self.control.should_training_stop:
                 break
+
+        if isinstance(agent, Component):
+            agent.post_epoch_end()
 
         if args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of training
@@ -517,3 +527,65 @@ class IncTrainer(Trainer):
 
         # Good practice: save your training arguments together with the trained model
         torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+        """
+        if self.label_smoother is not None and "labels" in inputs:
+            labels = inputs.pop("labels")
+        else:
+            labels = None
+
+        outputs = model(**inputs)
+
+        # Save past state if it exists
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
+
+        if labels is not None:
+            loss = self.label_smoother(outputs, labels)
+        else:
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+
+        if (
+            self.is_in_train
+            and hasattr(self, "agent")
+            and hasattr(self.agent, "criterion")
+            and hasattr(self.agent, "on_post_forward")
+        ):
+            logits = self._get_logits(outputs)
+            teacher_logits = inputs.pop("teacher_logits", None)
+            # Compute teacher model outputs
+            self.agent.on_post_forward(inputs, teacher_output=teacher_logits)
+            teacher_outputs = self._get_logits(self.agent.criterion.teacher_outputs)
+            distillation_loss = self.compute_distillation_loss(logits, teacher_outputs)
+            loss *= self.agent.criterion.loss_weights[0]
+            loss += distillation_loss * self.agent.criterion.loss_weights[1]
+            loss /= self.agent.criterion.loss_weights[0] + self.agent.criterion.loss_weights[1]
+
+            if isinstance(outputs, dict):
+                outputs["loss"] = loss
+            else:
+                outputs[0] = loss
+
+        return (loss, outputs) if return_outputs else loss
+
+    @staticmethod
+    def _get_logits(model_outputs):
+        output_names = ["logits", "start_logits", "end_logits"]
+        return tuple(model_outputs.get(name) for name in output_names if name in model_outputs)
+
+    def compute_distillation_loss(self, student_outputs, teacher_outputs):
+        """
+        How the distillation loss is computed given the student and teacher outputs.
+        """
+        distillation_loss = None
+        for student_output, teacher_output in zip(student_outputs, teacher_outputs):
+            student_output = student_output / self.agent.criterion.temperature
+            teacher_output = teacher_output / self.agent.criterion.temperature
+            loss = self.agent.criterion.teacher_student_loss_cal(student_output, teacher_output)
+            distillation_loss = loss if distillation_loss is None else distillation_loss + loss
+        distillation_loss *= self.agent.criterion.temperature**2
+        return distillation_loss

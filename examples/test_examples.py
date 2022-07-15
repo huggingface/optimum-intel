@@ -63,11 +63,11 @@ class TestExamples(unittest.TestCase):
                 run_glue.py
                 --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english
                 --task_name sst2
-                --quantize
+                --apply_quantization
                 --quantization_approach {quantization_approach}
-                --tune_metric eval_accuracy
+                --metric eval_accuracy
                 --tolerance_criterion 0.1
-                --prune
+                --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
                 --do_train
@@ -94,11 +94,11 @@ class TestExamples(unittest.TestCase):
                 run_qa.py
                 --model_name_or_path distilbert-base-uncased-distilled-squad
                 --dataset_name squad
-                --quantize
+                --apply_quantization
                 --quantization_approach {quantization_approach}
-                --tune_metric eval_f1
+                --metric eval_f1
                 --tolerance_criterion 0.1
-                --prune
+                --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
                 --do_train
@@ -126,11 +126,11 @@ class TestExamples(unittest.TestCase):
                 run_ner.py
                 --model_name_or_path elastic/distilbert-base-uncased-finetuned-conll03-english
                 --dataset_name conll2003
-                --quantize
+                --apply_quantization
                 --quantization_approach {quantization_approach}
-                --tune_metric eval_f1
+                --metric eval_f1
                 --tolerance_criterion 0.1
-                --prune
+                --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
                 --do_train
@@ -160,11 +160,11 @@ class TestExamples(unittest.TestCase):
             test_args = f"""
                 run_swag.py
                 --model_name_or_path ehdwns1516/bert-base-uncased_SWAG
-                --quantize
+                --apply_quantization
                 --quantization_approach {quantization_approach}
-                --tune_metric eval_accuracy
+                --metric eval_accuracy
                 --tolerance_criterion 0.1
-                --prune
+                --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
                 --do_train
@@ -193,11 +193,11 @@ class TestExamples(unittest.TestCase):
                 --model_name_or_path EleutherAI/gpt-neo-125M
                 --dataset_name wikitext
                 --dataset_config_name wikitext-2-raw-v1
-                --quantize
+                --apply_quantization
                 --quantization_approach {quantization_approach}
-                --prune
+                --apply_pruning
                 --target_sparsity 0.02
-                --tune_metric eval_loss
+                --metric eval_loss
                 --tolerance_criterion 0.8
                 --do_eval
                 --do_train
@@ -225,11 +225,11 @@ class TestExamples(unittest.TestCase):
                 --model_name_or_path google/electra-small-discriminator
                 --dataset_name wikitext
                 --dataset_config_name wikitext-2-raw-v1
-                --quantize
+                --apply_quantization
                 --quantization_approach {quantization_approach}
-                --prune
+                --apply_pruning
                 --target_sparsity 0.02
-                --tune_metric eval_loss
+                --metric eval_loss
                 --tolerance_criterion 0.8
                 --do_eval
                 --do_train
