@@ -40,7 +40,6 @@ from transformers.utils.versions import require_version
 import neural_compressor
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
-
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization, common
 
