@@ -12,7 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from .configuration import IncConfig, IncPruningConfig, IncQuantizationConfig
+from .configuration import IncConfig, IncDistillationConfig, IncPruningConfig, IncQuantizationConfig
+from .distillation import IncDistiller
 from .optimization import IncOptimizer
 from .pruning import IncPruner, IncPruningMode
 from .quantization import IncQuantizationMode, IncQuantizer

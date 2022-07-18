@@ -22,10 +22,7 @@ model:
 pruning:
   approach:
     weight_compression:
-      initial_sparsity: 0.0
-      target_sparsity: 0.1                              # Mandatory: targeted sparsity set to 10%.
       start_epoch: 0
-      end_epoch: 1
       pruners:
         - !Pruner
-            prune_type: basic_magnitude
+            prune_type: pattern_lock

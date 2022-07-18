@@ -12,20 +12,22 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 version: 1.0
 
-model:
+model:                                               # Mandatory: used to specify model specific information.
   name: bert
-  framework: pytorch_fx                                 # Mandatory: possible values are pytorch and pytorch_fx.
+  framework: pytorch_fx                              # Mandatory: possible values are pytorch and pytorch_fx.
 
-pruning:
-  approach:
-    weight_compression:
-      initial_sparsity: 0.0
-      target_sparsity: 0.1                              # Mandatory: targeted sparsity set to 10%.
-      start_epoch: 0
-      end_epoch: 1
-      pruners:
-        - !Pruner
-            prune_type: basic_magnitude
+distillation:
+  train:
+    optimizer:
+      SGD:
+        learning_rate: 0.001
+        momentum: 0.1
+        nesterov: True
+        weight_decay: 0.001
+    criterion:
+      KnowledgeDistillationLoss:
+        temperature: 1.0
+        loss_types: ['CE', 'KL']
+        loss_weights: [0, 1]
