@@ -687,7 +687,7 @@ def main():
 
     optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
     optimized_model = optimizer.fit()
-    result_optimized_model = take_eval_steps(optimized_model.model, trainer, metric_name, save_metrics=True)
+    result_optimized_model = take_eval_steps(optimized_model, trainer, metric_name, save_metrics=True)
 
     optimizer.save_pretrained(training_args.output_dir)
 

@@ -49,7 +49,7 @@ from transformers.trainer_utils import (
 )
 from transformers.utils import logging
 
-from neural_compressor.experimental import Pruning
+from neural_compressor.experimental import Component
 
 from .utils import TRAINING_ARGS_NAME
 
@@ -66,7 +66,7 @@ logger = logging.get_logger(__name__)
 class IncTrainer(Trainer):
     def train(
         self,
-        pruner: Optional[Pruning] = None,
+        agent: Optional[Component] = None,
         resume_from_checkpoint: Optional[Union[str, bool]] = None,
         trial: Union["optuna.Trial", Dict[str, Any]] = None,
         ignore_keys_for_eval: Optional[List[str]] = None,
@@ -76,8 +76,8 @@ class IncTrainer(Trainer):
         Main training entry point.
 
         Args:
-            pruner (`Pruning`, *optional*):
-                Pruning object handling the pruning process.
+            agent (:obj:`Component`, *optional*):
+                Component object containing the compression objects to apply during the training process.
             resume_from_checkpoint (`str` or `bool`, *optional*):
                 If a `str`, local path to a saved checkpoint as saved by a previous instance of
                 :class:`~transformers.Trainer`. If a `bool` and equals `True`, load the last checkpoint in
@@ -99,6 +99,9 @@ class IncTrainer(Trainer):
         args = self.args
 
         self.is_in_train = True
+
+        if isinstance(agent, Component):
+            agent.pre_epoch_begin()
 
         # do_train is not a reliable argument, as it might not be set and .train() still called, so
         # the following is a workaround:
@@ -328,8 +331,8 @@ class IncTrainer(Trainer):
                 len(epoch_iterator) if train_dataset_is_sized else args.max_steps * args.gradient_accumulation_steps
             )
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
-            if isinstance(pruner, Pruning):
-                pruner.on_epoch_begin(epoch)
+            if isinstance(agent, Component):
+                agent.on_epoch_begin(epoch)
 
             for step, inputs in enumerate(epoch_iterator):
 
@@ -347,8 +350,8 @@ class IncTrainer(Trainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-                    if isinstance(pruner, Pruning):
-                        pruner.on_batch_begin(step)
+                    if isinstance(agent, Component):
+                        agent.on_batch_begin(step)
                 if (
                     ((step + 1) % args.gradient_accumulation_steps != 0)
                     and args.local_rank != -1
@@ -359,6 +362,9 @@ class IncTrainer(Trainer):
                         tr_loss_step = self.training_step(model, inputs)
                 else:
                     tr_loss_step = self.training_step(model, inputs)
+
+                if isinstance(agent, Component):
+                    agent.on_post_grad()
 
                 if args.logging_nan_inf_filter and (torch.isnan(tr_loss_step) or torch.isinf(tr_loss_step)):
                     # if loss is nan or inf simply add the average of previous logged losses
@@ -400,8 +406,8 @@ class IncTrainer(Trainer):
                     self.state.global_step += 1
                     self.state.epoch = epoch + (step + 1) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
-                    if isinstance(pruner, Pruning):
-                        pruner.on_batch_end()
+                    if isinstance(agent, Component):
+                        agent.on_batch_end()
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
@@ -410,8 +416,8 @@ class IncTrainer(Trainer):
                     break
 
             self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
-            if isinstance(pruner, Pruning):
-                pruner.on_epoch_end()
+            if isinstance(agent, Component):
+                agent.on_epoch_end()
             self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
 
             if DebugOption.TPU_METRICS_DEBUG in self.args.debug:
@@ -422,6 +428,9 @@ class IncTrainer(Trainer):
 
             if self.control.should_training_stop:
                 break
+
+        if isinstance(agent, Component):
+            agent.post_epoch_end()
 
         if args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of training

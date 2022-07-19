@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 class IncPruningMode(Enum):
     MAGNITUDE = "basic_magnitude"
+    PATTERN_LOCK = "pattern_lock"
 
 
 SUPPORTED_PRUNING_MODE = set([approach.value for approach in IncPruningMode])
