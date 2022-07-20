@@ -29,9 +29,7 @@ QUALITY_REQUIRES = [
     "hf-doc-builder",
 ]
 
-EXTRAS_REQUIRE = {
-    "tests": TESTS_REQUIRE,
-}
+EXTRAS_REQUIRE = {"tests": TESTS_REQUIRE, "quality": QUALITY_REQUIRES}
 
 setup(
     name="optimum-intel",
