@@ -1,6 +1,6 @@
 FROM ubuntu:18.04
 
-# Need cv2 to install Intel Neural Compressoe. See https://github.com/intel/neural-compressor/issues/36
+# Need cv2 to install Intel Neural Compressor. See https://github.com/intel/neural-compressor/issues/36
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \

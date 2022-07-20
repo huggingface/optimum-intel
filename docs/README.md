@@ -18,7 +18,7 @@ limitations under the License.
 
 > The following guide is adapted from [🤗 Transformers](https://github.com/huggingface/transformers/tree/main/docs).
 
-To generate the documentation for 🤗 Optimum intel, simply run the following
+To generate the documentation for 🤗 Optimum Intel, simply run the following
 command from the root of the `optimum-intel` repository:
 
 ```bash
