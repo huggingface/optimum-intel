@@ -6,7 +6,10 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     git \
     curl \
-    gnupg
+    gnupg \
+    ffmpeg \
+    libsm6 \
+    libxext6
 RUN curl -sL https://deb.nodesource.com/setup_14.x  | bash -
 RUN apt-get -y install nodejs
 RUN npm install
