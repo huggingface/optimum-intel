@@ -23,6 +23,12 @@ INSTALL_REQUIRES = [
 
 TESTS_REQUIRE = ["pytest", "parameterized"]
 
+QUALITY_REQUIRES = [
+    "black",
+    "isort",
+    "hf-doc-builder",
+]
+
 EXTRAS_REQUIRE = {
     "tests": TESTS_REQUIRE,
 }

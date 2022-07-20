@@ -1,0 +1,29 @@
+name: Check documentation build
+
+on:
+  push:
+    branches: [ main ]
+
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build_documentation:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          repository: 'huggingface/optimum-intel'
+          path: optimum-intel
+
+      - name: Make documentation
+        run: |
+          cd optimum-intel
+          git fetch origin
+          git checkout documentation
+          make doc BUILD_DIR=intel-doc-build
+          sudo rm -rf intel-doc-build
