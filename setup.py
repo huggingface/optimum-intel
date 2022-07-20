@@ -23,9 +23,13 @@ INSTALL_REQUIRES = [
 
 TESTS_REQUIRE = ["pytest", "parameterized"]
 
-EXTRAS_REQUIRE = {
-    "tests": TESTS_REQUIRE,
-}
+QUALITY_REQUIRES = [
+    "black",
+    "isort",
+    "hf-doc-builder",
+]
+
+EXTRAS_REQUIRE = {"tests": TESTS_REQUIRE, "quality": QUALITY_REQUIRES}
 
 setup(
     name="optimum-intel",
