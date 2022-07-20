@@ -42,7 +42,7 @@ should not commit the built documentation.
 
 # Writing documentation - specification
 
-The 🤗 Optimum Habana documentation follows the [Google
+The 🤗 Optimum Intel documentation follows the [Google
 documentation](https://sphinxcontrib-napoleon.readthedocs.io/en/latest/example_google.html)
 style for docstrings, although we can write them directly in Markdown.
 
