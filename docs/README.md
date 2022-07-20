@@ -18,11 +18,11 @@ limitations under the License.
 
 > The following guide is adapted from [🤗 Transformers](https://github.com/huggingface/transformers/tree/main/docs).
 
-To generate the documentation for 🤗 Optimum Graphcore, simply run the following
-command from the root of the `optimum-graphcore` repository:
+To generate the documentation for 🤗 Optimum intel, simply run the following
+command from the root of the `optimum-intel` repository:
 
 ```bash
-make doc BUILD_DIR=graphcore-doc-build
+make doc BUILD_DIR=intel-doc-build
 ```
 
 This command will generate the HTML files that will be rendered as the
