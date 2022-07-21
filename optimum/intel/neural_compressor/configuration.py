@@ -159,6 +159,8 @@ class IncOptimizedConfig(IncConfig):
 class IncQuantizationConfig(IncConfig):
     def __init__(self, config_path: str):
         """
+        The configuration describing the quantization process.
+
         Args:
             config_path (`str`):
                 Path to the YAML configuration file used to control the tuning behavior.
@@ -174,6 +176,8 @@ class IncQuantizationConfig(IncConfig):
 class IncPruningConfig(IncConfig):
     def __init__(self, config_path: str):
         """
+        The configuration describing the pruning process.
+
         Args:
             config_path (`str`):
                 Path to the YAML configuration file used to control the tuning behavior.
