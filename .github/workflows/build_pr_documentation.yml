@@ -43,8 +43,6 @@ jobs:
       - name: Make intel documentation
         run: |
           cd optimum-intel
-          git fetch origin
-          git checkout add-doc-prs
           make doc BUILD_DIR=intel-doc-build VERSION=pr_$PR_NUMBER
           cd ..
 
