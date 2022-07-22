@@ -17,5 +17,5 @@ RUN apt-get -y install nodejs
 RUN npm install
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip
-RUN git clone -b add-doc-prs https://github.com/huggingface/optimum-intel.git
+RUN git clone https://github.com/huggingface/optimum-intel.git
 RUN python3 -m pip install --no-cache-dir ./optimum-intel[quality]
