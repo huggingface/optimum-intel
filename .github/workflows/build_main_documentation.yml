@@ -36,7 +36,7 @@ jobs:
           cd optimum-intel
           version=`echo "$(grep '^__version__ =' optimum/intel/version.py | cut -d '=' -f 2- | xargs)"`
 
-          if [[ $version == *.dev0 ]]
+          if [[ $version == *".dev0"* ]]
           then
             echo "VERSION=main" >> $GITHUB_ENV
           else
