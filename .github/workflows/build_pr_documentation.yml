@@ -40,7 +40,7 @@ jobs:
           pip install black
           cd ..
 
-      - name: Make intel documentation
+      - name: Make documentation
         run: |
           cd optimum-intel
           make doc BUILD_DIR=intel-doc-build VERSION=pr_$PR_NUMBER
