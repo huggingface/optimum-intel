@@ -32,7 +32,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install .[tests]
         pip install torch==1.9.1
-        pip install torch==4.19.4
+        pip install transformers==4.19.4
     - name: Test with Pytest
       run: |
         pytest tests/
