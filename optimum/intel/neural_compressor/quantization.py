@@ -42,6 +42,7 @@ from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization, common
+from neural_compressor.utils.pytorch import _load_int8_orchestration
 
 from .configuration import IncOptimizedConfig, IncQuantizationConfig
 from .utils import WEIGHTS_NAME, IncDataLoader, _cfgs_to_fx_cfgs
@@ -121,7 +122,7 @@ class IncQuantizer:
 # Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
 def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> torch.nn.Module:
     """
-    Apply Intel Neural Compressor (INC) quantization steps on the given model.
+    Apply Intel Neural Compressor quantization steps on the given model.
 
     Arguments:
         q_config (`Dict`):
@@ -202,7 +203,7 @@ class IncQuantizedModel:
         **kwargs
     ) -> torch.nn.Module:
         """
-        Instantiate a quantized pytorch model from a given Intel Neural Compressor (INC) configuration file.
+        Instantiate a quantized pytorch model from a given Intel Neural Compressor configuration file.
         Arguments:
             model_name_or_path (`str`):
                 Repository name in the Hugging Face Hub or path to a local directory hosting the model.
@@ -311,6 +312,9 @@ class IncQuantizedModel:
         else:
             config_path = inc_config if inc_config is not None else model_name_or_path
             inc_config = IncOptimizedConfig.from_pretrained(config_path, **download_kwargs).config
+
+        if "is_oneshot" in inc_config and inc_config["is_oneshot"]:
+            return _load_int8_orchestration(model, inc_config, state_dict)
 
         q_model = apply_quantization_from_config(inc_config, model)
 

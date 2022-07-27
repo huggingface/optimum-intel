@@ -35,7 +35,7 @@ from neural_compressor.experimental import Pruning, Quantization, common
 from neural_compressor.experimental.scheduler import Scheduler
 
 from .pruning import IncPruner
-from .quantization import IncQuantizer
+from .quantization import IncQuantizationMode, IncQuantizer
 from .utils import CONFIG_NAME, WEIGHTS_NAME
 
 
@@ -51,6 +51,9 @@ class IncOptimizer:
         model: PreTrainedModel,
         quantizer: Optional[IncQuantizer] = None,
         pruner: Optional[IncPruner] = None,
+        one_shot_optimization: bool = True,
+        eval_func: Optional[Callable] = None,
+        train_func: Optional[Callable] = None,
     ):
         """
         Arguments:
@@ -60,26 +63,59 @@ class IncOptimizer:
                 Quantization object which handles the quantization process.
             pruner (`IncPruner`, *optional*):
                 Pruning object which handles the pruning process.
+            one_shot_optimization (`bool`, *optional*, defaults to True):
+                Whether to apply the compression processes all together.
+            eval_func (`Callable`, *optional*):
+                Evaluation function to evaluate the tuning objective.
+            train_func (`Callable`, *optional*):
+                Training function which will be combined with pruning.
         """
         self.config = model.config
         self.scheduler = Scheduler()
         self.scheduler.model = common.Model(model)
-        self.pruner = pruner
-        self.model = None
+        self._model = None
+        self.do_prune = False
+        self.do_quantize = False
 
+        components = []
         if pruner is not None:
-            self.scheduler.append(pruner.pruner)
+            components.append(pruner.pruner)
+            self.do_prune = True
 
         if quantizer is not None:
-            self.scheduler.append(quantizer.quantizer)
+            if quantizer.approach == IncQuantizationMode.AWARE_TRAINING:
+                components.append(quantizer.quantizer)
+            self.do_quantize = True
             self.config.torch_dtype = "int8"
+
+        if one_shot_optimization and len(components) > 1:
+            agent = self.scheduler.combine(*components)
+            agent.train_func = train_func
+            agent.eval_func = eval_func
+            self.scheduler.append(agent)
+        else:
+            self.scheduler.append(*components)
+
+        if self.do_quantize and quantizer.approach != IncQuantizationMode.AWARE_TRAINING:
+            self.scheduler.append(quantizer.quantizer)
 
     def fit(self):
         # If no optimization, the original model is returned
         if len(self.scheduler.components) == 0:
             logger.error("No optimization applied.`IncOptimizer` requires either a `quantizer` or `pruner` argument")
-        self.model = self.scheduler()
+        self._model = self.scheduler()
         return self.model
+
+    @property
+    def model(self):
+        return self._model.model
+
+    def get_agent(self):
+        return self.scheduler.components[0] if self.do_prune else None
+
+    def get_sparsity(self):
+        sparsity = self._model.report_sparsity()
+        return sparsity[-1]
 
     def save_pretrained(self, save_directory: Optional[Union[str, os.PathLike]] = None):
         """
@@ -93,17 +129,16 @@ class IncOptimizer:
             logger.error(f"Provided path ({save_directory}) should be a directory, not a file")
             return
 
-        if self.model is None:
+        if self._model is None:
             logger.error(f"The model was not optimized, please call the `fit` method before saving.")
             return
 
         os.makedirs(save_directory, exist_ok=True)
         self.config.save_pretrained(save_directory)
-        state_dict = self.model.model.state_dict()
-        if hasattr(self.model, "tune_cfg"):
-            state_dict["best_configure"] = self.model.tune_cfg
-            with open(os.path.join(save_directory, CONFIG_NAME), "w") as f:
-                yaml.dump(self.model.tune_cfg, f, default_flow_style=False)
-
+        state_dict = self._model.model.state_dict()
+        if hasattr(self._model, "q_config"):
+            state_dict["best_configure"] = self._model.q_config
+        elif hasattr(self._model, "tune_cfg"):
+            state_dict["best_configure"] = self._model.tune_cfg
         torch.save(state_dict, os.path.join(save_directory, WEIGHTS_NAME))
         logger.info(f"Model weights saved to {save_directory}")
