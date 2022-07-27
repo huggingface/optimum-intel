@@ -301,8 +301,8 @@ class IncDistillationTest(unittest.TestCase):
         model_name = "distilbert-base-uncased"
         teacher_model_name = "distilbert-base-uncased-finetuned-sst-2-english"
         task = "sst2"
-        max_eval_samples = 64
-        max_train_samples = 64
+        max_eval_samples = 512
+        max_train_samples = 512
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
@@ -341,7 +341,7 @@ class IncDistillationTest(unittest.TestCase):
         agent = optimizer.get_agent()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(tmp_dir, num_train_epochs=2.0, learning_rate=5e-1)
+            training_args = TrainingArguments(tmp_dir, num_train_epochs=2.0, learning_rate=5e-4)
             trainer = IncTrainer(
                 model=model,
                 args=training_args,
