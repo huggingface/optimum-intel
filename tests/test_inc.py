@@ -341,7 +341,7 @@ class IncDistillationTest(unittest.TestCase):
         agent = optimizer.get_agent()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(tmp_dir, num_train_epochs=1.0)
+            training_args = TrainingArguments(tmp_dir, num_train_epochs=2.0)
             trainer = IncTrainer(
                 model=model,
                 args=training_args,
