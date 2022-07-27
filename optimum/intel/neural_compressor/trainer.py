@@ -104,6 +104,9 @@ class IncTrainer(Trainer):
         self.is_in_train = True
         self.agent = agent
 
+        if isinstance(agent, Component):
+            agent.pre_epoch_begin()
+
         # do_train is not a reliable argument, as it might not be set and .train() still called, so
         # the following is a workaround:
         if args.fp16_full_eval and not args.do_train:

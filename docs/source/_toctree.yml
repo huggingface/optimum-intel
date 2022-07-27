@@ -1,0 +1,16 @@
+- sections:
+  - local: index
+    title: 🤗 Optimum Intel
+  - local: quickstart
+    title: Quickstart
+  - local: configuration
+    title: Configuration
+  - local: optimization
+    title: Optimization
+  - local: quantization
+    title: Quantization
+  - local: pruning
+    title: Pruning
+  - local: trainer
+    title: Trainer
+  title: Optimum Intel

@@ -811,7 +811,7 @@ def main():
 
     if optim_args.apply_quantization and optim_args.verify_loading:
 
-        # Load the model obtained after Intel Neural Compressor (INC) quantization
+        # Load the model obtained after Intel Neural Compressor quantization
         loaded_model = IncQuantizedModelForQuestionAnswering.from_pretrained(training_args.output_dir)
         loaded_model.eval()
         result_loaded_model = take_eval_steps(loaded_model, trainer, metric_name)

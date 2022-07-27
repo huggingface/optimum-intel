@@ -18,7 +18,7 @@ limitations under the License.
 
 The script [`run_swag.py`](https://github.com/huggingface/optimum/blob/main/examples/multiple-choice/run_swag.py) 
 allows us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning 
-using the [Intel Neural Compressor (INC)](https://github.com/intel/neural-compressor) library for 
+using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for 
 multiple choice tasks.
 
 The following example applies post-training static quantization on a BERT fine-tuned on the SWAG datasets.
