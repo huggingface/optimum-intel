@@ -22,16 +22,13 @@ model:
 pruning:
   approach:
     weight_compression:
-      initial_sparsity: 0.0
-      target_sparsity: 0.1                           # targeted sparsity of 10%
       start_epoch: 0
-      end_epoch: 1
       pruners:
         - !Pruner
-            prune_type: basic_magnitude
+            prune_type: pattern_lock
 tuning:
   accuracy_criterion:
-    relative: 0.1                                    # optional. default value is relative, can also be set to absolute. this example allows relative accuracy loss: 10%.
+    relative: 0.05                                   # optional. default value is relative, can also be set to absolute. this example allows relative accuracy loss: 5%.
   exit_policy:
     timeout: 0                                       # optional. tuning timeout (seconds). default value is 0 which means early stop. combine with max_trials field to decide when to exit.
   random_seed: 9527                                  # optional. random seed.
