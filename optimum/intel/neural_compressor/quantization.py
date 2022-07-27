@@ -41,6 +41,7 @@ import neural_compressor
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization
+from neural_compressor.utils.pytorch import _load_int8_orchestration
 
 from .configuration import IncOptimizedConfig, IncQuantizationConfig
 from .utils import WEIGHTS_NAME, IncDataLoader, _cfgs_to_fx_cfgs
@@ -300,6 +301,9 @@ class IncQuantizedModel:
         else:
             config_path = inc_config if inc_config is not None else model_name_or_path
             inc_config = IncOptimizedConfig.from_pretrained(config_path, **download_kwargs).config
+
+        if "is_oneshot" in inc_config and inc_config["is_oneshot"]:
+            return _load_int8_orchestration(model, inc_config, state_dict)
 
         q_model = apply_quantization_from_config(inc_config, model)
 
