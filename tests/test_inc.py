@@ -301,8 +301,8 @@ class IncDistillationTest(unittest.TestCase):
         model_name = "distilbert-base-uncased"
         teacher_model_name = "distilbert-base-uncased-finetuned-sst-2-english"
         task = "sst2"
-        max_eval_samples = 512
-        max_train_samples = 512
+        max_eval_samples = 256
+        max_train_samples = 256
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
@@ -357,6 +357,7 @@ class IncDistillationTest(unittest.TestCase):
 
             # Verification that the model's accuracy improved
             self.assertGreater(optimized_model_result, model_result)
+            print(optimized_model_result, model_result)
 
 
 if __name__ == "__main__":
