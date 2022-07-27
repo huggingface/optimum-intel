@@ -136,10 +136,9 @@ class IncOptimizer:
         os.makedirs(save_directory, exist_ok=True)
         self.config.save_pretrained(save_directory)
         state_dict = self._model.model.state_dict()
-        if hasattr(self._model, "tune_cfg"):
+        if hasattr(self._model, "q_config"):
+            state_dict["best_configure"] = self._model.q_config
+        elif hasattr(self._model, "tune_cfg"):
             state_dict["best_configure"] = self._model.tune_cfg
-            with open(os.path.join(save_directory, CONFIG_NAME), "w") as f:
-                yaml.dump(self._model.tune_cfg, f, default_flow_style=False)
-
         torch.save(state_dict, os.path.join(save_directory, WEIGHTS_NAME))
         logger.info(f"Model weights saved to {save_directory}")
