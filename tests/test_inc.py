@@ -357,7 +357,6 @@ class IncDistillationTest(unittest.TestCase):
 
             # Verification that the model's accuracy improved
             self.assertGreater(optimized_model_result, model_result)
-            print(optimized_model_result, model_result)
 
 
 if __name__ == "__main__":
