@@ -26,15 +26,28 @@ The following example applies post-training static quantization on a BERT fine-t
 ```bash
 python run_swag.py \
     --model_name_or_path ehdwns1516/bert-base-uncased_SWAG \
-    --quantize \
+    --apply_quantization \
     --quantization_approach static \
     --do_train \
     --do_eval \
-    --pad_to_max_length \
     --verify_loading \
     --output_dir /tmp/swag_output
 ```
 
+The following example fine-tunes DistilBERT on the SWAG datasets while applying knowledge distillation with quantization aware training.
+
+```bash
+python run_swag.py \
+    --model_name_or_path distilbert-base-uncased \
+    --apply_distillation \
+    --teacher_model_name_or_path ehdwns1516/bert-base-uncased_SWAG \
+    --apply_quantization \
+    --quantization_approach aware_training \
+    --do_train \
+    --do_eval \
+    --verify_loading \
+    --output_dir /tmp/swag_output
+```
 
 The following example fine-tunes BERT on the SWAG dataset while applying magnitude pruning and then applies 
 dynamic quantization as a second step.
@@ -42,9 +55,9 @@ dynamic quantization as a second step.
 ```bash
 python run_swag.py \
     --model_name_or_path ehdwns1516/bert-base-uncased_SWAG \
-    --quantize \
+    --apply_quantization \
     --quantization_approach dynamic \
-    --prune \
+    --apply_pruning \
     --target_sparsity 0.1 \
     --do_train \
     --do_eval \
@@ -55,10 +68,11 @@ python run_swag.py \
 In order to apply dynamic, static or aware-training quantization, `quantization_approach` must be set to 
 respectively `dynamic`, `static` or `aware_training`.
 
-The configuration file containing all the information related to the model quantization and pruning objectives can be 
-specified using respectively `quantization_config` and `pruning_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum/blob/main/examples/config/quantization.yml) 
+The configuration file containing all the information related to the model quantization, distillation and pruning objectives can be 
+specified using respectively `quantization_config`, `distillation_config` and `pruning_config`. If not specified, the default
+[quantization](https://github.com/huggingface/optimum/blob/main/examples/config/quantization.yml),
+[distillation](https://github.com/huggingface/optimum/blob/main/examples/config/distillation.yml),
 and [pruning](https://github.com/huggingface/optimum/blob/main/examples/config/prune.yml) 
-config files will be used.
+configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.

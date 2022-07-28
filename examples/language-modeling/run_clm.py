@@ -56,7 +56,6 @@ from optimum.intel.neural_compressor import (
     IncTrainer,
 )
 from optimum.intel.neural_compressor.quantization import IncQuantizedModelForCausalLM
-from optimum.intel.neural_compressor.utils import CONFIG_NAME
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -135,7 +134,7 @@ class OptimizationArguments:
     Arguments pertaining to what type of optimization we are going to apply on the model.
     """
 
-    quantize: bool = field(
+    apply_quantization: bool = field(
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
     )
@@ -143,7 +142,7 @@ class OptimizationArguments:
         default=None,
         metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
     )
-    prune: bool = field(
+    apply_pruning: bool = field(
         default=False,
         metadata={"help": "Whether or not to apply pruning."},
     )
@@ -164,7 +163,7 @@ class OptimizationArguments:
             "help": "Path to the directory containing the YAML configuration file used to control the pruning behavior."
         },
     )
-    tune_metric: str = field(
+    metric: str = field(
         default="eval_loss",
         metadata={"help": "Metric used for the tuning strategy."},
     )
@@ -525,7 +524,7 @@ def main():
     )
 
     resume_from_checkpoint = training_args.resume_from_checkpoint
-    metric_name = optim_args.tune_metric
+    metric_name = optim_args.metric
 
     def take_eval_steps(model, trainer, metric_name, save_metrics=False):
         trainer.model = model
@@ -539,7 +538,7 @@ def main():
             trainer.save_metrics("eval", metrics)
         logger.info("{}: {}".format(metric_name, metrics.get(metric_name)))
         logger.info("Throughput: {} samples/sec".format(metrics.get("eval_samples_per_second")))
-        return metrics.get(metric_name)
+        return metrics[metric_name]
 
     def eval_func(model):
         return take_eval_steps(model, trainer, metric_name)
@@ -552,9 +551,7 @@ def main():
             checkpoint = resume_from_checkpoint
         elif last_checkpoint is not None:
             checkpoint = last_checkpoint
-        train_result = trainer.train(
-            pruner.pruner if hasattr(pruner, "pruner") else None, resume_from_checkpoint=checkpoint
-        )
+        train_result = trainer.train(agent, resume_from_checkpoint=checkpoint)
         metrics = train_result.metrics
         trainer.save_model()  # Saves the tokenizer too for easy upload
         trainer.log_metrics("train", metrics)
@@ -568,14 +565,14 @@ def main():
     quantizer = None
     pruner = None
 
-    if not optim_args.quantize and not optim_args.prune:
-        raise ValueError("quantize and prune are both set to False.")
+    if not optim_args.apply_quantization and not optim_args.apply_pruning:
+        raise ValueError("No optimization activated.")
 
     result_baseline_model = take_eval_steps(model, trainer, metric_name)
 
     default_config = os.path.join(os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir)), "config")
 
-    if optim_args.quantize:
+    if optim_args.apply_quantization:
 
         if not training_args.do_eval:
             raise ValueError("do_eval must be set to True for quantization.")
@@ -616,7 +613,7 @@ def main():
             q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
         )
 
-    if optim_args.prune:
+    if optim_args.apply_pruning:
 
         if not training_args.do_train:
             raise ValueError("do_train must be set to True for pruning.")
@@ -651,18 +648,30 @@ def main():
         # Creation Pruning object used for IncTrainer training loop
         pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
 
-    optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
+    optimizer = IncOptimizer(
+        model,
+        quantizer=quantizer,
+        pruner=pruner,
+        one_shot_optimization=True,
+        eval_func=eval_func,
+        train_func=train_func,
+    )
+
+    agent = optimizer.get_agent()
     optimized_model = optimizer.fit()
     result_optimized_model = take_eval_steps(optimized_model, trainer, metric_name, save_metrics=True)
 
+    # Save the resulting model and its corresponding configuration in the given directory
     optimizer.save_pretrained(training_args.output_dir)
+    # Compute the model's sparsity
+    sparsity = optimizer.get_sparsity()
 
     logger.info(
-        f"Optimized model with {metric_name} of {result_optimized_model} saved to: {training_args.output_dir}."
-        f" Original model had an {metric_name} of {result_baseline_model}."
+        f"Optimized model with {metric_name} of {result_optimized_model} and sparsity of {round(sparsity, 2)}% "
+        f"saved to: {training_args.output_dir}. Original model had an {metric_name} of {result_baseline_model}."
     )
 
-    if optim_args.quantize and optim_args.verify_loading:
+    if optim_args.apply_quantization and optim_args.verify_loading:
 
         # Load the model obtained after Intel Neural Compressor quantization
         loaded_model = IncQuantizedModelForCausalLM.from_pretrained(training_args.output_dir)

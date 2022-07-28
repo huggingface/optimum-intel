@@ -15,23 +15,17 @@
 
 version: 1.0
 
-model:
-  name: bert_prune
-  framework: pytorch
+model:                                               # Mandatory: used to specify model specific information.
+  name: bert
+  framework: pytorch_fx                              # Mandatory: possible values are pytorch and pytorch_fx.
 
 pruning:
   approach:
     weight_compression:
       initial_sparsity: 0.0
-      target_sparsity: 0.1                           # targeted sparsity of 10%
+      target_sparsity: 0.1                           # Mandatory: targeted sparsity set to 10%.
       start_epoch: 0
       end_epoch: 1
       pruners:
         - !Pruner
             prune_type: basic_magnitude
-tuning:
-  accuracy_criterion:
-    relative: 0.1                                    # only verifying workflow, accuracy loss percentage: 10%
-  exit_policy:
-    timeout: 0                                       # tuning timeout (seconds)
-  random_seed: 9527                                  # random seed

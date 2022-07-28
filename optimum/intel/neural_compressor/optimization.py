@@ -34,6 +34,7 @@ import yaml
 from neural_compressor.experimental import Pruning, Quantization, common
 from neural_compressor.experimental.scheduler import Scheduler
 
+from .distillation import IncDistiller
 from .pruning import IncPruner
 from .quantization import IncQuantizationMode, IncQuantizer
 from .utils import CONFIG_NAME, WEIGHTS_NAME
@@ -51,6 +52,7 @@ class IncOptimizer:
         model: PreTrainedModel,
         quantizer: Optional[IncQuantizer] = None,
         pruner: Optional[IncPruner] = None,
+        distiller: Optional[IncDistiller] = None,
         one_shot_optimization: bool = True,
         eval_func: Optional[Callable] = None,
         train_func: Optional[Callable] = None,
@@ -63,6 +65,8 @@ class IncOptimizer:
                 Quantization object which handles the quantization process.
             pruner (`IncPruner`, *optional*):
                 Pruning object which handles the pruning process.
+            distiller (`IncDistiller`, *optional*):
+                Distillation object which handles the distillation process.
             one_shot_optimization (`bool`, *optional*, defaults to True):
                 Whether to apply the compression processes all together.
             eval_func (`Callable`, *optional*):
@@ -74,35 +78,46 @@ class IncOptimizer:
         self.scheduler = Scheduler()
         self.scheduler.model = common.Model(model)
         self._model = None
-        self.do_prune = False
-        self.do_quantize = False
+        self.apply_pruning = False
+        self.apply_quantization = False
+        self.one_shot_optimization = one_shot_optimization
 
         components = []
         if pruner is not None:
-            components.append(pruner.pruner)
-            self.do_prune = True
+            components.append(pruner.pruning)
+            self.apply_pruning = True
+
+        criterion = None
+        if distiller is not None:
+            distiller.distillation.model = self.scheduler.model
+            components.append(distiller.distillation)
+            distiller.distillation.create_criterion()
+            criterion = getattr(distiller.distillation, "criterion", None)
 
         if quantizer is not None:
             if quantizer.approach == IncQuantizationMode.AWARE_TRAINING:
-                components.append(quantizer.quantizer)
-            self.do_quantize = True
+                components.append(quantizer.quantization)
+            self.apply_quantization = True
             self.config.torch_dtype = "int8"
 
         if one_shot_optimization and len(components) > 1:
             agent = self.scheduler.combine(*components)
             agent.train_func = train_func
             agent.eval_func = eval_func
+            agent.criterion = criterion
             self.scheduler.append(agent)
         else:
             self.scheduler.append(*components)
 
-        if self.do_quantize and quantizer.approach != IncQuantizationMode.AWARE_TRAINING:
-            self.scheduler.append(quantizer.quantizer)
+        if self.apply_quantization and quantizer.approach != IncQuantizationMode.AWARE_TRAINING:
+            self.scheduler.append(quantizer.quantization)
 
     def fit(self):
         # If no optimization, the original model is returned
         if len(self.scheduler.components) == 0:
-            logger.error("No optimization applied.`IncOptimizer` requires either a `quantizer` or `pruner` argument")
+            logger.error(
+                "No optimization applied.`IncOptimizer` requires either a `quantizer`, a `pruner` or a `distiller` argument."
+            )
         self._model = self.scheduler()
         return self.model
 
@@ -111,7 +126,7 @@ class IncOptimizer:
         return self._model.model
 
     def get_agent(self):
-        return self.scheduler.components[0] if self.do_prune else None
+        return self.scheduler.components[0] if self.one_shot_optimization or self.apply_pruning else None
 
     def get_sparsity(self):
         sparsity = self._model.report_sparsity()

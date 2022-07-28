@@ -98,7 +98,11 @@ class IncTrainer(Trainer):
 
         args = self.args
 
+        if isinstance(agent, Component):
+            agent.pre_epoch_begin()
+
         self.is_in_train = True
+        self.agent = agent
 
         if isinstance(agent, Component):
             agent.pre_epoch_begin()
@@ -526,3 +530,69 @@ class IncTrainer(Trainer):
 
         # Good practice: save your training arguments together with the trained model
         torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+        """
+        if self.label_smoother is not None and "labels" in inputs:
+            labels = inputs.pop("labels")
+        else:
+            labels = None
+
+        outputs = model(**inputs)
+
+        # Save past state if it exists
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
+
+        if labels is not None:
+            loss = self.label_smoother(outputs, labels)
+        else:
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+
+        if (
+            self.is_in_train
+            and hasattr(self, "agent")
+            and hasattr(self.agent, "criterion")
+            and hasattr(self.agent.criterion, "teacher_model_forward")
+        ):
+            logits = self._get_logits(outputs)
+            teacher_outputs = inputs.pop("teacher_outputs", None)
+            # Compute teacher model outputs
+            if teacher_outputs is None:
+                teacher_outputs = self.agent.criterion.teacher_model_forward(
+                    inputs, teacher_model=self.agent.teacher_model._model
+                )
+
+            teacher_logits = self._get_logits(teacher_outputs)
+            distillation_loss = self.compute_distillation_loss(logits, teacher_logits)
+            loss *= self.agent.criterion.loss_weights[0]
+            loss += distillation_loss * self.agent.criterion.loss_weights[1]
+            loss /= self.agent.criterion.loss_weights[0] + self.agent.criterion.loss_weights[1]
+
+            if isinstance(outputs, dict):
+                outputs["loss"] = loss
+            else:
+                outputs[0] = loss
+
+        return (loss, outputs) if return_outputs else loss
+
+    @staticmethod
+    def _get_logits(model_outputs):
+        output_names = ["logits", "start_logits", "end_logits"]
+        return tuple(model_outputs.get(name) for name in output_names if name in model_outputs)
+
+    def compute_distillation_loss(self, student_outputs, teacher_outputs):
+        """
+        How the distillation loss is computed given the student and teacher outputs.
+        """
+        distillation_loss = None
+        for student_output, teacher_output in zip(student_outputs, teacher_outputs):
+            student_output = student_output / self.agent.criterion.temperature
+            teacher_output = teacher_output / self.agent.criterion.temperature
+            loss = self.agent.criterion.teacher_student_loss_cal(student_output, teacher_output)
+            distillation_loss = loss if distillation_loss is None else distillation_loss + loss
+        distillation_loss *= self.agent.criterion.temperature**2
+        return distillation_loss
