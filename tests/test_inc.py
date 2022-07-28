@@ -212,8 +212,8 @@ class IncQuantizationTest(unittest.TestCase):
             self.assertEqual(optimized_model_result, loaded_model_result)
 
 
-class IncOptimizerTest(unittest.TestCase):
-    def test_pruning_quantization_dynamic(self):
+class IncPrunerTest(unittest.TestCase):
+    def test_pruning(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
         task = "sst2"
         max_eval_samples = 64
@@ -246,19 +246,14 @@ class IncOptimizerTest(unittest.TestCase):
 
         config_path = os.path.dirname(os.path.abspath(__file__))
 
-        q8_config = IncQuantizationConfig.from_pretrained(config_path, config_file_name="quantization.yml")
-        q8_config.set_config("quantization.approach", IncQuantizationMode.DYNAMIC.value)
-        q8_config.set_config("tuning.accuracy_criterion.relative", 0.06)
-
         pruning_config = IncPruningConfig.from_pretrained(config_path, config_file_name="prune.yml")
         pruning_config.set_config("pruning.approach.weight_compression.start_epoch", 0)
         pruning_config.set_config("pruning.approach.weight_compression.end_epoch", 1)
         pruning_config.set_config("pruning.approach.weight_compression.initial_sparsity", 0.0)
         pruning_config.set_config("pruning.approach.weight_compression.target_sparsity", target_sparsity)
 
-        quantizer = IncQuantizer(q8_config, eval_func=eval_func)
         pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
-        optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
+        optimizer = IncOptimizer(model, quantizer=None, pruner=pruner)
         agent = optimizer.get_agent()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -273,27 +268,16 @@ class IncOptimizerTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
-
             model_result = eval_func(model)
             optimized_model = optimizer.fit()
-
             optimized_model_result = eval_func(optimized_model)
             sparsity = optimizer.get_sparsity()
 
-            optimizer.save_pretrained(tmp_dir)
-
-            loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
-            loaded_model.eval()
-            loaded_model_result = eval_func(loaded_model)
-
             # Verification final sparsity is equal to the targeted sparsity
-            self.assertEqual(round(sparsity), target_sparsity * 100)
+            self.assertGreaterEqual(round(sparsity), target_sparsity * 100)
 
             # Verification accuracy loss is under 6%
             self.assertGreaterEqual(optimized_model_result, model_result * 0.94)
-
-            # Verification quantized model was correctly loaded
-            self.assertEqual(optimized_model_result, loaded_model_result)
 
 
 class IncDistillationTest(unittest.TestCase):
@@ -301,8 +285,8 @@ class IncDistillationTest(unittest.TestCase):
         model_name = "distilbert-base-uncased"
         teacher_model_name = "distilbert-base-uncased-finetuned-sst-2-english"
         task = "sst2"
-        max_eval_samples = 256
-        max_train_samples = 256
+        max_eval_samples = 128
+        max_train_samples = 128
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
