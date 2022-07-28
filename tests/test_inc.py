@@ -343,5 +343,89 @@ class IncDistillationTest(unittest.TestCase):
             self.assertGreater(optimized_model_result, model_result)
 
 
+class IncOptimizerTest(unittest.TestCase):
+    def test_one_shot(self):
+        model_name = "distilbert-base-uncased"
+        teacher_model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+        task = "sst2"
+        max_eval_samples = 64
+        max_train_samples = 64
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_name)
+        metric = load_metric("glue", task)
+        dataset = load_dataset("glue", task)
+        dataset = dataset.map(
+            lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
+        )
+        train_dataset = dataset["train"].select(range(max_train_samples))
+        eval_dataset = dataset["validation"].select(range(max_eval_samples))
+
+        def compute_metrics(p: EvalPrediction):
+            return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
+
+        def train_func(model):
+            trainer.model_wrapped = model
+            trainer.model = model
+            _ = trainer.train(agent)
+            return trainer.model
+
+        def eval_func(model):
+            trainer.model = model
+            metrics = trainer.evaluate()
+            return metrics["eval_accuracy"]
+
+        config_path = os.path.dirname(os.path.abspath(__file__))
+        q8_config = IncQuantizationConfig.from_pretrained(config_path, config_file_name="quantization.yml")
+        q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
+        q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
+        q8_config.set_config("model.framework", "pytorch_fx")
+        quantizer = IncQuantizer(q8_config, eval_func=eval_func, train_func=train_func)
+        distillation_config = IncDistillationConfig.from_pretrained(config_path, config_file_name="distillation.yml")
+        distiller = IncDistiller(
+            teacher_model=teacher_model,
+            config=distillation_config,
+            eval_func=eval_func,
+            train_func=train_func,
+        )
+        optimizer = IncOptimizer(
+            model,
+            quantizer=quantizer,
+            distiller=distiller,
+            one_shot_optimization=True,
+            eval_func=eval_func,
+            train_func=train_func,
+        )
+        agent = optimizer.get_agent()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = TrainingArguments(tmp_dir, num_train_epochs=1.0)
+            trainer = IncTrainer(
+                model=model,
+                args=training_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                compute_metrics=compute_metrics,
+                tokenizer=tokenizer,
+                data_collator=default_data_collator,
+            )
+            model_result = eval_func(model)
+            optimized_model = optimizer.fit()
+            optimized_model_result = eval_func(optimized_model)
+
+            optimizer.save_pretrained(tmp_dir)
+
+            loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
+            loaded_model.eval()
+            loaded_model_result = eval_func(loaded_model)
+
+            # Verification accuracy loss is under 20%
+            self.assertGreaterEqual(optimized_model_result, model_result * 0.80)
+
+            # Verification quantized model was correctly loaded
+            self.assertEqual(optimized_model_result, loaded_model_result)
+
+
 if __name__ == "__main__":
     unittest.main()
