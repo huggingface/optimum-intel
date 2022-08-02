@@ -781,7 +781,7 @@ def main():
         )
 
         # Creation Distillation object used for IncTrainer training loop
-        distillation = IncDistiller(
+        distiller = IncDistiller(
             teacher_model=teacher_model, config=distillation_config, eval_func=eval_func, train_func=train_func
         )
 
