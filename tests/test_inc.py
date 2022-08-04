@@ -350,6 +350,7 @@ class IncOptimizerTest(unittest.TestCase):
         task = "sst2"
         max_eval_samples = 64
         max_train_samples = 64
+        target_sparsity = 0.05
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
@@ -377,11 +378,12 @@ class IncOptimizerTest(unittest.TestCase):
             return metrics["eval_accuracy"]
 
         config_path = os.path.dirname(os.path.abspath(__file__))
-        q8_config = IncQuantizationConfig.from_pretrained(config_path, config_file_name="quantization.yml")
-        q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
-        q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
-        q8_config.set_config("model.framework", "pytorch_fx")
-        quantizer = IncQuantizer(q8_config, eval_func=eval_func, train_func=train_func)
+        pruning_config = IncPruningConfig.from_pretrained(config_path, config_file_name="prune.yml")
+        pruning_config.set_config("pruning.approach.weight_compression.start_epoch", 0)
+        pruning_config.set_config("pruning.approach.weight_compression.end_epoch", 0)
+        pruning_config.set_config("pruning.approach.weight_compression.initial_sparsity", 0.0)
+        pruning_config.set_config("pruning.approach.weight_compression.target_sparsity", target_sparsity)
+        pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
         distillation_config = IncDistillationConfig.from_pretrained(config_path, config_file_name="distillation.yml")
         distiller = IncDistiller(
             teacher_model=teacher_model,
@@ -391,7 +393,7 @@ class IncOptimizerTest(unittest.TestCase):
         )
         optimizer = IncOptimizer(
             model,
-            quantizer=quantizer,
+            pruner=pruner,
             distiller=distiller,
             one_shot_optimization=True,
             eval_func=eval_func,
@@ -414,18 +416,11 @@ class IncOptimizerTest(unittest.TestCase):
             optimized_model = optimizer.fit()
             optimized_model_result = eval_func(optimized_model)
 
-            optimizer.save_pretrained(tmp_dir)
+            sparsity = optimizer.get_sparsity()
 
-            loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
-            loaded_model.eval()
-            loaded_model_result = eval_func(loaded_model)
+            # Verification final sparsity is equal to the targeted sparsity
+            self.assertGreaterEqual(round(sparsity), target_sparsity * 100)
 
             # Verification accuracy loss is under 20%
             self.assertGreaterEqual(optimized_model_result, model_result * 0.80)
 
-            # Verification quantized model was correctly loaded
-            self.assertEqual(optimized_model_result, loaded_model_result)
-
-
-if __name__ == "__main__":
-    unittest.main()
