@@ -249,8 +249,8 @@ class IncQuantizedModel:
             r"best_configure",
             r"max_val",
             r"min_val",
-            r"fake_quant_enabled",
             r"eps",
+            r"fake_quant_enabled",
             r"observer_enabled",
         ]
         if keys_to_ignore_on_load_unexpected is None:
