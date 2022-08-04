@@ -423,4 +423,3 @@ class IncOptimizerTest(unittest.TestCase):
 
             # Verification accuracy loss is under 20%
             self.assertGreaterEqual(optimized_model_result, model_result * 0.80)
-
