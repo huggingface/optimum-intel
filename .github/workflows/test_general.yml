@@ -31,7 +31,6 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install .[tests]
-        pip install torch==1.11.0
     - name: Test with Pytest
       run: |
         pytest tests/
