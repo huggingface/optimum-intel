@@ -247,6 +247,11 @@ class IncQuantizedModel:
             r"constant",
             r"module",
             r"best_configure",
+            r"max_val",
+            r"min_val",
+            r"eps",
+            r"fake_quant_enabled",
+            r"observer_enabled",
         ]
         if keys_to_ignore_on_load_unexpected is None:
             model_class._keys_to_ignore_on_load_unexpected = quantized_keys_to_ignore_on_load
