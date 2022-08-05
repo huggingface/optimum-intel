@@ -141,5 +141,7 @@ class IncOptimizer:
         state_dict = self._model.model.state_dict()
         if hasattr(self._model, "q_config"):
             state_dict["best_configure"] = self._model.q_config
+        elif hasattr(self._model, "tune_cfg"):
+            state_dict["best_configure"] = self._model.tune_cfg
         torch.save(state_dict, os.path.join(save_directory, WEIGHTS_NAME))
         logger.info(f"Model weights saved to {save_directory}")
