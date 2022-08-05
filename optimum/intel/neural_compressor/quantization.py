@@ -123,7 +123,6 @@ def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> to
         q_model (`torch.nn.Module`):
             Quantized model.
     """
-
     approach = q_config.get("approach")
     framework = q_config.get("framework")
 

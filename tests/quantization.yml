@@ -24,7 +24,7 @@ quantization:
 
 tuning:
   accuracy_criterion:
-    relative: 0.02                                   # Optional: default value is relative, other value is absolute. this example allows relative accuracy loss: 2%.
+    relative: 0.03                                   # Optional: default value is relative, other value is absolute. this example allows relative accuracy loss: 2%.
   exit_policy:
     timeout: 0                                       # Optional: tuning timeout (seconds). default value is 0 which means early stop. combine with max_trials field to decide when to exit.
     max_trials: 2

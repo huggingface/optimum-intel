@@ -111,7 +111,7 @@ class IncOptimizer:
 
     @property
     def model(self):
-        return self._model.model
+        return self._model.model if self._model is not None else None
 
     def get_agent(self):
         return self.scheduler.components[0] if self.one_shot_optimization or self.apply_pruning else None
