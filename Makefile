@@ -11,6 +11,8 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+SHELL := /bin/bash
+CURRENT_DIR = $(shell pwd)
 
 .PHONY:	style test
 
@@ -39,3 +41,16 @@ build_dist:
 
 pypi_upload: build_dist
 	python -m twine upload dist/*
+
+build_doc_docker_image:
+	docker build -t doc_maker ./docs
+
+doc: build_doc_docker_image
+	@test -n "$(BUILD_DIR)" || (echo "BUILD_DIR is empty." ; exit 1)
+	@test -n "$(VERSION)" || (echo "VERSION is empty." ; exit 1)
+	docker run -v $(CURRENT_DIR):/doc_folder --workdir=/doc_folder doc_maker \
+	doc-builder build optimum.intel /optimum-intel/docs/source/ \
+		--build_dir $(BUILD_DIR) \
+		--version $(VERSION) \
+		--html \
+		--clean

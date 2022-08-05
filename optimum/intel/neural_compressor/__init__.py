@@ -18,3 +18,4 @@ from .optimization import IncOptimizer
 from .pruning import IncPruner, IncPruningMode
 from .quantization import IncQuantizationMode, IncQuantizer
 from .trainer import IncTrainer
+from .trainer_seq2seq import IncSeq2SeqTrainer

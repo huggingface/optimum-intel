@@ -781,7 +781,7 @@ def main():
         )
 
         # Creation Distillation object used for IncTrainer training loop
-        distillation = IncDistiller(
+        distiller = IncDistiller(
             teacher_model=teacher_model, config=distillation_config, eval_func=eval_func, train_func=train_func
         )
 
@@ -811,7 +811,7 @@ def main():
 
     if optim_args.apply_quantization and optim_args.verify_loading:
 
-        # Load the model obtained after Intel Neural Compressor (INC) quantization
+        # Load the model obtained after Intel Neural Compressor quantization
         loaded_model = IncQuantizedModelForQuestionAnswering.from_pretrained(training_args.output_dir)
         loaded_model.eval()
         result_loaded_model = take_eval_steps(loaded_model, trainer, metric_name)

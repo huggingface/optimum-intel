@@ -39,6 +39,7 @@ from transformers.utils.versions import require_version
 
 import neural_compressor
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
+from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization
 from neural_compressor.utils.pytorch import _load_int8_orchestration
@@ -111,7 +112,7 @@ class IncQuantizer:
 # Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
 def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> torch.nn.Module:
     """
-    Apply Intel Neural Compressor (INC) quantization steps on the given model.
+    Apply Intel Neural Compressor quantization steps on the given model.
 
     Arguments:
         q_config (`Dict`):
@@ -191,7 +192,7 @@ class IncQuantizedModel:
         **kwargs
     ) -> torch.nn.Module:
         """
-        Instantiate a quantized pytorch model from a given Intel Neural Compressor (INC) configuration file.
+        Instantiate a quantized pytorch model from a given Intel Neural Compressor configuration file.
         Arguments:
             model_name_or_path (`str`):
                 Repository name in the Hugging Face Hub or path to a local directory hosting the model.
@@ -245,6 +246,11 @@ class IncQuantizedModel:
             r"constant",
             r"module",
             r"best_configure",
+            r"max_val",
+            r"min_val",
+            r"eps",
+            r"fake_quant_enabled",
+            r"observer_enabled",
         ]
         if keys_to_ignore_on_load_unexpected is None:
             model_class._keys_to_ignore_on_load_unexpected = quantized_keys_to_ignore_on_load
@@ -307,6 +313,8 @@ class IncQuantizedModel:
         q_model = apply_quantization_from_config(inc_config, model)
 
         q_model.load_state_dict(state_dict, strict=False)
+
+        get_embedding_contiguous(q_model)
 
         return q_model
 
