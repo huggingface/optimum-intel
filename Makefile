@@ -43,7 +43,7 @@ pypi_upload: build_dist
 	python -m twine upload dist/*
 
 build_doc_docker_image:
-	docker build -t doc_maker --build-arg commit_sha=$(COMMIT_SHA) ./docs
+	docker build -t doc_maker --build-arg commit_sha=$(COMMIT_SHA_SUBPACKAGE) ./docs
 
 doc: build_doc_docker_image
 	@test -n "$(BUILD_DIR)" || (echo "BUILD_DIR is empty." ; exit 1)

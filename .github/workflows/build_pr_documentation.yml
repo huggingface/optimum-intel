@@ -43,7 +43,7 @@ jobs:
       - name: Make documentation
         run: |
           cd optimum-intel
-          make doc BUILD_DIR=intel-doc-build VERSION=pr_$PR_NUMBER COMMIT_SHA=$COMMIT_SHA
+          make doc BUILD_DIR=intel-doc-build VERSION=pr_$PR_NUMBER COMMIT_SHA_SUBPACKAGE=$COMMIT_SHA
           cd ..
 
       - name: Push to repositories
