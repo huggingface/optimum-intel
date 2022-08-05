@@ -98,9 +98,6 @@ class IncTrainer(Trainer):
 
         args = self.args
 
-        if isinstance(agent, Component):
-            agent.pre_epoch_begin()
-
         self.is_in_train = True
         self.agent = agent
 

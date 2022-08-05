@@ -17,27 +17,15 @@ import os
 from typing import Callable, Optional, Union
 
 import torch
-from transformers import (
-    AutoModel,
-    AutoModelForCausalLM,
-    AutoModelForMaskedLM,
-    AutoModelForMultipleChoice,
-    AutoModelForQuestionAnswering,
-    AutoModelForSeq2SeqLM,
-    AutoModelForSequenceClassification,
-    AutoModelForTokenClassification,
-    PreTrainedModel,
-    XLNetLMHeadModel,
-)
+from transformers import AutoModel, PreTrainedModel
 
-import yaml
 from neural_compressor.experimental import Pruning, Quantization, common
 from neural_compressor.experimental.scheduler import Scheduler
 
 from .distillation import IncDistiller
 from .pruning import IncPruner
 from .quantization import IncQuantizationMode, IncQuantizer
-from .utils import CONFIG_NAME, WEIGHTS_NAME
+from .utils import WEIGHTS_NAME
 
 
 logger = logging.getLogger(__name__)
