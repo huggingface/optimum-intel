@@ -17,7 +17,7 @@ import os
 from typing import Callable, Optional, Union
 
 import torch
-from transformers import PreTrainedModel, AutoModel
+from transformers import AutoModel, PreTrainedModel
 
 from neural_compressor.experimental import Pruning, Quantization, common
 from neural_compressor.experimental.scheduler import Scheduler
