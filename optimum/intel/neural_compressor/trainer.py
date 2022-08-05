@@ -562,12 +562,12 @@ class IncTrainer(Trainer):
                 teacher_outputs = self.agent.criterion.teacher_model_forward(
                     inputs, teacher_model=self.agent.teacher_model._model
                 )
-
-            teacher_logits = self._get_logits(teacher_outputs)
-            distillation_loss = self.compute_distillation_loss(logits, teacher_logits)
-            loss *= self.agent.criterion.loss_weights[0]
-            loss += distillation_loss * self.agent.criterion.loss_weights[1]
-            loss /= self.agent.criterion.loss_weights[0] + self.agent.criterion.loss_weights[1]
+            if teacher_outputs is not None:
+                teacher_logits = self._get_logits(teacher_outputs)
+                distillation_loss = self.compute_distillation_loss(logits, teacher_logits)
+                loss *= self.agent.criterion.loss_weights[0]
+                loss += distillation_loss * self.agent.criterion.loss_weights[1]
+                loss /= self.agent.criterion.loss_weights[0] + self.agent.criterion.loss_weights[1]
 
             if isinstance(outputs, dict):
                 outputs["loss"] = loss
