@@ -561,13 +561,14 @@ class IncTrainer(Trainer):
             if teacher_logits is None:
                 if hasattr(self.agent, "on_after_compute_loss"):
                     teacher_outputs = self.agent.criterion.teacher_model_forward(inputs)
-                    teacher_logits = self._get_logits(teacher_outputs)
+                    if teacher_outputs is not None:
+                        teacher_logits = self._get_logits(teacher_outputs)
                 elif hasattr(self.agent, "on_post_forward"):
                     self.agent.on_post_forward(inputs, teacher_output=teacher_logits)
                     teacher_logits = self._get_logits(self.agent.criterion.teacher_outputs)
                 else:
                     raise ValueError("Unable to compute the teacher outputs")
-            if teacher_logits is None:
+            if teacher_logits is not None:
                 distillation_loss = self.compute_distillation_loss(logits, teacher_logits)
                 loss *= self.agent.criterion.loss_weights[0]
                 loss += distillation_loss * self.agent.criterion.loss_weights[1]
