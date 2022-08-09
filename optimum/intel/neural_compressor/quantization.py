@@ -123,7 +123,6 @@ def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> to
         q_model (`torch.nn.Module`):
             Quantized model.
     """
-
     approach = q_config.get("approach")
     framework = q_config.get("framework")
 
@@ -247,6 +246,11 @@ class IncQuantizedModel:
             r"constant",
             r"module",
             r"best_configure",
+            r"max_val",
+            r"min_val",
+            r"eps",
+            r"fake_quant_enabled",
+            r"observer_enabled",
         ]
         if keys_to_ignore_on_load_unexpected is None:
             model_class._keys_to_ignore_on_load_unexpected = quantized_keys_to_ignore_on_load

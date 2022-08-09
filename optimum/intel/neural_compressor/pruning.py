@@ -55,5 +55,5 @@ class IncPruner:
         self.eval_func = eval_func
         self.train_func = train_func
         self.pruning = Pruning(self.config)
-        self.pruning.pruning_func = self.train_func
+        self.pruning.train_func = self.train_func
         self.pruning.eval_func = self.eval_func
