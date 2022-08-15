@@ -33,8 +33,18 @@ from transformers import (
     AutoModelForTokenClassification,
     XLNetLMHeadModel,
 )
-from transformers.utils import cached_file
 from transformers.models.auto.auto_factory import _get_model_class
+
+
+try:
+    from transformers.utils import cached_file
+
+    _use_cached_file = True
+except ImportError:
+    from transformers.file_utils import cached_path, hf_bucket_url
+
+    _use_cached_file = False
+
 from transformers.utils.versions import require_version
 
 import neural_compressor
@@ -271,9 +281,19 @@ class IncQuantizedModel:
 
             q_model_name = q_model_name if q_model_name is not None else WEIGHTS_NAME
             revision = download_kwargs.pop("revision", None)
+            if _use_cached_file == False:
+                if os.path.isdir(model_name_or_path):
+                    state_dict_path = os.path.join(model_name_or_path, q_model_name)
+                elif os.path.isfile(model_name_or_path):
+                    state_dict_path = model_name_or_path
+                else:
+                    state_dict_path = hf_bucket_url(model_name_or_path, filename=q_model_name, revision=revision)
 
             try:
-                state_dict_path = cached_file(model_name_or_path, q_model_name, **download_kwargs)
+                if _use_cached_file == False:
+                    state_dict_path = cached_path(state_dict_path, **download_kwargs)
+                else:
+                    state_dict_path = cached_file(model_name_or_path, q_model_name, **download_kwargs)
             except EnvironmentError as err:
                 logger.error(err)
                 msg = (

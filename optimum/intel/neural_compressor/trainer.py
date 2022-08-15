@@ -18,7 +18,10 @@ import os
 import sys
 import time
 import warnings
+import copy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from packaging import version
+import datasets
 
 import torch
 import torch.distributed as dist
@@ -527,6 +530,33 @@ class IncTrainer(Trainer):
 
         # Good practice: save your training arguments together with the trained model
         torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
+        
+    def _remove_unused_columns(self, dataset: "datasets.Dataset", description: Optional[str] = None):
+        if not self.args.remove_unused_columns:
+            return dataset
+        self._set_signature_columns_if_needed()
+        signature_columns = self._signature_columns
+        signature_columns += ["teacher_logits"]
+
+        ignored_columns = list(set(dataset.column_names) - set(signature_columns))
+        if len(ignored_columns) > 0:
+            dset_description = "" if description is None else f"in the {description} set"
+            logger.info(
+                f"The following columns {dset_description} don't have a corresponding argument in "
+                f"`{self.model.__class__.__name__}.forward` and have been ignored: {', '.join(ignored_columns)}."
+                f" If {', '.join(ignored_columns)} are not expected by `{self.model.__class__.__name__}.forward`, "
+                " you can safely ignore this message."
+            )
+
+        columns = [k for k in signature_columns if k in dataset.column_names]
+
+        if version.parse(datasets.__version__) < version.parse("1.4.0"):
+            dataset.set_format(
+                type=dataset.format["type"], columns=columns, format_kwargs=dataset.format["format_kwargs"]
+            )
+            return dataset
+        else:
+            return dataset.remove_columns(ignored_columns)
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """
@@ -536,8 +566,11 @@ class IncTrainer(Trainer):
             labels = inputs.pop("labels")
         else:
             labels = None
-
-        outputs = model(**inputs)
+        
+        train_inputs = copy.deepcopy(inputs)
+        if "teacher_logits" in train_inputs:
+            train_inputs.pop("teacher_logits")
+        outputs = model(**train_inputs)
 
         # Save past state if it exists
         if self.args.past_index >= 0:
@@ -549,16 +582,13 @@ class IncTrainer(Trainer):
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
-        if (
-            self.is_in_train
-            and hasattr(self, "agent")
-            and hasattr(self.agent, "criterion")
-            and self.agent.criterion is not None
-        ):
+        if (self.is_in_train and hasattr(self, "agent") and hasattr(self.agent, "criterion") \
+            and self.agent.criterion is not None):
             logits = self._get_logits(outputs)
             teacher_logits = inputs.pop("teacher_logits", None)
-            # Compute teacher model outputs
-            if teacher_logits is None:
+            if teacher_logits is not None:
+                teacher_logits = tuple(teacher_logits.transpose(1, 0))
+            else:
                 if hasattr(self.agent, "on_after_compute_loss"):
                     teacher_outputs = self.agent.criterion.teacher_model_forward(inputs)
                     if teacher_outputs is not None:

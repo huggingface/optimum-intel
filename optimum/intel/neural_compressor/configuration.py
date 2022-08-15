@@ -17,7 +17,14 @@ import os
 from functools import reduce
 from typing import Any, Optional, Union
 
-from transformers.utils import cached_file
+try:
+    from transformers.utils import cached_file
+
+    _use_cached_file = True
+except ImportError:
+    from transformers.file_utils import cached_path, hf_bucket_url
+
+    _use_cached_file = False
 
 import yaml
 from neural_compressor.conf.config import Conf, Distillation_Conf, Pruning_Conf, Quantization_Conf
@@ -97,15 +104,30 @@ class IncConfig:
         revision = kwargs.get("revision", None)
 
         config_file_name = config_file_name if config_file_name is not None else CONFIG_NAME
-
+        
+        if _use_cached_file == False:
+            if os.path.isdir(config_name_or_path):
+                config_file = os.path.join(config_name_or_path, config_file_name)
+            elif os.path.isfile(config_name_or_path):
+                config_file = config_name_or_path
+            else:
+                config_file = hf_bucket_url(config_name_or_path, filename=config_file_name, revision=revision)
         try:
-            resolved_config_file = cached_file(
-                config_name_or_path,
-                config_file_name,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                resume_download=resume_download,
-            )
+            if _use_cached_file == False:
+                resolved_config_file = cached_path(
+                    config_file,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    resume_download=resume_download,
+                )
+            else:
+                resolved_config_file = cached_file(
+                    config_name_or_path,
+                    config_file_name,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    resume_download=resume_download,
+                )
         except EnvironmentError as err:
             logger.error(err)
             msg = (
