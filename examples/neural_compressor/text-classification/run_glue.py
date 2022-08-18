@@ -595,7 +595,9 @@ def main():
 
         result_baseline_model = take_eval_steps(model, trainer, metric_name)
 
-        default_config = os.path.join(os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir)), "config")
+        default_config = os.path.join(
+            os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir)), "config"
+        )
 
         if optim_args.apply_quantization:
 
