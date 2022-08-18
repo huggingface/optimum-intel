@@ -86,6 +86,24 @@ class TestExamples(unittest.TestCase):
                 results = get_results(tmp_dir)
                 self.assertGreaterEqual(results["eval_accuracy"], 0.70)
 
+            test_args = f"""
+                run_glue.py
+                --model_name_or_path {tmp_dir}
+                --task_name sst2
+                --metric eval_accuracy
+                --do_eval
+                --per_device_eval_batch_size 1
+                --max_eval_samples 50
+                --load_int8 \
+                --verify_loading
+                --output_dir {tmp_dir}
+                """.split()
+
+            with patch.object(sys, "argv", test_args):
+                run_glue.main()
+                results = get_results(tmp_dir)
+                self.assertGreaterEqual(results["eval_accuracy"], 0.70)
+
     def test_run_qa(self):
         quantization_approach = "static"
 
