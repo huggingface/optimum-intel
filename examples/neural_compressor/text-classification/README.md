@@ -36,11 +36,24 @@ python run_glue.py \
     --verify_loading \
     --output_dir /tmp/sst2_output
 ```
-The following example reloads the quantized DistilBERT and verifies the accuracy on sst-2 task. [Int8 models](https://huggingface.co/models?other=Intel%C2%AE%20Neural%20Compressor) on model hub are also available.
+
+The following example reloads the quantized DistilBERT and verifies the accuracy on sst-2 task. 
 
 ```bash
 python run_glue.py \
     --model_name_or_path /tmp/sst2_output \
+    --task_name sst2 \
+    --do_eval \
+    --load_int8 \
+    --verify_loading \
+    --output_dir /tmp/sst2_log
+```
+
+[Int8 models](https://huggingface.co/models?other=Intel%C2%AE%20Neural%20Compressor) on the model hub are also available for direct loading.
+
+```bash
+python run_glue.py \
+    --model_name_or_path Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-static \
     --task_name sst2 \
     --do_eval \
     --load_int8 \

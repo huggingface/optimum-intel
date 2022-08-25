@@ -587,6 +587,14 @@ def main():
     def train_func(model):
         return take_train_steps(model, trainer, resume_from_checkpoint, last_checkpoint)
 
+    if (
+        not optim_args.apply_quantization
+        and not optim_args.apply_pruning
+        and not optim_args.apply_distillation
+        and not optim_args.load_int8
+    ):
+        raise ValueError("No optimization activated.")
+
     if optim_args.apply_quantization or optim_args.apply_pruning or optim_args.apply_distillation:
 
         quantizer = None
