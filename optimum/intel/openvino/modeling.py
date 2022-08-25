@@ -26,6 +26,7 @@ from transformers import (
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import (
+    BaseModelOutput,
     ImageClassifierOutput,
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
@@ -276,12 +277,63 @@ class OVModelForTokenClassification(OVModel):
         return TokenClassifierOutput(logits=logits)
 
 
+FEATURE_EXTRACTION_EXAMPLE = r"""
+    Example of feature extraction using `transformers.pipelines`:
+    ```python
+    >>> from transformers import {processor_class}, pipeline
+    >>> from optimum.intel.openvino.modeling import {model_class}
+
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
+    >>> outputs = pipe("My Name is Arthur and I live in Lyon.")
+    ```
+"""
+
+
+class OVModelForFeatureExtraction(OVModel):
+
+    export_feature = "default"
+    auto_model_class = AutoModel
+
+    def __init__(self, model=None, config=None, **kwargs):
+        super().__init__(model, config, **kwargs)
+
+    @add_start_docstrings_to_model_forward(
+        INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        + FEATURE_EXTRACTION_EXAMPLE.format(
+            processor_class=_TOKENIZER_FOR_DOC,
+            model_class="OVModelForFeatureExtraction",
+            checkpoint="sentence-transformers/all-MiniLM-L6-v2",
+        )
+    )
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        if token_type_ids is not None:
+            inputs["token_type_ids"] = token_type_ids
+
+        # Run inference
+        outputs = self.request.infer(inputs)
+        outputs = {key.get_any_name(): value for key, value in outputs.items()}
+        last_hidden_state = torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
+        return BaseModelOutput(last_hidden_state=last_hidden_state)
+
+
 IMAGE_CLASSIFICATION_EXAMPLE = r"""
     Example of image classification using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
     >>> from optimum.intel.openvino.modeling import {model_class}
-
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
     >>> pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)

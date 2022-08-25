@@ -19,6 +19,7 @@ import torch
 from PIL import Image
 from transformers import (
     AutoFeatureExtractor,
+    AutoModel,
     AutoModelForImageClassification,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
@@ -31,6 +32,7 @@ from transformers import (
 
 import requests
 from optimum.intel.openvino.modeling import (
+    OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForQuestionAnswering,
     OVModelForSequenceClassification,
@@ -40,8 +42,8 @@ from parameterized import parameterized
 
 
 MODEL_NAMES = {
-    "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "bert": "hf-internal-testing/tiny-random-bert",
+    "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "vit": "hf-internal-testing/tiny-random-vit",
 }
@@ -51,8 +53,8 @@ SEED = 42
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        "distilbert",
         "bert",
+        "distilbert",
         "roberta",
     )
 
@@ -89,8 +91,8 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
 
 class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        "distilbert",
         "bert",
+        "distilbert",
         "roberta",
     )
 
@@ -131,8 +133,8 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
 
 class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        "distilbert",
         "bert",
+        "distilbert",
         "roberta",
     )
 
@@ -162,6 +164,44 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         outputs = pipe("My Name is Arthur and I live in Lyon.")
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
+        gc.collect()
+
+
+class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = (
+        "bert",
+        "distilbert",
+        "roberta",
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForFeatureExtraction.from_pretrained(model_id, from_transformers=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        transformers_model = AutoModel.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        ov_outputs = ov_model(**tokens)
+        self.assertTrue("last_hidden_state" in ov_outputs)
+        self.assertIsInstance(ov_outputs.last_hidden_state, torch.Tensor)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        self.assertTrue(
+            torch.allclose(ov_outputs.last_hidden_state, transformers_outputs.last_hidden_state, atol=1e-4)
+        )
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForFeatureExtraction.from_pretrained(model_id, from_transformers=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
+        outputs = pipe("My Name is Arthur and I live in Lyon.")
+        self.assertEqual(pipe.device, model.device)
+        self.assertTrue(all(all(isinstance(item, float) for item in row) for row in outputs[0]))
         gc.collect()
 
 
