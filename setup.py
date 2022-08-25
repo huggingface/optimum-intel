@@ -22,7 +22,7 @@ INSTALL_REQUIRES = [
     "openvino",
 ]
 
-TESTS_REQUIRE = ["pytest", "parameterized"]
+TESTS_REQUIRE = ["pytest", "parameterized", "Pillow"]
 
 QUALITY_REQUIRES = [
     "black",

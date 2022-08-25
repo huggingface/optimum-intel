@@ -16,7 +16,10 @@ import gc
 import unittest
 
 import torch
+from PIL import Image
 from transformers import (
+    AutoFeatureExtractor,
+    AutoModelForImageClassification,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
@@ -26,7 +29,9 @@ from transformers import (
     set_seed,
 )
 
+import requests
 from optimum.intel.openvino.modeling import (
+    OVModelForImageClassification,
     OVModelForQuestionAnswering,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
@@ -38,6 +43,7 @@ MODEL_NAMES = {
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "bert": "hf-internal-testing/tiny-random-bert",
     "roberta": "hf-internal-testing/tiny-random-roberta",
+    "vit": "hf-internal-testing/tiny-random-vit",
 }
 
 SEED = 42
@@ -156,4 +162,39 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         outputs = pipe("My Name is Arthur and I live in Lyon.")
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
+        gc.collect()
+
+
+class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("vit",)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForImageClassification.from_pretrained(model_id, from_transformers=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        image = Image.open(requests.get(url, stream=True).raw)
+        inputs = preprocessor(images=image, return_tensors="pt")
+        ov_outputs = ov_model(**inputs)
+        self.assertTrue("logits" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForImageClassification.from_pretrained(model_id, from_transformers=True)
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
+        outputs = pipe("http://images.cocodataset.org/val2017/000000039769.jpg")
+        self.assertEqual(pipe.device, model.device)
+        self.assertGreaterEqual(outputs[0]["score"], 0.0)
+        self.assertTrue(isinstance(outputs[0]["label"], str))
         gc.collect()
