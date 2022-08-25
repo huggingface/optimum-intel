@@ -32,6 +32,5 @@ jobs:
         python -m pip install --upgrade pip
         pip install .[tests]
     - name: Test with Pytest
-      working-directory: tests
       run: |
-        python -m unittest discover -s neural_compressor -p 'test_*.py'
+        pytest tests/neural_compressor/
