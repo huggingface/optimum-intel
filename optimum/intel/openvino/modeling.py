@@ -19,12 +19,18 @@ import torch
 from transformers import (
     AutoConfig,
     AutoModel,
+    AutoModelForImageClassification,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
-from transformers.modeling_outputs import QuestionAnsweringModelOutput, SequenceClassifierOutput, TokenClassifierOutput
+from transformers.modeling_outputs import (
+    ImageClassifierOutput,
+    QuestionAnsweringModelOutput,
+    SequenceClassifierOutput,
+    TokenClassifierOutput,
+)
 
 from .modeling_base import OVBaseModel
 
@@ -33,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 _TOKENIZER_FOR_DOC = "AutoTokenizer"
+_FEATURE_EXTRACTOR_FOR_DOC = "AutoFeatureExtractor"
 
 MODEL_START_DOCSTRING = r"""
     This model inherits from [~`intel.openvino.modeling.OVBaseModel`]. Check the superclass documentation for the generic methods the
@@ -60,6 +67,13 @@ INPUTS_DOCSTRING = r"""
             - 1 for tokens that are **sentence A**,
             - 0 for tokens that are **sentence B**.
             [What are token type IDs?](https://huggingface.co/docs/transformers/glossary#token-type-ids)
+"""
+
+IMAGE_INPUTS_DOCSTRING = r"""
+    Args:
+        pixel_values (`torch.Tensor`):
+            Pixel values corresponding to the images in the current batch.
+            Pixel values can be obtained from encoded images using [`AutoFeatureExtractor`](https://huggingface.co/docs/transformers/autoclass_tutorial#autofeatureextractor).
 """
 
 
@@ -90,6 +104,7 @@ SEQUENCE_CLASSIFICATION_EXAMPLE = r"""
     ```python
     >>> from transformers import {processor_class}, pipeline
     >>> from optimum.intel.openvino.modeling import {model_class}
+
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
     >>> pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
@@ -148,6 +163,7 @@ QUESTION_ANSWERING_EXAMPLE = r"""
     ```python
     >>> from transformers import {processor_class}, pipeline
     >>> from optimum.intel.openvino.modeling import {model_class}
+
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
     >>> pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
@@ -207,6 +223,7 @@ TOKEN_CLASSIFICATION_EXAMPLE = r"""
     ```python
     >>> from transformers import {processor_class}, pipeline
     >>> from optimum.intel.openvino.modeling import {model_class}
+
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
     >>> pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
@@ -257,3 +274,57 @@ class OVModelForTokenClassification(OVModel):
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
         logits = torch.from_numpy(outputs["logits"]).to(self.device)
         return TokenClassifierOutput(logits=logits)
+
+
+IMAGE_CLASSIFICATION_EXAMPLE = r"""
+    Example of image classification using `transformers.pipelines`:
+    ```python
+    >>> from transformers import {processor_class}, pipeline
+    >>> from optimum.intel.openvino.modeling import {model_class}
+
+    >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
+    >>> url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+    >>> outputs = pipe(url)
+    ```
+"""
+
+
+@add_start_docstrings(
+    """
+    OpenVINO Model with a ImageClassifierOutput for image classification tasks.
+    """,
+    MODEL_START_DOCSTRING,
+)
+class OVModelForImageClassification(OVModel):
+
+    export_feature = "image-classification"
+    auto_model_class = AutoModelForImageClassification
+
+    def __init__(self, model=None, config=None, **kwargs):
+        super().__init__(model, config, **kwargs)
+
+    @add_start_docstrings_to_model_forward(
+        IMAGE_INPUTS_DOCSTRING.format("batch_size, num_channels, height, width")
+        + IMAGE_CLASSIFICATION_EXAMPLE.format(
+            processor_class=_FEATURE_EXTRACTOR_FOR_DOC,
+            model_class="OVModelForTokenClassification",
+            checkpoint="google/vit-base-patch16-224",
+        )
+    )
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        **kwargs,
+    ):
+        inputs = {
+            "pixel_values": pixel_values,
+        }
+
+        # Run inference
+        outputs = self.request.infer(inputs)
+        outputs = {key.get_any_name(): value for key, value in outputs.items()}
+        logits = torch.from_numpy(outputs["logits"]).to(self.device)
+
+        return ImageClassifierOutput(logits=logits)
