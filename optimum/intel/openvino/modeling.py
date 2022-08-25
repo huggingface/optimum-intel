@@ -58,7 +58,7 @@ INPUTS_DOCSTRING = r"""
             Indices of input sequence tokens in the vocabulary.
             Indices can be obtained using [`AutoTokenizer`](https://huggingface.co/docs/transformers/autoclass_tutorial#autotokenizer).
             [What are input IDs?](https://huggingface.co/docs/transformers/glossary#input-ids)
-        attention_mask (`torch.Tensor`)`, *optional*):
+        attention_mask (`torch.Tensor`), *optional*):
             Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
             - 1 for tokens that are **not masked**,
             - 0 for tokens that are **masked**.
