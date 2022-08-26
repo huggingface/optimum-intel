@@ -12,9 +12,4 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from .neural_compressor.configuration import IncConfig, IncPruningConfig, IncQuantizationConfig
-from .neural_compressor.optimization import IncOptimizer
-from .neural_compressor.pruning import IncPruner, IncPruningMode
-from .neural_compressor.quantization import IncQuantizationMode, IncQuantizer
-from .neural_compressor.trainer import IncTrainer
 from .version import __version__
