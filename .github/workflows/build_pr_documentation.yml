@@ -37,7 +37,7 @@ jobs:
           pip uninstall -y doc-builder
           cd doc-builder
           git pull origin main
-          pip install .
+          pip install .[neural_compressor,openvino]
           pip install black
           cd ..
 
