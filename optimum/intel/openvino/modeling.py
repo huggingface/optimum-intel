@@ -334,6 +334,7 @@ IMAGE_CLASSIFICATION_EXAMPLE = r"""
     ```python
     >>> from transformers import {processor_class}, pipeline
     >>> from optimum.intel.openvino.modeling import {model_class}
+
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
     >>> pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
