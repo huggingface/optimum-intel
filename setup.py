@@ -18,8 +18,6 @@ INSTALL_REQUIRES = [
     "torch",
     "sentencepiece",
     "scipy",
-    "neural_compressor",
-    "openvino",
 ]
 
 TESTS_REQUIRE = ["pytest", "parameterized", "Pillow"]
@@ -30,7 +28,12 @@ QUALITY_REQUIRES = [
     "hf-doc-builder @ git+https://github.com/huggingface/doc-builder.git",
 ]
 
-EXTRAS_REQUIRE = {"tests": TESTS_REQUIRE, "quality": QUALITY_REQUIRES}
+EXTRAS_REQUIRE = {
+    "neural-compressor": "neural-compressor",
+    "openvino": "openvino",
+    "quality": QUALITY_REQUIRES,
+    "tests": TESTS_REQUIRE,
+}
 
 setup(
     name="optimum-intel",
