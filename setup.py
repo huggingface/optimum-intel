@@ -30,7 +30,7 @@ QUALITY_REQUIRES = [
 
 EXTRAS_REQUIRE = {
     "neural_compressor": "neural_compressor",
-    "openvino": "openvino",
+    "openvino": ["openvino", "neural_compressor"],
     "quality": QUALITY_REQUIRES,
     "tests": TESTS_REQUIRE,
 }
