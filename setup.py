@@ -18,6 +18,7 @@ INSTALL_REQUIRES = [
     "torch",
     "sentencepiece",
     "scipy",
+    # TODO : Remove when documentation is fixed
     "neural-compressor",
     "openvino",
 ]
@@ -31,7 +32,7 @@ QUALITY_REQUIRES = [
 ]
 
 EXTRAS_REQUIRE = {
-    "neural_compressor": "neural_compressor",
+    "neural-compressor": "neural-compressor",
     "openvino": "openvino",
     "quality": QUALITY_REQUIRES,
     "tests": TESTS_REQUIRE,
