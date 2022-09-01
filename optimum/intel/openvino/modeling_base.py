@@ -17,11 +17,13 @@ import os
 from pathlib import Path
 from typing import Optional, Union
 
+import transformers
 from transformers import AutoConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, default_cache_path
 from transformers.onnx import FeaturesManager, export
 from transformers.onnx.utils import get_preprocessor
 
+import openvino
 import openvino.runtime.passes as passes
 from huggingface_hub import HfApi, hf_hub_download
 from openvino.runtime import Core, Dimension
@@ -34,6 +36,8 @@ core = Core()
 
 logger = logging.getLogger(__name__)
 
+_SUPPORTED_DEVICES = {"CPU", "GPU"}
+
 
 @add_start_docstrings(
     """
@@ -44,15 +48,15 @@ class OVBaseModel(OptimizedModel):
 
     export_feature = None
 
-    def __init__(self, model=None, config=None, **kwargs):
-        self.model = model
+    def __init__(self, model: openvino.pyopenvino.Model, config: transformers.PretrainedConfig = None, **kwargs):
         self.config = config
+        self.model = model
         self.model_save_dir = kwargs.get("model_save_dir", None)
-        self._device = "CPU"
+        self._device = kwargs.get("device", "CPU")
+        # Ensure the selected device is supported by OpenVINO
+        self._ensure_supported_device()
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
-        self.model_inputs = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
-        self.model_outputs = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
-        self.request = self._create_infer_request()
+        self.request = self._create_infer_request(model)
 
     @staticmethod
     def load_model(file_name: Union[str, Path], bin_file_name: Union[str, Path] = None):
@@ -115,10 +119,13 @@ class OVBaseModel(OptimizedModel):
                 Whether or not to force the (re-)download of the model weights and configuration files, overriding the
                 cached versions if they exist.
             file_name(`str`, *optional*):
-                The file name of the model to load. Overwrites the default file name and allows one to save the model
+                The file name of the model to load. Overwrites the default file name and allows one to load the model
                 with a different name.
+            local_files_only(`bool`, *optional*, defaults to `False`):
+                Whether or not to only look at local files (i.e., do not try to download the model).
         """
         from_onnx = kwargs.pop("from_onnx", False)
+        local_files_only = kwargs.pop("local_files_only", False)
         config_dict = kwargs.pop("config", {})
         config = PretrainedConfig.from_dict(config_dict)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_WEIGHTS_NAME
@@ -145,6 +152,7 @@ class OVBaseModel(OptimizedModel):
                     revision=revision,
                     cache_dir=cache_dir,
                     force_download=force_download,
+                    local_files_only=local_files_only,
                 )
                 file_names.append(Path(model_cache_path).name)
             kwargs["model_save_dir"] = Path(model_cache_path).parent
@@ -212,9 +220,14 @@ class OVBaseModel(OptimizedModel):
 
         return cls._from_pretrained(save_dir, **kwargs)
 
-    def _create_infer_request(self):
-        compiled_model = core.compile_model(self.model, self._device, self.ov_config)
+    def _create_infer_request(self, model):
+        compiled_model = core.compile_model(model, self._device, self.ov_config)
         return compiled_model.create_infer_request()
+
+    def _ensure_supported_device(self, device: str = None):
+        device = device if device is not None else self._device
+        if device not in _SUPPORTED_DEVICES:
+            raise ValueError(f"Unknown device: {device}. Expected one of {_SUPPORTED_DEVICES}.")
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError

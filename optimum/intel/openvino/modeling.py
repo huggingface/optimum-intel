@@ -13,9 +13,10 @@
 #  limitations under the License.
 
 import logging
-from typing import Any, Dict, Optional, Union
+from typing import Optional
 
 import torch
+import transformers
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -32,6 +33,8 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
+
+import openvino
 
 from .modeling_base import OVBaseModel
 
@@ -83,17 +86,18 @@ class OVModel(OVBaseModel):
     base_model_prefix = "ov_model"
     auto_model_class = AutoModel
 
-    def __init__(self, model=None, config=None, **kwargs):
+    def __init__(self, model: openvino.pyopenvino.Model, config: transformers.PretrainedConfig = None, **kwargs):
         super().__init__(model, config, **kwargs)
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
-        self.device = torch.device("cpu") if self._device == "CPU" else torch.device("cuda")
+        self.device = torch.device("cpu")
 
-    def to(self, device):
-        self.device = device
-        self._device = "CPU" if device == torch.device("cpu") else "GPU"
-        self.request = self._create_infer_request()
+    def to(self, device: str):
+        # Ensure the selected device is supported by OpenVINO
+        self._ensure_supported_device(device)
+        self._device = device
+        self.request = self._create_infer_request(self.model)
         return self
 
     def forward(self, *args, **kwargs):
