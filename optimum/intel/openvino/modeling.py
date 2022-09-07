@@ -21,19 +21,19 @@ from transformers import (
     AutoConfig,
     AutoModel,
     AutoModelForImageClassification,
+    AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
-    AutoModelForMaskedLM,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import (
     BaseModelOutput,
     ImageClassifierOutput,
+    MaskedLMOutput,
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
     TokenClassifierOutput,
-    MaskedLMOutput,
 )
 
 import openvino
@@ -348,6 +348,7 @@ MASKED_LM_EXAMPLE = r"""
     >>> outputs = pipe("The goal of life is" + mask_token)
     ```
 """
+
 
 @add_start_docstrings(
     """

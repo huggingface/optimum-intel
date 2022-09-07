@@ -18,9 +18,9 @@ from typing import Dict, Optional, Tuple
 import torch
 import transformers
 from transformers import AutoConfig, AutoModelForSeq2SeqLM
+from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation_utils import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
-from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 
 import openvino
 
@@ -115,6 +115,7 @@ TRANSLATION_EXAMPLE = r"""
     >>> outputs = pipe(text)
     ```
 """
+
 
 @add_start_docstrings(
     """
@@ -247,6 +248,7 @@ class OVEncoder:
         request (`openvino.runtime.ie_api.InferRequest`):
             The OpenVINO inference request associated to the encoder.
     """
+
     def __init__(self, request, device: torch.device):
         self.request = request
         self.device = device
@@ -288,6 +290,7 @@ class OVDecoder:
         device (`torch.device`):
             The device type used by this process.
     """
+
     def __init__(self, request, device: torch.device, input_names):
         self.request = request
         self.device = device

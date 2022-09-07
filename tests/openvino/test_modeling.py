@@ -21,11 +21,11 @@ from transformers import (
     AutoFeatureExtractor,
     AutoModel,
     AutoModelForImageClassification,
+    AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
     AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
-    AutoModelForMaskedLM,
     AutoTokenizer,
     PretrainedConfig,
     pipeline,
@@ -36,10 +36,10 @@ import requests
 from optimum.intel.openvino.modeling import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
+    OVModelForMaskedLM,
     OVModelForQuestionAnswering,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
-    OVModelForMaskedLM,
 )
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder, OVModelForSeq2SeqLM
 from parameterized import parameterized
