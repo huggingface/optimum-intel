@@ -36,7 +36,7 @@ core = Core()
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_DEVICES = {"CPU", "GPU"}
+_SUPPORTED_DEVICES = {"CPU"}
 
 
 @add_start_docstrings(
