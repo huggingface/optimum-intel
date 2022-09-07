@@ -8,6 +8,8 @@
 
 Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) is an open-source library enabling the usage of the most popular compression techniques such as quantization, pruning and knowledge distillation. It supports automatic accuracy-driven tuning strategies in order for users to easily generate quantized model. The users can easily apply static, dynamic and aware-training quantization approaches while giving an expected accuracy criteria. It also supports different weight pruning techniques enabling the creation of pruned model giving a predefined sparsity target.
 
+[OpenVINO](https://docs.openvino.ai/latest/index.html) is an open-source toolkit enabling model optimization and providing high-performance inference solutions for XPUs including various types of CPUs, GPUs, and special DL inference accelerators.
+
 ## Install
 To install the latest release of this package:
 
