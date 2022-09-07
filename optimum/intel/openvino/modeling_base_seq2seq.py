@@ -54,9 +54,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
     def __init__(
         self,
-        encoder: openvino.pyopenvino.Model,
-        decoder: openvino.pyopenvino.Model,
-        decoder_with_past: openvino.pyopenvino.Model = None,
+        encoder: openvino.runtime.Model,
+        decoder: openvino.runtime.Model,
+        decoder_with_past: openvino.runtime.Model = None,
         config: transformers.PretrainedConfig = None,
         **kwargs
     ):

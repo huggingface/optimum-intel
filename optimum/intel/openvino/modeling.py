@@ -54,7 +54,7 @@ MODEL_START_DOCSTRING = r"""
         config (`transformers.PretrainedConfig`): [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig) is the Model configuration class with all the parameters of the model.
             Initializing with a config file does not load the weights associated with the model, only the
             configuration. Check out the [`~intel.openvino.modeling.OVBaseModel.from_pretrained`] method to load the model weights.
-        model (`openvino.pyopenvino.Model`): is the main class used to run OpenVINO Runtime inference.
+        model (`openvino.runtime.Model`): is the main class used to run OpenVINO Runtime inference.
 """
 
 INPUTS_DOCSTRING = r"""
@@ -88,7 +88,7 @@ class OVModel(OVBaseModel):
     base_model_prefix = "ov_model"
     auto_model_class = AutoModel
 
-    def __init__(self, model: openvino.pyopenvino.Model, config: transformers.PretrainedConfig = None, **kwargs):
+    def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):
         super().__init__(model, config, **kwargs)
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)

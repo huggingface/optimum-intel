@@ -48,7 +48,7 @@ class OVBaseModel(OptimizedModel):
 
     export_feature = None
 
-    def __init__(self, model: openvino.pyopenvino.Model, config: transformers.PretrainedConfig = None, **kwargs):
+    def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):
         self.config = config
         self.model = model
         self.model_save_dir = kwargs.get("model_save_dir", None)
