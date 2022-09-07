@@ -20,6 +20,7 @@ import transformers
 from transformers import AutoConfig, AutoModelForSeq2SeqLM
 from transformers.generation_utils import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
+from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 
 import openvino
 
@@ -28,11 +29,100 @@ from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 
 logger = logging.getLogger(__name__)
 
+_TOKENIZER_FOR_DOC = "AutoTokenizer"
 
-class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
+INPUTS_DOCSTRING = r"""
+    Arguments:
+        encoder (`openvino.runtime.Model`):
+            The OpenVINO Runtime model associated to the encoder.
+        decoder (`openvino.runtime.Model`):
+            The OpenVINO Runtime model associated to the decoder.
+        decoder_with_past (`openvino.runtime.Model`):
+            The OpenVINO Runtime model associated  to the decoder with past key values.
+        config (`transformers.PretrainedConfig`):
+            [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig)
+            is an instance of the configuration associated to the model. Initializing with a config file does
+            not load the weights associated with the model, only the configuration.
+"""
+
+ENCODER_INPUTS_DOCSTRING = r"""
+    Arguments:
+        input_ids (`torch.LongTensor`):
+            Indices of input sequence tokens in the vocabulary of shape `(batch_size, encoder_sequence_length)`.
+        attention_mask (`torch.LongTensor`):
+            Mask to avoid performing attention on padding token indices, of shape
+            `(batch_size, encoder_sequence_length)`. Mask values selected in `[0, 1]`.
+"""
+
+
+DECODER_INPUTS_DOCSTRING = r"""
+    Arguments:
+        input_ids (`torch.LongTensor`):
+            Indices of decoder input sequence tokens in the vocabulary of shape `(batch_size, decoder_sequence_length)`.
+        encoder_hidden_states (`torch.FloatTensor`):
+            The encoder `last_hidden_state` of shape `(batch_size, encoder_sequence_length, hidden_size)`.
+        encoder_attention_mask (`torch.LongTensor`, *optional*):
+            Mask to avoid performing cross-attention on padding tokens indices of encoder `input_ids`.
+        past_key_values (`tuple(tuple(torch.FloatTensor), *optional*)`
+            Contains the precomputed key and value hidden states of the attention blocks used to speed up decoding.
+            The tuple is of length `config.n_layers` with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, decoder_sequence_length, embed_size_per_head)` and 2 additional tensors of shape
+            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+"""
+
+SEQ2SEQ_MODEL_DOCSTRING = r"""
+    Arguments:
+        input_ids (`torch.LongTensor`):
+            Indices of input sequence tokens in the vocabulary of shape `(batch_size, encoder_sequence_length)`.
+        attention_mask (`torch.LongTensor`):
+            Mask to avoid performing attention on padding token indices, of shape
+            `(batch_size, encoder_sequence_length)`. Mask values selected in `[0, 1]`.
+        decoder_input_ids (`torch.LongTensor`):
+            Indices of decoder input sequence tokens in the vocabulary of shape `(batch_size, decoder_sequence_length)`.
+        encoder_outputs (`torch.FloatTensor`):
+            The encoder `last_hidden_state` of shape `(batch_size, encoder_sequence_length, hidden_size)`.
+        past_key_values (`tuple(tuple(torch.FloatTensor), *optional*)`
+            Contains the precomputed key and value hidden states of the attention blocks used to speed up decoding.
+            The tuple is of length `config.n_layers` with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, decoder_sequence_length, embed_size_per_head)` and 2 additional tensors of shape
+            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+"""
+
+
+TRANSLATION_EXAMPLE = r"""
+    Example of text generation:
+    ```python
+    >>> from transformers import {processor_class}
+    >>> from optimum.intel.openvino.modeling_seq2seq import {model_class}
+
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}")
+    >>> text = "He never went out without a book under his arm, and he often came back with two."
+    >>> inputs = tokenizer(text, return_tensors="pt")
+    >>> gen_tokens = model.generate(**inputs)
+    >>> outputs = tokenizer.batch_decode(gen_tokens)
+    ```
+
+    Example using `transformers.pipeline`:
+    ```python
+    >>> from transformers import {processor_class}, pipeline
+    >>> from optimum.intel.openvino.modeling_seq2seq import {model_class}
+
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}")
+    >>> pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
+    >>> text = "He never went out without a book under his arm, and he often came back with two."
+    >>> outputs = pipe(text)
+    ```
+"""
+
+@add_start_docstrings(
     """
     Sequence-to-sequence model with a language modeling head for OpenVINO inference.
-    """
+    """,
+    INPUTS_DOCSTRING,
+)
+class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
 
     auto_model_class = AutoModelForSeq2SeqLM
 
@@ -45,7 +135,6 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         **kwargs
     ):
         super().__init__(encoder, decoder, decoder_with_past, config, **kwargs)
-        self.main_input_name = "input_ids"
         self.device = torch.device("cpu")
         self.encoder = OVEncoder(self.encoder_request, self.device)
         self.decoder = OVDecoder(self.decoder_request, self.device, self.decoder_input_names)
@@ -54,6 +143,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             if self.use_cache
             else None
         )
+        self.main_input_name = "input_ids"
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
@@ -71,6 +161,14 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             self.decoder_with_past.request = self.decoder_with_past_request
         return self
 
+    @add_start_docstrings_to_model_forward(
+        SEQ2SEQ_MODEL_DOCSTRING.format("batch_size, sequence_length")
+        + TRANSLATION_EXAMPLE.format(
+            processor_class=_TOKENIZER_FOR_DOC,
+            model_class="OVModelForSeq2SeqLM",
+            checkpoint="Helsinki-NLP/opus-mt-en-fr",
+        )
+    )
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -142,11 +240,19 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
 
 
 class OVEncoder:
+    """
+    Encoder model for OpenVINO inference.
+
+    Arguments:
+        request (`openvino.runtime.ie_api.InferRequest`):
+            The OpenVINO inference request associated to the encoder.
+    """
     def __init__(self, request, device: torch.device):
         self.request = request
         self.device = device
         self.main_input_name = "input_ids"
 
+    @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
         self,
         input_ids: torch.LongTensor,
@@ -173,12 +279,22 @@ class OVEncoder:
 
 
 class OVDecoder:
+    """
+    Decoder model for OpenVINO inference.
+
+    Arguments:
+        request (`openvino.runtime.ie_api.InferRequest`):
+            The OpenVINO inference request associated to the decoder.
+        device (`torch.device`):
+            The device type used by this process.
+    """
     def __init__(self, request, device: torch.device, input_names):
         self.request = request
         self.device = device
         self.input_names = input_names
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
 
+    @add_start_docstrings_to_model_forward(DECODER_INPUTS_DOCSTRING)
     def forward(
         self,
         input_ids: torch.LongTensor,

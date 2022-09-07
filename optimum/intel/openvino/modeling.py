@@ -234,7 +234,7 @@ TOKEN_CLASSIFICATION_EXAMPLE = r"""
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
     >>> pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
-    >>> outputs = pipe("My Name is Arthur and I live in Lyon.")
+    >>> outputs = pipe("My Name is Peter and I live in New York.")
     ```
 """
 
@@ -292,7 +292,7 @@ FEATURE_EXTRACTION_EXAMPLE = r"""
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
     >>> pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
-    >>> outputs = pipe("My Name is Arthur and I live in Lyon.")
+    >>> outputs = pipe("My Name is Peter and I live in New York.")
     ```
 """
 
@@ -336,15 +336,16 @@ class OVModelForFeatureExtraction(OVModel):
 
 
 MASKED_LM_EXAMPLE = r"""
-Example of masked language modeling using `transformers.pipelines`:
+    Example of masked language modeling using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
     >>> from optimum.intel.openvino.modeling import {model_class}
+
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
-    >>> text = f"The goal of life is {tokenizer.mask_token}."
+    >>> mask_token = tokenizer.mask_token
     >>> pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
-    >>> outputs = pipe(text)
+    >>> outputs = pipe("The goal of life is" + mask_token)
     ```
 """
 
