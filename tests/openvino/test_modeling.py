@@ -25,6 +25,7 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
+    AutoModelForMaskedLM,
     AutoTokenizer,
     PretrainedConfig,
     pipeline,
@@ -38,6 +39,7 @@ from optimum.intel.openvino.modeling import (
     OVModelForQuestionAnswering,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
+    OVModelForMaskedLM,
 )
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder, OVModelForSeq2SeqLM
 from parameterized import parameterized
@@ -210,6 +212,42 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         outputs = pipe("My Name is Arthur and I live in Lyon.")
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(all(isinstance(item, float) for item in row) for row in outputs[0]))
+        gc.collect()
+
+
+class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = (
+        "bert",
+        "distilbert",
+        "roberta",
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForMaskedLM.from_pretrained(model_id, from_transformers=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        transformers_model = AutoModelForMaskedLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer(f"This is a sample {tokenizer.mask_token}", return_tensors="pt")
+        ov_outputs = ov_model(**tokens)
+        self.assertTrue("logits" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForMaskedLM.from_pretrained(model_id, from_transformers=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
+        outputs = pipe(f"This is a {tokenizer.mask_token}.")
+        self.assertEqual(pipe.device, model.device)
+        self.assertTrue(all(item["score"] > 0.0 for item in outputs))
         gc.collect()
 
 

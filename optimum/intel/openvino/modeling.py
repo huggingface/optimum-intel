@@ -24,6 +24,7 @@ from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
+    AutoModelForMaskedLM,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import (
@@ -32,6 +33,7 @@ from transformers.modeling_outputs import (
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
     TokenClassifierOutput,
+    MaskedLMOutput,
 )
 
 import openvino
@@ -331,6 +333,65 @@ class OVModelForFeatureExtraction(OVModel):
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
         last_hidden_state = torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
         return BaseModelOutput(last_hidden_state=last_hidden_state)
+
+
+MASKED_LM_EXAMPLE = r"""
+Example of masked language modeling using `transformers.pipelines`:
+    ```python
+    >>> from transformers import {processor_class}, pipeline
+    >>> from optimum.intel.openvino.modeling import {model_class}
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> text = f"The goal of life is {tokenizer.mask_token}."
+    >>> pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
+    >>> outputs = pipe(text)
+    ```
+"""
+
+@add_start_docstrings(
+    """
+    OpenVINO Model with a MaskedLMOutput for masked language modeling tasks.
+    """,
+    MODEL_START_DOCSTRING,
+)
+class OVModelForMaskedLM(OVModel):
+
+    export_feature = "masked-lm"
+    auto_model_class = AutoModelForMaskedLM
+
+    def __init__(self, model=None, config=None, **kwargs):
+        super().__init__(model, config, **kwargs)
+
+    @add_start_docstrings_to_model_forward(
+        INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        + MASKED_LM_EXAMPLE.format(
+            processor_class=_TOKENIZER_FOR_DOC,
+            model_class="OVModelForMaskedLM",
+            checkpoint="roberta-base",
+        )
+    )
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        if token_type_ids is not None:
+            inputs["token_type_ids"] = token_type_ids
+
+        # Run inference
+        outputs = self.request.infer(inputs)
+        outputs = {key.get_any_name(): value for key, value in outputs.items()}
+        logits = torch.from_numpy(outputs["logits"]).to(self.device)
+
+        return MaskedLMOutput(logits=logits)
 
 
 IMAGE_CLASSIFICATION_EXAMPLE = r"""
