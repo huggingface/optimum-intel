@@ -73,6 +73,18 @@ class OVBaseModel(OptimizedModel):
         bin_file_name = str(bin_file_name) if bin_file_name is not None else bin_file_name
         return core.read_model(str(file_name), bin_file_name)
 
+    def half(self):
+        """
+        Lower model inference preicion to FP16 for more efficient inference on GPU.
+        .save_pretrained() method will save the model with FP16 weights which is 2x 
+        smaller compared to FP32. It will also reduce the the load time in the future.
+        """
+        from openvino.offline_transformations import compress_model_transformation
+        
+        compress_model_transformation(self.model)
+        self.request = self._create_infer_request(self.model)
+        return self
+
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
