@@ -136,15 +136,18 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         **kwargs
     ):
         super().__init__(encoder, decoder, decoder_with_past, config, **kwargs)
-        self.device = torch.device("cpu")
-        self.encoder = OVEncoder(self.encoder_request, self.device)
-        self.decoder = OVDecoder(self.decoder_request, self.device, self.decoder_input_names)
-        self.decoder_with_past = (
-            OVDecoder(self.decoder_with_past_request, self.device, self.decoder_with_past_input_names)
-            if self.use_cache
-            else None
-        )
+        encoder_input_names = {key.get_any_name(): idx for idx, key in enumerate(self.encoder_model.inputs)}
+        decoder_input_names = {key.get_any_name(): idx for idx, key in enumerate(self.decoder_model.inputs)}
+        self.encoder = OVEncoder(self.encoder_request, self.device, encoder_input_names)
+        self.decoder = OVDecoder(self.decoder_request, self.device, decoder_input_names)
+        self.decoder_with_past = None
         self.main_input_name = "input_ids"
+        self.device = torch.device("cpu")
+        if self.use_cache:
+            decoder_with_past_input_names = {
+                key.get_any_name(): idx for idx, key in enumerate(self.decoder_with_past_model.inputs)
+            }
+            self.decoder_with_past = OVDecoder(self.decoder_with_past_request, self.device, decoder_with_past_input_names)
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
@@ -249,16 +252,17 @@ class OVEncoder:
             The OpenVINO inference request associated to the encoder.
     """
 
-    def __init__(self, request, device: torch.device):
+    def __init__(self, request, device: torch.device, input_names: Dict):
         self.request = request
         self.device = device
+        self.input_names = input_names
         self.main_input_name = "input_ids"
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
         self,
         input_ids: torch.LongTensor,
-        attention_mask: torch.LongTensor,
+        attention_mask: torch.LongTensor = None,
         **kwargs,
     ) -> BaseModelOutput:
 
@@ -266,7 +270,7 @@ class OVEncoder:
             "input_ids": input_ids,
         }
         # Add the attention_mask inputs when needed
-        if attention_mask is not None:
+        if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
         # Run inference
@@ -291,7 +295,7 @@ class OVDecoder:
             The device type used by this process.
     """
 
-    def __init__(self, request, device: torch.device, input_names):
+    def __init__(self, request, device: torch.device, input_names: Dict):
         self.request = request
         self.device = device
         self.input_names = input_names

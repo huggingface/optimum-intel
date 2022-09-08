@@ -57,6 +57,7 @@ class OVBaseModel(OptimizedModel):
         self._ensure_supported_device()
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
         self.request = self._create_infer_request(model)
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
 
     @staticmethod
     def load_model(file_name: Union[str, Path], bin_file_name: Union[str, Path] = None):

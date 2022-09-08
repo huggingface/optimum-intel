@@ -65,10 +65,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.model_save_dir = kwargs.get("model_save_dir", None)
         self._device = kwargs.get("device", "CPU")
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
-        self.decoder_input_names = {key.get_any_name(): idx for idx, key in enumerate(decoder.inputs)}
-        self.decoder_with_past_input_names = (
-            {key.get_any_name(): idx for idx, key in enumerate(decoder_with_past.inputs)} if self.use_cache else None
-        )
         self.encoder_model = encoder
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past

@@ -155,7 +155,8 @@ class OVModelForSequenceClassification(OVModel):
             "attention_mask": attention_mask,
         }
 
-        if token_type_ids is not None:
+        # Add the token_type_ids when needed
+        if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
@@ -214,7 +215,8 @@ class OVModelForQuestionAnswering(OVModel):
             "attention_mask": attention_mask,
         }
 
-        if token_type_ids is not None:
+        # Add the token_type_ids when needed
+        if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
@@ -273,7 +275,8 @@ class OVModelForTokenClassification(OVModel):
             "attention_mask": attention_mask,
         }
 
-        if token_type_ids is not None:
+        # Add the token_type_ids when needed
+        if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
@@ -325,7 +328,8 @@ class OVModelForFeatureExtraction(OVModel):
             "attention_mask": attention_mask,
         }
 
-        if token_type_ids is not None:
+        # Add the token_type_ids when needed
+        if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
@@ -385,7 +389,8 @@ class OVModelForMaskedLM(OVModel):
             "attention_mask": attention_mask,
         }
 
-        if token_type_ids is not None:
+        # Add the token_type_ids when needed
+        if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
