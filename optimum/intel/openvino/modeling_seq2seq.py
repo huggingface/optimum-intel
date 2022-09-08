@@ -144,10 +144,10 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.main_input_name = "input_ids"
         self.device = torch.device("cpu")
         if self.use_cache:
-            decoder_with_past_input_names = {
+            decoder_input_names = {
                 key.get_any_name(): idx for idx, key in enumerate(self.decoder_with_past_model.inputs)
             }
-            self.decoder_with_past = OVDecoder(self.decoder_with_past_request, self.device, decoder_with_past_input_names)
+            self.decoder_with_past = OVDecoder(self.decoder_with_past_request, self.device, decoder_input_names)
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
