@@ -75,7 +75,7 @@ class OVBaseModel(OptimizedModel):
 
     def half(self):
         """
-        Lower model inference preicion to FP16 for more efficient inference on GPU.
+        Lower model inference precision to FP16 for more efficient inference on GPU.
         .save_pretrained() method will save the model with FP16 weights which is 2x 
         smaller compared to FP32. It will also reduce the the load time in the future.
         """
