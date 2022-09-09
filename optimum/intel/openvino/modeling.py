@@ -110,7 +110,7 @@ SEQUENCE_CLASSIFICATION_EXAMPLE = r"""
     Example of sequence classification using `transformers.pipeline`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino.modeling import {model_class}
+    >>> from optimum.intel.openvino import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
@@ -170,7 +170,7 @@ QUESTION_ANSWERING_EXAMPLE = r"""
     Example of question answering using `transformers.pipeline`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino.modeling import {model_class}
+    >>> from optimum.intel.openvino import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
@@ -231,7 +231,7 @@ TOKEN_CLASSIFICATION_EXAMPLE = r"""
     Example of token classification using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino.modeling import {model_class}
+    >>> from optimum.intel.openvino import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
@@ -290,7 +290,7 @@ FEATURE_EXTRACTION_EXAMPLE = r"""
     Example of feature extraction using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino.modeling import {model_class}
+    >>> from optimum.intel.openvino import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
@@ -343,7 +343,7 @@ MASKED_LM_EXAMPLE = r"""
     Example of masked language modeling using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino.modeling import {model_class}
+    >>> from optimum.intel.openvino import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
@@ -405,7 +405,7 @@ IMAGE_CLASSIFICATION_EXAMPLE = r"""
     Example of image classification using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino.modeling import {model_class}
+    >>> from optimum.intel.openvino import {model_class}
 
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
