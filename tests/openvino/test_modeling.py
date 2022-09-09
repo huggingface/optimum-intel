@@ -16,6 +16,7 @@ import gc
 import unittest
 
 import torch
+from datasets import load_dataset
 from PIL import Image
 from transformers import (
     AutoFeatureExtractor,
@@ -33,6 +34,7 @@ from transformers import (
 )
 
 import requests
+from evaluate import evaluator
 from optimum.intel.openvino.modeling import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
@@ -138,6 +140,22 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
+        gc.collect()
+
+    def test_metric(self):
+        model_id = "distilbert-base-cased-distilled-squad"
+        set_seed(SEED)
+        ov_model = OVModelForQuestionAnswering.from_pretrained(model_id, from_transformers=True)
+        transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        data = load_dataset("squad", split="validation").select(range(50))
+        eval = evaluator("question-answering")
+        transformers_pipe = pipeline("question-answering", model=transformers_model, tokenizer=tokenizer)
+        ov_pipe = pipeline("question-answering", model=ov_model, tokenizer=tokenizer)
+        transformers_metric = eval.compute(model_or_pipeline=transformers_pipe, data=data, metric="squad")
+        ov_metric = eval.compute(model_or_pipeline=ov_pipe, data=data, metric="squad")
+        self.assertEqual(ov_metric["exact_match"], transformers_metric["exact_match"])
+        self.assertEqual(ov_metric["f1"], transformers_metric["f1"])
         gc.collect()
 
 
