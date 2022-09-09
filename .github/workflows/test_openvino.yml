@@ -1,6 +1,6 @@
 # This workflow will install Python dependencies, run tests and lint with a variety of Python versions
 # For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
-name: Intel Neural Compressor - Test
+name: OpenVINO - Test
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.8]
+        python-version: [3.8, 3.9]
         os: [ubuntu-18.04]
 
     runs-on: ${{ matrix.os }}
@@ -30,7 +30,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install .[neural-compressor,tests]
+        pip install .[openvino,tests]
     - name: Test with Pytest
       run: |
-        pytest tests/neural_compressor/
+        pytest tests/openvino/
