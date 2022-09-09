@@ -15,11 +15,13 @@
 import logging
 import os
 from functools import reduce
+from pathlib import Path
 from typing import Any, Optional, Union
 
-from transformers.file_utils import cached_path, hf_bucket_url
+from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
 
 import yaml
+from huggingface_hub import hf_hub_download
 from neural_compressor.conf.config import Conf, Distillation_Conf, Pruning_Conf, Quantization_Conf
 from optimum.intel.neural_compressor.utils import CONFIG_NAME
 
@@ -97,37 +99,46 @@ class IncConfig:
         revision = kwargs.get("revision", None)
 
         config_file_name = config_file_name if config_file_name is not None else CONFIG_NAME
+
         if os.path.isdir(config_name_or_path):
             config_file = os.path.join(config_name_or_path, config_file_name)
         elif os.path.isfile(config_name_or_path):
             config_file = config_name_or_path
         else:
-            config_file = hf_bucket_url(config_name_or_path, filename=config_file_name, revision=revision)
-
-        try:
-            resolved_config_file = cached_path(
-                config_file,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                resume_download=resume_download,
-            )
-        except EnvironmentError as err:
-            logger.error(err)
-            msg = (
-                f"Can't load config for '{config_name_or_path}'. Make sure that:\n\n"
-                f"-'{config_name_or_path}' is a correct model identifier listed on 'https://huggingface.co/models'\n\n"
-                f"-or '{config_name_or_path}' is a correct path to a directory containing a {config_file_name} file\n\n"
-            )
-
-            if revision is not None:
-                msg += (
-                    f"- or '{revision}' is a valid git identifier (branch name, a tag name, or a commit id) that "
-                    f"exists for this model name as listed on its model page on 'https://huggingface.co/models'\n\n"
+            local_files_only = False
+            if is_offline_mode():
+                logger.info("Offline mode: forcing local_files_only=True")
+                local_files_only = True
+            if cache_dir is None:
+                cache_dir = TRANSFORMERS_CACHE
+            if isinstance(cache_dir, Path):
+                cache_dir = str(cache_dir)
+            try:
+                config_file = hf_hub_download(
+                    repo_id=config_name_or_path,
+                    filename=config_file_name,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    resume_download=resume_download,
+                    local_files_only=local_files_only,
+                )
+            except EnvironmentError as err:
+                logger.error(err)
+                msg = (
+                    f"Can't load config for '{config_name_or_path}'. Make sure that:\n\n"
+                    f"-'{config_name_or_path}' is a correct model identifier listed on 'https://huggingface.co/models'\n\n"
+                    f"-or '{config_name_or_path}' is a correct path to a directory containing a {config_file_name} file\n\n"
                 )
 
-            raise EnvironmentError(msg)
+                if revision is not None:
+                    msg += (
+                        f"- or '{revision}' is a valid git identifier (branch name, a tag name, or a commit id) that "
+                        f"exists for this model name as listed on its model page on 'https://huggingface.co/models'\n\n"
+                    )
 
-        config = cls(resolved_config_file)
+                raise EnvironmentError(msg)
+        config = cls(config_file)
 
         return config
 
