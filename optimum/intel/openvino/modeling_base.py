@@ -29,7 +29,7 @@ from huggingface_hub import HfApi, hf_hub_download
 from openvino.runtime import Core, Dimension
 from optimum.modeling_base import OptimizedModel
 
-from .utils import ONNX_WEIGHTS_NAME, OV_WEIGHTS_NAME
+from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
 
 core = Core()
@@ -60,19 +60,18 @@ class OVBaseModel(OptimizedModel):
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
 
     @staticmethod
-    def load_model(file_name: Union[str, Path], bin_file_name: Union[str, Path] = None):
+    def load_model(file_name: Union[str, Path], bin_file_name: Optional[Union[str, Path]] = None):
         """
         Loads the model.
 
         Arguments:
             file_name (`str` or `Path`):
-                The path of the model weights.
-            bin_file_name (`str` or `Path`):
-                The path of the model binary file.
-
+                The path of the model ONNX or XML file.
+            bin_file_name (`str` or `Path`, *optional*):
+                The path of the model binary file, for OpenVINO IR the weights file is expected to be in the same
+                directory as the .xml file if not provided.
         """
-        bin_file_name = str(bin_file_name) if bin_file_name is not None else bin_file_name
-        return core.read_model(str(file_name), bin_file_name)
+        return core.read_model(file_name, bin_file_name)
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
         """
@@ -85,7 +84,7 @@ class OVBaseModel(OptimizedModel):
             file_name(`str`, *optional*):
                 The model file name to use when saving the model. Overwrites the default file names.
         """
-        file_name = file_name if file_name is not None else OV_WEIGHTS_NAME
+        file_name = file_name if file_name is not None else OV_XML_FILE_NAME
         dst_path = os.path.join(save_directory, file_name)
         pass_manager = passes.Manager()
         pass_manager.register_pass("Serialize", dst_path, dst_path.replace(".xml", ".bin"))
@@ -108,6 +107,9 @@ class OVBaseModel(OptimizedModel):
         Arguments:
             model_id (`str` or `Path`):
                 The directory from which to load the model.
+                Can be either:
+                    - The model id of a pretrained model hosted inside a model repo on huggingface.co.
+                    - The path to a directory containing the model weights.
             use_auth_token (`str` or `bool`):
                 The token to use as HTTP bearer authorization for remote files. Needed to load models from a private
                 repository.
@@ -129,7 +131,7 @@ class OVBaseModel(OptimizedModel):
         local_files_only = kwargs.pop("local_files_only", False)
         config_dict = kwargs.pop("config", {})
         config = PretrainedConfig.from_dict(config_dict)
-        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_WEIGHTS_NAME
+        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
 
         # Load the model from local directory
@@ -175,9 +177,11 @@ class OVBaseModel(OptimizedModel):
 
         Arguments:
             model_id (`str` or `Path`):
-                Directory from which to load
-            save_dir (`str` or `Path`):
-                Directory where the exported ONNX model should be saved, default to
+                The directory from which to load the model.
+                Can be either:
+                    - The model id of a pretrained model hosted inside a model repo on huggingface.co.
+                    - The path to a directory containing the model weights.            save_dir (`str` or `Path`):
+                The directory where the exported ONNX model should be saved, default to
                 `transformers.file_utils.default_cache_path`, which is the cache directory for transformers.
             use_auth_token (`str` or `bool`):
                 Is needed to load models from a private repository

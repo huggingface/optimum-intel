@@ -12,4 +12,4 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from .utils import OV_WEIGHTS_NAME
+from .utils import OV_XML_FILE_NAME

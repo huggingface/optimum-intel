@@ -128,6 +128,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         Arguments:
             model_id (`str` or `Path`):
                 The directory from which to load the model.
+                Can be either:
+                    - The model id of a pretrained model hosted inside a model repo on huggingface.co.
+                    - The path to a directory containing the model weights.
             use_auth_token (`str` or `bool`):
                 The token to use as HTTP bearer authorization for remote files. Needed to load models from a private
                 repository.
@@ -140,14 +143,14 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 The path to a directory in which a downloaded pretrained model configuration should be cached if the
                 standard cache should not be used.
             encoder_file_name(`str`, *optional*):
-                The encoder model file name. Overwrites the default file name and allows one to load the encoder model
-                with a different name.
+                The encoder model file name. Overwrites the default file name ov_encoder_model.xml and allows one to
+                load the encoder model with a different name.
             decoder_file_name(`str`, *optional*):
-                The decoder model file name. Overwrites the default file name and allows one to load the decoder model
-                with a different name.
+                The decoder model file name. Overwrites the default file name ov_decoder_model.xml and allows one to
+                load the decoder model with a different name.
             decoder_with_past_file_name(`str`, *optional*):
-                The decoder with past key values model file name overwriting the default file name, allowing to load
-                the decoder model with a different name.
+                The decoder with past key values model file name overwriting the default file name ov_decoder_with_past_model.xml,
+                allowing to load the decoder model with a different name.
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
@@ -239,9 +242,12 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
         Arguments:
             model_id (`str` or `Path`):
-                Directory from which to load
+                The directory from which to load the model.
+                Can be either:
+                    - The model id of a pretrained model hosted inside a model repo on huggingface.co.
+                    - The path to a directory containing the model weights.
             save_dir (`str` or `Path`):
-                Directory where the exported ONNX model should be saved, default to
+                The directory where the exported ONNX model should be saved, defaults to
                 `transformers.file_utils.default_cache_path`, which is the cache directory for transformers.
             use_auth_token (`str` or `bool`):
                 Is needed to load models from a private repository

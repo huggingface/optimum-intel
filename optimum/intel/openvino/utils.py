@@ -13,8 +13,7 @@
 #  limitations under the License.
 
 
-OV_WEIGHTS_NAME = "ov_model.xml"
-OV_BIN_NAME = "ov_model.bin"
+OV_XML_FILE_NAME = "ov_model.xml"
 OV_ENCODER_NAME = "ov_encoder_model.xml"
 OV_DECODER_NAME = "ov_decoder_model.xml"
 OV_DECODER_WITH_PAST_NAME = "ov_decoder_with_past_model.xml"
