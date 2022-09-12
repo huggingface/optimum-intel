@@ -100,6 +100,17 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(outputs[0]["label"], str)
         gc.collect()
 
+    def test_fp16(self):
+        model_id = MODEL_NAMES["bert"]
+        ov_model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
+        ov_model.half()
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        ov_outputs = ov_model(**tokens)
+        self.assertTrue("logits" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        gc.collect()
+
 
 class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
