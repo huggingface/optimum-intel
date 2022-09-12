@@ -5,12 +5,12 @@
     title: Quickstart
   title: Optimum Intel
 - sections:
-  - local: neural_compressor/optimization
+  - local: optimization
     title: Optimization
-  - local: neural_compressor/quantization
+  - local: quantization
     title: Quantization
-  - local: neural_compressor/pruning
+  - local: pruning
     title: Pruning
-  - local: neural_compressor/trainer
+  - local: trainer
     title: Trainer
   title: Neural Compressor
