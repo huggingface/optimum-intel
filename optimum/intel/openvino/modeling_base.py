@@ -36,7 +36,7 @@ core = Core()
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_DEVICES = {"CPU"}
+_SUPPORTED_DEVICES = {"CPU", "GPU"}
 
 
 @add_start_docstrings(
@@ -50,13 +50,20 @@ class OVBaseModel(OptimizedModel):
 
     def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):
         self.config = config
-        self.model = model
         self.model_save_dir = kwargs.get("model_save_dir", None)
         self._device = kwargs.get("device", "CPU")
+        self.is_dynamic = kwargs.get("dynamic_shapes", True)
+        self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        if self._device == "GPU" and self.is_dynamic:
+            raise ValueError(
+                "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
+            )
         # Ensure the selected device is supported by OpenVINO
         self._ensure_supported_device()
-        self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
-        self.request = self._create_infer_request(model)
+        if self.is_dynamic:
+            model = self._reshape(model, -1, -1)
+        self.model = model
+        self.request = self._create_infer_request(self.model)
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
 
     @staticmethod
@@ -228,6 +235,20 @@ class OVBaseModel(OptimizedModel):
     def _create_infer_request(self, model):
         compiled_model = core.compile_model(model, self._device, self.ov_config)
         return compiled_model.create_infer_request()
+
+    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int):
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            shapes[inputs][0] = batch_size
+            shapes[inputs][1] = sequence_length
+        model.reshape(shapes)
+        return model
+
+    def reshape(self, batch_size: int, sequence_length: int):
+        self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
+        self.model = self._reshape(self.model, batch_size, sequence_length)
+        self.request = self._create_infer_request(self.model)
 
     def _ensure_supported_device(self, device: str = None):
         device = device if device is not None else self._device

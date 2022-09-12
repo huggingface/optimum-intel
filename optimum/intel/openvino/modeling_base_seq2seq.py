@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 @add_start_docstrings(
     """
-    Base OVModel class.
+    Base OVModelForSeq2SeqLM class.
     """,
 )
 class OVBaseModelForSeq2SeqLM(OVBaseModel):
@@ -64,7 +64,17 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.use_cache = decoder_with_past is not None
         self.model_save_dir = kwargs.get("model_save_dir", None)
         self._device = kwargs.get("device", "CPU")
+        self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        if self._device == "GPU":
+            raise ValueError("Support of dynamic shapes for GPU devices is not yet available.")
+        # Ensure the selected device is supported by OpenVINO
+        self._ensure_supported_device()
+        if self.is_dynamic:
+            encoder = self._reshape(encoder, -1, -1, is_decoder=False)
+            decoder = self._reshape(decoder, -1, -1)
+            decoder_with_past = self._reshape(decoder_with_past, -1, -1) if self.use_cache else None
+
         self.encoder_model = encoder
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
@@ -308,6 +318,33 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         kwargs["from_onnx"] = True
 
         return cls._from_pretrained(save_dir, **kwargs)
+
+    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            shapes[inputs][0] = batch_size if not is_decoder else -1
+            if inputs.get_any_name().startswith("past_key_values"):
+                shapes[inputs][2] = -1
+            elif is_decoder and not inputs.get_any_name().startswith("encoder"):
+                shapes[inputs][1] = -1
+            else:
+                shapes[inputs][1] = sequence_length
+        model.reshape(shapes)
+        return model
+
+    def reshape(self, batch_size: int, sequence_length: int):
+        self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
+        self.encoder_model = self._reshape(self.encoder_model, batch_size, sequence_length, is_decoder=False)
+        self.encoder_request = self._create_infer_request(self.encoder_model)
+        self.encoder.request = self.encoder_request
+        self.decoder_model = self._reshape(self.decoder_model, batch_size, sequence_length)
+        self.decoder_request = self._create_infer_request(self.decoder_model)
+        self.decoder.request = self.decoder_request
+        if self.use_cache:
+            self.decoder_with_past_model = self._reshape(self.decoder_with_past_model, batch_size, sequence_length)
+            self.decoder_with_past_request = self._create_infer_request(self.decoder_with_past_model)
+            self.decoder_with_past.request = self.decoder_with_past_request
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
