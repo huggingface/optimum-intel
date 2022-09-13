@@ -14,3 +14,7 @@
   - local: trainer
     title: Trainer
   title: Neural Compressor
+- sections:
+  - local: inference
+    title: Inference
+  title: OpenVINO
