@@ -7,10 +7,6 @@
 - sections:
   - local: optimization
     title: Optimization
-  - local: quantization
-    title: Quantization
-  - local: pruning
-    title: Pruning
   - local: trainer
     title: Trainer
   title: Neural Compressor
