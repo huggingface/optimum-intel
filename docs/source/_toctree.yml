@@ -5,4 +5,8 @@
     - local: optimization
       title: Optimization
     title: Neural Compressor
+  - sections:
+    - local: inference
+      title: Inference
+    title: OpenVINO
   title: Optimum Intel
