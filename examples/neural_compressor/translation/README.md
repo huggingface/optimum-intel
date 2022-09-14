@@ -64,7 +64,7 @@ python run_translation.py \
     --do_eval \
     --num_train_epochs 3 \
     --verify_loading \
-    --predict_with_generate
+    --predict_with_generate \
     --per_device_train_batch_size=4 \
     --per_device_eval_batch_size=4 \
     --output_dir /tmp/test_translation
