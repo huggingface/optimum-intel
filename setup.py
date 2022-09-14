@@ -18,8 +18,6 @@ INSTALL_REQUIRES = [
     "torch",
     "sentencepiece",
     "scipy",
-    "openvino",
-    "neural-compressor",
 ]
 
 TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate"]
