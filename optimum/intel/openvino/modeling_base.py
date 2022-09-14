@@ -36,7 +36,16 @@ core = Core()
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_DEVICES = {"CPU", "GPU"}
+_SUPPORTED_DEVICES = {
+    "CPU",
+    "GPU",
+    "AUTO",
+    "AUTO:CPU,GPU",
+    "AUTO:GPU,CPU",
+    "MULTI",
+    "MULTI:CPU,GPU",
+    "MULTI:GPU,CPU",
+}
 
 
 @add_start_docstrings(
@@ -54,7 +63,7 @@ class OVBaseModel(OptimizedModel):
         self._device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
-        if self._device == "GPU" and self.is_dynamic:
+        if "GPU" in self._device and self.is_dynamic:
             raise ValueError(
                 "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
             )

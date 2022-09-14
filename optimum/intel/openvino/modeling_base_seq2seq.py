@@ -66,7 +66,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self._device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
-        if self._device == "GPU":
+        if "GPU" in self._device:
             raise ValueError("Support of dynamic shapes for GPU devices is not yet available.")
         # Ensure the selected device is supported by OpenVINO
         self._ensure_supported_device()
