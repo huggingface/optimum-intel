@@ -587,7 +587,8 @@ class IncTrainer(Trainer):
             logits = self._get_logits(outputs)
             teacher_logits = inputs.pop("teacher_logits", None)
             if teacher_logits is not None:
-                teacher_logits = tuple(teacher_logits.transpose(1, 0))
+                if len(teacher_logits.shape) == 3 and teacher_logits.shape[1] == 2:
+                    teacher_logits = tuple(teacher_logits.transpose(1, 0))
             else:
                 if hasattr(self.agent, "on_after_compute_loss"):
                     teacher_outputs = self.agent.criterion.teacher_model_forward(inputs)
