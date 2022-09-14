@@ -255,6 +255,15 @@ class OVBaseModel(OptimizedModel):
         return model
 
     def reshape(self, batch_size: int, sequence_length: int):
+        """
+        Propagates the given input shapes on the model's layers, fixing the inputs shapes of the model.
+
+        Arguments:
+            batch_size (`int`):
+                The batch size.
+            sequence_length (`int`):
+                The sequence length or number of channels.
+        """
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.model = self._reshape(self.model, batch_size, sequence_length)
         self.request = self._create_infer_request(self.model)

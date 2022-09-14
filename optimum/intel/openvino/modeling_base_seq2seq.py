@@ -334,6 +334,15 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         return model
 
     def reshape(self, batch_size: int, sequence_length: int):
+        """
+        Propagates the given input shapes on the model's layers, fixing the inputs shapes of the model.
+
+        Arguments:
+            batch_size (`int`):
+                The batch size.
+            sequence_length (`int`):
+                The sequence length.
+        """
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.encoder_model = self._reshape(self.encoder_model, batch_size, sequence_length, is_decoder=False)
         self.encoder_request = self._create_infer_request(self.encoder_model)
