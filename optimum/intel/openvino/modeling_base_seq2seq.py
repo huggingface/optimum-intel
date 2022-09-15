@@ -343,6 +343,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             sequence_length (`int`):
                 The sequence length.
         """
+        logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.encoder_model = self._reshape(self.encoder_model, batch_size, sequence_length, is_decoder=False)
         self.encoder_request = self._create_infer_request(self.encoder_model)
