@@ -25,9 +25,12 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
+import numpy as np
+import torch
 import transformers
 from datasets import load_dataset, load_metric
-from accelerate import Accelerator
+from torch.utils.data.dataloader import DataLoader
+from tqdm.auto import tqdm
 from transformers import (
     AutoConfig,
     AutoModelForQuestionAnswering,
@@ -44,6 +47,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
+from accelerate import Accelerator
 from optimum.intel.neural_compressor import (
     IncDistillationConfig,
     IncDistiller,
@@ -57,11 +61,6 @@ from optimum.intel.neural_compressor import (
 from optimum.intel.neural_compressor.quantization import IncQuantizedModelForQuestionAnswering
 from trainer_qa import QuestionAnsweringIncTrainer
 from utils_qa import postprocess_qa_predictions
-
-import numpy as np
-import torch
-from torch.utils.data.dataloader import DataLoader
-from tqdm.auto import tqdm
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -423,7 +422,7 @@ def main():
             f"model ({tokenizer.model_max_length}). Using max_seq_length={tokenizer.model_max_length}."
         )
     max_seq_length = min(data_args.max_seq_length, tokenizer.model_max_length)
-    
+
     # Data collator
     # We have already padded to max length if the corresponding flag is True, otherwise we need to pad in the data
     # collator.
@@ -432,17 +431,18 @@ def main():
         if data_args.pad_to_max_length
         else DataCollatorWithPadding(tokenizer, pad_to_multiple_of=8 if training_args.fp16 else None)
     )
-    
-    class QAModel_output_reshaped(torch.nn.Module):
-            def __init__(self, model):
-                super(QAModel_output_reshaped, self).__init__()
-                self.model = model
 
-            def forward(self, *args, **kwargs):
-                outputs = self.model(*args, **kwargs)
-                outputs_reshaped = torch.vstack([torch.vstack([sx, ex]) \
-                        for sx, ex in zip(outputs['start_logits'], outputs['end_logits'])])
-                return outputs_reshaped
+    class QAModel_output_reshaped(torch.nn.Module):
+        def __init__(self, model):
+            super(QAModel_output_reshaped, self).__init__()
+            self.model = model
+
+        def forward(self, *args, **kwargs):
+            outputs = self.model(*args, **kwargs)
+            outputs_reshaped = torch.vstack(
+                [torch.vstack([sx, ex]) for sx, ex in zip(outputs["start_logits"], outputs["end_logits"])]
+            )
+            return outputs_reshaped
 
     # Training preprocessing
     def prepare_train_features(examples):
@@ -542,7 +542,7 @@ def main():
         if data_args.max_train_samples is not None:
             # Number of samples might increase during Feature Creation, We select only specified max samples
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
-    
+
     accelerator = Accelerator(cpu=training_args.no_cuda)
 
     def move_input_to_device(input, device):
@@ -553,13 +553,13 @@ def main():
         elif isinstance(input, list):
             return [move_input_to_device(ele, device) for ele in input]
         elif isinstance(input, dict):
-            return {key:move_input_to_device(input[key], device) for key in input}
+            return {key: move_input_to_device(input[key], device) for key in input}
         else:
             assert False, "only support input type of torch.Tensor, tuple, list and dict."
 
     # get logits of teacher model
     if optim_args.run_teacher_logits:
-        assert data_args.pad_to_max_length, 'to run teacher logits must open pad_to_max_length due to padding issue'
+        assert data_args.pad_to_max_length, "to run teacher logits must open pad_to_max_length due to padding issue"
         teacher_config = AutoConfig.from_pretrained(optim_args.teacher_model_name_or_path)
         teacher_model = AutoModelForQuestionAnswering.from_pretrained(
             optim_args.teacher_model_name_or_path,
@@ -568,24 +568,28 @@ def main():
         )
         teacher_model = QAModel_output_reshaped(teacher_model)
         teacher_model = accelerator.prepare(teacher_model)
-        para_counter = lambda model:sum(p.numel() for p in model.parameters())
-        logger.info("***** Number of teacher model parameters: {:.2f}M *****".format(\
-                    para_counter(teacher_model)/10**6))
-        logger.info("***** Number of student model parameters: {:.2f}M *****".format(\
-                    para_counter(model)/10**6))
+        para_counter = lambda model: sum(p.numel() for p in model.parameters())
+        logger.info(
+            "***** Number of teacher model parameters: {:.2f}M *****".format(para_counter(teacher_model) / 10**6)
+        )
+        logger.info("***** Number of student model parameters: {:.2f}M *****".format(para_counter(model) / 10**6))
+
         def get_logits(teacher_model, train_dataset):
             logger.info("***** Getting logits of teacher model *****")
             logger.info(f"  Num examples = {len(train_dataset) }")
             logger.info(f"  Batch Size = {training_args.per_device_eval_batch_size }")
             # teacher_model.eval()
-            npy_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                '{}.{}.npy'.format(data_args.dataset_name, optim_args.teacher_model_name_or_path.replace('/', '.')))
+            npy_file = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "{}.{}.npy".format(data_args.dataset_name, optim_args.teacher_model_name_or_path.replace("/", ".")),
+            )
             if os.path.exists(npy_file):
                 teacher_logits = [list(x) for x in np.load(npy_file, allow_pickle=True)]
             else:
                 sampler = None
                 if accelerator.num_processes > 1:
                     from transformers.trainer_pt_utils import ShardSampler
+
                     sampler = ShardSampler(
                         train_dataset,
                         batch_size=training_args.per_device_eval_batch_size,
@@ -593,7 +597,10 @@ def main():
                         process_index=accelerator.process_index,
                     )
                 train_dataloader = DataLoader(
-                    train_dataset, collate_fn=data_collator, sampler=sampler, batch_size=training_args.per_device_eval_batch_size
+                    train_dataset,
+                    collate_fn=data_collator,
+                    sampler=sampler,
+                    batch_size=training_args.per_device_eval_batch_size,
                 )
                 train_dataloader = tqdm(train_dataloader, desc="Evaluating")
                 teacher_logits = []
@@ -604,12 +611,13 @@ def main():
                         outputs_list = [None for i in range(accelerator.num_processes)]
                         torch.distributed.all_gather_object(outputs_list, outputs)
                         outputs = np.concatenate(outputs_list, axis=0)
-                    teacher_logits += [[s,e] for s,e in zip(outputs[0::2], outputs[1::2])]
+                    teacher_logits += [[s, e] for s, e in zip(outputs[0::2], outputs[1::2])]
                 if accelerator.num_processes > 1:
-                    teacher_logits = teacher_logits[:len(train_dataset)]
+                    teacher_logits = teacher_logits[: len(train_dataset)]
                 if accelerator.local_process_index in [-1, 0]:
                     np.save(npy_file, teacher_logits, allow_pickle=True)
-            return train_dataset.add_column('teacher_logits', teacher_logits)
+            return train_dataset.add_column("teacher_logits", teacher_logits)
+
         with torch.no_grad():
             train_dataset = get_logits(teacher_model, train_dataset)
 

@@ -13,18 +13,18 @@
 #  limitations under the License.
 
 import collections
+import copy
 import math
 import os
 import sys
 import time
 import warnings
-import copy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
-from packaging import version
-import datasets
 
+import datasets
 import torch
 import torch.distributed as dist
+from packaging import version
 
 # from packaging import version
 from torch import nn
@@ -530,7 +530,7 @@ class IncTrainer(Trainer):
 
         # Good practice: save your training arguments together with the trained model
         torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
-        
+
     def _remove_unused_columns(self, dataset: "datasets.Dataset", description: Optional[str] = None):
         if not self.args.remove_unused_columns:
             return dataset
@@ -566,7 +566,7 @@ class IncTrainer(Trainer):
             labels = inputs.pop("labels")
         else:
             labels = None
-        
+
         train_inputs = copy.deepcopy(inputs)
         if "teacher_logits" in train_inputs:
             train_inputs.pop("teacher_logits")
@@ -582,8 +582,12 @@ class IncTrainer(Trainer):
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
-        if (self.is_in_train and hasattr(self, "agent") and hasattr(self.agent, "criterion") \
-            and self.agent.criterion is not None):
+        if (
+            self.is_in_train
+            and hasattr(self, "agent")
+            and hasattr(self.agent, "criterion")
+            and self.agent.criterion is not None
+        ):
             logits = self._get_logits(outputs)
             teacher_logits = inputs.pop("teacher_logits", None)
             if teacher_logits is not None:
