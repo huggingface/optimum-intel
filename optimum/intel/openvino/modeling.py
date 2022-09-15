@@ -96,8 +96,6 @@ class OVModel(OVBaseModel):
         self._device = torch.device("cpu")
 
     def to(self, device: str):
-        # Ensure the selected device is supported by OpenVINO
-        self._ensure_supported_device(device)
         self.device = device
         self.request = self._create_infer_request(self.model)
         return self

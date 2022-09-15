@@ -67,8 +67,6 @@ class OVBaseModel(OptimizedModel):
             raise ValueError(
                 "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
             )
-        # Ensure the selected device is supported by OpenVINO
-        self._ensure_supported_device()
         if self.is_dynamic:
             model = self._reshape(model, -1, -1)
         self.model = model

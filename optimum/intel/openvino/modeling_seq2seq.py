@@ -153,8 +153,6 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.auto_model_class.register(AutoConfig, self.__class__)
 
     def to(self, device: str):
-        # Ensure the selected device is supported by OpenVINO
-        self._ensure_supported_device(device)
         self.device = device
         self.encoder_request = self._create_infer_request(self.encoder_model)
         self.encoder.request = self.encoder_request
