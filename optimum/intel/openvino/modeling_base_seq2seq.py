@@ -72,13 +72,12 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             encoder = self._reshape(encoder, -1, -1, is_decoder=False)
             decoder = self._reshape(decoder, -1, -1)
             decoder_with_past = self._reshape(decoder_with_past, -1, -1) if self.use_cache else None
-
         self.encoder_model = encoder
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
-        self.encoder_request = self._create_infer_request(encoder)
-        self.decoder_request = self._create_infer_request(decoder)
-        self.decoder_with_past_request = self._create_infer_request(decoder_with_past) if self.use_cache else None
+        self.encoder_request = None
+        self.decoder_request = None
+        self.decoder_with_past_request = None
 
     def _save_pretrained(
         self,
@@ -344,15 +343,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.encoder_model = self._reshape(self.encoder_model, batch_size, sequence_length, is_decoder=False)
-        self.encoder_request = self._create_infer_request(self.encoder_model)
-        self.encoder.request = self.encoder_request
         self.decoder_model = self._reshape(self.decoder_model, batch_size, sequence_length)
-        self.decoder_request = self._create_infer_request(self.decoder_model)
-        self.decoder.request = self.decoder_request
         if self.use_cache:
             self.decoder_with_past_model = self._reshape(self.decoder_with_past_model, batch_size, sequence_length)
-            self.decoder_with_past_request = self._create_infer_request(self.decoder_with_past_model)
-            self.decoder_with_past.request = self.decoder_with_past_request
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError

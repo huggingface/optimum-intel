@@ -69,9 +69,9 @@ class OVBaseModel(OptimizedModel):
             )
         if self.is_dynamic:
             model = self._reshape(model, -1, -1)
-        self.model = model
-        self.request = self._create_infer_request(self.model)
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
+        self.model = model
+        self.request = None
 
     @staticmethod
     def load_model(file_name: Union[str, Path], bin_file_name: Optional[Union[str, Path]] = None):
@@ -239,9 +239,11 @@ class OVBaseModel(OptimizedModel):
 
         return cls._from_pretrained(save_dir, **kwargs)
 
-    def _create_infer_request(self, model):
-        compiled_model = core.compile_model(model, self.device, self.ov_config)
-        return compiled_model.create_infer_request()
+    def _create_inference_request(self):
+        if self.request is None:
+            logger.info("Compiling the model and creating the inference request ...")
+            compiled_model = core.compile_model(self.model, self.device, self.ov_config)
+            self.request = compiled_model.create_infer_request()
 
     def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int):
         shapes = {}
@@ -264,7 +266,7 @@ class OVBaseModel(OptimizedModel):
         """
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.model = self._reshape(self.model, batch_size, sequence_length)
-        self.request = self._create_infer_request(self.model)
+        self.request = None
 
     def _ensure_supported_device(self, device: str = None):
         device = device if device is not None else self.device

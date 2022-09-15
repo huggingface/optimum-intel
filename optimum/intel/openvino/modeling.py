@@ -97,7 +97,7 @@ class OVModel(OVBaseModel):
 
     def to(self, device: str):
         self.device = device
-        self.request = self._create_infer_request(self.model)
+        self.request = None
         return self
 
     def forward(self, *args, **kwargs):
@@ -147,6 +147,7 @@ class OVModelForSequenceClassification(OVModel):
         token_type_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
+        self._create_inference_request()
 
         inputs = {
             "input_ids": input_ids,
@@ -208,6 +209,8 @@ class OVModelForQuestionAnswering(OVModel):
         token_type_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
+        self._create_inference_request()
+
         inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
@@ -268,6 +271,8 @@ class OVModelForTokenClassification(OVModel):
         token_type_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
+        self._create_inference_request()
+
         inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
@@ -321,6 +326,8 @@ class OVModelForFeatureExtraction(OVModel):
         token_type_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
+        self._create_inference_request()
+
         inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
@@ -381,6 +388,7 @@ class OVModelForMaskedLM(OVModel):
         token_type_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
+        self._create_inference_request()
 
         inputs = {
             "input_ids": input_ids,
@@ -441,6 +449,8 @@ class OVModelForImageClassification(OVModel):
         pixel_values: torch.Tensor,
         **kwargs,
     ):
+        self._create_inference_request()
+
         inputs = {
             "pixel_values": pixel_values,
         }
