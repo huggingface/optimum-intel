@@ -60,10 +60,10 @@ class OVBaseModel(OptimizedModel):
     def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):
         self.config = config
         self.model_save_dir = kwargs.get("model_save_dir", None)
-        self._device = kwargs.get("device", "CPU")
+        self.device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
-        if "GPU" in self._device and self.is_dynamic:
+        if "GPU" in self.device and self.is_dynamic:
             raise ValueError(
                 "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
             )
@@ -242,7 +242,7 @@ class OVBaseModel(OptimizedModel):
         return cls._from_pretrained(save_dir, **kwargs)
 
     def _create_infer_request(self, model):
-        compiled_model = core.compile_model(model, self._device, self.ov_config)
+        compiled_model = core.compile_model(model, self.device, self.ov_config)
         return compiled_model.create_infer_request()
 
     def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int):
@@ -269,7 +269,7 @@ class OVBaseModel(OptimizedModel):
         self.request = self._create_infer_request(self.model)
 
     def _ensure_supported_device(self, device: str = None):
-        device = device if device is not None else self._device
+        device = device if device is not None else self.device
         if device not in _SUPPORTED_DEVICES:
             raise ValueError(f"Unknown device: {device}. Expected one of {_SUPPORTED_DEVICES}.")
 

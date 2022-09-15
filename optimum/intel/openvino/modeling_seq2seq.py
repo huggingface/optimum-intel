@@ -136,18 +136,18 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         **kwargs
     ):
         super().__init__(encoder, decoder, decoder_with_past, config, **kwargs)
-        self.device = torch.device("cpu")
+        self._device = torch.device("cpu")
         encoder_input_names = {key.get_any_name(): idx for idx, key in enumerate(self.encoder_model.inputs)}
         decoder_input_names = {key.get_any_name(): idx for idx, key in enumerate(self.decoder_model.inputs)}
-        self.encoder = OVEncoder(self.encoder_request, self.device, encoder_input_names)
-        self.decoder = OVDecoder(self.decoder_request, self.device, decoder_input_names)
+        self.encoder = OVEncoder(self.encoder_request, self._device, encoder_input_names)
+        self.decoder = OVDecoder(self.decoder_request, self._device, decoder_input_names)
         self.decoder_with_past = None
         self.main_input_name = "input_ids"
         if self.use_cache:
             decoder_input_names = {
                 key.get_any_name(): idx for idx, key in enumerate(self.decoder_with_past_model.inputs)
             }
-            self.decoder_with_past = OVDecoder(self.decoder_with_past_request, self.device, decoder_input_names)
+            self.decoder_with_past = OVDecoder(self.decoder_with_past_request, self._device, decoder_input_names)
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
@@ -155,7 +155,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
     def to(self, device: str):
         # Ensure the selected device is supported by OpenVINO
         self._ensure_supported_device(device)
-        self._device = device
+        self.device = device
         self.encoder_request = self._create_infer_request(self.encoder_model)
         self.encoder.request = self.encoder_request
         self.decoder_request = self._create_infer_request(self.decoder_model)
