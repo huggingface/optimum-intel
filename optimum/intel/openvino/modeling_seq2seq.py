@@ -263,6 +263,18 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
                 The sequence length.
         """
         super().reshape(batch_size, sequence_length)
+        self.clear_requests()
+        return self
+
+    def half(self):
+        """
+        Converts all the model weights to FP16 for more efficient inference on GPU.
+        """
+        super().half()
+        self.clear_requests()
+        return self
+
+    def clear_requests(self):
         self.encoder.request = None
         self.decoder.request = None
         if self.use_cache:

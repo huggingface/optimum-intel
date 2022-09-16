@@ -26,6 +26,7 @@ from transformers.onnx.utils import get_preprocessor
 import openvino
 import openvino.runtime.passes as passes
 from huggingface_hub import HfApi, hf_hub_download
+from openvino.offline_transformations import compress_model_transformation
 from openvino.runtime import Core, Dimension
 from optimum.modeling_base import OptimizedModel
 
@@ -287,6 +288,15 @@ class OVBaseModel(OptimizedModel):
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
         self.request = None
+        return self
+
+    def half(self):
+        """
+        Converts all the model weights to FP16 for more efficient inference on GPU.
+        """
+        compress_model_transformation(self.model)
+        self.request = None
+        return self
 
     def _ensure_supported_device(self, device: str = None):
         device = device if device is not None else self.device

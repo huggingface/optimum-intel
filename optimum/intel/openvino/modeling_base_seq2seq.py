@@ -26,6 +26,7 @@ from transformers.onnx.utils import get_preprocessor
 import openvino
 import openvino.runtime.passes as passes
 from huggingface_hub import HfApi, hf_hub_download
+from openvino.offline_transformations import compress_model_transformation
 from optimum.onnx.configuration import DecoderOnnxConfig, EncoderOnnxConfig
 from optimum.onnx.modeling_seq2seq import _DecoderWithLMhead
 
@@ -346,6 +347,16 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.decoder_model = self._reshape(self.decoder_model, batch_size, sequence_length)
         if self.use_cache:
             self.decoder_with_past_model = self._reshape(self.decoder_with_past_model, batch_size, sequence_length)
+
+    def half(self):
+        """
+        Converts all the model weights to FP16 for more efficient inference on GPU.
+        """
+        compress_model_transformation(self.encoder_model)
+        compress_model_transformation(self.decoder_model)
+        if self.use_cache:
+            compress_model_transformation(self.decoder_with_past_model)
+        return self
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError

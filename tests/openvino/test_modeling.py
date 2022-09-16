@@ -93,11 +93,24 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
-        outputs = pipe("This restaurant is awesome")
-
+        text = "This restaurant is awesome"
+        outputs = pipe(text)
+        self.assertTrue(model.is_dynamic)
         self.assertEqual(pipe.device, model._device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertIsInstance(outputs[0]["label"], str)
+        if model_arch == "bert":
+            # Test FP16 conversion
+            model.half()
+            outputs = pipe(text)
+            self.assertGreaterEqual(outputs[0]["score"], 0.0)
+            self.assertIsInstance(outputs[0]["label"], str)
+            # Test static shapes
+            model.reshape(1, 25)
+            outputs = pipe(text)
+            self.assertTrue(not model.is_dynamic)
+            self.assertGreaterEqual(outputs[0]["score"], 0.0)
+            self.assertIsInstance(outputs[0]["label"], str)
         gc.collect()
 
 
@@ -401,20 +414,3 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     #     model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
     #     outputs_model_without_pkv = model_without_pkv.generate(**tokens)
     #     self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
-
-
-class OVModelIntegrationTest(unittest.TestCase):
-    def test_static_shapes(self):
-        model_id = MODEL_NAMES["bert"]
-        model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True, use_dynamic=True)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
-        text = "This restaurant is awesome"
-        outputs = pipe(text)
-        self.assertTrue(model.is_dynamic)
-        self.assertGreaterEqual(outputs[0]["score"], 0.0)
-        model.reshape(1, 25)
-        outputs = pipe(text)
-        self.assertTrue(not model.is_dynamic)
-        self.assertGreaterEqual(outputs[0]["score"], 0.0)
-        gc.collect()
