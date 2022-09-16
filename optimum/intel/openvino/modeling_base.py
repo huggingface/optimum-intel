@@ -68,7 +68,9 @@ class OVBaseModel(OptimizedModel):
                 "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
             )
         if self.is_dynamic:
-            model = self._reshape(model, -1, -1)
+            height = -1 if self.export_feature == "image-classification" else None
+            width = -1 if self.export_feature == "image-classification" else None
+            model = self._reshape(model, -1, -1, height, width)
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
         self.model = model
         self.request = None
@@ -245,16 +247,27 @@ class OVBaseModel(OptimizedModel):
             compiled_model = core.compile_model(self.model, self.device, self.ov_config)
             self.request = compiled_model.create_infer_request()
 
-    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int):
+    def _reshape(
+        self,
+        model: openvino.runtime.Model,
+        batch_size: int,
+        sequence_length: int,
+        height: int = None,
+        width: int = None,
+    ):
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
             shapes[inputs][0] = batch_size
             shapes[inputs][1] = sequence_length
+            if height is not None:
+                shapes[inputs][2] = height
+            if width is not None:
+                shapes[inputs][3] = width
         model.reshape(shapes)
         return model
 
-    def reshape(self, batch_size: int, sequence_length: int):
+    def reshape(self, batch_size: int, sequence_length: int, height: int = None, width: int = None):
         """
         Propagates the given input shapes on the model's layers, fixing the inputs shapes of the model.
 
@@ -263,9 +276,13 @@ class OVBaseModel(OptimizedModel):
                 The batch size.
             sequence_length (`int`):
                 The sequence length or number of channels.
+            height (`int`, *optional*):
+                The image height.
+            width (`int`, *optional*):
+                The image width.
         """
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
-        self.model = self._reshape(self.model, batch_size, sequence_length)
+        self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
         self.request = None
 
     def _ensure_supported_device(self, device: str = None):
