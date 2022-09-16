@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -23,9 +24,12 @@ from transformers.generation_utils import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 
 import openvino
+from openvino.runtime import Core
 
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 
+
+core = Core()
 
 logger = logging.getLogger(__name__)
 
@@ -136,33 +140,39 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         **kwargs
     ):
         super().__init__(encoder, decoder, decoder_with_past, config, **kwargs)
-        self.device = torch.device("cpu")
-        encoder_input_names = {key.get_any_name(): idx for idx, key in enumerate(self.encoder_model.inputs)}
-        decoder_input_names = {key.get_any_name(): idx for idx, key in enumerate(self.decoder_model.inputs)}
-        self.encoder = OVEncoder(self.encoder_request, self.device, encoder_input_names)
-        self.decoder = OVDecoder(self.decoder_request, self.device, decoder_input_names)
-        self.decoder_with_past = None
+        self._device = torch.device("cpu")
         self.main_input_name = "input_ids"
+        self.decoder_with_past = None
+
+        encoder_cache_dir = Path(self.model_save_dir).joinpath("encoder_cache")
+        encoder_cache_dir.mkdir(parents=True, exist_ok=True)
+        ov_encoder_config = {**self.ov_config, "CACHE_DIR": str(encoder_cache_dir)}
+        self.encoder = OVEncoder(self.encoder_model, self.device, ov_encoder_config)
+
+        decoder_cache_dir = Path(self.model_save_dir).joinpath("decoder_cache")
+        decoder_cache_dir.mkdir(parents=True, exist_ok=True)
+        ov_decoder_config = {**self.ov_config, "CACHE_DIR": str(decoder_cache_dir)}
+        self.decoder = OVDecoder(self.decoder_model, self.device, ov_decoder_config)
+
         if self.use_cache:
-            decoder_input_names = {
-                key.get_any_name(): idx for idx, key in enumerate(self.decoder_with_past_model.inputs)
-            }
-            self.decoder_with_past = OVDecoder(self.decoder_with_past_request, self.device, decoder_input_names)
+            decoder_past_cache_dir = Path(self.model_save_dir).joinpath("decoder_past_cache")
+            decoder_past_cache_dir.mkdir(parents=True, exist_ok=True)
+            ov_decoder_past_config = {**self.ov_config, "CACHE_DIR": str(decoder_past_cache_dir)}
+            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, self.device, ov_decoder_past_config)
+
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
 
     def to(self, device: str):
-        # Ensure the selected device is supported by OpenVINO
-        self._ensure_supported_device(device)
-        self._device = device
-        self.encoder_request = self._create_infer_request(self.encoder_model)
-        self.encoder.request = self.encoder_request
-        self.decoder_request = self._create_infer_request(self.decoder_model)
-        self.decoder.request = self.decoder_request
+        self.device = device
+        self.encoder.device = device
+        self.decoder.device = device
+        self.encoder.request = None
+        self.decoder.request = None
         if self.use_cache:
-            self.decoder_with_past_request = self._create_infer_request(self.decoder_with_past_model)
-            self.decoder_with_past.request = self.decoder_with_past_request
+            self.decoder_with_past.device = device
+            self.decoder_with_past.request = None
         return self
 
     @add_start_docstrings_to_model_forward(
@@ -242,6 +252,22 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             )
         return reordered_past
 
+    def reshape(self, batch_size: int, sequence_length: int):
+        """
+        Propagates the given input shapes on the model's layers, fixing the inputs shapes of the model.
+
+        Arguments:
+            batch_size (`int`):
+                The batch size.
+            sequence_length (`int`):
+                The sequence length.
+        """
+        super().reshape(batch_size, sequence_length)
+        self.encoder.request = None
+        self.decoder.request = None
+        if self.use_cache:
+            self.decoder_with_past.request = None
+
 
 class OVEncoder:
     """
@@ -252,11 +278,14 @@ class OVEncoder:
             The OpenVINO inference request associated to the encoder.
     """
 
-    def __init__(self, request, device: torch.device, input_names: Dict):
-        self.request = request
+    def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict):
+        self.model = model
         self.device = device
-        self.input_names = input_names
+        self._device = torch.device("cpu")
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.main_input_name = "input_ids"
+        self.ov_config = ov_config
+        self.request = None
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
@@ -265,6 +294,11 @@ class OVEncoder:
         attention_mask: torch.LongTensor = None,
         **kwargs,
     ) -> BaseModelOutput:
+
+        if self.request is None:
+            logger.info("Compiling the encoder and creating the inference request ...")
+            compiled_model = core.compile_model(self.model, self.device, self.ov_config)
+            self.request = compiled_model.create_infer_request()
 
         inputs = {
             "input_ids": input_ids,
@@ -276,7 +310,7 @@ class OVEncoder:
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        last_hidden_state = torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
+        last_hidden_state = torch.from_numpy(outputs["last_hidden_state"]).to(self._device)
 
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
@@ -295,11 +329,14 @@ class OVDecoder:
             The device type used by this process.
     """
 
-    def __init__(self, request, device: torch.device, input_names: Dict):
-        self.request = request
+    def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict):
+        self.model = model
         self.device = device
-        self.input_names = input_names
+        self._device = torch.device("cpu")
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
+        self.ov_config = ov_config
+        self.request = None
 
     @add_start_docstrings_to_model_forward(DECODER_INPUTS_DOCSTRING)
     def forward(
@@ -309,6 +346,11 @@ class OVDecoder:
         encoder_attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
     ) -> Seq2SeqLMOutput:
+
+        if self.request is None:
+            logger.info("Compiling the decoder and creating the inference request ...")
+            compiled_model = core.compile_model(self.model, self.device, self.ov_config)
+            self.request = compiled_model.create_infer_request()
 
         inputs = {
             "input_ids": input_ids,
@@ -333,7 +375,7 @@ class OVDecoder:
         # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
         # self-attention layer and 2 to the cross-attention layer)
         past_key_values = tuple(
-            torch.from_numpy(outputs[key]).to(self.device) for key in outputs if "key_values" in key
+            torch.from_numpy(outputs[key]).to(self._device) for key in outputs if "key_values" in key
         )
 
         # Tuple of tuple of length `n_layers`, with each tuple of length equal to the number of self-attention and
@@ -341,7 +383,7 @@ class OVDecoder:
         num_pkv = 4
         past_key_values = tuple(past_key_values[i : i + num_pkv] for i in range(0, len(past_key_values), num_pkv))
 
-        logits = torch.from_numpy(outputs["logits"]).to(self.device)
+        logits = torch.from_numpy(outputs["logits"]).to(self._device)
 
         return Seq2SeqLMOutput(logits=logits, past_key_values=past_key_values)
 
