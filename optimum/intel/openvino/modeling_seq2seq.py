@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -140,12 +141,25 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
     ):
         super().__init__(encoder, decoder, decoder_with_past, config, **kwargs)
         self._device = torch.device("cpu")
-        self.encoder = OVEncoder(self.encoder_model, self.device)
-        self.decoder = OVDecoder(self.decoder_model, self.device)
-        self.decoder_with_past = None
         self.main_input_name = "input_ids"
+        self.decoder_with_past = None
+
+        encoder_cache_dir = Path(self.model_save_dir).joinpath("encoder_cache")
+        encoder_cache_dir.mkdir(parents=True, exist_ok=True)
+        ov_encoder_config = {**self.ov_config, "CACHE_DIR": str(encoder_cache_dir)}
+        self.encoder = OVEncoder(self.encoder_model, self.device, ov_encoder_config)
+
+        decoder_cache_dir = Path(self.model_save_dir).joinpath("decoder_cache")
+        decoder_cache_dir.mkdir(parents=True, exist_ok=True)
+        ov_decoder_config = {**self.ov_config, "CACHE_DIR": str(decoder_cache_dir)}
+        self.decoder = OVDecoder(self.decoder_model, self.device, ov_decoder_config)
+
         if self.use_cache:
-            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, self.device)
+            decoder_past_cache_dir = Path(self.model_save_dir).joinpath("decoder_past_cache")
+            decoder_past_cache_dir.mkdir(parents=True, exist_ok=True)
+            ov_decoder_past_config = {**self.ov_config, "CACHE_DIR": str(decoder_past_cache_dir)}
+            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, self.device, ov_decoder_past_config)
+
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
@@ -264,13 +278,13 @@ class OVEncoder:
             The OpenVINO inference request associated to the encoder.
     """
 
-    def __init__(self, model: openvino.runtime.Model, device: str):
+    def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict):
         self.model = model
         self.device = device
         self._device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.main_input_name = "input_ids"
-        self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        self.ov_config = ov_config
         self.request = None
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
@@ -315,13 +329,13 @@ class OVDecoder:
             The device type used by this process.
     """
 
-    def __init__(self, model: openvino.runtime.Model, device: str):
+    def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict):
         self.model = model
         self.device = device
         self._device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
-        self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        self.ov_config = ov_config
         self.request = None
 
     @add_start_docstrings_to_model_forward(DECODER_INPUTS_DOCSTRING)

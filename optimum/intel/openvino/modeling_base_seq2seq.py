@@ -62,7 +62,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
     ):
         self.config = config
         self.use_cache = decoder_with_past is not None
-        self.model_save_dir = kwargs.get("model_save_dir", None)
+        self.model_save_dir = kwargs.get("model_save_dir")
         self.device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}

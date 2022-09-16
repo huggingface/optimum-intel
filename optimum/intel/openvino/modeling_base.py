@@ -59,10 +59,13 @@ class OVBaseModel(OptimizedModel):
 
     def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):
         self.config = config
-        self.model_save_dir = kwargs.get("model_save_dir", None)
+        self.model_save_dir = kwargs.get("model_save_dir")
         self.device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        cache_dir = Path(self.model_save_dir).joinpath("model_cache")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self.ov_config["CACHE_DIR"] = str(cache_dir)
         if "GPU" in self.device and self.is_dynamic:
             raise ValueError(
                 "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
