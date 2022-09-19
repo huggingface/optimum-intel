@@ -90,7 +90,7 @@ class IncQuantizationTest(unittest.TestCase):
 
     def test_dynamic_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization.yml")
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             model, trainer, eval_func = self.helper(model_name, tmp_dir)
@@ -115,7 +115,7 @@ class IncQuantizationTest(unittest.TestCase):
 
     def test_static_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quantization.yml")
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             model, trainer, eval_func = self.helper(model_name, tmp_dir)
@@ -174,7 +174,7 @@ class IncQuantizationTest(unittest.TestCase):
 
         config_path = os.path.dirname(os.path.abspath(__file__))
 
-        q8_config = IncQuantizationConfig.from_pretrained(config_path, config_file_name="quantization.yml")
+        q8_config = IncQuantizationConfig.from_pretrained(config_path)
         q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
         q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
         q8_config.set_config("model.framework", "pytorch_fx")
@@ -377,12 +377,12 @@ class IncOptimizerTest(unittest.TestCase):
             return metrics["eval_accuracy"]
 
         config_path = os.path.dirname(os.path.abspath(__file__))
-        q8_config = IncQuantizationConfig.from_pretrained(config_path, config_file_name="quantization.yml")
+        q8_config = IncQuantizationConfig.from_pretrained(config_path)
         q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
         q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
         q8_config.set_config("model.framework", "pytorch_fx")
         quantizer = IncQuantizer(q8_config, eval_func=eval_func, train_func=train_func)
-        distillation_config = IncDistillationConfig.from_pretrained(config_path, config_file_name="distillation.yml")
+        distillation_config = IncDistillationConfig.from_pretrained(config_path)
         distiller = IncDistiller(
             teacher_model=teacher_model,
             config=distillation_config,
