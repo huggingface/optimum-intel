@@ -567,10 +567,8 @@ class IncTrainer(Trainer):
         else:
             labels = None
 
-        train_inputs = copy.deepcopy(inputs)
-        if "teacher_logits" in train_inputs:
-            train_inputs.pop("teacher_logits")
-        outputs = model(**train_inputs)
+        teacher_logits = inputs.pop("teacher_logits", None)
+        outputs = model(**inputs)
 
         # Save past state if it exists
         if self.args.past_index >= 0:
@@ -589,7 +587,6 @@ class IncTrainer(Trainer):
             and self.agent.criterion is not None
         ):
             logits = self._get_logits(outputs)
-            teacher_logits = inputs.pop("teacher_logits", None)
             if teacher_logits is not None:
                 if len(teacher_logits.shape) == 3 and teacher_logits.shape[1] == 2:
                     teacher_logits = tuple(teacher_logits.transpose(1, 0))
