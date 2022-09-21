@@ -35,7 +35,7 @@ pip install -r requirements.txt
 
 ### OpenVINO
 
-Here is an example on how to export a model to the OpenVINO IR and to perform inference with OpenVINO Runtime :
+Here is an example on how to export a model to the OpenVINO IR and perform inference with OpenVINO Runtime :
 
 ```diff
 -from transformers import AutoModelForSequenceClassification
