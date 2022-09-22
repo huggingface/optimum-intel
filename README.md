@@ -35,7 +35,7 @@ pip install -r requirements.txt
 
 ### OpenVINO
 
-Here is an example on how to perform inference with OpenVINO Runtime :
+Here is an example on how to perform inference with OpenVINO Runtime:
 
 ```diff
 -from transformers import AutoModelForSequenceClassification
