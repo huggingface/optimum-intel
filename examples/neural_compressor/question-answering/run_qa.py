@@ -584,43 +584,36 @@ def main():
             logger.info("***** Getting logits of teacher model *****")
             logger.info(f"  Num examples = {len(train_dataset) }")
             logger.info(f"  Batch Size = {training_args.per_device_eval_batch_size }")
-            npy_file = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "{}.{}.npy".format(data_args.dataset_name, optim_args.teacher_model_name_or_path.replace("/", ".")),
-            )
-            if os.path.exists(npy_file):
-                teacher_logits = [list(x) for x in np.load(npy_file, allow_pickle=True)]
-            else:
-                sampler = None
-                if accelerator.num_processes > 1:
-                    from transformers.trainer_pt_utils import ShardSampler
 
-                    sampler = ShardSampler(
-                        train_dataset,
-                        batch_size=training_args.per_device_eval_batch_size,
-                        num_processes=accelerator.num_processes,
-                        process_index=accelerator.process_index,
-                    )
-                train_dataloader = DataLoader(
+            sampler = None
+            if accelerator.num_processes > 1:
+                from transformers.trainer_pt_utils import ShardSampler
+
+                sampler = ShardSampler(
                     train_dataset,
-                    collate_fn=data_collator,
-                    sampler=sampler,
                     batch_size=training_args.per_device_eval_batch_size,
+                    num_processes=accelerator.num_processes,
+                    process_index=accelerator.process_index,
                 )
-                train_dataloader = tqdm(train_dataloader, desc="Evaluating")
-                teacher_logits = []
-                for step, batch in enumerate(train_dataloader):
-                    batch = move_input_to_device(batch, next(teacher_model_qa.parameters()).device)
-                    outputs = teacher_model_qa(**batch).cpu().detach().numpy()
-                    if accelerator.num_processes > 1:
-                        outputs_list = [None for i in range(accelerator.num_processes)]
-                        torch.distributed.all_gather_object(outputs_list, outputs)
-                        outputs = np.concatenate(outputs_list, axis=0)
-                    teacher_logits += [[s, e] for s, e in zip(outputs[0::2], outputs[1::2])]
+            train_dataloader = DataLoader(
+                train_dataset,
+                collate_fn=data_collator,
+                sampler=sampler,
+                batch_size=training_args.per_device_eval_batch_size,
+            )
+            train_dataloader = tqdm(train_dataloader, desc="Evaluating")
+            teacher_logits = []
+            for step, batch in enumerate(train_dataloader):
+                batch = move_input_to_device(batch, next(teacher_model_qa.parameters()).device)
+                outputs = teacher_model_qa(**batch).cpu().detach().numpy()
                 if accelerator.num_processes > 1:
-                    teacher_logits = teacher_logits[: len(train_dataset)]
-                if accelerator.local_process_index in [-1, 0]:
-                    np.save(npy_file, teacher_logits, allow_pickle=True)
+                    outputs_list = [None for i in range(accelerator.num_processes)]
+                    torch.distributed.all_gather_object(outputs_list, outputs)
+                    outputs = np.concatenate(outputs_list, axis=0)
+                teacher_logits += [[s, e] for s, e in zip(outputs[0::2], outputs[1::2])]
+            if accelerator.num_processes > 1:
+                teacher_logits = teacher_logits[: len(train_dataset)]
+
             return train_dataset.add_column("teacher_logits", teacher_logits)
 
         with torch.no_grad():
