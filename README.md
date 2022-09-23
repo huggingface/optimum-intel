@@ -33,24 +33,6 @@ pip install -r requirements.txt
 
 ## How to use it?
 
-### OpenVINO
-
-Here is an example on how to perform inference with OpenVINO Runtime:
-
-```diff
--from transformers import AutoModelForSequenceClassification
-+from optimum.intel.openvino import OVModelForSequenceClassification
-from transformers import AutoTokenizer, pipeline
-
-model_id = "distilbert-base-uncased-finetuned-sst-2-english"
--model = AutoModelForSequenceClassification.from_pretrained(model_id)
-+model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-pipe_cls = pipeline("text-classification", model=model, tokenizer=tokenizer)
-text = "He's a dreadful magician."
-outputs = pipe_cls(text)
-```
-
 ### Neural Compressor
 
 Here is an example on how to combine magnitude pruning with dynamic quantization while fine-tuning a DistilBERT on the sst-2 task.
@@ -116,3 +98,20 @@ You can load many more quantized models hosted on the hub under the Intel organi
 
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
 
+### OpenVINO
+
+Here is an example on how to perform inference with OpenVINO Runtime:
+
+```diff
+-from transformers import AutoModelForSequenceClassification
++from optimum.intel.openvino import OVModelForSequenceClassification
+from transformers import AutoTokenizer, pipeline
+
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+-model = AutoModelForSequenceClassification.from_pretrained(model_id)
++model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+pipe_cls = pipeline("text-classification", model=model, tokenizer=tokenizer)
+text = "He's a dreadful magician."
+outputs = pipe_cls(text)
+```
