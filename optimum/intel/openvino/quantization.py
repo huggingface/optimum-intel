@@ -12,19 +12,22 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from optimum.quantization_base import OptimumQuantizer
+import inspect
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
-from datasets import Dataset, load_dataset
-import inspect
+
 import datasets
-from nncf.torch.initialization import PTInitializingDataLoader
-from torch.utils.data import DataLoader, RandomSampler
-from nncf.torch import create_compressed_model, register_default_init_args
-from .utils import ONNX_WEIGHTS_NAME
-from transformers import default_data_collator, PreTrainedModel
 import torch
+from datasets import Dataset, load_dataset
+from torch.utils.data import DataLoader, RandomSampler
+from transformers import PreTrainedModel, default_data_collator
+
 from nncf import NNCFConfig
+from nncf.torch import create_compressed_model, register_default_init_args
+from nncf.torch.initialization import PTInitializingDataLoader
+from optimum.quantization_base import OptimumQuantizer
+
+from .utils import ONNX_WEIGHTS_NAME
 
 
 class OVDataLoader(PTInitializingDataLoader):
@@ -56,12 +59,12 @@ class OVQuantizer(OptimumQuantizer):
         return cls(model, **kwargs)
 
     def quantize(
-        self, 
-        quantization_config: NNCFConfig, 
+        self,
+        quantization_config: NNCFConfig,
         calibration_dataset: Dataset,
-        save_directory: Union[str, Path], 
-        file_name: Optional[str] = None, 
-        batch_size: int = 8, 
+        save_directory: Union[str, Path],
+        file_name: Optional[str] = None,
+        batch_size: int = 8,
     ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
