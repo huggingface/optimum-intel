@@ -18,16 +18,13 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from itertools import chain
 
-import datasets
 import torch
 from datasets import Dataset, load_dataset
 from torch.utils.data import DataLoader, RandomSampler
 from torch.onnx import export as onnx_export
 
 from transformers import PreTrainedModel, default_data_collator
-from huggingface_hub import HfApi, hf_hub_download
-from transformers.onnx import FeaturesManager, export
-from transformers.onnx.utils import get_preprocessor
+from transformers.onnx import FeaturesManager
 
 from nncf import NNCFConfig
 from nncf.torch import create_compressed_model, register_default_init_args
@@ -36,6 +33,8 @@ from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_obj
 from optimum.quantization_base import OptimumQuantizer
 
 from .utils import ONNX_WEIGHTS_NAME
+
+from .nncf_config import get_config_with_input_info
 
 
 class OVDataLoader(PTInitializingDataLoader):
@@ -80,8 +79,10 @@ class OVQuantizer(OptimumQuantizer):
         file_name = file_name if file_name is not None else ONNX_WEIGHTS_NAME
         output_path = save_directory.joinpath(file_name)
         calibration_dataloader = self._get_calibration_dataloader(calibration_dataset, batch_size)
-        quantization_config = register_default_init_args(quantization_config, calibration_dataloader)
-        controller, compressed_model = create_compressed_model(self.model, quantization_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk)
+        nncf_config = get_config_with_input_info(quantization_config, next(iter(calibration_dataloader)))
+
+        nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
+        controller, compressed_model = create_compressed_model(self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk)
 
         controller.prepare_for_export()
         model_id = 'distilbert-base-uncased-finetuned-sst-2-english'
