@@ -44,7 +44,7 @@ class OVDataLoader(PTInitializingDataLoader):
 
 class OVQuantizer(OptimumQuantizer):
     """
-    Handles the NNCF quantization process.
+    Handle the NNCF quantization process.
     """
 
     def __init__(self, model: PreTrainedModel, **kwargs):
@@ -52,6 +52,8 @@ class OVQuantizer(OptimumQuantizer):
         Args:
             model (`PreTrainedModel`):
                 The model to quantize.
+            seed (`int`, defaults to 42):
+                The random seed to use when shuffling the calibration dataset.
         """
         super().__init__()
         self.model = model
@@ -73,7 +75,21 @@ class OVQuantizer(OptimumQuantizer):
         file_name: Optional[str] = None,
         batch_size: int = 8,
     ):
+        """
+        Quantize a model given the optimization specifications defined in `quantization_config`.
 
+        Args:
+            quantization_config (`NNCFConfig`):
+                The configuration containing the parameters related to quantization.
+            calibration_dataset (`datasets.Dataset`):
+                The dataset to use for the calibration step.
+            save_directory (`Union[str, Path]`):
+                The directory where the quantized model should be saved.
+            file_name (`str`, *optional*):
+                The model file name to use when saving the model. Overwrites the default file name `"model.onnx"`.
+            batch_size (`int`, defaults to 8):
+                The number of calibration samples to load per batch.
+        """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         file_name = file_name if file_name is not None else ONNX_WEIGHTS_NAME
@@ -127,7 +143,29 @@ class OVQuantizer(OptimumQuantizer):
         preprocess_batch: bool = True,
         use_auth_token: bool = False,
     ) -> Dataset:
-        calib_dataset = load_dataset(
+        """
+        Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
+
+        Args:
+            dataset_name (`str`):
+                The dataset repository name on the Hugging Face Hub or path to a local directory containing data files
+                to load to use for the calibration step.
+            num_samples (`int`, defaults to 100):
+                The maximum number of samples composing the calibration dataset.
+            dataset_config_name (`str`, *optional*):
+                The name of the dataset configuration.
+            dataset_split (`str`, *optional*):
+                Which split of the dataset to use to perform the calibration step.
+            preprocess_function (`Callable`, *optional*):
+                Processing function to apply to each example after loading dataset.
+            preprocess_batch (`bool`, defaults to `True`):
+                Whether the `preprocess_function` should be batched.
+            use_auth_token (`bool`, defaults to `False`):
+                Whether to use the token generated when running `transformers-cli login`.
+        Returns:
+            The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
+        """
+        calibration_dataset = load_dataset(
             dataset_name,
             name=dataset_config_name,
             split=dataset_split,
@@ -135,13 +173,13 @@ class OVQuantizer(OptimumQuantizer):
         )
 
         if num_samples is not None:
-            num_samples = min(num_samples, len(calib_dataset))
-            calib_dataset = calib_dataset.shuffle(seed=self.seed).select(range(num_samples))
+            num_samples = min(num_samples, len(calibration_dataset))
+            calibration_dataset = calibration_dataset.shuffle(seed=self.seed).select(range(num_samples))
 
         if preprocess_function is not None:
-            calib_dataset = calib_dataset.map(preprocess_function, batched=preprocess_batch)
+            calibration_dataset = calibration_dataset.map(preprocess_function, batched=preprocess_batch)
 
-        return calib_dataset
+        return calibration_dataset
 
     def _get_calibration_dataloader(self, calibration_dataset: Dataset, batch_size: int) -> OVDataLoader:
         calibration_dataset = self._remove_unused_columns(calibration_dataset)
