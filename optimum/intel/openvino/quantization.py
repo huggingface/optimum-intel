@@ -75,11 +75,6 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 8,
     ):
 
-        '''print(dir(self.model))
-        print(self.model.__class__.__name__)
-        print(dir(type(self.model).__class__))
-        return'''
-
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         file_name = file_name if file_name is not None else ONNX_WEIGHTS_NAME
@@ -87,75 +82,28 @@ class OVQuantizer(OptimumQuantizer):
         calibration_dataloader = self._get_calibration_dataloader(calibration_dataset, batch_size)
         quantization_config = register_default_init_args(quantization_config, calibration_dataloader)
         controller, compressed_model = create_compressed_model(self.model, quantization_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk)
-        controller.prepare_for_export()
 
-        
+        controller.prepare_for_export()
         model_id = 'distilbert-base-uncased-finetuned-sst-2-english'
         task = "sequence-classification"
 
-        # TODO: support private models
-        preprocessor = get_preprocessor(model_id)
-        # TODO: Add framework ["pt", "tf"]
         model = FeaturesManager.get_model_from_feature(task, model_id)
         _, model_onnx_config = FeaturesManager.check_supported_model_or_raise(model, feature=task)
         onnx_config = model_onnx_config(model.config)
 
-        print("Export to ONNX")
-
-        # Export the model to the ONNX format
-        '''export(
-            preprocessor=preprocessor,
-            model=compressed_model,
-            config=onnx_config,
-            opset=onnx_config.default_onnx_opset,
-            output=output_path,
-        )'''
-
-        
-        model_inputs = onnx_config.generate_dummy_inputs(preprocessor, framework="pt")
-        model.config.return_dict = True
-        onnx_config.patch_ops()
-
-        compressed_model.config.return_dict = True
+        # Export the model to the ONNX format      
         compressed_model.eval()
-        
 
-        print(model_inputs)
-
-        print(self.input_names)
-
-        print(list(onnx_config.inputs.keys()))
-
-        loaded_item = next(iter(calibration_dataloader))
-        _model_inputs = calibration_dataloader.get_inputs(loaded_item)
-        print(_model_inputs)
-
-        '''original_forward = compressed_model.forward
-        args = self._model_args[:-1]
-        kwargs = self._model_args[-1]
-        model.forward = partial(model.forward, *args, **kwargs)'''
+        data_item = next(iter(calibration_dataloader))
 
         # pylint:disable=unexpected-keyword-arg
         with torch.no_grad():
             # Should call this, otherwise the operations executed during export will end up in the graph.
-            compressed_model.disable_dynamic_graph_building()        
-
-            '''onnx_export(
-                        model,
-                        tuple(model_inputs,),
-                        f=output_path.as_posix(),
-                        input_names=list(onnx_config.inputs.keys()),
-                        output_names=list(onnx_config.outputs.keys()),
-                        dynamic_axes={name: axes for name, axes in chain(onnx_config.inputs.items(), onnx_config.outputs.items())},
-                        opset_version=13,
-                        training=True
-                    )'''
-            dummy_inputs = list(loaded_item.values())
-            
+            compressed_model.disable_dynamic_graph_building()            
 
             onnx_export(
                     compressed_model,
-                    tuple(dummy_inputs),
+                    tuple(data_item.values()),
                     f=output_path.as_posix(),
                     input_names=list(onnx_config.inputs.keys()),
                     output_names=list(onnx_config.outputs.keys()),
@@ -165,11 +113,7 @@ class OVQuantizer(OptimumQuantizer):
                 )
 
             compressed_model.enable_dynamic_graph_building()
-        #compressed_model.forward = original_forward
 
-        print("Finished export")
-
-        #controller.export_model(output_path.as_posix(), input_names=list(onnx_config.inputs.keys()))
         return output_path
 
     def get_calibration_dataset(
