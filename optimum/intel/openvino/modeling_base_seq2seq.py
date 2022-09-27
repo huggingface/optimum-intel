@@ -167,16 +167,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         config = PretrainedConfig.from_dict(config_dict)
         local_files_only = kwargs.pop("local_files_only", False)
         use_cache = kwargs.pop("use_cache", True)
-        # TODO: Remove with next openvino release
-        if use_cache:
-            logger.warning(
-                "The `use_cache` argument is changed to `False`, its support will be enabled in the next release."
-            )
-            use_cache = False
         default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
         default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
         default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
-
         encoder_file_name = encoder_file_name or default_encoder_file_name
         decoder_file_name = decoder_file_name or default_decoder_file_name
         decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name

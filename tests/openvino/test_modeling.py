@@ -403,14 +403,13 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
         gc.collect()
 
-    # TODO : Add test after use_cache support
-    # def test_compare_with_and_without_past_key_values_model_outputs(self):
-    #     model_id = MODEL_NAMES["t5"]
-    #     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    #     text = "This is a sample input"
-    #     tokens = tokenizer(text, return_tensors="pt")
-    #     model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=True)
-    #     outputs_model_with_pkv = model_with_pkv.generate(**tokens)
-    #     model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
-    #     outputs_model_without_pkv = model_without_pkv.generate(**tokens)
-    #     self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
+    def test_compare_with_and_without_past_key_values_model_outputs(self):
+        model_id = MODEL_NAMES["t5"]
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        text = "This is a sample input"
+        tokens = tokenizer(text, return_tensors="pt")
+        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=True)
+        outputs_model_with_pkv = model_with_pkv.generate(**tokens)
+        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
+        outputs_model_without_pkv = model_without_pkv.generate(**tokens)
+        self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
