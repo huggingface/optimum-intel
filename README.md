@@ -45,9 +45,10 @@ from evaluate import evaluator
 from optimum.intel.neural_compressor import IncOptimizer, IncQuantizationConfig, IncQuantizer
 
 model_id = "distilbert-base-cased-distilled-squad"
+max_eval_samples = 100
 model = AutoModelForQuestionAnswering.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-eval_dataset = load_dataset("squad", split="validation").select(range(20))
+eval_dataset = load_dataset("squad", split="validation").select(range(max_eval_samples))
 eval = evaluator("question-answering")
 qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
 
