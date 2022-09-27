@@ -21,6 +21,5 @@ from .modeling import (
     OVModelForTokenClassification,
 )
 from .modeling_seq2seq import OVModelForSeq2SeqLM
-from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
-
 from .nncf_config import DEFAULT_QUANTIZATION_CONFIG
+from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
