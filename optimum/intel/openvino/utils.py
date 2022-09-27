@@ -12,4 +12,13 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from .version import __version__
+
+OV_XML_FILE_NAME = "ov_model.xml"
+OV_ENCODER_NAME = "ov_encoder_model.xml"
+OV_DECODER_NAME = "ov_decoder_model.xml"
+OV_DECODER_WITH_PAST_NAME = "ov_decoder_with_past_model.xml"
+
+ONNX_WEIGHTS_NAME = "model.onnx"
+ONNX_ENCODER_NAME = "encoder_model.onnx"
+ONNX_DECODER_NAME = "decoder_model.onnx"
+ONNX_DECODER_WITH_PAST_NAME = "decoder_with_past_model.onnx"

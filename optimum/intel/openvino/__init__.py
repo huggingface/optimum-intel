@@ -12,4 +12,13 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from .version import __version__
+from .modeling import (
+    OVModelForFeatureExtraction,
+    OVModelForImageClassification,
+    OVModelForMaskedLM,
+    OVModelForQuestionAnswering,
+    OVModelForSequenceClassification,
+    OVModelForTokenClassification,
+)
+from .modeling_seq2seq import OVModelForSeq2SeqLM
+from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME

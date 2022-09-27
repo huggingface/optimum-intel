@@ -3,14 +3,10 @@
     title: 🤗 Optimum Intel
   - local: quickstart
     title: Quickstart
-  - local: configuration
-    title: Configuration
+  title: Optimum Intel
+- sections:
   - local: optimization
     title: Optimization
-  - local: quantization
-    title: Quantization
-  - local: pruning
-    title: Pruning
   - local: trainer
     title: Trainer
-  title: Optimum Intel
+  title: Neural Compressor

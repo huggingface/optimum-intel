@@ -12,6 +12,130 @@ specific language governing permissions and limitations under the License.
 
 # Optimization
 
+Optimum Intel can be used to apply popular compression techniques such as quantization, pruning and knowledge distillation. 
+
+To apply dynamic quantization on a fine-tuned DistilBERT, we first need to create the corresponding configuration describing the quantization details as well as the quantizer object used to later apply quantization:
+
+```python
+from optimum.intel.neural_compressor import IncQuantizationConfig, IncQuantizer 
+
+# Load the quantization configuration detailing the quantization methodology we wish to apply
+quantization_config = IncQuantizationConfig.from_pretrained(
+  "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic", 
+  config_file_name="quantization.yml",
+)
+# Create our quantizer with the quantization configuration and the evaluation function needed 
+# for the automatic accuracy-driven tuning strategies
+quantizer = IncQuantizer(quantization_config, eval_func=eval_func)
+```
+
+In a second step, we create our optimizer which will take care of the optimization process.
+
+```python
+from transformers import AutoModelForSequenceClassification
+from optimum.intel.neural_compressor import IncOptimizer
+
+model = AutoModelForSequenceClassification("distilbert-base-uncased-finetuned-sst-2-english")
+
+# Create our optimizer by giving the model we wish to optimize with the corresponding quantizer
+optimizer = IncOptimizer(model, quantizer=quantizer)
+
+# Apply dynamic quantization
+optimized_model = optimizer.fit()
+
+# Save the resulting model and its corresponding configuration in the given directory
+optimizer.save_pretrained(save_dir)
+```
+
+To load a quantized model hosted locally or on the 🤗 hub, you can do as follows :
+```python
+from optimum.intel.neural_compressor.quantization import IncQuantizedModelForSequenceClassification
+
+loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrained(
+    "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-static"
+)
+```
+
+You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
+
+Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
+
+
+It is also possible to combine different compression techniques such as pruning and quantization.
+
+```python
+from optimum.intel.neural_compressor import IncOptimizer, IncPruner, IncQuantizer
+from optimum.intel.neural_compressor.configuration import IncPruningConfig, IncQuantizationConfig
+
+# The targeted sparsity is set to 10%
+target_sparsity = 0.1
+config_path = "echarlaix/distilbert-sst2-inc-dynamic-quantization-magnitude-pruning-0.1"
+# Load the quantization configuration detailing the quantization we wish to apply
+quantization_config = IncQuantizationConfig.from_pretrained(config_path, config_file_name="quantization.yml")
+# Load the pruning configuration detailing the pruning we wish to apply
+pruning_config = IncPruningConfig.from_pretrained(config_path, config_file_name="prune.yml")
+
+# Instantiate our IncQuantizer using the desired configuration
+quantizer = IncQuantizer(quantization_config, eval_func=eval_func)
+# Instantiate our IncPruner using the desired configuration
+pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
+optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
+# Apply pruning and quantization 
+optimized_model = optimizer.fit()
+
+# Save the resulting model and its corresponding configuration in the given directory
+optimizer.save_pretrained(save_dir)
+```
+
+
 ## IncOptimizer
 
 [[autodoc]] neural_compressor.optimization.IncOptimizer
+
+## IncPruner
+
+[[autodoc]] neural_compressor.pruning.IncPruner
+
+## IncDistiller
+
+[[autodoc]] neural_compressor.distillation.IncDistiller
+
+## IncQuantizer
+
+[[autodoc]] neural_compressor.quantization.IncQuantizer
+
+## IncQuantizedModel
+
+[[autodoc]] neural_compressor.quantization.IncQuantizedModel
+
+## IncQuantizedModelForSequenceClassification
+
+[[autodoc]] neural_compressor.quantization.IncQuantizedModelForSequenceClassification
+
+## IncQuantizedModelForQuestionAnswering
+
+[[autodoc]] neural_compressor.quantization.IncQuantizedModelForQuestionAnswering
+
+## IncQuantizedModelForTokenClassification
+
+[[autodoc]] neural_compressor.quantization.IncQuantizedModelForTokenClassification
+
+## IncQuantizedModelForMultipleChoice
+
+[[autodoc]] neural_compressor.quantization.IncQuantizedModelForMultipleChoice
+
+## IncQuantizedModelForMaskedLM
+
+[[autodoc]] neural_compressor.quantization.IncQuantizedModelForMaskedLM
+
+## IncQuantizedModelForCausalLM
+
+[[autodoc]] neural_compressor.quantization.IncQuantizedModelForCausalLM
+
+## IncQuantizedModelForSeq2SeqLM
+
+[[autodoc]] neural_compressor.quantization.IncQuantizedModelForSeq2SeqLM
+
+
+
+
