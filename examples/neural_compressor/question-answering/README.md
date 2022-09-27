@@ -83,3 +83,18 @@ and [pruning](https://github.com/huggingface/optimum/blob/main/examples/config/p
 configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
+
+The distillation process can be accelerated by reserving teacher logits.
+
+```bash
+python run_qa.py \
+    --model_name_or_path distilbert-base-uncased \
+    --dataset_name squad \
+    --apply_distillation \
+    --generate_teacher_logits \
+    --teacher_model_name_or_path distilbert-base-uncased-distilled-squad \
+    --do_train \
+    --do_eval \
+    --output_dir /tmp/squad_output
+```
+The flag `--generate_teacher_logits` can save teacher logits in training set so you can read teacher logits while distillation training instead of running teacher model forward in every step.

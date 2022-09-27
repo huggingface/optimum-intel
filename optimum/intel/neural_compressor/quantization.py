@@ -16,6 +16,7 @@ import copy
 import logging
 import os
 from enum import Enum
+from pathlib import Path
 from typing import Callable, ClassVar, Dict, Optional, Union
 
 import torch
@@ -34,20 +35,11 @@ from transformers import (
     XLNetLMHeadModel,
 )
 from transformers.models.auto.auto_factory import _get_model_class
-
-
-try:
-    from transformers.utils import cached_file
-
-    _use_cached_file = True
-except ImportError:
-    from transformers.file_utils import cached_path, hf_bucket_url
-
-    _use_cached_file = False
-
+from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
 from transformers.utils.versions import require_version
 
 import neural_compressor
+from huggingface_hub import hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.conf.config import Quantization_Conf
@@ -281,35 +273,43 @@ class IncQuantizedModel:
 
             q_model_name = q_model_name if q_model_name is not None else WEIGHTS_NAME
             revision = download_kwargs.pop("revision", None)
-            if _use_cached_file == False:
-                if os.path.isdir(model_name_or_path):
-                    state_dict_path = os.path.join(model_name_or_path, q_model_name)
-                elif os.path.isfile(model_name_or_path):
-                    state_dict_path = model_name_or_path
-                else:
-                    state_dict_path = hf_bucket_url(model_name_or_path, filename=q_model_name, revision=revision)
-
-            try:
-                if _use_cached_file == False:
-                    state_dict_path = cached_path(state_dict_path, **download_kwargs)
-                else:
-                    state_dict_path = cached_file(model_name_or_path, q_model_name, **download_kwargs)
-            except EnvironmentError as err:
-                logger.error(err)
-                msg = (
-                    f"Can't load config for '{model_name_or_path}'. Make sure that:\n\n - '{model_name_or_path}' is a "
-                    f"correct model identifier listed on 'https://huggingface.co/models'\n\n - or "
-                    f"'{model_name_or_path}' is a correct path to a directory containing a {q_model_name} file\n\n"
-                )
-
-                if revision is not None:
-                    msg += (
-                        f"- or '{revision}' is a valid git identifier (branch name, a tag name, or a commit id)  "
-                        f"thatexists for this model name as listed on its model page on "
-                        f"'https://huggingface.co/models'\n\n"
+            if os.path.isdir(model_name_or_path):
+                state_dict_path = os.path.join(model_name_or_path, q_model_name)
+            elif os.path.isfile(model_name_or_path):
+                state_dict_path = model_name_or_path
+            else:
+                local_files_only = False
+                if is_offline_mode():
+                    logger.info("Offline mode: forcing local_files_only=True")
+                    local_files_only = True
+                cache_dir = download_kwargs.get("cache_dir", None)
+                if cache_dir is None:
+                    cache_dir = TRANSFORMERS_CACHE
+                if isinstance(cache_dir, Path):
+                    cache_dir = str(cache_dir)
+                try:
+                    state_dict_path = hf_hub_download(
+                        repo_id=model_name_or_path,
+                        filename=q_model_name,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        local_files_only=local_files_only,
+                    )
+                except EnvironmentError as err:
+                    logger.error(err)
+                    msg = (
+                        f"Can't load config for '{model_name_or_path}'. Make sure that:\n\n"
+                        f"-'{model_name_or_path}' is a correct model identifier listed on 'https://huggingface.co/models'\n\n"
+                        f"-or '{model_name_or_path}' is a correct path to a directory containing a {q_model_name} file\n\n"
                     )
 
-                raise EnvironmentError(msg)
+                    if revision is not None:
+                        msg += (
+                            f"- or '{revision}' is a valid git identifier (branch name, a tag name, or a commit id) that "
+                            f"exists for this model name as listed on its model page on 'https://huggingface.co/models'\n\n"
+                        )
+
+                    raise EnvironmentError(msg)
 
             state_dict = torch.load(state_dict_path)
 

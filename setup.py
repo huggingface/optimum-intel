@@ -26,7 +26,7 @@ TESTS_REQUIRE = ["pytest", "parameterized"]
 QUALITY_REQUIRES = [
     "black",
     "isort",
-    "hf-doc-builder",
+    "hf-doc-builder @ git+https://github.com/huggingface/doc-builder.git",
 ]
 
 EXTRAS_REQUIRE = {"tests": TESTS_REQUIRE, "quality": QUALITY_REQUIRES}

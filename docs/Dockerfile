@@ -1,5 +1,8 @@
 FROM ubuntu:18.04
 
+ARG commit_sha
+ARG clone_url
+
 # Need cv2 to install Intel Neural Compressor. See https://github.com/intel/neural-compressor/issues/36
 RUN apt-get update && apt-get install -y \
     python3 \
@@ -17,5 +20,5 @@ RUN apt-get -y install nodejs
 RUN npm install
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip
-RUN git clone https://github.com/huggingface/optimum-intel.git
+RUN git clone $clone_url && cd optimum-intel && git checkout $commit_sha
 RUN python3 -m pip install --no-cache-dir ./optimum-intel[quality]
