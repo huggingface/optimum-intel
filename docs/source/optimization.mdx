@@ -37,7 +37,9 @@ def eval_func(model):
 
 # Load the quantization configuration detailing the quantization we wish to apply
 config_name_or_path = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
-quantization_config = IncQuantizationConfig.from_pretrained(config_name_or_path)
+quantization_config = IncQuantizationConfig.from_pretrained(
+    config_name_or_path, config_file_name="quantization.yml"
+)
 
 # Instantiate our IncQuantizer using the desired configuration and the evaluation function used
 # for the INC accuracy-driven tuning strategy
