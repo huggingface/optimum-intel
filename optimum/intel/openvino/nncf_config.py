@@ -4,6 +4,7 @@ DEFAULT_QUANTIZATION_CONFIG = {
   "compression": {
     "algorithm": "quantization",
     "preset": "mixed",
+    "overflow_fix": "disable",
     "initializer": {
       "range": {
         "num_init_samples": 300,
