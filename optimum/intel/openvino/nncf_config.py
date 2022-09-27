@@ -25,7 +25,8 @@ DEFAULT_QUANTIZATION_CONFIG = {
       "{re}.*Embeddings.*",
       "{re}.*__add___[0-1]",
       "{re}.*layer_norm_0",
-      "{re}.*matmul_1"
+      "{re}.*matmul_1",
+      "{re}.*__truediv__*"
     ]
   }
 }
