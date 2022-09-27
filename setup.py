@@ -30,7 +30,7 @@ QUALITY_REQUIRES = [
 
 EXTRAS_REQUIRE = {
     "neural-compressor": "neural-compressor",
-    "openvino":  ["openvino>=2022.2.0", "nncf"],
+    "openvino": ["openvino>=2022.2.0", "nncf"],
     "quality": QUALITY_REQUIRES,
     "tests": TESTS_REQUIRE,
 }
