@@ -113,3 +113,20 @@ pipe_cls = pipeline("text-classification", model=model, tokenizer=tokenizer)
 text = "He's a dreadful magician."
 outputs = pipe_cls(text)
 ```
+
+By default, OVModels support dynamic shapes, enabling inputs of every shapes.
+To decrease latency, static shapes can be enabled by giving the desired inputs shapes.
+
+```python
+# Fix the batch size to 1 and the sequence length to 9
+model.reshape(1, 9)
+```
+
+Currently, OpenVINO GPU only supports static shapes. FP16 precision can also be enabled in order to further decrease latency.
+
+```python
+# Fix the batch size to 1 and the sequence length to 9
+model.reshape(1, 9)
+model.to("GPU")
+# FP16 precision can be enabled
+model.half()
