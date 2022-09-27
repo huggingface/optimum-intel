@@ -16,18 +16,25 @@ import inspect
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
-import datasets
+from itertools import chain
+
 import torch
 from datasets import Dataset, load_dataset
 from torch.utils.data import DataLoader, RandomSampler
+from torch.onnx import export as onnx_export
+
 from transformers import PreTrainedModel, default_data_collator
+from transformers.onnx import FeaturesManager
 
 from nncf import NNCFConfig
 from nncf.torch import create_compressed_model, register_default_init_args
 from nncf.torch.initialization import PTInitializingDataLoader
+from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from optimum.quantization_base import OptimumQuantizer
 
 from .utils import ONNX_WEIGHTS_NAME
+
+from .nncf_config import get_config_with_input_info
 
 
 class OVDataLoader(PTInitializingDataLoader):
@@ -88,10 +95,43 @@ class OVQuantizer(OptimumQuantizer):
         file_name = file_name if file_name is not None else ONNX_WEIGHTS_NAME
         output_path = save_directory.joinpath(file_name)
         calibration_dataloader = self._get_calibration_dataloader(calibration_dataset, batch_size)
-        quantization_config = register_default_init_args(quantization_config, calibration_dataloader)
-        controller, compressed_model = create_compressed_model(self.model, quantization_config)
+        nncf_config = get_config_with_input_info(quantization_config, next(iter(calibration_dataloader)))
+
+        nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
+        controller, compressed_model = create_compressed_model(self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk)
+
         controller.prepare_for_export()
-        controller.export_model(output_path, input_names=self.input_names)
+        model_id = 'distilbert-base-uncased-finetuned-sst-2-english'
+        task = "sequence-classification"
+
+        model = FeaturesManager.get_model_from_feature(task, model_id)
+        _, model_onnx_config = FeaturesManager.check_supported_model_or_raise(model, feature=task)
+        onnx_config = model_onnx_config(model.config)
+
+        # Export the model to the ONNX format      
+        compressed_model.eval()
+
+        data_item = next(iter(calibration_dataloader))
+
+        # pylint:disable=unexpected-keyword-arg
+        with torch.no_grad():
+            # Should call this, otherwise the operations executed during export will end up in the graph.
+            compressed_model.disable_dynamic_graph_building()            
+
+            onnx_export(
+                    compressed_model,
+                    tuple(data_item.values()),
+                    f=output_path.as_posix(),
+                    input_names=list(onnx_config.inputs.keys()),
+                    output_names=list(onnx_config.outputs.keys()),
+                    dynamic_axes={name: axes for name, axes in chain(onnx_config.inputs.items(), onnx_config.outputs.items())},
+                    do_constant_folding=True,
+                    opset_version=13,
+                )
+
+            compressed_model.enable_dynamic_graph_building()
+
+        return output_path
 
     def get_calibration_dataset(
         self,
