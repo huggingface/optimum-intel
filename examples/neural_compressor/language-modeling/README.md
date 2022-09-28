@@ -16,8 +16,8 @@ limitations under the License.
 
 # Language modeling training
 
-The scripts [`run_clm.py`](https://github.com/huggingface/optimum/blob/main/examples/language-modeling/run_clm.py) 
-and [`run_mlm.py`](https://github.com/huggingface/optimum/blob/main/examples/language-modeling/run_mlm.py)
+The scripts [`run_clm.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/language-modeling/run_clm.py) 
+and [`run_mlm.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/language-modeling/run_mlm.py)
 allow us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning 
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for language modeling tasks.
 
@@ -75,8 +75,8 @@ respectively `dynamic`, `static` or `aware_training`.
 
 The configuration file containing all the information related to the model quantization and pruning objectives can be 
 specified using respectively `quantization_config` and `pruning_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum/blob/main/examples/config/quantization.yml) 
-and [pruning](https://github.com/huggingface/optimum/blob/main/examples/config/prune.yml) 
+[quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/quantization.yml) 
+and [pruning](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/prune.yml) 
 config files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.

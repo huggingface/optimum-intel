@@ -17,7 +17,7 @@ limitations under the License.
 # Token classification
 
 
-The script [`run_ner.py`](https://github.com/huggingface/optimum/blob/main/examples/token-classification/run_ner.py)
+The script [`run_ner.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/token-classification/run_ner.py)
 allows us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for token classification tasks.
 
@@ -72,9 +72,9 @@ In order to apply dynamic, static or aware-training quantization, `quantization_
 
 The configuration file containing all the information related to the model quantization, distillation and pruning objectives can be 
 specified using respectively `quantization_config`, `distillation_config` and `pruning_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum/blob/main/examples/config/quantization.yml),
-[distillation](https://github.com/huggingface/optimum/blob/main/examples/config/distillation.yml),
-and [pruning](https://github.com/huggingface/optimum/blob/main/examples/config/prune.yml) 
+[quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/quantization.yml),
+[distillation](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/distillation.yml),
+and [pruning](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/prune.yml) 
 configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
