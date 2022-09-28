@@ -16,7 +16,7 @@ limitations under the License.
 
 # Summarization
 
-The script [`run_summarization.py`](https://github.com/huggingface/optimum/blob/main/examples/summarization/run_summarization.py)
+The script [`run_summarization.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/summarization/run_summarization.py)
 allows us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning 
 using the [Intel Neural Compressor (INC)](https://github.com/intel/neural-compressor) library for summarization tasks.
 
@@ -68,8 +68,8 @@ respectively `dynamic`, `static` or `aware_training`.
 
 The configuration file containing all the information related to the model quantization and pruning objectives can be 
 specified using respectively `quantization_config` and `pruning_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum/blob/main/examples/config/quantization.yml),
-and [pruning](https://github.com/huggingface/optimum/blob/main/examples/config/prune.yml) 
+[quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/quantization.yml),
+and [pruning](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/prune.yml) 
 configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
