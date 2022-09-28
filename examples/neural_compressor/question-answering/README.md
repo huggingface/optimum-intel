@@ -56,7 +56,7 @@ python run_qa.py \
     --output_dir /tmp/squad_output
 ```
 
-The distillation process can be accelerated by the flag `--generate_teacher_logits`, it can save teacher logits in training set so you can read teacher logits while distillation training instead of running teacher model forward in every step.
+The distillation process can be accelerated by the flag `--generate_teacher_logits`, which will add an additional step where the teacher outputs will be computed and saved in the training dataset, removing the need to compute the teacher outputs at every training step.
 
 The following example fine-tunes DistilBERT on the SQuAD1.0 dataset while applying magnitude pruning and then applies 
 dynamic quantization as a second step.
