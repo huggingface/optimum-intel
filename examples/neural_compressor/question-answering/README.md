@@ -46,6 +46,7 @@ python run_qa.py \
     --model_name_or_path distilbert-base-uncased \
     --dataset_name squad \
     --apply_distillation \
+    --generate_teacher_logits \
     --teacher_model_name_or_path distilbert-base-uncased-distilled-squad \
     --apply_quantization \
     --quantization_approach aware_training \
@@ -54,6 +55,8 @@ python run_qa.py \
     --verify_loading \
     --output_dir /tmp/squad_output
 ```
+
+The distillation process can be accelerated by the flag `--generate_teacher_logits`, it can save teacher logits in training set so you can read teacher logits while distillation training instead of running teacher model forward in every step.
 
 The following example fine-tunes DistilBERT on the SQuAD1.0 dataset while applying magnitude pruning and then applies 
 dynamic quantization as a second step.
@@ -84,17 +87,3 @@ configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
 
-The distillation process can be accelerated by reserving teacher logits.
-
-```bash
-python run_qa.py \
-    --model_name_or_path distilbert-base-uncased \
-    --dataset_name squad \
-    --apply_distillation \
-    --generate_teacher_logits \
-    --teacher_model_name_or_path distilbert-base-uncased-distilled-squad \
-    --do_train \
-    --do_eval \
-    --output_dir /tmp/squad_output
-```
-The flag `--generate_teacher_logits` can save teacher logits in training set so you can read teacher logits while distillation training instead of running teacher model forward in every step.
