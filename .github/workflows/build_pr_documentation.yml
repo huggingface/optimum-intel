@@ -37,14 +37,14 @@ jobs:
           pip uninstall -y doc-builder
           cd doc-builder
           git pull origin main
-          pip install .[neural-compressor,openvino]
-          pip freeze
+          pip install .
           pip install black
           cd ..
 
       - name: Make documentation
         run: |
           cd optimum-intel
+          pip install openvino
           make doc BUILD_DIR=intel-doc-build VERSION=pr_$PR_NUMBER COMMIT_SHA_SUBPACKAGE=$COMMIT_SHA CLONE_URL=$PR_CLONE_URL
           cd ..
 
