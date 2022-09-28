@@ -86,4 +86,3 @@ and [pruning](https://github.com/huggingface/optimum/blob/main/examples/config/p
 configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
-
