@@ -19,7 +19,7 @@ limitations under the License.
 ## GLUE tasks
 
 The script [`run_glue.py`](https://github.com/huggingface/optimum/blob/main/examples/text-classification/run_glue.py)
-allows us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning 
+allows us to apply different quantization approaches (such as dynamic, static and quantization-aware training) as well as pruning 
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for 
 sequence classification tasks such as the ones from the [GLUE benchmark](https://gluebenchmark.com/).
 
