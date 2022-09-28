@@ -38,6 +38,7 @@ jobs:
           cd doc-builder
           git pull origin main
           pip install .[neural-compressor,openvino]
+          pip freeze
           pip install black
           cd ..
 
