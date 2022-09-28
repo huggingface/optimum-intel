@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 
 class IncConfig:
+
+    CONFIG_NAME = "best_configure.yml"
+
     def __init__(self, config_path: str):
         """
         Args:
@@ -98,7 +101,7 @@ class IncConfig:
         resume_download = kwargs.get("resume_download", False)
         revision = kwargs.get("revision", None)
 
-        config_file_name = config_file_name if config_file_name is not None else CONFIG_NAME
+        config_file_name = config_file_name if config_file_name is not None else cls.CONFIG_NAME
 
         if os.path.isdir(config_name_or_path):
             config_file = os.path.join(config_name_or_path, config_file_name)
@@ -166,6 +169,9 @@ class IncOptimizedConfig(IncConfig):
 
 
 class IncQuantizationConfig(IncConfig):
+
+    CONFIG_NAME = "quantization.yml"
+
     def __init__(self, config_path: str):
         """
         The configuration describing the quantization process.
@@ -181,6 +187,9 @@ class IncQuantizationConfig(IncConfig):
 
 
 class IncPruningConfig(IncConfig):
+
+    CONFIG_NAME = "prune.yml"
+
     def __init__(self, config_path: str):
         """
         The configuration describing the pruning process.
@@ -196,6 +205,9 @@ class IncPruningConfig(IncConfig):
 
 
 class IncDistillationConfig(IncConfig):
+
+    CONFIG_NAME = "distillation.yml"
+
     def __init__(self, config_path: str):
         """
         Args:

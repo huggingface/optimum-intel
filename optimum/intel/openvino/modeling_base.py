@@ -26,6 +26,7 @@ from transformers.onnx.utils import get_preprocessor
 import openvino
 import openvino.runtime.passes as passes
 from huggingface_hub import HfApi, hf_hub_download
+from openvino.offline_transformations import compress_model_transformation
 from openvino.runtime import Core, Dimension
 from optimum.modeling_base import OptimizedModel
 
@@ -36,7 +37,16 @@ core = Core()
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_DEVICES = {"CPU"}
+_SUPPORTED_DEVICES = {
+    "CPU",
+    "GPU",
+    "AUTO",
+    "AUTO:CPU,GPU",
+    "AUTO:GPU,CPU",
+    "MULTI",
+    "MULTI:CPU,GPU",
+    "MULTI:GPU,CPU",
+}
 
 
 @add_start_docstrings(
@@ -50,14 +60,24 @@ class OVBaseModel(OptimizedModel):
 
     def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):
         self.config = config
-        self.model = model
-        self.model_save_dir = kwargs.get("model_save_dir", None)
-        self._device = kwargs.get("device", "CPU")
-        # Ensure the selected device is supported by OpenVINO
-        self._ensure_supported_device()
+        self.model_save_dir = kwargs.get("model_save_dir")
+        self.device = kwargs.get("device", "CPU")
+        self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
-        self.request = self._create_infer_request(model)
+        cache_dir = Path(self.model_save_dir).joinpath("model_cache")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self.ov_config["CACHE_DIR"] = str(cache_dir)
+        if "GPU" in self.device and self.is_dynamic:
+            raise ValueError(
+                "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
+            )
+        if self.is_dynamic:
+            height = -1 if self.export_feature == "image-classification" else None
+            width = -1 if self.export_feature == "image-classification" else None
+            model = self._reshape(model, -1, -1, height, width)
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
+        self.model = model
+        self.request = None
 
     @staticmethod
     def load_model(file_name: Union[str, Path], bin_file_name: Optional[Union[str, Path]] = None):
@@ -225,12 +245,61 @@ class OVBaseModel(OptimizedModel):
 
         return cls._from_pretrained(save_dir, **kwargs)
 
-    def _create_infer_request(self, model):
-        compiled_model = core.compile_model(model, self._device, self.ov_config)
-        return compiled_model.create_infer_request()
+    def _create_inference_request(self):
+        if self.request is None:
+            logger.info("Compiling the model and creating the inference request ...")
+            compiled_model = core.compile_model(self.model, self.device, self.ov_config)
+            self.request = compiled_model.create_infer_request()
+
+    def _reshape(
+        self,
+        model: openvino.runtime.Model,
+        batch_size: int,
+        sequence_length: int,
+        height: int = None,
+        width: int = None,
+    ):
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            shapes[inputs][0] = batch_size
+            shapes[inputs][1] = sequence_length
+            if height is not None:
+                shapes[inputs][2] = height
+            if width is not None:
+                shapes[inputs][3] = width
+        model.reshape(shapes)
+        return model
+
+    def reshape(self, batch_size: int, sequence_length: int, height: int = None, width: int = None):
+        """
+        Propagates the given input shapes on the model's layers, fixing the inputs shapes of the model.
+
+        Arguments:
+            batch_size (`int`):
+                The batch size.
+            sequence_length (`int`):
+                The sequence length or number of channels.
+            height (`int`, *optional*):
+                The image height.
+            width (`int`, *optional*):
+                The image width.
+        """
+        self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
+        self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
+        self.request = None
+        return self
+
+    def half(self):
+        """
+        Converts all the model weights to FP16 for more efficient inference on GPU.
+        """
+        compress_model_transformation(self.model)
+        self.request = None
+        return self
 
     def _ensure_supported_device(self, device: str = None):
-        device = device if device is not None else self._device
+        device = device if device is not None else self.device
         if device not in _SUPPORTED_DEVICES:
             raise ValueError(f"Unknown device: {device}. Expected one of {_SUPPORTED_DEVICES}.")
 

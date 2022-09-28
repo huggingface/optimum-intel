@@ -11,14 +11,24 @@ Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tool
 [OpenVINO](https://docs.openvino.ai/latest/index.html) is an open-source toolkit enabling model optimization and providing high-performance inference solutions for XPUs including various types of CPUs, GPUs, and special DL inference accelerators.
 
 ## Install
-To install the latest release of this package:
 
-`pip install optimum[intel]`
+🤗 Optimum Intel can be installed using `pip` as follows:
+
+```bash
+python -m pip install optimum[intel]
+```
 
 Optimum Intel is a fast-moving project, and you may want to install from source.
 
-`pip install git+https://github.com/huggingface/optimum-intel.git`
+```bash
+pip install git+https://github.com/huggingface/optimum-intel.git
+```
 
+To install the latest release of this package with the corresponding required dependencies, you can do respectively:
+| Accelerator | Installation |
+|:------------|:---------------------------------------------|
+| [OpenVINO](https://docs.openvino.ai/latest/index.html)| `python -m pip install optimum-intel[openvino]` |
+| Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum-intel[neural-compressor]`|
 
 ## Running the examples
 
@@ -33,54 +43,44 @@ pip install -r requirements.txt
 
 ## How to use it?
 
-Here is an example on how to combine magnitude pruning with dynamic quantization while fine-tuning a DistilBERT on the sst-2 task.
+### Neural Compressor
+
+Here is an example on how to apply dynamic quantization on a DistilBERT fine-tuned on the SQuAD1.0 dataset.
 Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in this example.
 
-To apply our pruning methodology, we need to create an instance of IncTrainer, which is very similar to the 🤗 Transformers [Trainer](https://huggingface.co/docs/transformers/main_classes/trainer).
-We will fine-tune our model for 3 epochs while applying pruning.
-
-```diff
--from transformers import Trainer
-+from optimum.intel.neural_compressor import IncTrainer
-
-# Initialize our IncTrainer
--trainer = Trainer(
-+trainer = IncTrainer(
-    model=model,
-    args=TrainingArguments(output_dir, num_train_epochs=3.0),
-    train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
-    compute_metrics=compute_metrics,
-    tokenizer=tokenizer,
-    data_collator=default_data_collator,
-)
-```
-
-To apply our quantization and pruning methodologies, we first need to create the corresponding configuration describing how we want those methodologies to be applied :
-
 ```python
-from optimum.intel.neural_compressor import IncOptimizer, IncPruner, IncQuantizer
-from optimum.intel.neural_compressor.configuration import IncPruningConfig, IncQuantizationConfig
+from datasets import load_dataset
+from transformers import AutoModelForQuestionAnswering, AutoTokenizer, pipeline
+from evaluate import evaluator
+from optimum.intel.neural_compressor import IncOptimizer, IncQuantizationConfig, IncQuantizer
 
-# The targeted sparsity is set to 10%
-target_sparsity = 0.1
-config_path = "echarlaix/distilbert-sst2-inc-dynamic-quantization-magnitude-pruning-0.1"
+model_id = "distilbert-base-cased-distilled-squad"
+max_eval_samples = 100
+model = AutoModelForQuestionAnswering.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+eval_dataset = load_dataset("squad", split="validation").select(range(max_eval_samples))
+eval = evaluator("question-answering")
+qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
+
+def eval_func(model):
+    qa_pipeline.model = model
+    metrics = eval.compute(model_or_pipeline=qa_pipeline, data=eval_dataset, metric="squad")
+    return metrics["f1"]
+
 # Load the quantization configuration detailing the quantization we wish to apply
-quantization_config = IncQuantizationConfig.from_pretrained(config_path, config_file_name="quantization.yml")
-# Load the pruning configuration detailing the pruning we wish to apply
-pruning_config = IncPruningConfig.from_pretrained(config_path, config_file_name="prune.yml")
+config_path = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
+quantization_config = IncQuantizationConfig.from_pretrained(config_path)
 
-# Instantiate our IncQuantizer using the desired configuration
+# Instantiate our IncQuantizer using the desired configuration and the evaluation function used
+# for the INC accuracy-driven tuning strategy
 quantizer = IncQuantizer(quantization_config, eval_func=eval_func)
-# Instantiate our IncPruner using the desired configuration
-pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
-optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
-# Apply pruning and quantization 
-optimized_model = optimizer.fit()
+optimizer = IncOptimizer(model, quantizer=quantizer)
+
+# Apply dynamic quantization
+quantized_model = optimizer.fit()
 
 # Save the resulting model and its corresponding configuration in the given directory
-optimizer.save_pretrained(output_dir)
-
+optimizer.save_pretrained("./quantized_model")
 ```
 
 To load a quantized model hosted locally or on the 🤗 hub, you can do as follows :
@@ -88,7 +88,7 @@ To load a quantized model hosted locally or on the 🤗 hub, you can do as follo
 from optimum.intel.neural_compressor.quantization import IncQuantizedModelForSequenceClassification
 
 loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrained(
-    "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-static"
+    "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
 )
 ```
 
@@ -96,3 +96,20 @@ You can load many more quantized models hosted on the hub under the Intel organi
 
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
 
+### OpenVINO
+
+Here is an example on how to perform inference with OpenVINO Runtime:
+
+```diff
+-from transformers import AutoModelForSequenceClassification
++from optimum.intel.openvino import OVModelForSequenceClassification
+from transformers import AutoTokenizer, pipeline
+
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+-model = AutoModelForSequenceClassification.from_pretrained(model_id)
++model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+pipe_cls = pipeline("text-classification", model=model, tokenizer=tokenizer)
+text = "He's a dreadful magician."
+outputs = pipe_cls(text)
+```

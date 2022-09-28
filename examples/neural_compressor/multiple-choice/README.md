@@ -16,7 +16,7 @@ limitations under the License.
 
 # Multiple choice 
 
-The script [`run_swag.py`](https://github.com/huggingface/optimum/blob/main/examples/multiple-choice/run_swag.py) 
+The script [`run_swag.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/multiple-choice/run_swag.py) 
 allows us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning 
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for 
 multiple choice tasks.
@@ -70,9 +70,9 @@ respectively `dynamic`, `static` or `aware_training`.
 
 The configuration file containing all the information related to the model quantization, distillation and pruning objectives can be 
 specified using respectively `quantization_config`, `distillation_config` and `pruning_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum/blob/main/examples/config/quantization.yml),
-[distillation](https://github.com/huggingface/optimum/blob/main/examples/config/distillation.yml),
-and [pruning](https://github.com/huggingface/optimum/blob/main/examples/config/prune.yml) 
+[quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/quantization.yml),
+[distillation](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/distillation.yml),
+and [pruning](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/prune.yml) 
 configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
