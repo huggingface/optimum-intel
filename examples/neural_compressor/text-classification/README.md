@@ -18,7 +18,7 @@ limitations under the License.
 
 ## GLUE tasks
 
-The script [`run_glue.py`](https://github.com/huggingface/optimum/blob/main/examples/text-classification/run_glue.py)
+The script [`run_glue.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/text-classification/run_glue.py)
 allows us to apply different quantization approaches (such as dynamic, static and quantization-aware training) as well as pruning 
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for 
 sequence classification tasks such as the ones from the [GLUE benchmark](https://gluebenchmark.com/).
@@ -75,9 +75,9 @@ respectively `dynamic`, `static` or `aware_training`.
 
 The configuration file containing all the information related to the model quantization, distillation and pruning objectives can be 
 specified using respectively `quantization_config`, `distillation_config` and `pruning_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum/blob/main/examples/config/quantization.yml),
-[distillation](https://github.com/huggingface/optimum/blob/main/examples/config/distillation.yml),
-and [pruning](https://github.com/huggingface/optimum/blob/main/examples/config/prune.yml) 
+[quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/quantization.yml),
+[distillation](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/distillation.yml),
+and [pruning](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/prune.yml) 
 configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
