@@ -117,6 +117,7 @@ class OVQuantizer(OptimumQuantizer):
         elif self.feature in ["feature-extraction", "fill-mask"]:
             self.feature = "default"
 
+        self.model.config.save_pretrained(save_directory)
         model_type = self.model.config.model_type.replace("_", "-")
         onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][self.feature]
         onnx_config = onnx_config_cls(self.model.config)
