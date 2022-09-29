@@ -126,7 +126,7 @@ class OVQuantizer(OptimumQuantizer):
                     name: axes for name, axes in chain(onnx_config.inputs.items(), onnx_config.outputs.items())
                 },
                 do_constant_folding=True,
-                opset_version=13,
+                opset_version=10,
             )
 
             compressed_model.enable_dynamic_graph_building()
