@@ -18,6 +18,7 @@ INSTALL_REQUIRES = [
     "torch",
     "sentencepiece",
     "scipy",
+    "huggingface_hub>=0.8.0",
 ]
 
 TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate"]
