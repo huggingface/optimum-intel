@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import inspect
+import io
 from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
@@ -22,17 +23,24 @@ from datasets import Dataset, load_dataset
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import PreTrainedModel, default_data_collator
-from transformers.onnx import FeaturesManager
+from transformers.onnx import FeaturesManager, OnnxConfig
 
+import openvino
+import openvino.runtime.passes as passes
 from huggingface_hub import HfApi
 from nncf import NNCFConfig
 from nncf.torch import create_compressed_model, register_default_init_args
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
+from nncf.torch.nncf_network import NNCFNetwork
+from openvino.runtime import Core
 from optimum.quantization_base import OptimumQuantizer
 
 from .nncf_config import get_config_with_input_info
-from .utils import ONNX_WEIGHTS_NAME
+from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
+
+
+core = Core()
 
 
 class OVDataLoader(PTInitializingDataLoader):
@@ -90,16 +98,18 @@ class OVQuantizer(OptimumQuantizer):
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
-        file_name = file_name if file_name is not None else ONNX_WEIGHTS_NAME
+        file_name = file_name if file_name is not None else OV_XML_FILE_NAME
         output_path = save_directory.joinpath(file_name)
+        output_path = output_path.with_suffix(".xml").as_posix()
         calibration_dataloader = self._get_calibration_dataloader(calibration_dataset, batch_size)
-        nncf_config = get_config_with_input_info(quantization_config, next(iter(calibration_dataloader)))
+        model_inputs = next(iter(calibration_dataloader))
+        nncf_config = get_config_with_input_info(quantization_config, model_inputs)
         nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
         controller, compressed_model = create_compressed_model(
             self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
         )
         controller.prepare_for_export()
-        # TODO: Remove
+
         feature = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
         if feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
             feature = "sequence-classification"
@@ -109,27 +119,39 @@ class OVQuantizer(OptimumQuantizer):
         model_type = self.model.config.model_type.replace("_", "-")
         onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][feature]
         onnx_config = onnx_config_cls(self.model.config)
-        model_inputs = next(iter(calibration_dataloader))
         compressed_model.eval()
+        use_external_data_format = onnx_config.use_external_data_format(compressed_model.num_parameters())
+        f = io.BytesIO() if not use_external_data_format else output_path.replace(".xml", ".onnx")
 
+        # Export the compressed model to the ONNX format
+        self._onnx_export(compressed_model, onnx_config, model_inputs, f)
+
+        # Load and save the compressed model
+        model = core.read_model(f) if use_external_data_format else core.read_model(f.getvalue(), b"")
+        self._save_pretrained(model, output_path)
+
+    @staticmethod
+    def _save_pretrained(model: openvino.runtime.Model, output_path: str):
+        pass_manager = passes.Manager()
+        pass_manager.register_pass("Serialize", output_path, output_path.replace(".xml", ".bin"))
+        pass_manager.run_passes(model)
+
+    @staticmethod
+    def _onnx_export(model: torch.nn.Module, config: OnnxConfig, model_inputs: Dict, f: Union[str, io.BytesIO]):
         with torch.no_grad():
             # Disable node additions to be exported in the graph
-            compressed_model.disable_dynamic_graph_building()
-            # Export the model to the ONNX format
+            model.disable_dynamic_graph_building()
             onnx_export(
-                compressed_model,
+                model,
                 tuple(model_inputs.values()),
-                f=output_path.as_posix(),
+                f=f,
                 input_names=list(model_inputs.keys()),
-                output_names=list(onnx_config.outputs.keys()),
-                dynamic_axes={
-                    name: axes for name, axes in chain(onnx_config.inputs.items(), onnx_config.outputs.items())
-                },
+                output_names=list(config.outputs.keys()),
+                dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
                 do_constant_folding=True,
                 opset_version=10,
             )
-
-            compressed_model.enable_dynamic_graph_building()
+            model.enable_dynamic_graph_building()
 
     def get_calibration_dataset(
         self,
