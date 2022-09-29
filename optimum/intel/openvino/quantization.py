@@ -149,7 +149,7 @@ class OVQuantizer(OptimumQuantizer):
                 output_names=list(config.outputs.keys()),
                 dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
                 do_constant_folding=True,
-                opset_version=config.default_onnx_opset,
+                opset_version=10,
             )
             model.enable_dynamic_graph_building()
 
