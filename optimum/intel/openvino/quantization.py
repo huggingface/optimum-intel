@@ -64,6 +64,7 @@ class OVQuantizer(OptimumQuantizer):
         super().__init__()
         self.model = model
         self.seed = kwargs.pop("seed", 42)
+        self.feature = kwargs.pop("feature", None)
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
         self.input_names = None
@@ -110,14 +111,14 @@ class OVQuantizer(OptimumQuantizer):
         )
         controller.prepare_for_export()
 
-        feature = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
-        if feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-            feature = "sequence-classification"
-        elif feature in ["feature-extraction", "fill-mask"]:
-            feature = "default"
+        self.feature = HfApi().model_info(self.model.config._name_or_path).pipeline_tag or self.feature
+        if self.feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+            self.feature = "sequence-classification"
+        elif self.feature in ["feature-extraction", "fill-mask"]:
+            self.feature = "default"
 
         model_type = self.model.config.model_type.replace("_", "-")
-        onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][feature]
+        onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][self.feature]
         onnx_config = onnx_config_cls(self.model.config)
         compressed_model.eval()
         use_external_data_format = onnx_config.use_external_data_format(compressed_model.num_parameters())
