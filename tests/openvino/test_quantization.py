@@ -12,10 +12,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import unittest
 import tempfile
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import unittest
 from functools import partial
+
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
 from optimum.intel.openvino.modeling import OVModelForSequenceClassification
 from optimum.intel.openvino.nncf_config import DEFAULT_QUANTIZATION_CONFIG
 from optimum.intel.openvino.quantization import OVQuantizer
@@ -29,7 +31,6 @@ class OVQuantizerTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_static_quantization(self, model_name, expected_fake_quantize):
-
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
 
