@@ -19,10 +19,10 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import torch
+import transformers
 from datasets import Dataset, load_dataset
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, RandomSampler
-import transformers
 from transformers import PreTrainedModel, default_data_collator
 from transformers.onnx import FeaturesManager, OnnxConfig
 

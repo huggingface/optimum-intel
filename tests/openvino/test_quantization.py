@@ -17,10 +17,9 @@ import unittest
 from functools import partial
 
 from datasets import load_dataset
-
 from transformers import AutoModelForQuestionAnswering, AutoTokenizer, pipeline
-from evaluate import evaluator
 
+from evaluate import evaluator
 from optimum.intel.openvino.modeling import OVModelForQuestionAnswering
 from optimum.intel.openvino.nncf_config import DEFAULT_QUANTIZATION_CONFIG
 from optimum.intel.openvino.quantization import OVQuantizer
@@ -28,9 +27,7 @@ from parameterized import parameterized
 
 
 class OVQuantizerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("distilbert-base-cased-distilled-squad", 80),
-    )
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-cased-distilled-squad", 80),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_static_quantization(self, model_name, expected_fake_quantize):
