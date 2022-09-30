@@ -14,6 +14,7 @@
 
 import inspect
 import io
+import logging
 from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
@@ -41,7 +42,12 @@ from .nncf_config import get_config_with_input_info
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
 
+MAX_ONNX_OPSET = 10
+
+
 core = Core()
+
+logger = logging.getLogger(__name__)
 
 
 class OVDataLoader(PTInitializingDataLoader):
@@ -137,6 +143,13 @@ class OVQuantizer(OptimumQuantizer):
 
     @staticmethod
     def _onnx_export(model: torch.nn.Module, config: OnnxConfig, model_inputs: Dict, f: Union[str, io.BytesIO]):
+        # if onnx_config.default_onnx_opset > MAX_ONNX_OPSET:
+        if config.default_onnx_opset > 11:
+            logger.warning(
+                f"The minimal ONNX opset for the given model architecture is {config.default_onnx_opset}, currently "
+                f"OpenVINO only supports opset inferior or equal to {MAX_ONNX_OPSET} which could result in "
+                "export issue."
+            )
         with torch.no_grad():
             # Disable node additions to be exported in the graph
             model.disable_dynamic_graph_building()
