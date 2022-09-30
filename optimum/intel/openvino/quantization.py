@@ -178,7 +178,7 @@ class OVQuantizer(OptimumQuantizer):
         Args:
             dataset_name (`str`):
                 The dataset repository name on the Hugging Face Hub or path to a local directory containing data files
-                to load to use for the calibration step.
+                in generic formats and optionally a dataset script, if it requires some code to read the data files.
             num_samples (`int`, defaults to 100):
                 The maximum number of samples composing the calibration dataset.
             dataset_config_name (`str`, *optional*):
