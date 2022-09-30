@@ -167,7 +167,7 @@ class OVQuantizer(OptimumQuantizer):
         dataset_name: str,
         num_samples: int = 100,
         dataset_config_name: Optional[str] = None,
-        dataset_split: Optional[str] = None,
+        dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
         use_auth_token: bool = False,
@@ -183,7 +183,7 @@ class OVQuantizer(OptimumQuantizer):
                 The maximum number of samples composing the calibration dataset.
             dataset_config_name (`str`, *optional*):
                 The name of the dataset configuration.
-            dataset_split (`str`, *optional*):
+            dataset_split (`str`, defaults to `"train"`):
                 Which split of the dataset to use to perform the calibration step.
             preprocess_function (`Callable`, *optional*):
                 Processing function to apply to each example after loading dataset.
