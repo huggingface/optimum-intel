@@ -22,6 +22,7 @@ import torch
 from datasets import Dataset, load_dataset
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, RandomSampler
+import transformers
 from transformers import PreTrainedModel, default_data_collator
 from transformers.onnx import FeaturesManager, OnnxConfig
 
@@ -53,11 +54,11 @@ class OVQuantizer(OptimumQuantizer):
     Handle the NNCF quantization process.
     """
 
-    def __init__(self, model: PreTrainedModel, **kwargs):
+    def __init__(self, model: transformers.PreTrainedModel, **kwargs):
         """
         Args:
-            model (`PreTrainedModel`):
-                The model to quantize.
+            model (`transformers.PreTrainedModel`):
+                The [PreTrainedModel](https://huggingface.co/docs/transformers/main_classes/model#transformers.PreTrainedModel) to quantize.
             seed (`int`, defaults to 42):
                 The random seed to use when shuffling the calibration dataset.
         """
@@ -111,11 +112,7 @@ class OVQuantizer(OptimumQuantizer):
         )
         controller.prepare_for_export()
 
-        self.feature = HfApi().model_info(self.model.config._name_or_path).pipeline_tag or self.feature
-        if self.feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-            self.feature = "sequence-classification"
-        elif self.feature in ["feature-extraction", "fill-mask"]:
-            self.feature = "default"
+        self._set_feature()
 
         self.model.config.save_pretrained(save_directory)
         model_type = self.model.config.model_type.replace("_", "-")
@@ -154,6 +151,16 @@ class OVQuantizer(OptimumQuantizer):
                 opset_version=10,
             )
             model.enable_dynamic_graph_building()
+
+    def _set_feature(self):
+        if self.feature is None:
+            self.feature = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
+            if self.feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+                self.feature = "sequence-classification"
+            elif self.feature in ["feature-extraction", "fill-mask"]:
+                self.feature = "default"
+            elif self.feature is None:
+                raise ValueError("The feature could not be extracted and needs to be specified for the ONNX export.")
 
     def get_calibration_dataset(
         self,
