@@ -65,4 +65,4 @@ class OVQuantizerTest(unittest.TestCase):
             transformers_metric = eval.compute(model_or_pipeline=transformers_pipe, data=data, metric="squad")
             ov_metric = eval.compute(model_or_pipeline=ov_pipe, data=data, metric="squad")
 
-            self.assertGreaterEqual(ov_metric["f1"], transformers_metric["f1"] * 0.80)
+            self.assertGreaterEqual(ov_metric["f1"], transformers_metric["f1"] * 0.70)
