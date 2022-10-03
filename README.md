@@ -122,7 +122,7 @@ To decrease latency, static shapes can be enabled by giving the desired inputs s
 model.reshape(1, 9)
 ```
 
-Currently, OpenVINO GPU only supports static shapes. FP16 precision can also be enabled in order to further decrease latency.
+Currently, OpenVINO only supports static shapes for inference on GPU. FP16 precision can also be enabled in order to further decrease latency.
 
 ```python
 # Fix the batch size to 1 and the sequence length to 9
