@@ -15,6 +15,7 @@
 import logging
 from typing import Optional
 
+import openvino
 import torch
 import transformers
 from transformers import (
@@ -35,8 +36,6 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
-
-import openvino
 
 from .modeling_base import OVBaseModel
 

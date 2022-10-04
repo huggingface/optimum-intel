@@ -17,15 +17,14 @@ import os
 from pathlib import Path
 from typing import Optional, Union
 
+import openvino
 import transformers
+from openvino.offline_transformations import compress_model_transformation
+from openvino.runtime import Core
 from transformers import AutoConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, default_cache_path
 from transformers.onnx import FeaturesManager, export
 from transformers.onnx.utils import get_preprocessor
-
-import openvino
-from openvino.offline_transformations import compress_model_transformation
-from openvino.runtime import Core
 
 from huggingface_hub import HfApi, hf_hub_download
 from optimum.modeling_base import OptimizedModel
