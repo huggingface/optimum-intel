@@ -28,7 +28,6 @@ from transformers import PreTrainedModel, default_data_collator
 from transformers.onnx import FeaturesManager, OnnxConfig
 
 import openvino
-import openvino.runtime.passes as passes
 from huggingface_hub import HfApi
 from nncf import NNCFConfig
 from nncf.torch import create_compressed_model, register_default_init_args
@@ -36,6 +35,7 @@ from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_obj
 from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino.runtime import Core
+from openvino.offline_transformations import compress_quantize_weights_transformation
 from optimum.quantization_base import OptimumQuantizer
 
 from .nncf_config import get_config_with_input_info
@@ -137,9 +137,8 @@ class OVQuantizer(OptimumQuantizer):
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
-        pass_manager = passes.Manager()
-        pass_manager.register_pass("Serialize", output_path, output_path.replace(".xml", ".bin"))
-        pass_manager.run_passes(model)
+        compress_quantize_weights_transformation(model)
+        openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
 
     @staticmethod
     def _onnx_export(model: torch.nn.Module, config: OnnxConfig, model_inputs: Dict, f: Union[str, io.BytesIO]):

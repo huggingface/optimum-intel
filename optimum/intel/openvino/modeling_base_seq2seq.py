@@ -24,7 +24,6 @@ from transformers.onnx import FeaturesManager, export
 from transformers.onnx.utils import get_preprocessor
 
 import openvino
-import openvino.runtime.passes as passes
 from huggingface_hub import HfApi, hf_hub_download
 from openvino.offline_transformations import compress_model_transformation
 from optimum.onnx.configuration import DecoderOnnxConfig, EncoderOnnxConfig
@@ -113,9 +112,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
         for src_file, dst_file_name in zip(src_files, dst_file_names):
             dst_path = os.path.join(save_directory, dst_file_name)
-            pass_manager = passes.Manager()
-            pass_manager.register_pass("Serialize", dst_path, dst_path.replace(".xml", ".bin"))
-            pass_manager.run_passes(src_file)
+            openvino.runtime.serialize(src_file, dst_path, dst_path.replace(".xml", ".bin"))
 
     @classmethod
     def _from_pretrained(
