@@ -19,10 +19,16 @@ from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
-import openvino
 import torch
 import transformers
 from datasets import Dataset, load_dataset
+from torch.onnx import export as onnx_export
+from torch.utils.data import DataLoader, RandomSampler
+from transformers import PreTrainedModel, default_data_collator
+from transformers.onnx import FeaturesManager, OnnxConfig
+
+import openvino
+from huggingface_hub import HfApi
 from nncf import NNCFConfig
 from nncf.torch import create_compressed_model, register_default_init_args
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
@@ -30,12 +36,6 @@ from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino.offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
-from torch.onnx import export as onnx_export
-from torch.utils.data import DataLoader, RandomSampler
-from transformers import PreTrainedModel, default_data_collator
-from transformers.onnx import FeaturesManager, OnnxConfig
-
-from huggingface_hub import HfApi
 from optimum.quantization_base import OptimumQuantizer
 
 from .nncf_config import get_config_with_input_info
