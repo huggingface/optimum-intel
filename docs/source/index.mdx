@@ -15,10 +15,30 @@ limitations under the License.
 -->
 
 
-# Optimum Intel
+# 🤗 Optimum Intel
 
 🤗 Optimum Intel is the interface between the 🤗 Transformers library and the different tools and libraries provided by Intel to accelerate end-to-end pipelines on Intel architectures.
 
 [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) is an open-source library enabling the usage of the most popular compression techniques such as quantization, pruning and knowledge distillation. It supports automatic accuracy-driven tuning strategies in order for users to easily generate quantized model. The users can easily apply static, dynamic and aware-training quantization approaches while giving an expected accuracy criteria. It also supports different weight pruning techniques enabling the creation of pruned model giving a predefined sparsity target.
 
 [OpenVINO](https://docs.openvino.ai/latest/index.html) is an open-source toolkit enabling model optimization and providing high-performance inference solutions for XPUs including various types of CPUs, GPUs, and special DL inference accelerators.
+
+## Installation
+
+🤗 Optimum Intel can be installed using `pip` as follows:
+
+```bash
+python -m pip install optimum[intel]
+```
+
+Optimum Intel is a fast-moving project, and you may want to install from source.
+
+```bash
+pip install git+https://github.com/huggingface/optimum-intel.git
+```
+
+To install the latest release of this package with the corresponding required dependencies, you can do respectively:
+| Accelerator                                                                                                      | Installation                                      |
+|:-----------------------------------------------------------------------------------------------------------------|:--------------------------------------------------|
+| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino]`         |
+| [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum[neural-compressor]`|
