@@ -154,9 +154,9 @@ class OVQuantizer(OptimumQuantizer):
             model.disable_dynamic_graph_building()
             onnx_export(
                 model,
-                tuple(model_inputs.values()),
+                tuple(model_inputs[input_name] for input_name in config.inputs.keys()),
                 f=f,
-                input_names=list(model_inputs.keys()),
+                input_names=list(config.inputs.keys()),
                 output_names=list(config.outputs.keys()),
                 dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
                 do_constant_folding=True,
