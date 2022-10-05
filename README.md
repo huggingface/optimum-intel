@@ -25,10 +25,11 @@ pip install git+https://github.com/huggingface/optimum-intel.git
 ```
 
 To install the latest release of this package with the corresponding required dependencies, you can do respectively:
-| Accelerator                                                                                                      | Installation                                            |
-|:-----------------------------------------------------------------------------------------------------------------|:--------------------------------------------------------|
-| [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum-intel[neural-compressor]`|
-| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum-intel[openvino,nncf]`    |
+
+| Accelerator                                                                                                      | Installation                                      |
+|:-----------------------------------------------------------------------------------------------------------------|:--------------------------------------------------|
+| [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum[neural-compressor]`|
+| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino,nncf]`    |
 
 ## Running the examples
 
