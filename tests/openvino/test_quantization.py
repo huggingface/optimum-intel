@@ -26,7 +26,7 @@ from parameterized import parameterized
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("distilbert-base-uncased-finetuned-sst-2-english", 44),
+        ("distilbert-base-uncased-finetuned-sst-2-english", 50),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
