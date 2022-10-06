@@ -21,4 +21,4 @@ RUN npm install
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip
 RUN git clone $clone_url && cd optimum-intel && git checkout $commit_sha
-RUN python3 -m pip install --no-cache-dir ./optimum-intel[neural-compressor,openvino,quality]
+RUN python3 -m pip install --no-cache-dir ./optimum-intel[neural-compressor,openvino,nncf,quality]
