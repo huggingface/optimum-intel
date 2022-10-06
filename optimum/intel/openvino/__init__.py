@@ -12,6 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import importlib.util
+
 from .modeling import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
@@ -21,6 +23,15 @@ from .modeling import (
     OVModelForTokenClassification,
 )
 from .modeling_seq2seq import OVModelForSeq2SeqLM
-from .nncf_config import DEFAULT_QUANTIZATION_CONFIG
-from .quantization import OVQuantizer
 from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
+
+
+_nncf_available = importlib.util.find_spec("nncf") is not None
+
+if _nncf_available:
+    from nncf.torch import patch_torch_operators
+
+    patch_torch_operators()
+
+    from .nncf_config import DEFAULT_QUANTIZATION_CONFIG
+    from .quantization import OVQuantizer
