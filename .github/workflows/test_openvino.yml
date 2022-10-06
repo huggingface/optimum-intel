@@ -36,4 +36,4 @@ jobs:
         pip freeze
     - name: Test with Pytest
       run: |
-        pytest tests/openvino/
+        python -m unittest discover -s openvino -p 'test_*.py'
