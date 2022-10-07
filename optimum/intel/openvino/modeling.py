@@ -51,7 +51,7 @@ _TOKENIZER_FOR_DOC = "AutoTokenizer"
 _FEATURE_EXTRACTOR_FOR_DOC = "AutoFeatureExtractor"
 
 MODEL_START_DOCSTRING = r"""
-    This model inherits from [~`intel.openvino.modeling.OVBaseModel`]. Check the superclass documentation for the generic methods the
+    This model inherits from [`optimum.intel.openvino.modeling.OVBaseModel`]. Check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving)
     Parameters:
         config (`transformers.PretrainedConfig`): [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig) is the Model configuration class with all the parameters of the model.
@@ -525,6 +525,7 @@ IMAGE_CLASSIFICATION_EXAMPLE = r"""
 
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model.reshape(batch_size=1, sequence_length=3, height=224, width=224)
     >>> pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
     >>> url = "http://images.cocodataset.org/val2017/000000039769.jpg"
     >>> outputs = pipe(url)
