@@ -1,4 +1,4 @@
-FROM nikolaik/python-nodejs:python3.8-nodejs18
+FROM python:3.8
 
 ARG commit_sha
 ARG clone_url
