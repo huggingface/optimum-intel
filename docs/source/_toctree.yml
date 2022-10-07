@@ -3,10 +3,10 @@
     title: 🤗 Optimum Intel
   - local: quickstart
     title: Quickstart
-  title: Optimum Intel
   - sections:
     - local: optimization
       title: Optimization
     - local: trainer
       title: Trainer
     title: Neural Compressor
+  title: Optimum Intel
