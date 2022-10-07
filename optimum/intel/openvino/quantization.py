@@ -38,7 +38,7 @@ from openvino.offline_transformations import compress_quantize_weights_transform
 from openvino.runtime import Core
 from optimum.quantization_base import OptimumQuantizer
 
-from .nncf_config import get_config_with_input_info
+from .configuration import OVConfig
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
 
@@ -83,9 +83,9 @@ class OVQuantizer(OptimumQuantizer):
 
     def quantize(
         self,
-        quantization_config: NNCFConfig,
         calibration_dataset: Dataset,
         save_directory: Union[str, Path],
+        quantization_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 8,
     ):
@@ -93,12 +93,12 @@ class OVQuantizer(OptimumQuantizer):
         Quantize a model given the optimization specifications defined in `quantization_config`.
 
         Args:
-            quantization_config (`NNCFConfig`):
-                The configuration containing the parameters related to quantization.
             calibration_dataset (`datasets.Dataset`):
                 The dataset to use for the calibration step.
             save_directory (`Union[str, Path]`):
                 The directory where the quantized model should be saved.
+            quantization_config (`OVConfig`, *optional*):
+                The configuration containing the parameters related to quantization.
             file_name (`str`, *optional*):
                 The model file name to use when saving the model. Overwrites the default file name `"model.onnx"`.
             batch_size (`int`, defaults to 8):
@@ -111,7 +111,13 @@ class OVQuantizer(OptimumQuantizer):
         output_path = output_path.with_suffix(".xml").as_posix()
         calibration_dataloader = self._get_calibration_dataloader(calibration_dataset, batch_size)
         model_inputs = next(iter(calibration_dataloader))
-        nncf_config = get_config_with_input_info(quantization_config, model_inputs)
+        if quantization_config is None:
+            logger.info(
+                "No configuration describing the quantization process was provided, a default OVConfig will be generated."
+            )
+            quantization_config = OVConfig()
+        quantization_config.add_input_info(model_inputs)
+        nncf_config = NNCFConfig.from_dict(quantization_config.__dict__)
         nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
         controller, compressed_model = create_compressed_model(
             self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
@@ -134,6 +140,7 @@ class OVQuantizer(OptimumQuantizer):
         # Load and save the compressed model
         model = core.read_model(f) if use_external_data_format else core.read_model(f.getvalue(), b"")
         self._save_pretrained(model, output_path)
+        quantization_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
@@ -141,7 +148,7 @@ class OVQuantizer(OptimumQuantizer):
         openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
 
     @staticmethod
-    def _onnx_export(model: torch.nn.Module, config: OnnxConfig, model_inputs: Dict, f: Union[str, io.BytesIO]):
+    def _onnx_export(model: NNCFNetwork, config: OnnxConfig, model_inputs: Dict, f: Union[str, io.BytesIO]):
         # if onnx_config.default_onnx_opset > MAX_ONNX_OPSET:
         if config.default_onnx_opset > 11:
             logger.warning(

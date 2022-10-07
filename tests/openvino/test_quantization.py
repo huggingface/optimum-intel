@@ -18,8 +18,8 @@ from functools import partial
 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+from optimum.intel.openvino.configuration import OVConfig
 from optimum.intel.openvino.modeling import OVModelForSequenceClassification
-from optimum.intel.openvino.nncf_config import DEFAULT_QUANTIZATION_CONFIG
 from optimum.intel.openvino.quantization import OVQuantizer
 from parameterized import parameterized
 
@@ -45,13 +45,9 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=10,
                 dataset_split="train",
             )
-            quantizer.quantize(
-                save_directory=tmp_dir,
-                quantization_config=DEFAULT_QUANTIZATION_CONFIG,
-                calibration_dataset=calibration_dataset,
-            )
-            ov_model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
 
+            ov_model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
             num_fake_quantize = 0
             for elem in ov_model.model.get_ops():
                 if "FakeQuantize" in elem.name:
@@ -61,3 +57,8 @@ class OVQuantizerTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = ov_model(**tokens)
             self.assertTrue("logits" in outputs)
+
+            # Verify that that the configuration is correctly saved and loaded
+            expected_config = OVConfig()
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(expected_config.to_dict()["compression"], loaded_config.to_dict()["compression"])
