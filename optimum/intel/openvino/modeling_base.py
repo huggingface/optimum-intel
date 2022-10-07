@@ -24,10 +24,9 @@ from transformers.onnx import FeaturesManager, export
 from transformers.onnx.utils import get_preprocessor
 
 import openvino
-import openvino.runtime.passes as passes
 from huggingface_hub import HfApi, hf_hub_download
 from openvino.offline_transformations import compress_model_transformation
-from openvino.runtime import Core, Dimension
+from openvino.runtime import Core
 from optimum.modeling_base import OptimizedModel
 
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
@@ -106,9 +105,7 @@ class OVBaseModel(OptimizedModel):
         """
         file_name = file_name if file_name is not None else OV_XML_FILE_NAME
         dst_path = os.path.join(save_directory, file_name)
-        pass_manager = passes.Manager()
-        pass_manager.register_pass("Serialize", dst_path, dst_path.replace(".xml", ".bin"))
-        pass_manager.run_passes(self.model)
+        openvino.runtime.serialize(self.model, dst_path, dst_path.replace(".xml", ".bin"))
 
     @classmethod
     def _from_pretrained(

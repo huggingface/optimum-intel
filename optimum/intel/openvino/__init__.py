@@ -12,6 +12,19 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import importlib.util
+
+
+_nncf_available = importlib.util.find_spec("nncf") is not None
+
+if _nncf_available:
+    from nncf.torch import patch_torch_operators
+
+    patch_torch_operators()
+
+    from .nncf_config import DEFAULT_QUANTIZATION_CONFIG
+    from .quantization import OVQuantizer
+
 from .modeling import (
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
