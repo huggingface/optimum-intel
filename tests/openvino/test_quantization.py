@@ -34,7 +34,6 @@ class OVQuantizerTest(unittest.TestCase):
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
 
-        quantization_config = OVConfig()
         with tempfile.TemporaryDirectory() as tmp_dir:
             transformers_model = AutoModelForSequenceClassification.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -63,4 +62,3 @@ class OVQuantizerTest(unittest.TestCase):
             expected_config = OVConfig()
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(expected_config.to_dict()["compression"], loaded_config.to_dict()["compression"])
-
