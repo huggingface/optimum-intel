@@ -83,9 +83,9 @@ class OVQuantizer(OptimumQuantizer):
 
     def quantize(
         self,
-        quantization_config: OVConfig,
         calibration_dataset: Dataset,
         save_directory: Union[str, Path],
+        quantization_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 8,
     ):
@@ -93,12 +93,12 @@ class OVQuantizer(OptimumQuantizer):
         Quantize a model given the optimization specifications defined in `quantization_config`.
 
         Args:
-            quantization_config (`OVConfig`):
-                The configuration containing the parameters related to quantization.
             calibration_dataset (`datasets.Dataset`):
                 The dataset to use for the calibration step.
             save_directory (`Union[str, Path]`):
                 The directory where the quantized model should be saved.
+            quantization_config (`OVConfig`, *optional*):
+                The configuration containing the parameters related to quantization.
             file_name (`str`, *optional*):
                 The model file name to use when saving the model. Overwrites the default file name `"model.onnx"`.
             batch_size (`int`, defaults to 8):
@@ -111,6 +111,11 @@ class OVQuantizer(OptimumQuantizer):
         output_path = output_path.with_suffix(".xml").as_posix()
         calibration_dataloader = self._get_calibration_dataloader(calibration_dataset, batch_size)
         model_inputs = next(iter(calibration_dataloader))
+        if quantization_config is None:
+            logger.info(
+                "No configuration describing the quantization process was provided, a default OVConfig will be generated."
+            )
+            quantization_config = OVConfig()
         quantization_config.add_input_info(model_inputs)
         nncf_config = NNCFConfig.from_dict(quantization_config.__dict__)
         nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
@@ -143,7 +148,7 @@ class OVQuantizer(OptimumQuantizer):
         openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
 
     @staticmethod
-    def _onnx_export(model: torch.nn.Module, config: OnnxConfig, model_inputs: Dict, f: Union[str, io.BytesIO]):
+    def _onnx_export(model: NNCFNetwork, config: OnnxConfig, model_inputs: Dict, f: Union[str, io.BytesIO]):
         # if onnx_config.default_onnx_opset > MAX_ONNX_OPSET:
         if config.default_onnx_opset > 11:
             logger.warning(

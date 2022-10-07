@@ -34,7 +34,6 @@ class OVQuantizerTest(unittest.TestCase):
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
 
-        quantization_config = OVConfig()
         with tempfile.TemporaryDirectory() as tmp_dir:
             transformers_model = AutoModelForSequenceClassification.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -46,13 +45,9 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=10,
                 dataset_split="train",
             )
-            quantizer.quantize(
-                save_directory=tmp_dir,
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-            )
-            ov_model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
 
+            ov_model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
             num_fake_quantize = 0
             for elem in ov_model.model.get_ops():
                 if "FakeQuantize" in elem.name:
@@ -64,5 +59,6 @@ class OVQuantizerTest(unittest.TestCase):
             self.assertTrue("logits" in outputs)
 
             # Verify that that the configuration is correctly saved and loaded
+            expected_config = OVConfig()
             loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertEqual(quantization_config.to_dict(), loaded_config.to_dict())
+            self.assertEqual(expected_config.to_dict()["compression"], loaded_config.to_dict()["compression"])
