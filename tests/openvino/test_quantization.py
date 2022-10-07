@@ -18,8 +18,8 @@ from functools import partial
 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
+from optimum.intel.openvino.configuration import OVConfig
 from optimum.intel.openvino.modeling import OVModelForSequenceClassification
-from optimum.intel.openvino.nncf_config import DEFAULT_QUANTIZATION_CONFIG
 from optimum.intel.openvino.quantization import OVQuantizer
 from parameterized import parameterized
 
@@ -34,6 +34,7 @@ class OVQuantizerTest(unittest.TestCase):
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
 
+        quantization_config = OVConfig()
         with tempfile.TemporaryDirectory() as tmp_dir:
             transformers_model = AutoModelForSequenceClassification.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -47,7 +48,7 @@ class OVQuantizerTest(unittest.TestCase):
             )
             quantizer.quantize(
                 save_directory=tmp_dir,
-                quantization_config=DEFAULT_QUANTIZATION_CONFIG,
+                quantization_config=quantization_config,
                 calibration_dataset=calibration_dataset,
             )
             ov_model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
@@ -61,3 +62,7 @@ class OVQuantizerTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = ov_model(**tokens)
             self.assertTrue("logits" in outputs)
+
+            # Verify that that the configuration is correctly saved and loaded
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(quantization_config.to_dict(), loaded_config.to_dict())

@@ -22,7 +22,7 @@ if _nncf_available:
 
     patch_torch_operators()
 
-    from .nncf_config import DEFAULT_QUANTIZATION_CONFIG
+    from .configuration import OVConfig
     from .quantization import OVQuantizer
 
 from .modeling import (
