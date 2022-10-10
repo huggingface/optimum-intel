@@ -8,7 +8,7 @@
 
 Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) is an open-source library enabling the usage of the most popular compression techniques such as quantization, pruning and knowledge distillation. It supports automatic accuracy-driven tuning strategies in order for users to easily generate quantized model. The users can easily apply static, dynamic and aware-training quantization approaches while giving an expected accuracy criteria. It also supports different weight pruning techniques enabling the creation of pruned model giving a predefined sparsity target.
 
-[OpenVINO](https://docs.openvino.ai/latest/index.html) is an open-source toolkit enabling model optimization and providing high-performance inference solutions for XPUs including various types of CPUs, GPUs, and special DL inference accelerators.
+[OpenVINO](https://docs.openvino.ai/latest/index.html) is an open-source toolkit that enalbes high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators. It also provides a set of tools to optimize and quantize models. Optimum Intel provides a simple interface to convert a model to OpenVINO IR format and to run inference using OpenVINO.
 
 ## Installation
 
@@ -97,8 +97,9 @@ You can load many more quantized models hosted on the hub under the Intel organi
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
 
 ### OpenVINO
+Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) tool for model optimization and inference.
 
-- Here is an example on how to perform inference with OpenVINO Runtime:
+- OpenVINO inference example:
 
 ```diff
 -from transformers import AutoModelForSequenceClassification
@@ -113,9 +114,13 @@ pipe_cls = pipeline("text-classification", model=model, tokenizer=tokenizer)
 text = "He's a dreadful magician."
 outputs = pipe_cls(text)
 ```
-- Use [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) to optimize models for OpenVINO using `post-training quantization` and `quantization-aware training`.
-  - Post-training quantizaiton example:
+
+- Post-training quantizaiton example:
 ```python
+from functools import partial
+from optimum.intel.openvino.quantization import OVQuantizer 
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)    
 tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -135,6 +140,42 @@ calibration_dataset = quantizer.get_calibration_dataset(
 )
 quantizer.quantize(
     calibration_dataset=calibration_dataset,
-    save_directory='nncf_results'
+    save_directory='nncf_results' # use this folder as and input for OVModelForSequenceClassification
+                                  # to do the inference
 )
+```
+
+- Quantization-aware training example:
+
+```diff
+import numpy as np
+from datasets import load_dataset, load_metric
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
+from optimum.intel.openvino.trainer import OVTrainer
+
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+model = AutoModelForSequenceClassification.from_pretrained(model_id)    
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+dataset = load_dataset("glue", "sst2")
+dataset = dataset.map(
+    lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
+)
+compute_metrics = lambda p: metric.compute(
+    predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
+)
+
+-trainer = Trainer(
++trainer = OVTrainer(
+    model=model,
+    feature="sequence-classification",
+    args=TrainingArguments('nncf_results', num_train_epochs=1.0, do_train=True, do_eval=True),
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
+    compute_metrics=compute_metrics,
+    tokenizer=tokenizer,
+    data_collator=default_data_collator,
+)
+train_result = trainer.train()
+metrics = trainer.evaluate()
+trainer.save_model()
 ```
