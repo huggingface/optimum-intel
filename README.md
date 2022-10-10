@@ -97,7 +97,7 @@ You can load many more quantized models hosted on the hub under the Intel organi
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
 
 ### OpenVINO
-Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) tool for model optimization and inference.
+Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework for model optimization, quantization, and inference.
 
 - OpenVINO inference example:
 
