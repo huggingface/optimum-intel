@@ -115,11 +115,11 @@ text = "He's a dreadful magician."
 outputs = pipe_cls(text)
 ```
 
-- Post-training quantization example:
+- Post-training quantizaiton example:
 ```python
 from functools import partial
 from optimum.intel.openvino.quantization import OVQuantizer 
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, OVModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)    
@@ -140,9 +140,11 @@ calibration_dataset = quantizer.get_calibration_dataset(
 )
 quantizer.quantize(
     calibration_dataset=calibration_dataset,
-    save_directory='nncf_results' # use this folder as model path for OVModelForSequenceClassification
+    save_directory='nncf_results' # use this folder as and input for OVModelForSequenceClassification
                                   # to do the inference
 )
+
+optimized_model = OVModelForSequenceClassification.from_pretrained('nncf_results')
 ```
 
 - Quantization-aware training example:
@@ -152,6 +154,7 @@ import numpy as np
 from datasets import load_dataset, load_metric
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
 from optimum.intel.openvino.trainer import OVTrainer
++from optimum.intel.openvino import OVModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)    
@@ -178,6 +181,8 @@ compute_metrics = lambda p: metric.compute(
 train_result = trainer.train()
 metrics = trainer.evaluate()
 trainer.save_model()
+
++optimized_model = OVModelForSequenceClassification.from_pretrained('nncf_results')
 ```
 
 You can find more OpenVINO examples in the corresponding Optimum-Intel documentation.
