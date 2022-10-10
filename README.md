@@ -27,8 +27,8 @@ pip install git+https://github.com/huggingface/optimum-intel.git
 To install the latest release of this package with the corresponding required dependencies, you can do respectively:
 | Accelerator                                                                                                      | Installation                                      |
 |:-----------------------------------------------------------------------------------------------------------------|:--------------------------------------------------|
-| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino]`         |
 | [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum[neural-compressor]`|
+| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino,nncf]`         |
 
 ## Running the examples
 
@@ -98,7 +98,7 @@ Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/mai
 
 ### OpenVINO
 
-Here is an example on how to perform inference with OpenVINO Runtime:
+- Here is an example on how to perform inference with OpenVINO Runtime:
 
 ```diff
 -from transformers import AutoModelForSequenceClassification
@@ -112,4 +112,29 @@ tokenizer = AutoTokenizer.from_pretrained(model_id)
 pipe_cls = pipeline("text-classification", model=model, tokenizer=tokenizer)
 text = "He's a dreadful magician."
 outputs = pipe_cls(text)
+```
+- Use [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) to optimize models for OpenVINO using `post-training quantization` and `quantization-aware training`.
+  - Post-training quantizaiton example:
+```python
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+model = AutoModelForSequenceClassification.from_pretrained(model_id)    
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+def preprocess_fn(examples, tokenizer):
+    return tokenizer(
+        examples["sentence"], padding="max_length", max_length=tokenizer.model_max_length, truncation=True
+    )
+
+quantizer = OVQuantizer.from_pretrained(model)
+calibration_dataset = quantizer.get_calibration_dataset(
+    "glue",
+    dataset_config_name="sst2",
+    preprocess_function=partial(preprocess_fn, tokenizer=tokenizer),
+    num_samples=100,
+    dataset_split="train",
+    preprocess_batch=True,
+)
+quantizer.quantize(
+    calibration_dataset=calibration_dataset,
+    save_directory='nncf_results'
+)
 ```
