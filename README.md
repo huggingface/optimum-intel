@@ -115,7 +115,7 @@ text = "He's a dreadful magician."
 outputs = pipe_cls(text)
 ```
 
-- Post-training quantizaiton example:
+- Post-training quantization example:
 ```python
 from functools import partial
 from optimum.intel.openvino.quantization import OVQuantizer 
