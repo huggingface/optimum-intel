@@ -179,3 +179,5 @@ train_result = trainer.train()
 metrics = trainer.evaluate()
 trainer.save_model()
 ```
+
+You can find more OpenVINO examples in the corresponding Optimum-Intel documentation.
