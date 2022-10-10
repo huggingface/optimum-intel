@@ -140,7 +140,7 @@ calibration_dataset = quantizer.get_calibration_dataset(
 )
 quantizer.quantize(
     calibration_dataset=calibration_dataset,
-    save_directory='nncf_results' # use this folder as and input for OVModelForSequenceClassification
+    save_directory='nncf_results' # use this folder as model path for OVModelForSequenceClassification
                                   # to do the inference
 )
 ```
