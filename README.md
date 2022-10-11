@@ -180,6 +180,7 @@ compute_metrics = lambda p: metric.compute(
 )
 train_result = trainer.train()
 metrics = trainer.evaluate()
+print(metrics)
 trainer.save_model()
 
 +optimized_model = OVModelForSequenceClassification.from_pretrained('nncf_results')
