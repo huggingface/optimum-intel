@@ -23,6 +23,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
+import torch.distributed as dist
 from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, Dataset, RandomSampler
@@ -31,16 +32,25 @@ from tqdm.auto import tqdm
 from transformers import Trainer
 from transformers.data.data_collator import DataCollator
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
+from transformers.deepspeed import deepspeed_init
 from transformers.integrations import hp_params
 from transformers.modeling_utils import PreTrainedModel, unwrap_model
 from transformers.onnx import FeaturesManager, OnnxConfig
+from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer import TRAINER_STATE_NAME, TRAINING_ARGS_NAME
 from transformers.trainer_callback import TrainerCallback, TrainerState
 from transformers.trainer_pt_utils import IterableDatasetShard
-from transformers.trainer_utils import EvalPrediction, HPSearchBackend, TrainOutput, has_length, speed_metrics
+from transformers.trainer_utils import (
+    EvalPrediction,
+    HPSearchBackend,
+    ShardedDDPOption,
+    TrainOutput,
+    has_length,
+    speed_metrics,
+)
 from transformers.training_args import TrainingArguments
-from transformers.utils import WEIGHTS_NAME, TensorType, is_sagemaker_mp_enabled, logging
+from transformers.utils import WEIGHTS_NAME, TensorType, is_apex_available, is_sagemaker_mp_enabled, logging
 
 import openvino
 from nncf import NNCFConfig
@@ -55,6 +65,9 @@ from .configuration import OVConfig
 from .quantization import OVDataLoader
 from .utils import OV_XML_FILE_NAME
 
+
+if is_apex_available():
+    from apex import amp
 
 core = Core()
 
