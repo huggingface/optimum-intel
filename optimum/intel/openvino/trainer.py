@@ -69,6 +69,9 @@ from .utils import OV_XML_FILE_NAME
 if is_apex_available():
     from apex import amp
 
+if is_sagemaker_mp_enabled():
+    import smdistributed.modelparallel.torch as smp
+
 core = Core()
 
 logger = logging.get_logger(__name__)
