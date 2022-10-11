@@ -540,6 +540,8 @@ class OVTrainer(Trainer):
 
     def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, f: Union[str, io.BytesIO]):
         model_inputs = config.generate_dummy_inputs(self.tokenizer, framework=TensorType.PYTORCH)
+        device = model.device
+        model_inputs = dict((k, v.to(device)) for k, v in model_inputs.items())
 
         with torch.no_grad():
             model.eval()
