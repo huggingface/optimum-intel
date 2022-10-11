@@ -57,13 +57,29 @@ model.to("GPU")
 model.half()
 ```
 
-When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape. By modifying your pipeline, you can make sure to pad (or truncate) your inputs in order to perform inference with a static model.
+When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape. By modifying your pipeline, you can make sure to pad or truncate your inputs in order to perform inference with a static model.
 
 ```python
-cls_pipe = pipeline(
-    "text-classification", model=model, tokenizer=tokenizer, max_length=9, padding="max_length", truncation=True
+from datasets import load_dataset
+from transformers import AutoTokenizer, pipeline
+from evaluate import evaluator
+from optimum.intel.openvino.modeling import OVModelForQuestionAnswering
+
+model_id = "distilbert-base-cased-distilled-squad"
+model = OVModelForQuestionAnswering.from_pretrained(model_id, from_transformers=True)
+model.reshape(1, 384)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+eval_dataset = load_dataset("squad", split="validation").select(range(50))
+eval = evaluator("question-answering")
+qa_pipe = pipeline(
+    "question-answering",
+    model=model,
+    tokenizer=tokenizer,
+    max_seq_len=384,
+    padding="max_length",
+    truncation=True,
 )
-result = cls_pipe("Hello")
+metric = eval.compute(model_or_pipeline=qa_pipe, data=eval_dataset, metric="squad")
 ```
 
 ## Run inference for sequence-to-sequence models
