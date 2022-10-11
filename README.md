@@ -147,7 +147,7 @@ quantizer.quantize(
 optimized_model = OVModelForSequenceClassification.from_pretrained('nncf_results')
 ```
 
-- Quantization-aware training example:
+#### Quantization-aware training example:
 
 ```diff
 import numpy as np
