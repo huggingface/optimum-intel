@@ -174,7 +174,7 @@ class OVBaseModel(OptimizedModel):
                     force_download=force_download,
                     local_files_only=local_files_only,
                 )
-                file_names.append(Path(model_cache_path).name)
+                file_names.append(model_cache_path)
             kwargs["model_save_dir"] = Path(model_cache_path).parent
             bin_file_name = file_names[1] if not from_onnx else None
             model = cls.load_model(file_names[0], bin_file_name=bin_file_name)
