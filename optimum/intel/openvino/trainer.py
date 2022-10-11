@@ -54,6 +54,7 @@ from transformers.utils import WEIGHTS_NAME, TensorType, is_apex_available, is_s
 
 import openvino
 from nncf import NNCFConfig
+from nncf.common.utils.logger import set_log_level
 from nncf.config.structures import BNAdaptationInitArgs, QuantizationRangeInitArgs
 from nncf.torch import create_compressed_model
 from nncf.torch.nncf_network import NNCFNetwork
@@ -74,6 +75,7 @@ if is_sagemaker_mp_enabled():
 
 core = Core()
 
+set_log_level(logging.ERROR)
 logger = logging.get_logger(__name__)
 
 
