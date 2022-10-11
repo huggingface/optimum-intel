@@ -34,7 +34,7 @@ result = cls_pipe("He's a dreadful magician.")
 To easily save the resulting model, you can use the `save_pretrained()` method, which will save both the BIN and XML files describing the graph.
 
 ```python
-# Save the converted model
+# Save the exported model
 save_directory = "a_local_path"
 model.save_pretrained(save_directory)
 tokenizer.save_pretrained(save_directory)
@@ -57,6 +57,15 @@ model.to("GPU")
 model.half()
 ```
 
+When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape. By modifying your pipeline, you can make sure to pad (or truncate) your inputs in order to perform inference with a static model.
+
+```python
+cls_pipe = pipeline(
+    "text-classification", model=model, tokenizer=tokenizer, max_length=9, padding="max_length", truncation=True
+)
+result = cls_pipe("Hello")
+```
+
 ## Run inference for sequence-to-sequence models
 
 Sequence-to-sequence (Seq2Seq) models, that generate a new sequence from an input, can also be used when running inference with OpenVINO. When Seq2Seq models are exported to the OpenVINO IR, they are decomposed into two parts : the encoder and the "decoder" (which actually consists of the decoder with the language modeling head), that are later combined during inference.
@@ -74,6 +83,9 @@ tokenizer = AutoTokenizer.from_pretrained(model_id)
 translation_pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
 text = "He never went out without a book under his arm, and he often came back with two."
 result = translation_pipe(text)
+
+# Save the exported model
+save_directory = "a_local_path"
 model.save_pretrained(save_directory)
 tokenizer.save_pretrained(save_directory)
 

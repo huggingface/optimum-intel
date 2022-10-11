@@ -63,5 +63,6 @@ ov_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 cls_pipe = pipeline("text-classification", model=ov_model, tokenizer=tokenizer)
 text = "He's a dreadful magician."
 outputs = cls_pipe(text)
+[{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
 ```
 
