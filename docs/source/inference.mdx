@@ -57,7 +57,7 @@ model.to("GPU")
 model.half()
 ```
 
-When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape. By modifying your pipeline, you can make sure to pad or truncate your inputs in order to perform inference with a static model.
+When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape. When instantiating your pipeline, you can specify the maximum total input sequence length after tokenization in order for shorter sequences to be padded and for longer sequences to be truncated.
 
 ```python
 from datasets import load_dataset
