@@ -99,7 +99,7 @@ Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/mai
 ### OpenVINO
 Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework for model optimization, quantization, and inference.
 
-- OpenVINO inference example:
+#### OpenVINO inference example:
 
 ```diff
 -from transformers import AutoModelForSequenceClassification
