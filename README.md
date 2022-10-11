@@ -173,7 +173,7 @@ compute_metrics = lambda p: metric.compute(
     feature="sequence-classification",
     args=TrainingArguments('nncf_results', num_train_epochs=1.0, do_train=True, do_eval=True),
     train_dataset=dataset["train"],
-    eval_dataset=eval_dataset,
+    eval_dataset=dataset["validation"],
     compute_metrics=compute_metrics,
     tokenizer=tokenizer,
     data_collator=default_data_collator,
