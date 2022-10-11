@@ -126,7 +126,7 @@ model = AutoModelForSequenceClassification.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 def preprocess_fn(examples, tokenizer):
     return tokenizer(
-        examples["sentence"], padding="max_length", max_length=tokenizer.model_max_length, truncation=True
+        examples["sentence"], padding=True, truncation=True, max_length=tokenizer.model_max_length
     )
 
 quantizer = OVQuantizer.from_pretrained(model)
