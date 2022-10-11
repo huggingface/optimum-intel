@@ -2,11 +2,13 @@
   - local: index
     title: 🤗 Optimum Intel
   - sections:
-    - local: optimization
+    - local: optimization_inc
       title: Optimization
     title: Neural Compressor
   - sections:
     - local: inference
       title: Inference
+    - local: optimization_ov
+      title: Optimization
     title: OpenVINO
   title: Optimum Intel
