@@ -87,7 +87,6 @@ python run_glue.py \
     --model_name_or_path Intel/distilbert-base-uncased-sparse-90-unstructured-pruneofa \
     --task_name sst2 \
     --apply_distillation \
-    --distillation_config ../config/distillation.yml \
     --teacher_model_name_or_path distilbert-base-uncased-finetuned-sst-2-english \
     --apply_pruning \
     --pruning_config ../config/prune_pattern_lock.yml \
@@ -108,7 +107,6 @@ python run_glue.py \
     --model_name_or_path /tmp/sst2_output_stage1 \
     --task_name sst2 \
     --apply_distillation \
-    --distillation_config ../config/distillation.yml \
     --teacher_model_name_or_path distilbert-base-uncased-finetuned-sst-2-english \
     --apply_pruning \
     --pruning_config ../config/prune_pattern_lock.yml \
