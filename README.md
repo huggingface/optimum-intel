@@ -171,7 +171,7 @@ compute_metrics = lambda p: metric.compute(
 +trainer = OVTrainer(
     model=model,
     feature="sequence-classification",
-    args=TrainingArguments('nncf_results', num_train_epochs=1.0, do_train=True, do_eval=True),
+    args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
     train_dataset=dataset["train"].select(range(300)),
     eval_dataset=dataset["validation"],
     compute_metrics=compute_metrics,
