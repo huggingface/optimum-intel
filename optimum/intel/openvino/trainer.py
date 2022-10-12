@@ -64,7 +64,7 @@ from optimum.utils import logging
 
 from .configuration import OVConfig
 from .quantization import OVDataLoader
-from .utils import OV_XML_FILE_NAME
+from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, OV_XML_FILE_NAME
 
 
 if is_apex_available():
@@ -72,6 +72,9 @@ if is_apex_available():
 
 if is_sagemaker_mp_enabled():
     import smdistributed.modelparallel.torch as smp
+
+_openvino_version_str = openvino.runtime.get_version()
+_openvino_version = version.parse(_openvino_version_str.split("-")[0])
 
 core = Core()
 
@@ -557,6 +560,15 @@ class OVTrainer(Trainer):
             self.feature = "default"
 
     def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, f: Union[str, io.BytesIO]):
+        if config.default_onnx_opset > MAX_ONNX_OPSET_2022_2_0 + 1:
+            logger.warning(
+                f"The minimal ONNX opset for the given model architecture is {config.default_onnx_opset}, currently "
+                f"OpenVINO only supports opset inferior or equal to {MAX_ONNX_OPSET_2022_2_0} which could result in "
+                "export issue."
+            )
+        max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
+        opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
+
         model_inputs = config.generate_dummy_inputs(self.tokenizer, framework=TensorType.PYTORCH)
         device = model.device
         model_inputs = dict((k, v.to(device)) for k, v in model_inputs.items())
@@ -573,6 +585,6 @@ class OVTrainer(Trainer):
                 output_names=list(config.outputs.keys()),
                 dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
                 do_constant_folding=True,
-                opset_version=10,
+                opset_version=opset,
             )
             model.enable_dynamic_graph_building()
