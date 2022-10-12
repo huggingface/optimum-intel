@@ -92,7 +92,6 @@ python run_qa.py \
     --model_name_or_path Intel/distilbert-base-uncased-sparse-90-unstructured-pruneofa \
     --dataset_name squad \
     --apply_distillation \
-    --distillation_config ../config/distillation.yml \
     --generate_teacher_logits \
     --teacher_model_name_or_path distilbert-base-uncased-distilled-squad \
     --apply_pruning \
@@ -114,7 +113,6 @@ python run_qa.py \
     --model_name_or_path /tmp/squad_output_stage1 \
     --dataset_name squad \
     --apply_distillation \
-    --distillation_config ../config/distillation.yml \
     --generate_teacher_logits \
     --teacher_model_name_or_path distilbert-base-uncased-distilled-squad \
     --apply_pruning \
