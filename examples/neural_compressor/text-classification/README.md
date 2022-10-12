@@ -75,9 +75,9 @@ respectively `dynamic`, `static` or `aware_training`.
 
 ### Prune Once For All
 
-The following example demonstrate the steps of reproducing Prune Once For All examples results on GLUE tasks.
+The following example demonstrate the steps of reproducing Prune Once For All examples results on the sst-2 task.
 <br>
-This examples will take the pre-trained sparse language model and fine tune it on the downstream task. This fine tune pipeline is two staged. For stage 1, the pattern lock pruning and the distillation are applied to fine tune the pre-trained sparse language model. In stage 2, the pattern lock pruning, distillation and quantization aware training are performed simultaneously on the fine tuned model from stage 1 to obtain the quantized model with the same sparsity pattern as the pre-trained sparse language model.
+This examples will take a pre-trained DistilBERT with a sparsity of 90% and fine-tune it on the downstream task. This fine-tuning process will be decomposed into two steps. During step 1, distillation as well as pattern lock pruning are both applied during fine-tuning. During step 2, quantization aware training will be additionaly applied, to obtain a fine-tuned quantized model with the same sparsity as the pre-trained model.
 <br>
 For more informations of Prune Once For All, please refer to the paper [Prune Once For All: Sparse Pre-Trained Language Models](https://arxiv.org/abs/2111.05754)
 
