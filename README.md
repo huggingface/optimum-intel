@@ -163,10 +163,13 @@ dataset = load_dataset("glue", "sst2")
 dataset = dataset.map(
     lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
 )
+metric = load_metric("accuracy")
 compute_metrics = lambda p: metric.compute(
     predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
 )
 
+# The directory where the quantized model will be saved
+save_dir = "nncf_results"
 -trainer = Trainer(
 +trainer = OVTrainer(
     model=model,
