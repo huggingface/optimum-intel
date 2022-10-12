@@ -183,7 +183,7 @@ metrics = trainer.evaluate()
 print(metrics)
 trainer.save_model()
 
-+optimized_model = OVModelForSequenceClassification.from_pretrained('nncf_results')
++optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
 You can find more OpenVINO examples in the corresponding Optimum-Intel documentation.
