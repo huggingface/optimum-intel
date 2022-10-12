@@ -160,7 +160,7 @@ model = AutoModelForSequenceClassification.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 dataset = load_dataset("glue", "sst2")
 dataset = dataset.map(
-    lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=tokenizer.model_max_length), batched=True
+    lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
 )
 compute_metrics = lambda p: metric.compute(
     predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
