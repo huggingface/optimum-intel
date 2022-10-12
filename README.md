@@ -152,7 +152,8 @@ optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 import numpy as np
 from datasets import load_dataset, load_metric
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
-from optimum.intel.openvino.trainer import OVTrainer
+-from transformers import Trainer
++from optimum.intel.openvino.trainer import OVTrainer
 +from optimum.intel.openvino import OVModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
