@@ -80,7 +80,7 @@ respectively `dynamic`, `static` or `aware_training`.
 
 ## Prune Once For All
 
-The following example demonstrate the steps of reproducing Prune Once For All examples results on SQuAD dataset.
+The following example demonstrate the steps of reproducing Prune Once For All examples results on SQuAD1.0 dataset.
 <br>
 This examples will take the pre-trained sparse language model and fine tune it on the downstream task. This fine tune pipeline is two staged. For stage 1, the pattern lock pruning and the distillation are applied to fine tune the pre-trained sparse language model. In stage 2, the pattern lock pruning, distillation and quantization aware training are performed simultaneously on the fine tuned model from stage 1 to obtain the quantized model with the same sparsity pattern as the pre-trained sparse language model.
 <br>
