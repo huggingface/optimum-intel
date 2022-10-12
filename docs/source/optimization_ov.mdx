@@ -52,6 +52,8 @@ quantizer.quantize(
     calibration_dataset=calibration_dataset,
     save_directory=save_dir,
 )
+# Save the tokenizer
+tokenizer.save_pretrained(save_dir)
 ```
 
 After applying static quantization on our model, we can then easily load it with our [OVModel](https://huggingface.co/docs/optimum/intel_optimization_ov) classes and perform inference with OpenVINO Runtime.
