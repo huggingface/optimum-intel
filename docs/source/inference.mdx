@@ -52,9 +52,9 @@ Currently, OpenVINO only supports static shapes for inference on GPU. FP16 preci
 ```python
 # Fix the batch size to 1 and the sequence length to 9
 model.reshape(1, 9)
-model.to("GPU")
-# FP16 precision can be enabled
+# Enable FP16 precision
 model.half()
+model.to("GPU")
 ```
 
 When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape. When instantiating your pipeline, you can specify the maximum total input sequence length after tokenization in order for shorter sequences to be padded and for longer sequences to be truncated.

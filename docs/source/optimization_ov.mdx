@@ -18,6 +18,7 @@ limitations under the License.
 
 🤗 Optimum Intel provides an `optimum.openvino` package that enables you to apply quantization on many model hosted on the 🤗 hub using the [NNCF](https://docs.openvino.ai/2022.1/docs_nncf_introduction.html) framework.
 
+Post-training static quantization introduces an additional calibration step where data is fed through the network in order to compute the activations quantization parameters.
 Here is how to apply static quantization on a fine-tuned DistilBERT:
 
 ```python
@@ -42,10 +43,10 @@ calibration_dataset = quantizer.get_calibration_dataset(
     "glue",
     dataset_config_name="sst2",
     preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-    num_samples=40,
+    num_samples=300,
     dataset_split="train",
 )
-# Apply static quantization and save the resulting quantized model OpenVINO IR
+# Apply static quantization and export the resulting quantized model to OpenVINO IR format
 quantizer.quantize(
     quantization_config=quantization_config,
     calibration_dataset=calibration_dataset,
@@ -65,4 +66,57 @@ text = "He's a dreadful magician."
 outputs = cls_pipe(text)
 [{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
 ```
+
+Quantization aware training (QAT) can also be applied in order to simulate the effects of quantization during training, in order to alleviate its effects on the model's accuracy. In the case where post-training quantization results in an import accuracy degradation, QAT can be used instead.
+Here is an example on how to fine-tune a DistilBERT on the sst-2 task while applying quantization aware training (QAT).
+
+```python
+import numpy as np
+from datasets import load_dataset, load_metric
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
+
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+model = AutoModelForSequenceClassification.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+dataset = load_dataset("glue", "sst2")
+dataset = dataset.map(
+    lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
+)
+metric = load_metric("accuracy")
+compute_metrics = lambda p: metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
+```
+```diff
+-from transformers import Trainer
++from optimum.intel.openvino.trainer import OVTrainer
+
+# Load the default quantization configuration detailing the quantization we wish to apply
++ov_config = OVConfig()
+
+trainer = OVTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
+    compute_metrics=compute_metrics,
+    tokenizer=tokenizer,
+    data_collator=data_collator,
++   ov_config=ov_config,
++   feature="sequence-classification",
+)
+
+# Train the model while applying quantization
+train_result = trainer.train()
+metrics = trainer.evaluate()
+# Export the quantized model to OpenVINO IR format and save it
+trainer.save_model()
+```
+
+
+## OVQuantizer
+
+[[autodoc]] openvino.quantization.OVQuantizer
+
+## OVTrainer
+
+[[autodoc]] openvino.trainer.OVTrainer
 
