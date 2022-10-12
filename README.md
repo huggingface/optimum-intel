@@ -138,13 +138,12 @@ calibration_dataset = quantizer.get_calibration_dataset(
     dataset_split="train",
     preprocess_batch=True,
 )
-quantizer.quantize(
-    calibration_dataset=calibration_dataset,
-    save_directory='nncf_results' # use this folder as and input for OVModelForSequenceClassification
-                                  # to do the inference
-)
-
-optimized_model = OVModelForSequenceClassification.from_pretrained('nncf_results')
+# The directory where the quantized model will be saved
+save_dir = "nncf_results"
+# Apply static quantization and save the resulting model in the OpenVINO IR format
+quantizer.quantize(calibration_dataset=calibration_dataset, save_directory=save_dir)
+# Load the quantized model
+optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
 #### Quantization-aware training example:
