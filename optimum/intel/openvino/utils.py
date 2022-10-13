@@ -24,4 +24,4 @@ ONNX_DECODER_NAME = "decoder_model.onnx"
 ONNX_DECODER_WITH_PAST_NAME = "decoder_with_past_model.onnx"
 
 MAX_ONNX_OPSET_2022_2_0 = 10
-MAX_ONNX_OPSET = 16
+MAX_ONNX_OPSET = 13
