@@ -13,7 +13,7 @@ specific language governing permissions and limitations under the License.
 # Optimization
 
 Optimum Intel can be used to apply popular compression techniques such as quantization, pruning and knowledge distillation. 
-
+Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in the following examples.
 To apply dynamic quantization on a fine-tuned DistilBERT, we first need to create the corresponding configuration describing the quantization details as well as the quantizer object used to later apply quantization:
 
 ```python
@@ -81,11 +81,6 @@ outputs = pipe_cls(text)
 
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
-Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
-
-
-
-
 The [`IncTrainer`] class provides an API to train your model while combining different compression techniques such as knowledge distillation, pruning and quantization.
 The `IncTrainer` is very similar to the 🤗 Transformers [`Trainer`](https://huggingface.co/docs/transformers/main/en/main_classes/trainer#trainer), which can be replaced with minimal changes in your code.
 
@@ -137,6 +132,8 @@ optimized_model = optimizer.fit()
 # Save the resulting model and its corresponding configuration in the given directory
 optimizer.save_pretrained(save_dir)
 ```
+
+Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
 
 
 ## IncOptimizer
