@@ -117,6 +117,8 @@ pip install oneccl_bind_pt=={pytorch_version} -f https://software.intel.com/ipex
 ```
 where `{pytorch_version}` should be your PyTorch version, for instance 1.12.0.
 Versions of oneCCL and PyTorch must match.
+oneccl_bindings_for_pytorch 1.12.0 prebuilt wheel does not work with PyTorch 1.12.1 (it is for PyTorch 1.12.0)
+PyTorch 1.12.1 should work with oneccl_bindings_for_pytorch 1.12.100
 
 <Tip warning={true}>
 
