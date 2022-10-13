@@ -14,7 +14,7 @@ specific language governing permissions and limitations under the License.
 
 Optimum Intel can be used to apply popular compression techniques such as quantization, pruning and knowledge distillation. 
 
-## Post-training compression
+## Optimizing you model post-training
 
 Post-training compression techniques such as dynamic and static quantization can be easily applied on your model using our [`IncQuantizer`](https://huggingface.co/docs/optimum/intel_optimization#optimum.intel.neural_compressor.IncQuantizer).
 Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in the following examples.
@@ -24,7 +24,7 @@ To apply dynamic quantization on a fine-tuned DistilBERT, we first need to creat
 from datasets import load_dataset
 from transformers import AutoModelForQuestionAnswering, AutoTokenizer, pipeline
 from evaluate import evaluator
-from optimum.intel.neural_compressor import IncOptimizer, IncQuantizationConfig, IncQuantizer
+from optimum.intel.neural_compressor import IncQuantizationConfig, IncQuantizer
 
 model_id = "distilbert-base-cased-distilled-squad"
 max_eval_samples = 100
@@ -40,8 +40,8 @@ def eval_func(model):
     return metrics["f1"]
 
 # Load the quantization configuration detailing the quantization we wish to apply
-config_name_or_path = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
-quantization_config = IncQuantizationConfig.from_pretrained(config_name_or_path)
+config_name = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
+quantization_config = IncQuantizationConfig.from_pretrained(config_name)
 
 # Instantiate our IncQuantizer using the desired configuration and the evaluation function
 # used for the INC accuracy-driven tuning strategy
@@ -51,6 +51,8 @@ quantizer = IncQuantizer(quantization_config, eval_func=eval_func)
 In a second step, we create our optimizer which will take care of the optimization process.
 
 ```python
+from optimum.intel.neural_compressor import IncOptimizer
+
 # To instantiate the optimizer, we need the model we wish to optimize and the
 # quantizer defining the quantization process
 optimizer = IncOptimizer(model, quantizer=quantizer)
@@ -91,7 +93,7 @@ outputs = pipe_cls(text)
 [{'label': 'NEGATIVE', 'score': 0.9880216121673584}]
 ```
 
-## During training Compression
+## Optimizing you model during training
 
 The [`IncTrainer`] class provides an API to train your model while combining different compression techniques such as knowledge distillation, pruning and quantization.
 The `IncTrainer` is very similar to the 🤗 Transformers [`Trainer`](https://huggingface.co/docs/transformers/main/en/main_classes/trainer#trainer), which can be replaced with minimal changes in your code.
