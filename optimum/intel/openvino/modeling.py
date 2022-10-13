@@ -13,13 +13,14 @@
 #  limitations under the License.
 
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import torch
 import transformers
 from transformers import (
     AutoConfig,
     AutoModel,
+    AutoModelForCausalLM,
     AutoModelForImageClassification,
     AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
@@ -27,8 +28,10 @@ from transformers import (
     AutoModelForTokenClassification,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
+from transformers.generation_utils import GenerationMixin
 from transformers.modeling_outputs import (
     BaseModelOutput,
+    CausalLMOutputWithCrossAttentions,
     ImageClassifierOutput,
     MaskedLMOutput,
     QuestionAnsweringModelOutput,
@@ -357,6 +360,113 @@ MASKED_LM_EXAMPLE = r"""
     >>> outputs = pipe("The goal of life is" + mask_token)
     ```
 """
+
+TEXT_GENERATION_EXAMPLE = r"""
+    Example of text generation:
+    ```python
+    >>> from transformers import {processor_class}
+    >>> from optimum.intel.openvino import {model_class}
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}")
+    >>> inputs = tokenizer("My name is Philipp and I live in Germany.", return_tensors="pt")
+    >>> gen_tokens = model.generate(**inputs,do_sample=True,temperature=0.9, min_length=20,max_length=20)
+    >>> tokenizer.batch_decode(gen_tokens)
+    ```
+    Example using `transformers.pipelines`:
+    ```python
+    >>> from transformers import {processor_class}, pipeline
+    >>> from optimum.intel.openvino import {model_class}
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> gen_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    >>> text = "My name is Philipp and I live in Germany."
+    >>> gen = gen_pipeline(text)
+    ```
+"""
+
+
+@add_start_docstrings(
+    """
+    OpenVINO Model with a causal language modeling head on top (linear layer with weights tied to the input
+    embeddings).
+    """,
+    MODEL_START_DOCSTRING,
+)
+class OVModelForCausalLM(OVModel, GenerationMixin):
+    """
+    Causal LM model for OpenVINO.
+    """
+
+    export_feature = "causal-lm"
+    auto_model_class = AutoModelForCausalLM
+
+    def __init__(self, model=None, config=None, **kwargs):
+        super().__init__(model, config, **kwargs)
+        self.main_input_name = "input_ids"
+
+    def prepare_inputs_for_generation(self, input_ids: torch.LongTensor, **kwargs) -> Dict[str, Any]:
+        inputs = {"input_ids": input_ids}
+        if kwargs.get("attention_mask", None) is not None:
+            inputs["attention_mask"] = kwargs["attention_mask"]
+        if kwargs.get("token_type_ids") is not None:
+            inputs["token_type_ids"] = kwargs["token_type_ids"]
+        return inputs
+
+    @add_start_docstrings_to_model_forward(
+        INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        + TEXT_GENERATION_EXAMPLE.format(
+            processor_class=_TOKENIZER_FOR_DOC,
+            model_class="OVModelForCausalLM",
+            checkpoint="gpt2",
+        )
+    )
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        self._create_inference_request()
+
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        # Add the token_type_ids when needed
+        if "token_type_ids" in self.input_names:
+            inputs["token_type_ids"] = token_type_ids
+
+        # Run inference
+        outputs = self.request.infer(inputs)
+        outputs = {key.get_any_name(): value for key, value in outputs.items()}
+        logits = torch.from_numpy(outputs["logits"]).to(self._device)
+
+        return CausalLMOutputWithCrossAttentions(logits=logits)
+
+    # Adapted from https://github.com/huggingface/transformers/blob/99289c08a1b16a805dd4ee46de029e9fd23cba3d/src/transformers/generation_utils.py#L490
+    def _prepare_attention_mask_for_generation(
+        self,
+        inputs: torch.Tensor,
+        pad_token_id: int,
+        eos_token_id: int,
+    ) -> torch.LongTensor:
+        """
+        Overrides the base method of `GenerationMixin` to ensure input IDs and
+        attention mask are on the same device.
+        """
+        is_input_ids = len(inputs.shape) == 2 and inputs.dtype in [torch.int, torch.long]
+        is_pad_token_in_inputs = (pad_token_id is not None) and (pad_token_id in inputs)
+        is_pad_token_not_equal_to_eos_token_id = (eos_token_id is None) or (
+            (eos_token_id is not None) and (pad_token_id != eos_token_id)
+        )
+        # Check if input is input_ids and padded -> only then is attention_mask defined
+        if is_input_ids and is_pad_token_in_inputs and is_pad_token_not_equal_to_eos_token_id:
+            return inputs.ne(pad_token_id).long()
+        else:
+            # Ensure attention mask is on the same device as the input IDs
+            return torch.ones(inputs.shape[:2], dtype=torch.long, device=inputs.device)
 
 
 @add_start_docstrings(

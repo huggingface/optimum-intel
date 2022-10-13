@@ -26,6 +26,7 @@ if _nncf_available:
     from .quantization import OVQuantizer
 
 from .modeling import (
+    OVModelForCausalLM,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
