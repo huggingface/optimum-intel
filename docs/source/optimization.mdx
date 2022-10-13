@@ -62,9 +62,20 @@ To load a quantized model hosted locally or on the 🤗 hub, you can do as follo
 ```python
 from optimum.intel.neural_compressor.quantization import IncQuantizedModelForSequenceClassification
 
-loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrained(
-    "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-static"
-)
+model_id = "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
+model = IncQuantizedModelForSequenceClassification.from_pretrained(model_id)
+```
+
+The quantized model can then easily be used to run inference with the Transformers [pipelines](https://huggingface.co/docs/transformers/main/en/main_classes/pipelines).
+
+```python
+from transformers import AutoTokenizer, pipeline
+
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+pipe_cls = pipeline("text-classification", model=model, tokenizer=tokenizer)
+text = "He's a dreadful magician."
+outputs = pipe_cls(text)
+[{'label': 'NEGATIVE', 'score': 0.9880216121673584}]
 ```
 
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
