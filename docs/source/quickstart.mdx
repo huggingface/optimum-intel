@@ -91,7 +91,7 @@ outputs = pipe_cls(text)
 
 When distillation on a single CPU is too slow, we can use multiple CPUs. This guide focuses on PyTorch-based DDP enabling distributed CPU distillation efficiently.
 
-Distributed distillation on multiple CPUs is launched by mpirun which supports both Gloo and oneCCL as collective communication backend. And for performance seek, Intel recommend to use oneCCL backend.
+Distributed distillation on multiple CPUs is launched by mpirun which supports both Gloo and oneCCL as collective communication backends. And for performance seek, Intel recommends to use oneCCL backend.
 
 [Intel® oneCCL](https://github.com/oneapi-src/oneCCL) (collective communications library) is a library for efficient distributed deep learning training implementing such collectives like allreduce, allgather, alltoall. For more information on oneCCL, please refer to the [oneCCL documentation](https://spec.oneapi.com/versions/latest/elements/oneCCL/source/index.html) and [oneCCL specification](https://spec.oneapi.com/versions/latest/elements/oneCCL/source/index.html).
 
@@ -107,6 +107,7 @@ Wheel files are available for the following Python versions:
 
 | Extension Version | Python 3.6 | Python 3.7 | Python 3.8 | Python 3.9 | Python 3.10 |
 | :---------------: | :--------: | :--------: | :--------: | :--------: | :---------: |
+| 1.12.100          |            | √          | √          | √          | √           |
 | 1.12.0            |            | √          | √          | √          | √           |
 | 1.11.0            |            | √          | √          | √          | √           |
 | 1.10.0            | √          | √          | √          | √          |             |
