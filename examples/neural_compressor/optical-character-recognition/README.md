@@ -16,7 +16,7 @@ limitations under the License.
 
 # Optical Character Recognition
 
-The script [`run_trocr.py`](https://github.com/huggingface/optimum/blob/main/examples/optical-character-recognition/run_trocr.py)
+The script [`run_trocr.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/optical-character-recognition/run_trocr.py)
 allows us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning 
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for optical character recognition tasks and [IAM](https://fki.tic.heia-fr.ch/databases/iam-handwriting-database) datasets.
 
@@ -34,7 +34,7 @@ The following example applies post-training static quantization on TrOCR small f
 python run_trocr.py \
     --model_name_or_path microsoft/trocr-small-handwritten \
     --datasets_dir IAM \
-    --tune \
+    --apply_quantization \
     --quantization_approach static \
     --verify_loading \
     --output_dir /tmp/trocr_output
@@ -44,6 +44,6 @@ In order to apply dynamic, static or aware-training quantization, `quantization_
 respectively `dynamic`, `static` or `aware_training`.
 
 The configuration file containing all the information related to the model quantization objectives can be specified using respectively `quantization_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum/blob/main/examples/config/quantization.yml) configuration files will be used.
+[quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/quantization.yml) configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
