@@ -1,21 +1,22 @@
 import logging
 import os
+import sys
 import time
+from dataclasses import dataclass, field
+from typing import Optional
 
 import pandas as pd
-import sys
 import torch
 import transformers
-from dataclasses import dataclass, field
 from datasets import load_metric
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from transformers import HfArgumentParser, TrainingArguments, TrOCRProcessor, VisionEncoderDecoderModel
 from transformers.utils import check_min_version
-from typing import Optional
 
 from optimum.intel.neural_compressor import IncOptimizer, IncQuantizationConfig, IncQuantizationMode, IncQuantizer
 from optimum.intel.neural_compressor.quantization import IncQuantizedModelForVision2Seq
+
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
@@ -66,7 +67,7 @@ class DataTrainingArguments:
     datasets_dir: str = field(default=None, metadata={"help": "The input testing data path."})
 
     def __post_init__(self):
-        if (self.datasets_dir is None):
+        if self.datasets_dir is None:
             raise ValueError("Need a dataset path")
 
 
@@ -257,7 +258,9 @@ def main():
 
     if optim_args.apply_quantization:
         torch.backends.quantized.engine = "onednn"
-        default_config = os.path.join(os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir)), "config")
+        default_config = os.path.join(
+            os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir)), "config"
+        )
         q8_config = IncQuantizationConfig.from_pretrained(
             optim_args.quantization_config if optim_args.quantization_config is not None else default_config,
             config_file_name="quantization.yml",
@@ -270,7 +273,9 @@ def main():
         if optim_args.quantization_approach is not None:
             supported_approach = {"static", "dynamic", "aware_training"}
             if optim_args.quantization_approach not in supported_approach:
-                raise ValueError("Unknown quantization approach. Supported approach are " + ", ".join(supported_approach))
+                raise ValueError(
+                    "Unknown quantization approach. Supported approach are " + ", ".join(supported_approach)
+                )
             quant_approach = getattr(IncQuantizationMode, optim_args.quantization_approach.upper()).value
             q8_config.set_config("quantization.approach", quant_approach)
         quant_approach = IncQuantizationMode(q8_config.get_config("quantization.approach"))
