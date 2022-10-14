@@ -29,11 +29,11 @@ from parameterized import parameterized
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("distilbert-base-uncased-finetuned-sst-2-english", 44),
+        ("distilbert-base-uncased-finetuned-sst-2-english", 50, 38),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_static_quantization(self, model_name, expected_fake_quantize):
+    def test_static_quantization(self, model_name, expected_fake_quantize, expected_int8):
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
 
@@ -50,15 +50,19 @@ class OVQuantizerTest(unittest.TestCase):
             )
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
 
-            ov_model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            num_int8 = 0
             num_fake_quantize = 0
-            for elem in ov_model.model.get_ops():
+            for elem in model.model.get_ops():
                 if "FakeQuantize" in elem.name:
                     num_fake_quantize += 1
+                if "8" in elem.get_element_type().get_type_name():
+                    num_int8 += 1
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
+            self.assertEqual(expected_int8, num_int8)
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
-            outputs = ov_model(**tokens)
+            outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
 
             # Verify that that the configuration is correctly saved and loaded
@@ -68,7 +72,7 @@ class OVQuantizerTest(unittest.TestCase):
 
 
 class OVTrainerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-uncased", 44, 38),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-uncased", 50, 38),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, model_name, expected_fake_quantize, expected_int8):
@@ -103,8 +107,8 @@ class OVTrainerTest(unittest.TestCase):
             trainer.save_model()
 
             model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
-            num_fake_quantize = 0
             num_int8 = 0
+            num_fake_quantize = 0
             for elem in model.model.get_ops():
                 if "FakeQuantize" in elem.name:
                     num_fake_quantize += 1
