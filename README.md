@@ -183,7 +183,6 @@ save_dir = "nncf_results"
 )
 train_result = trainer.train()
 metrics = trainer.evaluate()
-print(metrics)
 trainer.save_model()
 
 +optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
