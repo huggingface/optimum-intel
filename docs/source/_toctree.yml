@@ -4,11 +4,15 @@
   - sections:
     - local: optimization_inc
       title: Optimization
+    - local: reference_inc
+      title: Reference
     title: Neural Compressor
   - sections:
     - local: inference
       title: Models for inference
     - local: optimization_ov
       title: Optimization
+    - local: reference_ov
+      title: Reference
     title: OpenVINO
   title: Optimum Intel
