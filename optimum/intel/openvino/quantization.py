@@ -182,6 +182,8 @@ class OVQuantizer(OptimumQuantizer):
                 self.feature = "default"
             elif self.feature is None:
                 raise ValueError("The feature could not be extracted and needs to be specified for the ONNX export.")
+        if self.feature in ["seq2seq-lm", "translation", "summarization"]:
+            raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(
         self,
