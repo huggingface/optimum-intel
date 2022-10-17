@@ -26,11 +26,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
-from datasets import load_dataset
-
-import evaluate
 import transformers
-from trainer_qa import QuestionAnsweringTrainer
+from datasets import load_dataset
 from transformers import (
     AutoConfig,
     AutoModelForQuestionAnswering,
@@ -46,8 +43,11 @@ from transformers import (
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
-from utils_qa import postprocess_qa_predictions
+
+import evaluate
 from optimum.intel.openvino import OVConfig
+from trainer_qa import QuestionAnsweringTrainer
+from utils_qa import postprocess_qa_predictions
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -602,7 +602,7 @@ def main():
         return metric.compute(predictions=p.predictions, references=p.label_ids)
 
     ov_config = OVConfig()
- 
+
     # Initialize our Trainer
     trainer = QuestionAnsweringTrainer(
         model=model,

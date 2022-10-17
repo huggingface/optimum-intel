@@ -16,8 +16,10 @@
 A subclass of `OVTrainer` specific to Question-Answering tasks
 """
 
-from optimum.intel.openvino.trainer import OVTrainer
 from transformers.trainer_utils import PredictionOutput
+
+from optimum.intel.openvino.trainer import OVTrainer
+
 
 class QuestionAnsweringTrainer(OVTrainer):
     def __init__(self, *args, eval_examples=None, post_process_function=None, **kwargs):
