@@ -87,6 +87,7 @@ class IncOptimizer:
                 components.append(quantizer.quantization)
             self.apply_quantization = True
             self.config.torch_dtype = "int8"
+            self.config.framework = quantizer.config.usr_cfg.model.framework
 
         if one_shot_optimization and len(components) > 1:
             agent = self.scheduler.combine(*components)
