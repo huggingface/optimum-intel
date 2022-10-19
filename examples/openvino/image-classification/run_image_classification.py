@@ -42,7 +42,6 @@ from transformers import (
     AutoFeatureExtractor,
     AutoModelForImageClassification,
     HfArgumentParser,
-    Trainer,
     TrainingArguments,
     set_seed,
 )
