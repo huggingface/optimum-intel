@@ -89,7 +89,7 @@ class OVQuantizer(OptimumQuantizer):
         file_name: Optional[str] = None,
         batch_size: int = 8,
         data_collator: Optional[DataCollator] = None,
-        remove_unused_columns: str = True,
+        remove_unused_columns: bool = True,
     ):
         """
         Quantize a model given the optimization specifications defined in `quantization_config`.
