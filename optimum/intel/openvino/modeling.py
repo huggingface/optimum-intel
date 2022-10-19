@@ -368,7 +368,7 @@ TEXT_GENERATION_EXAMPLE = r"""
     >>> from optimum.intel.openvino import {model_class}
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}")
-    >>> inputs = tokenizer("My name is Philipp and I live in Germany.", return_tensors="pt")
+    >>> inputs = tokenizer("I love this story because", return_tensors="pt")
     >>> gen_tokens = model.generate(**inputs, do_sample=True, temperature=0.9, min_length=20, max_length=20)
     >>> tokenizer.batch_decode(gen_tokens)
     ```
@@ -379,7 +379,7 @@ TEXT_GENERATION_EXAMPLE = r"""
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
     >>> gen_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer)
-    >>> text = "My name is Philipp and I live in Germany."
+    >>> text = "I love this story because"
     >>> gen = gen_pipeline(text)
     ```
 """
