@@ -27,17 +27,17 @@ Note that if your dataset contains samples with no possible answers (like SQuAD 
 
 ### Fine-tuning BERT on SQuAD1.0
 
-This example code fine-tunes BERT on the SQuAD1.0 dataset while applying quantization aware training (QAT).
+Here we show how to apply quantization aware training (QAT) on a fine-tuned DistilBERT on the SQuAD1.0 dataset.
 
 ```bash
 python run_qa.py \
-  --model_name_or_path bert-base-uncased \
+  --model_name_or_path distilbert-base-uncased-distilled-squad \
   --dataset_name squad \
   --do_train \
   --do_eval \
   --per_device_train_batch_size 12 \
   --learning_rate 3e-5 \
-  --num_train_epochs 2 \
+  --num_train_epochs 1 \
   --max_seq_length 384 \
   --doc_stride 128 \
   --output_dir /tmp/outputs_squad/

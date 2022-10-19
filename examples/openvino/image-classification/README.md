@@ -19,16 +19,17 @@ This folder contains [`run_image_classification.py`](https://github.com/huggingf
 
 ### Fine-tuning ViT on the beans dataset
 
-Here we show how to fine-tune a Vision Transformer (ViT) on the beans dataset (to classify the disease type of bean leaves) while applying quantization aware training (QAT).
+Here we show how to apply quantization aware training (QAT) on a fine-tuned Vision Transformer (ViT) on the beans dataset (to classify the disease type of bean leaves).
 
 ```bash
 python run_image_classification.py \
+    --model_name_or_path nateraw/vit-base-beans \
     --dataset_name beans \
     --remove_unused_columns False \
     --do_train \
     --do_eval \
     --learning_rate 2e-5 \
-    --num_train_epochs 5 \
+    --num_train_epochs 1 \
     --per_device_train_batch_size 8 \
     --per_device_eval_batch_size 8 \
     --logging_strategy steps \
