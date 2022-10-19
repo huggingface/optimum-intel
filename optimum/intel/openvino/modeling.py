@@ -369,7 +369,7 @@ TEXT_GENERATION_EXAMPLE = r"""
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}")
     >>> inputs = tokenizer("My name is Philipp and I live in Germany.", return_tensors="pt")
-    >>> gen_tokens = model.generate(**inputs,do_sample=True,temperature=0.9, min_length=20,max_length=20)
+    >>> gen_tokens = model.generate(**inputs, do_sample=True, temperature=0.9, min_length=20, max_length=20)
     >>> tokenizer.batch_decode(gen_tokens)
     ```
     Example using `transformers.pipelines`:
