@@ -22,6 +22,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 import torch
 import transformers
 from datasets import Dataset, load_dataset
+from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import PreTrainedModel, default_data_collator
@@ -39,11 +40,11 @@ from openvino.runtime import Core
 from optimum.quantization_base import OptimumQuantizer
 
 from .configuration import OVConfig
-from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
+from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
 
-MAX_ONNX_OPSET = 10
-
+_openvino_version_str = openvino.runtime.get_version()
+_openvino_version = version.parse(_openvino_version_str.split("-")[0])
 
 core = Core()
 
@@ -149,13 +150,14 @@ class OVQuantizer(OptimumQuantizer):
 
     @staticmethod
     def _onnx_export(model: NNCFNetwork, config: OnnxConfig, model_inputs: Dict, f: Union[str, io.BytesIO]):
-        # if onnx_config.default_onnx_opset > MAX_ONNX_OPSET:
-        if config.default_onnx_opset > 11:
+        if config.default_onnx_opset > MAX_ONNX_OPSET_2022_2_0 + 1:
             logger.warning(
                 f"The minimal ONNX opset for the given model architecture is {config.default_onnx_opset}, currently "
-                f"OpenVINO only supports opset inferior or equal to {MAX_ONNX_OPSET} which could result in "
+                f"OpenVINO only supports opset inferior or equal to {MAX_ONNX_OPSET_2022_2_0} which could result in "
                 "export issue."
             )
+        max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
+        opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
         with torch.no_grad():
             # Disable node additions to be exported in the graph
             model.disable_dynamic_graph_building()
@@ -167,7 +169,7 @@ class OVQuantizer(OptimumQuantizer):
                 output_names=list(config.outputs.keys()),
                 dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
                 do_constant_folding=True,
-                opset_version=10,
+                opset_version=opset,
             )
             model.enable_dynamic_graph_building()
 
@@ -180,6 +182,8 @@ class OVQuantizer(OptimumQuantizer):
                 self.feature = "default"
             elif self.feature is None:
                 raise ValueError("The feature could not be extracted and needs to be specified for the ONNX export.")
+        if self.feature in ["seq2seq-lm", "translation", "summarization"]:
+            raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(
         self,
