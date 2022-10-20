@@ -16,6 +16,7 @@ limitations under the License.
 # Question answering
 
 This folder contains [`run_qa.py`](https://github.com/huggingface/optimum/blob/main/examples/openvino/question-answering/run_qa.py), a script to fine-tune a 🤗 Transformers model on a question answering dataset while applying quantization aware training (QAT). QAT can be easily applied by replacing the Transformers [`Trainer`](https://huggingface.co/docs/transformers/main/en/main_classes/trainer#trainer) with the Optimum [`OVTrainer`].
+An `QuestionAnsweringOVTrainer` is defined in [`trainer_qa.py`](https://github.com/huggingface/optimum/blob/main/examples/openvino/question-answering/trainer_qa.py), which inherits from `OVTrainer` and is adapted to perform question answering tasks evaluation.
 
 Any model from our [hub](https://huggingface.co/models) (as long as the model supported by the [`AutoModelForQuestionAnswering`](https://huggingface.co/docs/transformers/main/en/model_doc/auto#transformers.AutoModelForQuestionAnswering) API) can be fine-tuned on a question-answering dataset (such as SQuAD, or any other QA dataset available in the `datasets` library, or your own csv/jsonlines files) as long as they are structured the same way as SQuAD. You might need to tweak the data processing inside the script if your data is structured differently.
 

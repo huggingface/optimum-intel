@@ -46,7 +46,7 @@ from transformers.utils.versions import require_version
 
 import evaluate
 from optimum.intel.openvino import OVConfig
-from trainer_qa import QuestionAnsweringTrainer
+from trainer_qa import QuestionAnsweringOVTrainer
 from utils_qa import postprocess_qa_predictions
 
 
@@ -604,7 +604,7 @@ def main():
     ov_config = OVConfig()
 
     # Initialize our Trainer
-    trainer = QuestionAnsweringTrainer(
+    trainer = QuestionAnsweringOVTrainer(
         model=model,
         ov_config=ov_config,
         feature="question-answering",

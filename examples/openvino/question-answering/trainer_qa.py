@@ -21,7 +21,7 @@ from transformers.trainer_utils import PredictionOutput
 from optimum.intel.openvino.trainer import OVTrainer
 
 
-class QuestionAnsweringTrainer(OVTrainer):
+class QuestionAnsweringOVTrainer(OVTrainer):
     def __init__(self, *args, eval_examples=None, post_process_function=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.eval_examples = eval_examples
