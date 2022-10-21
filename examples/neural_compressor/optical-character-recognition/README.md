@@ -16,7 +16,7 @@ limitations under the License.
 
 # Optical Character Recognition
 
-The script [`run_ocr.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/optical-character-recognition/run_trocr.py)
+The script [`run_ocr.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/optical-character-recognition/run_ocr.py)
 allows us to apply different quantization approaches (such as dynamic and static quantization) 
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for optical character recognition tasks and [IAM](https://fki.tic.heia-fr.ch/databases/iam-handwriting-database) datasets.
 
@@ -31,7 +31,7 @@ tar xvf IAM.tar.gz
 ## Run Command
 The following example applies post-training static quantization on TrOCR small fine-tuned on the IAM dataset.
 ```bash
-python run_trocr.py \
+python run_ocr.py \
     --model_name_or_path microsoft/trocr-small-handwritten \
     --datasets_dir IAM \
     --apply_quantization \
