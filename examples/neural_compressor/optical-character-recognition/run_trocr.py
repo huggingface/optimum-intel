@@ -177,7 +177,7 @@ def main():
 
     test_dataloader = DataLoader(test_dataset, batch_size=training_args.per_device_eval_batch_size)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cpu")
 
     model = VisionEncoderDecoderModel.from_pretrained(model_args.model_name_or_path)
     model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
