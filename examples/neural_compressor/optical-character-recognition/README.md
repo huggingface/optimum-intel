@@ -16,11 +16,11 @@ limitations under the License.
 
 # Optical Character Recognition
 
-The script [`run_trocr.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/optical-character-recognition/run_trocr.py)
+The script [`run_ocr.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/optical-character-recognition/run_trocr.py)
 allows us to apply different quantization approaches (such as dynamic and static quantization) 
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for optical character recognition tasks and [IAM](https://fki.tic.heia-fr.ch/databases/iam-handwriting-database) datasets.
 
-Note that this case is from https://github.com/NielsRogge/Transformers-Tutorials/blob/master/TrOCR/Evaluating_TrOCR_base_handwritten_on_the_IAM_test_set.ipynb.
+Note that this case is from https://github.com/NielsRogge/Transformers-Tutorials/blob/master/TrOCR/Evaluating_TrOCR_base_handwritten_on_the_IAM_test_set.ipynb, And it only support TrOCR models.
 
 ## Prepare datasets
 ```bash

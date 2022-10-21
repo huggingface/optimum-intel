@@ -1,9 +1,10 @@
+import itertools
 import logging
 import os
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterable, Iterator, Optional
 
 import pandas as pd
 import torch
@@ -63,6 +64,24 @@ class DataTrainingArguments:
     """
     Arguments pertaining to what data we are going to input our model for training and eval.
     """
+
+    num_beams: Optional[int] = field(
+        default=1,
+        metadata={
+            "help": (
+                "Number of beams to use for evaluation. This argument will be passed to ``model.generate``, "
+                "which is used during ``evaluate`` and ``predict``."
+            )
+        },
+    )
+    max_calibration_samples: Optional[int] = field(
+        default=100,
+        metadata={"help": ("Number of samples to calibration quantization sacle and zero point.")},
+    )
+    max_eval_samples: Optional[int] = field(
+        default=None,
+        metadata={"help": ("Number of samples to evaluation.")},
+    )
 
     datasets_dir: str = field(default=None, metadata={"help": "The input testing data path."})
 
@@ -137,16 +156,15 @@ def main():
     )
     logger.info(f"Training/evaluation parameters {training_args}")
 
-    test_file = os.path.join(data_args.datasets_dir, "gt_test.txt")
-    test_dir = os.path.join(data_args.datasets_dir, "image")
-    df = pd.read_fwf(test_file, header=None)
-    df.rename(columns={0: "file_name", 1: "text"}, inplace=True)
-    del df[2]
-    df.head()
-
     class IAMDataset(Dataset):
-        def __init__(self, root_dir, df, processor, max_target_length=128):
-            self.root_dir = root_dir
+        def __init__(self, root_dir, processor, max_target_length=128, max_samples=None):
+            self.samples_dir = os.path.join(root_dir, "image")
+            samples_file = os.path.join(root_dir, "gt_test.txt")
+            df = pd.read_fwf(samples_file, header=None)
+            df.rename(columns={0: "file_name", 1: "text"}, inplace=True)
+            if max_samples is not None and max_samples < len(df):
+                df.drop(labels=range(max_samples, len(df)), inplace=True)
+            del df[2]
             self.df = df
             self.processor = processor
             self.max_target_length = max_target_length
@@ -162,7 +180,7 @@ def main():
             if file_name.endswith("jp"):
                 file_name = file_name + "g"
             # prepare image (i.e. resize + normalize)
-            image = Image.open(os.path.join(self.root_dir, file_name)).convert("RGB")
+            image = Image.open(os.path.join(self.samples_dir, file_name)).convert("RGB")
             pixel_values = self.processor(image, return_tensors="pt").pixel_values
             # add labels (input_ids) by encoding the text
             labels = self.processor.tokenizer(text, padding="max_length", max_length=self.max_target_length).input_ids
@@ -173,8 +191,9 @@ def main():
             return encoding
 
     processor = TrOCRProcessor.from_pretrained(model_args.model_name_or_path)
-    test_dataset = IAMDataset(root_dir=test_dir, df=df, processor=processor)
-
+    test_dataset = IAMDataset(
+        root_dir=data_args.datasets_dir, processor=processor, max_samples=data_args.max_eval_samples
+    )
     test_dataloader = DataLoader(test_dataset, batch_size=training_args.per_device_eval_batch_size)
 
     device = torch.device("cpu")
@@ -185,13 +204,9 @@ def main():
     # make sure vocab size is set correctly
     model.config.vocab_size = model.config.decoder.vocab_size
 
-    # set beam search parameters
+    # # set beam search parameters
     model.config.eos_token_id = processor.tokenizer.sep_token_id
-    model.config.max_length = 64
-    model.config.early_stopping = True
-    model.config.no_repeat_ngram_size = 3
-    model.config.length_penalty = 2.0
-    model.config.num_beams = 4
+    model.config.encoder.num_beams = data_args.num_beams
     model.to(device)
 
     cer = load_metric("cer")
@@ -230,7 +245,7 @@ def main():
             pixel_values = pixel_values.to(memory_format=torch.channels_last)
             if i >= optim_args.warmup_iter:
                 start = time.time()
-            outputs = model.generate(pixel_values)
+            outputs = model.generate(pixel_values, num_beams=data_args.num_beams)
             # measure elapsed time
             if i >= optim_args.warmup_iter:
                 batch_time.update(time.time() - start)
@@ -283,22 +298,30 @@ def main():
         # dynamic quantization will be added when torch FX is more mature
         if quant_approach != IncQuantizationMode.DYNAMIC:
             q8_config.set_config("model.framework", "pytorch_fx")
+        if quant_approach == IncQuantizationMode.STATIC:
+            q8_config.set_config("quantization.calibration.sampling_size", data_args.max_calibration_samples)
         q8_config.set_config("tuning.accuracy_criterion.higher_is_better", False)
         quantizer = IncQuantizer(q8_config, eval_func=eval_func, calib_dataloader=test_dataloader)
         optimizer = IncOptimizer(model, quantizer=quantizer)
         q_model = optimizer.fit()
+        torch.backends.quantized.engine = "onednn"
+        result_optimized_model = eval_func(q_model, 20)
+
+        # Save the resulting model and its corresponding configuration in the given directory
         optimizer.save_pretrained(training_args.output_dir)
 
-    if optim_args.verify_loading:
-        torch.backends.quantized.engine = "onednn"
+    if optim_args.apply_quantization and optim_args.verify_loading:
         print("loading int8 model...")
-        model = IncQuantizedModelForVision2Seq.from_pretrained(training_args.output_dir)
-        model.eval()
+        loaded_model = IncQuantizedModelForVision2Seq.from_pretrained(training_args.output_dir)
+        loaded_model.eval()
 
-    print("Running evaluation...")
-    final_score = eval_func(model, 20)
-
-    print("Character error rate on test set:", final_score)
+        print("Running evaluation on reloaded model...")
+        result_loaded_model = eval_func(loaded_model, 20)
+        print("Character error rate on test set:", result_loaded_model)
+        if result_loaded_model != result_optimized_model:
+            logger.error("The quantized model was not successfully loaded.")
+        else:
+            logger.info(f"The quantized model was successfully loaded.")
 
 
 def _mp_fn(index):
