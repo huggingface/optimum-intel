@@ -40,8 +40,8 @@ python run_trocr.py \
     --output_dir /tmp/trocr_output
 ```
 
-In order to apply dynamic, static or aware-training quantization, `quantization_approach` must be set to 
-respectively `dynamic`, `static` or `aware_training`.
+In order to apply dynamic and static quantization, `quantization_approach` must be set to 
+respectively `dynamic` or `static`.
 
 The configuration file containing all the information related to the model quantization objectives can be specified using respectively `quantization_config`. If not specified, the default
 [quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/quantization.yml) configuration files will be used.
