@@ -83,7 +83,7 @@ class OptimizationArguments:
     )
     quantization_approach: Optional[str] = field(
         default=None,
-        metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
+        metadata={"help": "Quantization approach. Supported approach are static and dynamic."},
     )
     quantization_config: Optional[str] = field(
         default=None,
