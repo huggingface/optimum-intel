@@ -36,6 +36,7 @@ python run_ocr.py \
     --datasets_dir IAM \
     --apply_quantization \
     --quantization_approach static \
+    --max_eval_samples 1000 \
     --verify_loading \
     --output_dir /tmp/trocr_output
 ```
