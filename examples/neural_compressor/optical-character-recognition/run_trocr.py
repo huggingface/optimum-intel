@@ -271,7 +271,7 @@ def main():
             q8_config.set_tolerance(optim_args.tolerance_criterion)
         # Set quantization approach if specified
         if optim_args.quantization_approach is not None:
-            supported_approach = {"static", "dynamic", "aware_training"}
+            supported_approach = {"static", "dynamic"}
             if optim_args.quantization_approach not in supported_approach:
                 raise ValueError(
                     "Unknown quantization approach. Supported approach are " + ", ".join(supported_approach)
