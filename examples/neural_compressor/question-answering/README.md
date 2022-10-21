@@ -33,7 +33,6 @@ python run_qa.py \
     --dataset_name squad \
     --apply_quantization \
     --quantization_approach static \
-    --do_train \
     --do_eval \
     --verify_loading \
     --output_dir /tmp/squad_output
