@@ -25,7 +25,7 @@ from datasets import Dataset, load_dataset
 from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, RandomSampler
-from transformers import PreTrainedModel, default_data_collator
+from transformers import DataCollator, PreTrainedModel, default_data_collator
 from transformers.onnx import FeaturesManager, OnnxConfig
 
 import openvino
@@ -89,6 +89,8 @@ class OVQuantizer(OptimumQuantizer):
         quantization_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 8,
+        data_collator: Optional[DataCollator] = None,
+        remove_unused_columns: bool = True,
     ):
         """
         Quantize a model given the optimization specifications defined in `quantization_config`.
@@ -104,13 +106,22 @@ class OVQuantizer(OptimumQuantizer):
                 The model file name to use when saving the model. Overwrites the default file name `"model.onnx"`.
             batch_size (`int`, defaults to 8):
                 The number of calibration samples to load per batch.
+            data_collator (`DataCollator`, *optional*):
+                The function to use to form a batch from a list of elements of the calibration dataset.
+            remove_unused_columns (`bool`, defaults to `True`):
+                Whether or not to remove the columns unused by the model forward method.
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         file_name = file_name if file_name is not None else OV_XML_FILE_NAME
         output_path = save_directory.joinpath(file_name)
         output_path = output_path.with_suffix(".xml").as_posix()
-        calibration_dataloader = self._get_calibration_dataloader(calibration_dataset, batch_size)
+        calibration_dataloader = self._get_calibration_dataloader(
+            calibration_dataset=calibration_dataset,
+            batch_size=batch_size,
+            remove_unused_columns=remove_unused_columns,
+            data_collator=data_collator,
+        )
         model_inputs = next(iter(calibration_dataloader))
         if quantization_config is None:
             logger.info(
@@ -233,8 +244,16 @@ class OVQuantizer(OptimumQuantizer):
 
         return calibration_dataset
 
-    def _get_calibration_dataloader(self, calibration_dataset: Dataset, batch_size: int) -> OVDataLoader:
-        calibration_dataset = self._remove_unused_columns(calibration_dataset)
+    def _get_calibration_dataloader(
+        self,
+        calibration_dataset: Dataset,
+        batch_size: int,
+        remove_unused_columns: bool,
+        data_collator: Optional[DataCollator] = None,
+    ) -> OVDataLoader:
+        data_collator = data_collator if data_collator is not None else default_data_collator
+        if remove_unused_columns:
+            calibration_dataset = self._remove_unused_columns(calibration_dataset)
         self.input_names = calibration_dataset.column_names
         generator = torch.Generator()
         generator.manual_seed(self.seed)
@@ -243,7 +262,7 @@ class OVQuantizer(OptimumQuantizer):
             calibration_dataset,
             batch_size=batch_size,
             sampler=sampler,
-            collate_fn=default_data_collator,
+            collate_fn=data_collator,
             drop_last=False,
         )
         return OVDataLoader(calibration_dataloader)

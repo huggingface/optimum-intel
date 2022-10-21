@@ -14,6 +14,8 @@
 
 from typing import Dict, List, Optional
 
+import torch
+
 from optimum.configuration_utils import BaseConfig
 
 
@@ -52,5 +54,13 @@ class OVConfig(BaseConfig):
         self.input_info = input_info
         self.optimum_version = kwargs.pop("optimum_version", None)
 
-    def add_input_info(self, model_inputs):
-        self.input_info = [{"sample_size": list(value.shape), "type": "long"} for name, value in model_inputs.items()]
+    def add_input_info(self, model_inputs: Dict):
+
+        self.input_info = [
+            {
+                "sample_size": list(value.shape),
+                "type": "long" if value.dtype is torch.int64 else "float",
+                "keyword": name,
+            }
+            for name, value in model_inputs.items()
+        ]
