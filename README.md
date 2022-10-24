@@ -41,9 +41,9 @@ cd <example-folder>
 pip install -r requirements.txt
 ```
 
-## How to use it?
+# How to use it?
 
-### Neural Compressor
+## Neural Compressor
 
 Here is an example on how to apply dynamic quantization on a DistilBERT fine-tuned on the SQuAD1.0 dataset.
 Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in this example.
@@ -96,7 +96,7 @@ You can load many more quantized models hosted on the hub under the Intel organi
 
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
 
-### OpenVINO
+## OpenVINO
 Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework for model optimization, quantization, and inference.
 
 #### OpenVINO inference example:
@@ -118,8 +118,8 @@ outputs = pipe_cls(text)
 #### Post-training quantization example:
 ```python
 from functools import partial
-from optimum.intel.openvino.quantization import OVQuantizer 
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, OVModelForSequenceClassification
+from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)    
@@ -153,8 +153,7 @@ import numpy as np
 from datasets import load_dataset, load_metric
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
 -from transformers import Trainer
-+from optimum.intel.openvino.trainer import OVTrainer
-+from optimum.intel.openvino import OVModelForSequenceClassification
++from optimum.intel.openvino import OVConfig, OVModelForSequenceClassification, OVTrainer
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)    
@@ -170,16 +169,21 @@ compute_metrics = lambda p: metric.compute(
 
 # The directory where the quantized model will be saved
 save_dir = "nncf_results"
+
+# Load the default quantization configuration detailing the quantization we wish to apply
++ov_config = OVConfig()
+
 -trainer = Trainer(
 +trainer = OVTrainer(
     model=model,
-    feature="sequence-classification",
     args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
     train_dataset=dataset["train"].select(range(300)),
     eval_dataset=dataset["validation"],
     compute_metrics=compute_metrics,
     tokenizer=tokenizer,
     data_collator=default_data_collator,
++   ov_config=ov_config,
++   feature="sequence-classification",
 )
 train_result = trainer.train()
 metrics = trainer.evaluate()
