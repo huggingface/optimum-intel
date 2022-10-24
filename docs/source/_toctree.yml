@@ -1,12 +1,12 @@
 - sections:
   - local: index
     title: 🤗 Optimum Intel
-  - local: quickstart
-    title: Quickstart
   - sections:
     - local: optimization
       title: Optimization
-    - local: trainer
-      title: Trainer
     title: Neural Compressor
+  - sections:
+    - local: distributed_training
+      title: Distributed Training
+    title: Distributed TrainingS
   title: Optimum Intel
