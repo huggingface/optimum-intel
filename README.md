@@ -8,9 +8,9 @@
 
 Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) is an open-source library enabling the usage of the most popular compression techniques such as quantization, pruning and knowledge distillation. It supports automatic accuracy-driven tuning strategies in order for users to easily generate quantized model. The users can easily apply static, dynamic and aware-training quantization approaches while giving an expected accuracy criteria. It also supports different weight pruning techniques enabling the creation of pruned model giving a predefined sparsity target.
 
-[OpenVINO](https://docs.openvino.ai/latest/index.html) is an open-source toolkit enabling model optimization and providing high-performance inference solutions for XPUs including various types of CPUs, GPUs, and special DL inference accelerators.
+[OpenVINO](https://docs.openvino.ai/latest/index.html) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators. It is supplied with a set of tools to optimize and quantize models. Optimum Intel provides a simple interface to optimize Transformer models, convert them to OpenVINO Intermediate Representation format and to run inference using OpenVINO.
 
-## Install
+## Installation
 
 🤗 Optimum Intel can be installed using `pip` as follows:
 
@@ -25,10 +25,10 @@ pip install git+https://github.com/huggingface/optimum-intel.git
 ```
 
 To install the latest release of this package with the corresponding required dependencies, you can do respectively:
-| Accelerator | Installation |
-|:------------|:---------------------------------------------|
-| [OpenVINO](https://docs.openvino.ai/latest/index.html)| `python -m pip install optimum-intel[openvino]` |
-| Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum-intel[neural-compressor]`|
+| Accelerator                                                                                                      | Installation                                            |
+|:-----------------------------------------------------------------------------------------------------------------|:--------------------------------------------------------|
+| [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum-intel[neural-compressor]`|
+| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum-intel[openvino,nncf]`    |
 
 ## Running the examples
 
@@ -97,8 +97,9 @@ You can load many more quantized models hosted on the hub under the Intel organi
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
 
 ### OpenVINO
+Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework for model optimization, quantization, and inference.
 
-Here is an example on how to perform inference with OpenVINO Runtime:
+#### OpenVINO inference example:
 
 ```diff
 -from transformers import AutoModelForSequenceClassification
@@ -113,3 +114,78 @@ pipe_cls = pipeline("text-classification", model=model, tokenizer=tokenizer)
 text = "He's a dreadful magician."
 outputs = pipe_cls(text)
 ```
+
+#### Post-training quantization example:
+```python
+from functools import partial
+from optimum.intel.openvino.quantization import OVQuantizer 
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, OVModelForSequenceClassification
+
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+model = AutoModelForSequenceClassification.from_pretrained(model_id)    
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+def preprocess_fn(examples, tokenizer):
+    return tokenizer(
+        examples["sentence"], padding=True, truncation=True, max_length=128
+    )
+
+quantizer = OVQuantizer.from_pretrained(model)
+calibration_dataset = quantizer.get_calibration_dataset(
+    "glue",
+    dataset_config_name="sst2",
+    preprocess_function=partial(preprocess_fn, tokenizer=tokenizer),
+    num_samples=100,
+    dataset_split="train",
+    preprocess_batch=True,
+)
+# The directory where the quantized model will be saved
+save_dir = "nncf_results"
+# Apply static quantization and save the resulting model in the OpenVINO IR format
+quantizer.quantize(calibration_dataset=calibration_dataset, save_directory=save_dir)
+# Load the quantized model
+optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
+```
+
+#### Quantization-aware training example:
+
+```diff
+import numpy as np
+from datasets import load_dataset, load_metric
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
+-from transformers import Trainer
++from optimum.intel.openvino.trainer import OVTrainer
++from optimum.intel.openvino import OVModelForSequenceClassification
+
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+model = AutoModelForSequenceClassification.from_pretrained(model_id)    
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+dataset = load_dataset("glue", "sst2")
+dataset = dataset.map(
+    lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
+)
+metric = load_metric("accuracy")
+compute_metrics = lambda p: metric.compute(
+    predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
+)
+
+# The directory where the quantized model will be saved
+save_dir = "nncf_results"
+-trainer = Trainer(
++trainer = OVTrainer(
+    model=model,
+    feature="sequence-classification",
+    args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
+    train_dataset=dataset["train"].select(range(300)),
+    eval_dataset=dataset["validation"],
+    compute_metrics=compute_metrics,
+    tokenizer=tokenizer,
+    data_collator=default_data_collator,
+)
+train_result = trainer.train()
+metrics = trainer.evaluate()
+trainer.save_model()
+
++optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
+```
+
+You can find more OpenVINO examples in the corresponding Optimum Intel documentation.
