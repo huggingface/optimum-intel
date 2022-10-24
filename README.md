@@ -41,7 +41,7 @@ cd <example-folder>
 pip install -r requirements.txt
 ```
 
-## How to use it?
+# How to use it?
 
 ## Neural Compressor
 
