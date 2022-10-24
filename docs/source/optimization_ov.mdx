@@ -89,12 +89,13 @@ compute_metrics = lambda p: metric.compute(predictions=np.argmax(p.predictions, 
 ```
 ```diff
 -from transformers import Trainer
-+from optimum.intel.openvino.trainer import OVTrainer
++from optimum.intel.openvino.trainer import OVConfig, OVTrainer
 
 # Load the default quantization configuration detailing the quantization we wish to apply
 +ov_config = OVConfig()
 
-trainer = OVTrainer(
+-trainer = Trainer(
++trainer = OVTrainer(
     model=model,
     args=training_args,
     train_dataset=train_dataset,
