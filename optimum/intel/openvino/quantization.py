@@ -22,9 +22,10 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 import torch
 import transformers
 from datasets import Dataset, load_dataset
+from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, RandomSampler
-from transformers import PreTrainedModel, default_data_collator
+from transformers import DataCollator, PreTrainedModel, default_data_collator
 from transformers.onnx import FeaturesManager, OnnxConfig
 
 import openvino
@@ -39,11 +40,11 @@ from openvino.runtime import Core
 from optimum.quantization_base import OptimumQuantizer
 
 from .configuration import OVConfig
-from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
+from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
 
-MAX_ONNX_OPSET = 10
-
+_openvino_version_str = openvino.runtime.get_version()
+_openvino_version = version.parse(_openvino_version_str.split("-")[0])
 
 core = Core()
 
@@ -88,6 +89,8 @@ class OVQuantizer(OptimumQuantizer):
         quantization_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 8,
+        data_collator: Optional[DataCollator] = None,
+        remove_unused_columns: bool = True,
     ):
         """
         Quantize a model given the optimization specifications defined in `quantization_config`.
@@ -103,13 +106,22 @@ class OVQuantizer(OptimumQuantizer):
                 The model file name to use when saving the model. Overwrites the default file name `"model.onnx"`.
             batch_size (`int`, defaults to 8):
                 The number of calibration samples to load per batch.
+            data_collator (`DataCollator`, *optional*):
+                The function to use to form a batch from a list of elements of the calibration dataset.
+            remove_unused_columns (`bool`, defaults to `True`):
+                Whether or not to remove the columns unused by the model forward method.
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         file_name = file_name if file_name is not None else OV_XML_FILE_NAME
         output_path = save_directory.joinpath(file_name)
         output_path = output_path.with_suffix(".xml").as_posix()
-        calibration_dataloader = self._get_calibration_dataloader(calibration_dataset, batch_size)
+        calibration_dataloader = self._get_calibration_dataloader(
+            calibration_dataset=calibration_dataset,
+            batch_size=batch_size,
+            remove_unused_columns=remove_unused_columns,
+            data_collator=data_collator,
+        )
         model_inputs = next(iter(calibration_dataloader))
         if quantization_config is None:
             logger.info(
@@ -149,13 +161,14 @@ class OVQuantizer(OptimumQuantizer):
 
     @staticmethod
     def _onnx_export(model: NNCFNetwork, config: OnnxConfig, model_inputs: Dict, f: Union[str, io.BytesIO]):
-        # if onnx_config.default_onnx_opset > MAX_ONNX_OPSET:
-        if config.default_onnx_opset > 11:
+        if config.default_onnx_opset > MAX_ONNX_OPSET_2022_2_0 + 1:
             logger.warning(
                 f"The minimal ONNX opset for the given model architecture is {config.default_onnx_opset}, currently "
-                f"OpenVINO only supports opset inferior or equal to {MAX_ONNX_OPSET} which could result in "
+                f"OpenVINO only supports opset inferior or equal to {MAX_ONNX_OPSET_2022_2_0} which could result in "
                 "export issue."
             )
+        max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
+        opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
         with torch.no_grad():
             # Disable node additions to be exported in the graph
             model.disable_dynamic_graph_building()
@@ -167,7 +180,7 @@ class OVQuantizer(OptimumQuantizer):
                 output_names=list(config.outputs.keys()),
                 dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
                 do_constant_folding=True,
-                opset_version=10,
+                opset_version=opset,
             )
             model.enable_dynamic_graph_building()
 
@@ -180,6 +193,8 @@ class OVQuantizer(OptimumQuantizer):
                 self.feature = "default"
             elif self.feature is None:
                 raise ValueError("The feature could not be extracted and needs to be specified for the ONNX export.")
+        if self.feature in ["seq2seq-lm", "translation", "summarization"]:
+            raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(
         self,
@@ -229,8 +244,16 @@ class OVQuantizer(OptimumQuantizer):
 
         return calibration_dataset
 
-    def _get_calibration_dataloader(self, calibration_dataset: Dataset, batch_size: int) -> OVDataLoader:
-        calibration_dataset = self._remove_unused_columns(calibration_dataset)
+    def _get_calibration_dataloader(
+        self,
+        calibration_dataset: Dataset,
+        batch_size: int,
+        remove_unused_columns: bool,
+        data_collator: Optional[DataCollator] = None,
+    ) -> OVDataLoader:
+        data_collator = data_collator if data_collator is not None else default_data_collator
+        if remove_unused_columns:
+            calibration_dataset = self._remove_unused_columns(calibration_dataset)
         self.input_names = calibration_dataset.column_names
         generator = torch.Generator()
         generator.manual_seed(self.seed)
@@ -239,7 +262,7 @@ class OVQuantizer(OptimumQuantizer):
             calibration_dataset,
             batch_size=batch_size,
             sampler=sampler,
-            collate_fn=default_data_collator,
+            collate_fn=data_collator,
             drop_last=False,
         )
         return OVDataLoader(calibration_dataloader)

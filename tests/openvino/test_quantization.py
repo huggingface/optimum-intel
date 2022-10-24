@@ -16,21 +16,24 @@ import tempfile
 import unittest
 from functools import partial
 
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+import numpy as np
+from datasets import load_dataset, load_metric
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
 
 from optimum.intel.openvino.configuration import OVConfig
 from optimum.intel.openvino.modeling import OVModelForSequenceClassification
 from optimum.intel.openvino.quantization import OVQuantizer
+from optimum.intel.openvino.trainer import OVTrainer
 from parameterized import parameterized
 
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("distilbert-base-uncased-finetuned-sst-2-english", 44),
+        ("distilbert-base-uncased-finetuned-sst-2-english", 50, 38),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_static_quantization(self, model_name, expected_fake_quantize):
+    def test_static_quantization(self, model_name, expected_fake_quantize, expected_int8):
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
 
@@ -47,18 +50,73 @@ class OVQuantizerTest(unittest.TestCase):
             )
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
 
-            ov_model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            num_int8 = 0
             num_fake_quantize = 0
-            for elem in ov_model.model.get_ops():
+            for elem in model.model.get_ops():
                 if "FakeQuantize" in elem.name:
                     num_fake_quantize += 1
+                if "8" in elem.get_element_type().get_type_name():
+                    num_int8 += 1
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
+            self.assertEqual(expected_int8, num_int8)
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
-            outputs = ov_model(**tokens)
+            outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
 
             # Verify that that the configuration is correctly saved and loaded
             expected_config = OVConfig()
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(expected_config.to_dict()["compression"], loaded_config.to_dict()["compression"])
+
+
+class OVTrainerTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-uncased", 50, 38),)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    def test_aware_training_quantization(self, model_name, expected_fake_quantize, expected_int8):
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        ov_config = OVConfig()
+        dataset = load_dataset("glue", "sst2")
+        dataset = dataset.map(
+            lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
+        )
+        train_dataset = dataset["train"].select(range(16))
+        eval_dataset = dataset["validation"].select(range(16))
+        metric = load_metric("glue", "sst2")
+        compute_metrics = lambda p: metric.compute(
+            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = OVTrainer(
+                model=model,
+                ov_config=ov_config,
+                feature="sequence-classification",
+                args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                compute_metrics=compute_metrics,
+                tokenizer=tokenizer,
+                data_collator=default_data_collator,
+            )
+            train_result = trainer.train()
+            metrics = trainer.evaluate()
+            trainer.save_model()
+
+            model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            num_int8 = 0
+            num_fake_quantize = 0
+            for elem in model.model.get_ops():
+                if "FakeQuantize" in elem.name:
+                    num_fake_quantize += 1
+                if "8" in elem.get_element_type().get_type_name():
+                    num_int8 += 1
+            self.assertEqual(expected_fake_quantize, num_fake_quantize)
+            self.assertEqual(expected_int8, num_int8)
+
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            outputs = model(**tokens)
+            self.assertTrue("logits" in outputs)

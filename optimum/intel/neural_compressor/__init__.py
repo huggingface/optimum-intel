@@ -16,6 +16,16 @@ from .configuration import IncConfig, IncDistillationConfig, IncPruningConfig, I
 from .distillation import IncDistiller
 from .optimization import IncOptimizer
 from .pruning import IncPruner, IncPruningMode
-from .quantization import IncQuantizationMode, IncQuantizer
+from .quantization import (
+    IncQuantizationMode,
+    IncQuantizedModelForCausalLM,
+    IncQuantizedModelForMaskedLM,
+    IncQuantizedModelForMultipleChoice,
+    IncQuantizedModelForQuestionAnswering,
+    IncQuantizedModelForSeq2SeqLM,
+    IncQuantizedModelForSequenceClassification,
+    IncQuantizedModelForTokenClassification,
+    IncQuantizer,
+)
 from .trainer import IncTrainer
 from .trainer_seq2seq import IncSeq2SeqTrainer
