@@ -29,7 +29,8 @@ from optimum.intel.openvino import OVConfig, OVQuantizer
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-save_dir = "./quantized_model"
+# The directory where the quantized model will be saved
+save_dir = "ptq_model"
 
 def preprocess_function(examples, tokenizer):
     return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
@@ -80,6 +81,8 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer, Trai
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
+# The directory where the quantized model will be saved
+save_dir = "qat_model"
 dataset = load_dataset("glue", "sst2")
 dataset = dataset.map(
     lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
@@ -87,6 +90,7 @@ dataset = dataset.map(
 metric = load_metric("accuracy")
 compute_metrics = lambda p: metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
 ```
+
 ```diff
 -from transformers import Trainer
 +from optimum.intel.openvino.trainer import OVConfig, OVTrainer
@@ -97,12 +101,12 @@ compute_metrics = lambda p: metric.compute(predictions=np.argmax(p.predictions, 
 -trainer = Trainer(
 +trainer = OVTrainer(
     model=model,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
+    args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
+    train_dataset=dataset["train"].select(range(300)),
+    eval_dataset=dataset["validation"],
     compute_metrics=compute_metrics,
     tokenizer=tokenizer,
-    data_collator=data_collator,
+    data_collator=default_data_collator,
 +   ov_config=ov_config,
 +   feature="sequence-classification",
 )
