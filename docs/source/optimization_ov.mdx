@@ -59,7 +59,7 @@ quantizer.quantize(
 tokenizer.save_pretrained(save_dir)
 ```
 
-## During training optimization
+## While training optimization
 
 Quantization aware training (QAT) can also be applied in order to simulate the effects of quantization during training, in order to alleviate its effects on the model's accuracy. In the case where post-training quantization results in an import accuracy degradation, QAT can be used instead.
 Here is an example on how to fine-tune a DistilBERT on the sst-2 task while applying quantization aware training (QAT).
