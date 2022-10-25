@@ -4,6 +4,8 @@
   - sections:
     - local: optimization_inc
       title: Optimization
+    - local: distributed_training
+      title: Distributed Training
     - local: reference_inc
       title: Reference
     title: Neural Compressor
