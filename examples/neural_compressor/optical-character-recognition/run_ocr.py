@@ -304,7 +304,6 @@ def main():
         quantizer = IncQuantizer(q8_config, eval_func=eval_func, calib_dataloader=test_dataloader)
         optimizer = IncOptimizer(model, quantizer=quantizer)
         q_model = optimizer.fit()
-        torch.backends.quantized.engine = "onednn"
         result_optimized_model = eval_func(q_model, 20)
 
         # Save the resulting model and its corresponding configuration in the given directory
