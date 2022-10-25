@@ -637,13 +637,10 @@ class IncTrainer(Trainer):
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
-        if self.model is None:
-            return None
-        if self.model.config and self.model.config.torch_dtype == "int8":
+        if getattr(self.model.config, "torch_dtype", None) == "int8":
             if self.model.config.framework in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
                 logger.warn(
                     f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
-
                 )
                 self.use_cpu_amp = False
         return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
