@@ -74,8 +74,7 @@ class DataTrainingArguments:
         },
     )
     max_calibration_samples: Optional[int] = field(
-        default=100,
-        metadata={"help": ("The Number of samples to calibration quantization sacle and zero point.")}
+        default=100, metadata={"help": ("The Number of samples to calibration quantization sacle and zero point.")}
     )
     max_eval_samples: Optional[int] = field(
         default=None,
