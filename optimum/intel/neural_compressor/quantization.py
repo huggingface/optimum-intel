@@ -32,6 +32,7 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
+    AutoModelForVision2Seq,
     XLNetLMHeadModel,
 )
 from transformers.models.auto.auto_factory import _get_model_class
@@ -371,3 +372,8 @@ class IncQuantizedModelForMaskedLM(IncQuantizedModel):
 class IncQuantizedModelForXLNetLM(IncQuantizedModel):
 
     TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel
+
+
+class IncQuantizedModelForVision2Seq(IncQuantizedModel):
+
+    TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq
