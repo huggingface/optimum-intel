@@ -18,6 +18,8 @@ limitations under the License.
 
 🤗 Optimum Intel provides an `optimum.openvino` package that enables you to apply quantization on many model hosted on the 🤗 hub using the [NNCF](https://docs.openvino.ai/2022.1/docs_nncf_introduction.html) framework.
 
+## Post-training optimization
+
 Post-training static quantization introduces an additional calibration step where data is fed through the network in order to compute the activations quantization parameters.
 Here is how to apply static quantization on a fine-tuned DistilBERT:
 
@@ -57,18 +59,7 @@ quantizer.quantize(
 tokenizer.save_pretrained(save_dir)
 ```
 
-After applying static quantization on our model, we can then easily load it with our [OVModel](https://huggingface.co/docs/optimum/intel_optimization_ov) classes and perform inference with OpenVINO Runtime.
-
-```python
-from transformers import pipeline
-from optimum.intel.openvino import OVModelForSequenceClassification
-
-ov_model = OVModelForSequenceClassification.from_pretrained(save_dir)
-cls_pipe = pipeline("text-classification", model=ov_model, tokenizer=tokenizer)
-text = "He's a dreadful magician."
-outputs = cls_pipe(text)
-[{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
-```
+## During training optimization
 
 Quantization aware training (QAT) can also be applied in order to simulate the effects of quantization during training, in order to alleviate its effects on the model's accuracy. In the case where post-training quantization results in an import accuracy degradation, QAT can be used instead.
 Here is an example on how to fine-tune a DistilBERT on the sst-2 task while applying quantization aware training (QAT).
@@ -116,4 +107,20 @@ train_result = trainer.train()
 metrics = trainer.evaluate()
 # Export the quantized model to OpenVINO IR format and save it
 trainer.save_model()
+```
+
+## Inference with Transformers pipeline
+
+After applying quantization on our model, we can then easily load it with our [`OVModelForXxx`](https://huggingface.co/docs/optimum/intel_inference#optimum-inference-with-openvino) classes and perform inference with OpenVINO Runtime using the Transformers [pipelines](https://huggingface.co/docs/transformers/main/en/main_classes/pipelines).
+
+```python
+from transformers import pipeline
+from optimum.intel.openvino import OVModelForSequenceClassification
+
+ov_model = OVModelForSequenceClassification.from_pretrained(save_dir)
+cls_pipe = pipeline("text-classification", model=ov_model, tokenizer=tokenizer)
+text = "He's a dreadful magician."
+outputs = cls_pipe(text)
+
+[{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
 ```
