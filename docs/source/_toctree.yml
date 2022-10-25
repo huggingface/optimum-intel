@@ -2,6 +2,8 @@
   - local: index
     title: 🤗 Optimum Intel
   - sections:
+    - local: distributed_training
+      title: Distributed Training
     - local: optimization
       title: Optimization
     title: Neural Compressor
