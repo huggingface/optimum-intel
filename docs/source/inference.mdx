@@ -1,0 +1,109 @@
+<!--Copyright 2022 The HuggingFace Team. All rights reserved.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+-->
+
+# Optimum Inference with OpenVINO
+
+Optimum Intel can be used to load optimized models from the [Hugging Face Hub](hf.co/models) and create pipelines to run inference with OpenVINO Runtime without rewriting your APIs.
+
+## Switching from Transformers to Optimum Inference
+
+The Optimum Inference models are API compatible with Hugging Face Transformers models. This means you can just replace your `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
+To perform inference from a vanilla Transformers models, which will be later converted to an OpenVINO IR, set `from_transformers=True` when loading the model with the `from_pretrained()` method. 
+
+Here is an example on how to perform inference with OpenVINO Runtime for a text classification class:
+
+```diff
+-from transformers import AutoModelForSequenceClassification
++from optimum.intel.openvino import OVModelForSequenceClassification
+from transformers import AutoTokenizer, pipeline
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+-model = AutoModelForSequenceClassification.from_pretrained(model_id)
++model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+cls_pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
+result = cls_pipe("He's a dreadful magician.")
+[{'label': 'NEGATIVE', 'score': 0.9919503927230835}]
+```
+
+To easily save the resulting model, you can use the `save_pretrained()` method, which will save both the BIN and XML files describing the graph.
+
+```python
+# Save the exported model
+save_directory = "a_local_path"
+model.save_pretrained(save_directory)
+tokenizer.save_pretrained(save_directory)
+```
+
+By default, `OVModelForXxx` support dynamic shapes, enabling inputs of every shapes. To decrease latency, static shapes can be enabled by giving the desired inputs shapes.
+
+```python
+# Fix the batch size to 1 and the sequence length to 9
+model.reshape(1, 9)
+```
+
+Currently, OpenVINO only supports static shapes for inference on GPU. FP16 precision can also be enabled in order to further decrease latency.
+
+```python
+# Fix the batch size to 1 and the sequence length to 9
+model.reshape(1, 9)
+# Enable FP16 precision
+model.half()
+model.to("GPU")
+```
+
+When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape. When instantiating your pipeline, you can specify the maximum total input sequence length after tokenization in order for shorter sequences to be padded and for longer sequences to be truncated.
+
+```python
+from datasets import load_dataset
+from transformers import AutoTokenizer, pipeline
+from evaluate import evaluator
+from optimum.intel.openvino.modeling import OVModelForQuestionAnswering
+
+model_id = "distilbert-base-cased-distilled-squad"
+model = OVModelForQuestionAnswering.from_pretrained(model_id, from_transformers=True)
+model.reshape(1, 384)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+eval_dataset = load_dataset("squad", split="validation").select(range(50))
+eval = evaluator("question-answering")
+qa_pipe = pipeline(
+    "question-answering",
+    model=model,
+    tokenizer=tokenizer,
+    max_seq_len=384,
+    padding="max_length",
+    truncation=True,
+)
+metric = eval.compute(model_or_pipeline=qa_pipe, data=eval_dataset, metric="squad")
+```
+
+## Run inference for sequence-to-sequence models
+
+Sequence-to-sequence (Seq2Seq) models, that generate a new sequence from an input, can also be used when running inference with OpenVINO. When Seq2Seq models are exported to the OpenVINO IR, they are decomposed into two parts : the encoder and the "decoder" (which actually consists of the decoder with the language modeling head), that are later combined during inference.
+To leverage the pre-computed key/values hidden-states to speed up sequential decoding, simply pass `use_cache=True` to the `from_pretrained()` method. An additional model component will be exported: the "decoder" with pre-computed key/values as one of its inputs.
+This specific export comes from the fact that during the first pass, the decoder has no pre-computed key/values hidden-states, while during the rest of the generation past key/values will be used to speed up sequential decoding.
+Here is an example on how you can run inference for a translation task using an MarianMT model and then export it to the OpenVINO IR:
+
+```python
+from transformers import AutoTokenizer, pipeline
+from optimum.intel.openvino import OVModelForSeq2SeqLM
+
+model_id = "Helsinki-NLP/opus-mt-en-fr"
+model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+translation_pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
+text = "He never went out without a book under his arm, and he often came back with two."
+result = translation_pipe(text)
+
+# Save the exported model
+save_directory = "a_local_path"
+model.save_pretrained(save_directory)
+tokenizer.save_pretrained(save_directory)
+
+[{'translation_text': "Il n'est jamais sorti sans un livre sous son bras, et il est souvent revenu avec deux."}]
+```
