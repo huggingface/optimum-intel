@@ -28,6 +28,7 @@ from packaging import version
 
 # from packaging import version
 from torch import nn
+from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
@@ -95,7 +96,6 @@ class IncTrainer(Trainer):
                 Additional keyword arguments used to hide deprecated arguments
         """
         resume_from_checkpoint = None if not resume_from_checkpoint else resume_from_checkpoint
-
         # memory metrics - must set up as early as possible
         self._memory_tracker.start()
 
@@ -630,3 +630,17 @@ class IncTrainer(Trainer):
             distillation_loss = loss if distillation_loss is None else distillation_loss + loss
         distillation_loss *= self.agent.criterion.temperature**2
         return distillation_loss
+
+    def evaluate(
+        self,
+        eval_dataset: Optional[Dataset] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+    ) -> Dict[str, float]:
+        if getattr(self.model.config, "torch_dtype", None) == "int8":
+            if self.model.config.framework in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
+                logger.warn(
+                    f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
+                )
+                self.use_cpu_amp = False
+        return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
