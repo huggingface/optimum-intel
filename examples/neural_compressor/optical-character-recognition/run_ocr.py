@@ -1,10 +1,9 @@
-import itertools
 import logging
 import os
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Iterable, Iterator, Optional
+from typing import Optional
 
 import pandas as pd
 import torch
@@ -76,7 +75,7 @@ class DataTrainingArguments:
     )
     max_calibration_samples: Optional[int] = field(
         default=100,
-        metadata={"help": ("Number of samples to calibration quantization sacle and zero point.")},
+        metadata={"help": ("The Number of samples to calibration quantization sacle and zero point.")}
     )
     max_eval_samples: Optional[int] = field(
         default=None,
@@ -264,7 +263,10 @@ def main():
         print("Batch size = %d" % training_args.per_device_eval_batch_size)
         if training_args.per_device_eval_batch_size == 1:
             print("Latency: %.3f ms" % (batch_time.avg * 1000))
-        print("Throughput: %.3f images/sec" % (training_args.per_device_eval_batch_size / batch_time.avg))
+        if batch_time.avg == 0:
+            print("The time of evaluation is 0, Please check it.")
+        else:
+            print("Throughput: %.3f images/sec" % (training_args.per_device_eval_batch_size / batch_time.avg))
 
         # TODO: this should also be done with the ProgressMeter
         print("cer: {score:.5f}".format(score=(score)))
@@ -272,7 +274,6 @@ def main():
         return score
 
     if optim_args.apply_quantization:
-        torch.backends.quantized.engine = "onednn"
         default_config = os.path.join(
             os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir)), "config"
         )
@@ -299,7 +300,7 @@ def main():
         if quant_approach != IncQuantizationMode.DYNAMIC:
             q8_config.set_config("model.framework", "pytorch_fx")
         if quant_approach == IncQuantizationMode.STATIC:
-            q8_config.set_config("quantization.calibration.sampling_size", data_args.max_calibration_samples)
+            q8_config.set_config("quantization.calibration.sampling_size", [data_args.max_calibration_samples])
         q8_config.set_config("tuning.accuracy_criterion.higher_is_better", False)
         quantizer = IncQuantizer(q8_config, eval_func=eval_func, calib_dataloader=test_dataloader)
         optimizer = IncOptimizer(model, quantizer=quantizer)
