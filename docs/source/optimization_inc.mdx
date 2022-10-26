@@ -65,7 +65,7 @@ save_dir = "./quantized_model"
 optimizer.save_pretrained(save_dir)
 ```
 
-## During training optimization
+## While training optimization
 
 The [`IncTrainer`] class provides an API to train your model while combining different compression techniques such as knowledge distillation, pruning and quantization.
 The `IncTrainer` is very similar to the 🤗 Transformers [`Trainer`](https://huggingface.co/docs/transformers/main/en/main_classes/trainer#trainer), which can be replaced with minimal changes in your code.
