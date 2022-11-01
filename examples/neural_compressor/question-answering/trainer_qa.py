@@ -17,8 +17,12 @@ A subclass of `IncTrainer` specific to Question-Answering tasks
 """
 
 from transformers.trainer_utils import PredictionOutput
+from transformers.utils import logging
 
 from optimum.intel.neural_compressor.trainer import IncTrainer
+
+
+logger = logging.get_logger(__name__)
 
 
 class QuestionAnsweringIncTrainer(IncTrainer):
@@ -31,6 +35,12 @@ class QuestionAnsweringIncTrainer(IncTrainer):
         eval_dataset = self.eval_dataset if eval_dataset is None else eval_dataset
         eval_dataloader = self.get_eval_dataloader(eval_dataset)
         eval_examples = self.eval_examples if eval_examples is None else eval_examples
+        if hasattr(self.model, "config") and getattr(self.model.config, "torch_dtype", None) == "int8":
+            if self.model.config.framework in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
+                logger.warn(
+                    f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
+                )
+                self.use_cpu_amp = False
 
         # Temporarily disable metric computation, we will do it in the loop here.
         compute_metrics = self.compute_metrics
