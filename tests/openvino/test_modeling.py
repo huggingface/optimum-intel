@@ -99,7 +99,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         text = "This restaurant is awesome"
         outputs = pipe(text)
         self.assertTrue(model.is_dynamic)
-        self.assertEqual(pipe.device, model._device)
+        self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertIsInstance(outputs[0]["label"], str)
         if model_arch == "bert":
@@ -153,7 +153,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         question = "What's my name?"
         context = "My Name is Arthur and I live in Lyon."
         outputs = pipe(question, context)
-        self.assertEqual(pipe.device, model._device)
+        self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
         gc.collect()
@@ -206,7 +206,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
         outputs = pipe("My Name is Arthur and I live in Lyon.")
-        self.assertEqual(pipe.device, model._device)
+        self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
         gc.collect()
 
@@ -244,7 +244,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
         outputs = pipe("My Name is Arthur and I live in Lyon.")
-        self.assertEqual(pipe.device, model._device)
+        self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(all(isinstance(item, float) for item in row) for row in outputs[0]))
         gc.collect()
 
@@ -276,7 +276,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         outputs = pipe(f"This is a sample", max_length=10)
-        self.assertEqual(pipe.device, model._device)
+        self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(["This is a sample" in item["generated_text"] for item in outputs]))
         gc.collect()
 
@@ -312,7 +312,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
         outputs = pipe(f"This is a {tokenizer.mask_token}.")
-        self.assertEqual(pipe.device, model._device)
+        self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
         gc.collect()
 
@@ -346,7 +346,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
         outputs = pipe("http://images.cocodataset.org/val2017/000000039769.jpg")
-        self.assertEqual(pipe.device, model._device)
+        self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
         gc.collect()
@@ -399,21 +399,21 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
         text = "This is a test"
         outputs = pipe(text)
-        self.assertEqual(pipe.device, model._device)
+        self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
 
         # Summarization
         pipe = pipeline("summarization", model=model, tokenizer=tokenizer)
         text = "This is a test"
         outputs = pipe(text)
-        self.assertEqual(pipe.device, model._device)
+        self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["summary_text"], str)
 
         # Translation
         pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
         text = "This is a test"
         outputs = pipe(text)
-        self.assertEqual(pipe.device, model._device)
+        self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["translation_text"], str)
 
         gc.collect()

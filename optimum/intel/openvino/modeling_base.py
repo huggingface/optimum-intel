@@ -60,13 +60,13 @@ class OVBaseModel(OptimizedModel):
     def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):
         self.config = config
         self.model_save_dir = kwargs.get("model_save_dir")
-        self.device = kwargs.get("device", "CPU")
+        self._device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
         cache_dir = Path(self.model_save_dir).joinpath("model_cache")
         cache_dir.mkdir(parents=True, exist_ok=True)
         self.ov_config["CACHE_DIR"] = str(cache_dir)
-        if "GPU" in self.device and self.is_dynamic:
+        if "GPU" in self._device and self.is_dynamic:
             raise ValueError(
                 "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
             )
@@ -245,7 +245,7 @@ class OVBaseModel(OptimizedModel):
     def _create_inference_request(self):
         if self.request is None:
             logger.info("Compiling the model and creating the inference request ...")
-            compiled_model = core.compile_model(self.model, self.device, self.ov_config)
+            compiled_model = core.compile_model(self.model, self._device, self.ov_config)
             self.request = compiled_model.create_infer_request()
 
     def _reshape(
@@ -296,7 +296,7 @@ class OVBaseModel(OptimizedModel):
         return self
 
     def _ensure_supported_device(self, device: str = None):
-        device = device if device is not None else self.device
+        device = device if device is not None else self._device
         if device not in _SUPPORTED_DEVICES:
             raise ValueError(f"Unknown device: {device}. Expected one of {_SUPPORTED_DEVICES}.")
 
