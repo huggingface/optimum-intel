@@ -148,14 +148,14 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 The path to a directory in which a downloaded pretrained model configuration should be cached if the
                 standard cache should not be used.
             encoder_file_name(`str`, *optional*):
-                The encoder model file name. Overwrites the default file name ov_encoder_model.xml and allows one to
+                The encoder model file name. Overwrites the default file name openvino_encoder_model.xml and allows one to
                 load the encoder model with a different name.
             decoder_file_name(`str`, *optional*):
-                The decoder model file name. Overwrites the default file name ov_decoder_model.xml and allows one to
+                The decoder model file name. Overwrites the default file name openvino_decoder_model.xml and allows one to
                 load the decoder model with a different name.
             decoder_with_past_file_name(`str`, *optional*):
-                The decoder with past key values model file name overwriting the default file name ov_decoder_with_past_model.xml,
-                allowing to load the decoder model with a different name.
+                The decoder with past key values model file name overwriting the default file name
+                openvino_decoder_with_past_model.xml, allowing to load the decoder model with a different name.
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
