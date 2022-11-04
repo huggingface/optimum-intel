@@ -42,7 +42,7 @@ from transformers.utils.versions import require_version
 
 import neural_compressor
 from huggingface_hub import hf_hub_download
-from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
+from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig, get_torch_version
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization
@@ -91,7 +91,6 @@ class IncQuantizer:
         self.approach = IncQuantizationMode(self.config.usr_cfg.quantization.approach)
         self.eval_func = eval_func
         self.train_func = train_func
-
         if calib_dataloader is not None:
             calib_dataloader = IncDataLoader.from_pytorch_dataloader(calib_dataloader)
         self.calib_dataloader = calib_dataloader
