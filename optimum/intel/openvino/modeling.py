@@ -96,10 +96,10 @@ class OVModel(OVBaseModel):
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
-        self._device = torch.device("cpu")
+        self.device = torch.device("cpu")
 
     def to(self, device: str):
-        self.device = device
+        self._device = device
         self.request = None
         return self
 
@@ -164,7 +164,7 @@ class OVModelForSequenceClassification(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self._device)
+        logits = torch.from_numpy(outputs["logits"]).to(self.device)
         return SequenceClassifierOutput(logits=logits)
 
 
@@ -226,8 +226,8 @@ class OVModelForQuestionAnswering(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        start_logits = torch.from_numpy(outputs["start_logits"]).to(self._device)
-        end_logits = torch.from_numpy(outputs["end_logits"]).to(self._device)
+        start_logits = torch.from_numpy(outputs["start_logits"]).to(self.device)
+        end_logits = torch.from_numpy(outputs["end_logits"]).to(self.device)
         return QuestionAnsweringModelOutput(start_logits=start_logits, end_logits=end_logits)
 
 
@@ -288,7 +288,7 @@ class OVModelForTokenClassification(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self._device)
+        logits = torch.from_numpy(outputs["logits"]).to(self.device)
         return TokenClassifierOutput(logits=logits)
 
 
@@ -343,7 +343,7 @@ class OVModelForFeatureExtraction(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        last_hidden_state = torch.from_numpy(outputs["last_hidden_state"]).to(self._device)
+        last_hidden_state = torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
 
@@ -441,7 +441,7 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self._device)
+        logits = torch.from_numpy(outputs["logits"]).to(self.device)
 
         return CausalLMOutputWithCrossAttentions(logits=logits)
 
@@ -512,7 +512,7 @@ class OVModelForMaskedLM(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self._device)
+        logits = torch.from_numpy(outputs["logits"]).to(self.device)
 
         return MaskedLMOutput(logits=logits)
 
@@ -569,6 +569,6 @@ class OVModelForImageClassification(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self._device)
+        logits = torch.from_numpy(outputs["logits"]).to(self.device)
 
         return ImageClassifierOutput(logits=logits)
