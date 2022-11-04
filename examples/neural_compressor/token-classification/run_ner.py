@@ -654,7 +654,7 @@ def main():
                 raise ValueError("do_train must be set to True for static and aware training quantization.")
             q8_config.set_config("model.framework", "pytorch_fx")
 
-        calib_dataloader = trainer.get_train_dataloader() if quant_approach == IncQuantizationMode.STATIC else None
+        calib_dataloader = trainer.get_train_dataloader() if quant_approach != IncQuantizationMode.DYNAMIC else None
         quantizer = IncQuantizer(
             q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
         )
