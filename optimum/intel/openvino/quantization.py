@@ -46,8 +46,8 @@ from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, ONNX_WEIGHTS_NAME, O
 _openvino_version_str = openvino.runtime.get_version()
 _openvino_version = version.parse(_openvino_version_str.split("-")[0])
 
-core = Core()
 
+core = Core()
 logger = logging.getLogger(__name__)
 
 
@@ -143,14 +143,13 @@ class OVQuantizer(OptimumQuantizer):
         onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][self.feature]
         onnx_config = onnx_config_cls(self.model.config)
         compressed_model.eval()
-        use_external_data_format = onnx_config.use_external_data_format(compressed_model.num_parameters())
-        f = io.BytesIO() if not use_external_data_format else output_path.replace(".xml", ".onnx")
+        f =  output_path.replace(".xml", ".onnx")
 
         # Export the compressed model to the ONNX format
         self._onnx_export(compressed_model, onnx_config, model_inputs, f)
 
         # Load and save the compressed model
-        model = core.read_model(f) if use_external_data_format else core.read_model(f.getvalue(), b"")
+        model = core.read_model(f)
         self._save_pretrained(model, output_path)
         quantization_config.save_pretrained(save_directory)
 
@@ -167,10 +166,11 @@ class OVQuantizer(OptimumQuantizer):
                 f"OpenVINO only supports opset inferior or equal to {MAX_ONNX_OPSET_2022_2_0} which could result in "
                 "export issue."
             )
-        max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
+        max_onnx_opset = max(config.default_onnx_opset, MAX_ONNX_OPSET)
         opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
         with torch.no_grad():
             # Disable node additions to be exported in the graph
+            print(f"Opset: {opset}")
             model.disable_dynamic_graph_building()
             onnx_export(
                 model,

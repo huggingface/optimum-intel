@@ -541,7 +541,7 @@ class OVTrainer(Trainer):
             onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][self.feature]
             onnx_config = onnx_config_cls(self.model.config)
             use_external_data_format = onnx_config.use_external_data_format(self.model.num_parameters())
-            f = io.BytesIO() if not use_external_data_format else output_path.replace(".xml", ".onnx")
+            f = output_path.replace(".xml", ".onnx")
             self._onnx_export(self.model, onnx_config, f)
 
             # Load and save the compressed model
@@ -566,7 +566,7 @@ class OVTrainer(Trainer):
                 f"OpenVINO only supports opset inferior or equal to {MAX_ONNX_OPSET_2022_2_0} which could result in "
                 "export issue."
             )
-        max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
+        max_onnx_opset = max(config.default_onnx_opset, MAX_ONNX_OPSET)
         opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
 
         model_inputs = config.generate_dummy_inputs(self.tokenizer, framework=TensorType.PYTORCH)
