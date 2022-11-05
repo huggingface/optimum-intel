@@ -62,7 +62,7 @@ class IncOptimizer:
             train_func (`Callable`, *optional*):
                 Training function which will be combined with pruning.
         """
-        self.config = model.config if hasattr(model, "config") else None
+        self.config = getattr(model, "config", None)
         self.scheduler = Scheduler()
         self.scheduler.model = common.Model(model)
         self._model = None
