@@ -139,7 +139,7 @@ class IncOptimizer:
             return
 
         os.makedirs(save_directory, exist_ok=True)
-        if hasattr(self.config, "save_pretrained"):
+        if isinstance(self.config, PretrainedConfig)
             self.config.save_pretrained(save_directory)
         state_dict = self._model.model.state_dict()
         if hasattr(self._model, "q_config"):
