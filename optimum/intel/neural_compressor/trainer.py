@@ -81,7 +81,7 @@ class IncTrainer(Trainer):
                 of [`Trainer`]. If present, training will resume from the model/optimizer/scheduler states loaded here.
             trial (`optuna.Trial` or `Dict[str, Any]`, *optional*):
                 The trial run or the hyperparameter dictionary for hyperparameter search.
-            ignore_keys_for_eval (`List[str]`, *optional*)
+            ignore_keys_for_eval (`List[str]`, *optional*):
                 A list of keys in the output of your model (if it is a dictionary) that should be ignored when
                 gathering predictions for evaluation during the training.
             kwargs:
