@@ -17,7 +17,7 @@ import os
 from typing import Callable, Optional, Union
 
 import torch
-from transformers import AutoModel, PreTrainedModel
+from transformers import AutoModel, PretrainedConfig, PreTrainedModel
 
 from neural_compressor.experimental import Pruning, Quantization, common
 from neural_compressor.experimental.scheduler import Scheduler
@@ -139,7 +139,7 @@ class IncOptimizer:
             return
 
         os.makedirs(save_directory, exist_ok=True)
-        if isinstance(self.config, PretrainedConfig)
+        if isinstance(self.config, PretrainedConfig):
             self.config.save_pretrained(save_directory)
         state_dict = self._model.model.state_dict()
         if hasattr(self._model, "q_config"):

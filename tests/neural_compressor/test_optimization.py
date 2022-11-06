@@ -368,6 +368,24 @@ class IncOptimizerTest(unittest.TestCase):
         def compute_metrics(p: EvalPrediction):
             return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
 
+        def train_func(model):
+            trainer.model_wrapped = model
+            trainer.model = model
+            _ = trainer.train(agent)
+            return trainer.model
+
+        def eval_func(model):
+            trainer.model = model
+            metrics = trainer.evaluate()
+            return metrics["eval_accuracy"]
+
+        config_path = os.path.dirname(os.path.abspath(__file__))
+        q8_config = IncQuantizationConfig.from_pretrained(config_path)
+        q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
+        q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
+        q8_config.set_config("model.framework", "pytorch_fx")
+        distillation_config = IncDistillationConfig.from_pretrained(config_path)
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(tmp_dir, num_train_epochs=1.0)
             trainer = IncTrainer(
@@ -380,26 +398,9 @@ class IncOptimizerTest(unittest.TestCase):
                 data_collator=default_data_collator,
             )
 
-            def train_func(model):
-                trainer.model_wrapped = model
-                trainer.model = model
-                _ = trainer.train(agent)
-                return trainer.model
-
-            def eval_func(model):
-                trainer.model = model
-                metrics = trainer.evaluate()
-                return metrics["eval_accuracy"]
-
-            config_path = os.path.dirname(os.path.abspath(__file__))
-            q8_config = IncQuantizationConfig.from_pretrained(config_path)
-            q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
-            q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
-            q8_config.set_config("model.framework", "pytorch_fx")
             quantizer = IncQuantizer(
                 q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader(), train_func=train_func
             )
-            distillation_config = IncDistillationConfig.from_pretrained(config_path)
             distiller = IncDistiller(
                 teacher_model=teacher_model,
                 config=distillation_config,

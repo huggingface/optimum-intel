@@ -113,7 +113,8 @@ class IncQuantizer:
                 raise ValueError("train_func must be provided for quantization aware training.")
             self.quantization.q_func = self.train_func
             if version.release >= Version("1.13.0").release:
-                assert self.calib_dataloader is not None, "calib_dataloader must be provided for PyTorch1.13 or above."
+                if self.calib_dataloader is None:
+                    raise ValueError("calib_dataloader must be provided for PyTorch1.13 or above.")
                 self.quantization._calib_dataloader = self.calib_dataloader
 
 
