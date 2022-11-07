@@ -64,7 +64,7 @@ from optimum.utils import logging
 
 from .configuration import OVConfig
 from .quantization import OVDataLoader
-from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, OV_XML_FILE_NAME
+from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, OV_XML_FILE_NAME, MIN_ONNX_QDQ_OPSET
 
 
 if is_apex_available():
@@ -540,9 +540,11 @@ class OVTrainer(Trainer):
             model_type = self.model.config.model_type.replace("_", "-")
             onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][self.feature]
             onnx_config = onnx_config_cls(self.model.config)
-            use_external_data_format = onnx_config.use_external_data_format(self.model.num_parameters())
-            f = output_path.replace(".xml", ".onnx")
-            self._onnx_export(self.model, onnx_config, f)
+            use_external_data_format = (
+                onnx_config.use_external_data_format(self.model.num_parameters()) or self.ov_config.dump_onnx
+            )
+            f = io.BytesIO() if not use_external_data_format else os.path.Path(output_dir) / "model.onnx"
+            self._onnx_export(self.model, onnx_config, self.ov_config, f)
 
             # Load and save the compressed model
             model = core.read_model(f) if use_external_data_format else core.read_model(f.getvalue(), b"")
@@ -559,7 +561,7 @@ class OVTrainer(Trainer):
         elif self.feature in ["feature-extraction", "fill-mask"]:
             self.feature = "default"
 
-    def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, f: Union[str, io.BytesIO]):
+    def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, ov_config: OVConfig, f: Union[str, io.BytesIO]):
         if config.default_onnx_opset > MAX_ONNX_OPSET_2022_2_0 + 1:
             logger.warning(
                 f"The minimal ONNX opset for the given model architecture is {config.default_onnx_opset}, currently "
@@ -568,6 +570,7 @@ class OVTrainer(Trainer):
             )
         max_onnx_opset = max(config.default_onnx_opset, MAX_ONNX_OPSET)
         opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
+        opset = opset if not ov_config.dump_onnx else max(opset, MIN_ONNX_QDQ_OPSET)
 
         model_inputs = config.generate_dummy_inputs(self.tokenizer, framework=TensorType.PYTORCH)
         device = model.device

@@ -40,7 +40,7 @@ from openvino.runtime import Core
 from optimum.quantization_base import OptimumQuantizer
 
 from .configuration import OVConfig
-from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
+from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, MIN_ONNX_QDQ_OPSET
 
 
 _openvino_version_str = openvino.runtime.get_version()
@@ -143,13 +143,16 @@ class OVQuantizer(OptimumQuantizer):
         onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][self.feature]
         onnx_config = onnx_config_cls(self.model.config)
         compressed_model.eval()
-        f =  output_path.replace(".xml", ".onnx")
+        use_external_data_format = (
+            onnx_config.use_external_data_format(compressed_model.num_parameters()) or quantization_config.dump_onnx
+        )
+        f = io.BytesIO() if not use_external_data_format else save_directory / "model.onnx"
 
         # Export the compressed model to the ONNX format
-        self._onnx_export(compressed_model, onnx_config, model_inputs, f)
+        self._onnx_export(compressed_model, onnx_config, model_inputs, quantization_config, f)
 
         # Load and save the compressed model
-        model = core.read_model(f)
+        model = core.read_model(f) if use_external_data_format else core.read_model(f.getvalue(), b"")
         self._save_pretrained(model, output_path)
         quantization_config.save_pretrained(save_directory)
 
@@ -159,7 +162,9 @@ class OVQuantizer(OptimumQuantizer):
         openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
 
     @staticmethod
-    def _onnx_export(model: NNCFNetwork, config: OnnxConfig, model_inputs: Dict, f: Union[str, io.BytesIO]):
+    def _onnx_export(
+        model: NNCFNetwork, config: OnnxConfig, model_inputs: Dict, ov_config: OVConfig, f: Union[str, io.BytesIO]
+    ):
         if config.default_onnx_opset > MAX_ONNX_OPSET_2022_2_0 + 1:
             logger.warning(
                 f"The minimal ONNX opset for the given model architecture is {config.default_onnx_opset}, currently "
@@ -168,9 +173,9 @@ class OVQuantizer(OptimumQuantizer):
             )
         max_onnx_opset = max(config.default_onnx_opset, MAX_ONNX_OPSET)
         opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
+        opset = opset if not ov_config.dump_onnx else max(opset, MIN_ONNX_QDQ_OPSET)
         with torch.no_grad():
             # Disable node additions to be exported in the graph
-            print(f"Opset: {opset}")
             model.disable_dynamic_graph_building()
             onnx_export(
                 model,
@@ -229,10 +234,7 @@ class OVQuantizer(OptimumQuantizer):
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
         calibration_dataset = load_dataset(
-            dataset_name,
-            name=dataset_config_name,
-            split=dataset_split,
-            use_auth_token=use_auth_token,
+            dataset_name, name=dataset_config_name, split=dataset_split, use_auth_token=use_auth_token
         )
 
         if num_samples is not None:
@@ -259,11 +261,7 @@ class OVQuantizer(OptimumQuantizer):
         generator.manual_seed(self.seed)
         sampler = RandomSampler(calibration_dataset, generator=generator)
         calibration_dataloader = DataLoader(
-            calibration_dataset,
-            batch_size=batch_size,
-            sampler=sampler,
-            collate_fn=data_collator,
-            drop_last=False,
+            calibration_dataset, batch_size=batch_size, sampler=sampler, collate_fn=data_collator, drop_last=False
         )
         return OVDataLoader(calibration_dataloader)
 

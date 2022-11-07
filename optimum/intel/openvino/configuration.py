@@ -23,7 +23,6 @@ DEFAULT_QUANTIZATION_CONFIG = {
     "algorithm": "quantization",
     "preset": "mixed",
     "overflow_fix": "disable",
-    "export_to_onnx_standard_ops": True,
     "initializer": {
         "range": {"num_init_samples": 300, "type": "mean_min_max"},
         "batchnorm_adaptation": {"num_bn_adaptation_samples": 0},
@@ -45,14 +44,13 @@ class OVConfig(BaseConfig):
     FULL_CONFIGURATION_FILE = "ov_config.json"
 
     def __init__(
-        self,
-        compression: Optional[Dict] = None,
-        input_info: Optional[List] = None,
-        **kwargs,
+        self, compression: Optional[Dict] = None, input_info: Optional[List] = None, dump_onnx: bool = False, **kwargs
     ):
         super().__init__()
         self.compression = compression or DEFAULT_QUANTIZATION_CONFIG
         self.input_info = input_info
+        self.dump_onnx = dump_onnx
+        self._enable_standard_onnx_export_option()
         self.optimum_version = kwargs.pop("optimum_version", None)
 
     def add_input_info(self, model_inputs: Dict):
@@ -65,3 +63,11 @@ class OVConfig(BaseConfig):
             }
             for name, value in model_inputs.items()
         ]
+
+    def _enable_standard_onnx_export_option(self):
+        if isinstance(self.compression, dict):
+            self.compression["export_to_onnx_standard_ops"] = self.dump_onnx
+        elif isinstance(self.compression, list):
+            for algo_config in self.compression:
+                if "quantization" in algo_config:
+                    self.compression["quantization"]["export_to_onnx_standard_ops"] = self.dump_onnx
