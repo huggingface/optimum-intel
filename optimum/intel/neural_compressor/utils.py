@@ -15,7 +15,7 @@
 import logging
 import os
 from collections import UserDict
-from typing import Dict
+from typing import Dict, List, Tuple
 
 import torch
 from packaging import version
@@ -107,3 +107,20 @@ def load_quantized_model(checkpoint_dir_or_file: str, model: torch.nn.Module, **
         )
 
     return load(checkpoint_dir_or_file, model, **kwargs)
+
+
+def inputs_to_dataloader(example_inputs):
+    """Wrap a torch.Tensor or numpy ndarray to torch dataloader.
+    Args:
+        example_inputs (`Tuple[torch.Tensor]`):
+            Tuple of torch tensor to be wraped to torch dataloader.
+    Returns:
+        torch dataloader
+    """
+
+    import torch
+    if not isinstance(example_inputs, Tuple) and not isinstance(example_inputs, List):
+        raise ValueError("example_inputs should be a tuple.")
+
+    dataset = torch.utils.data.TensorDataset(*(example_inputs))
+    return torch.utils.data.DataLoader(dataset, batch_size=example_inputs[0].shape[0])

@@ -17,10 +17,9 @@ import logging
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Callable, ClassVar, Dict, Optional, Union
+from typing import Any, Callable, ClassVar, Dict, Optional, Union
 
 import torch
-from packaging.version import Version
 from torch.quantization import add_observer_, convert
 from torch.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_fx
 from torch.utils.data import DataLoader
@@ -74,6 +73,7 @@ class IncQuantizer:
         train_func: Optional[Callable] = None,
         calib_dataloader: Optional[DataLoader] = None,
         calib_func: Optional[Callable] = None,
+        example_inputs: Optional[Any] = None
     ):
         """
         Arguments:
@@ -88,6 +88,9 @@ class IncQuantizer:
                 DataLoader for post-training quantization calibration.
             calib_func (`Callable`):
                 Calibration function for post training static quantization, If user specifies calib_func, calib_dataloader is also needed for PyTorch>1.12.
+            example_inputs (`Union[torch.Tensor, numpy array]`, *optional*):
+                Be used to FX trace for PyTorch>1.13, if calib_dataloader is not be specified,
+                then you must specify the example_inputs.
         """
 
         self.config = config.config if isinstance(config, IncQuantizationConfig) else Quantization_Conf(config)
@@ -97,6 +100,14 @@ class IncQuantizer:
         self.calib_func = calib_func
         if calib_dataloader is not None:
             calib_dataloader = IncDataLoader.from_pytorch_dataloader(calib_dataloader)
+        elif example_inputs is not None:
+            if is_torch_less_than_1_13:
+                raise ValueError("PyTorch must be 1.13 or above.")
+
+            from optimum.intel.neural_compressor.utils import inputs_to_dataloader
+
+            calib_dataloader = inputs_to_dataloader(example_inputs)
+
         self.calib_dataloader = calib_dataloader
 
         if self.config.usr_cfg.model.framework == "pytorch_fx":

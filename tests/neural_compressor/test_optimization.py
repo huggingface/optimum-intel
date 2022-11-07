@@ -225,8 +225,12 @@ class IncQuantizationTest(unittest.TestCase):
                 data_collator=default_data_collator,
             )
 
+            # Need a example of tuple for FX trace if PyTorch version > 1.13.
+            example_inputs = next(iter(trainer.get_eval_dataloader()))
+            example_inputs = [example_inputs[key] for key in example_inputs]
+
             quantizer = IncQuantizer(
-                q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader(), train_func=train_func
+                q8_config, eval_func=eval_func, train_func=train_func, example_inputs=example_inputs
             )
             optimizer = IncOptimizer(model, quantizer=quantizer)
 
@@ -431,8 +435,12 @@ class IncOptimizerTest(unittest.TestCase):
                 data_collator=default_data_collator,
             )
 
+            # Need a example of tuple for FX trace if PyTorch version > 1.13.
+            example_inputs = next(iter(trainer.get_eval_dataloader()))
+            example_inputs = [example_inputs[key] for key in example_inputs]
+
             quantizer = IncQuantizer(
-                q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader(), train_func=train_func
+                q8_config, eval_func=eval_func, train_func=train_func, example_inputs=example_inputs
             )
             distiller = IncDistiller(
                 teacher_model=teacher_model,
