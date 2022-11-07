@@ -119,6 +119,7 @@ def inputs_to_dataloader(example_inputs):
     """
 
     import torch
+
     if not isinstance(example_inputs, Tuple) and not isinstance(example_inputs, List):
         raise ValueError("example_inputs should be a tuple.")
 
