@@ -33,7 +33,6 @@ python run_translation.py \
     --apply_quantization \
     --quantization_approach static \
     --tolerance_criterion 0.7 \
-    --do_train \
     --do_eval \
     --verify_loading \
     --predict_with_generate \
@@ -42,8 +41,7 @@ python run_translation.py \
     --output_dir /tmp/test_translation
 ```
 
-The following example fine-tunes a T5 model on the wmt16 dataset while applying magnitude pruning and then applies 
-dynamic quantization as a second step.
+The following example fine-tunes a T5 model on the wmt16 dataset while applying magnitude pruning and then applies dynamic quantization as a second step.
 
 ```bash
 
