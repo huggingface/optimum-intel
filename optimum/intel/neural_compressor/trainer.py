@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 import datasets
 import torch
 import torch.distributed as dist
-from packaging import version
+from packaging.version import Version
 
 # from packaging import version
 from torch import nn
@@ -53,6 +53,7 @@ from transformers.trainer_utils import (
 )
 from transformers.utils import logging
 
+from neural_compressor.adaptor.pytorch import get_torch_version
 from neural_compressor.experimental import Component
 
 from .utils import TRAINING_ARGS_NAME
@@ -103,9 +104,13 @@ class IncTrainer(Trainer):
 
         self.is_in_train = True
         self.agent = agent
+        version = get_torch_version()
 
         if isinstance(agent, Component):
-            agent.pre_epoch_begin()
+            if version.release >= Version("1.13.0").release:
+                agent.pre_epoch_begin(self.get_train_dataloader())
+            else:
+                agent.pre_epoch_begin()
 
         # do_train is not a reliable argument, as it might not be set and .train() still called, so
         # the following is a workaround:
@@ -550,7 +555,7 @@ class IncTrainer(Trainer):
 
         columns = [k for k in signature_columns if k in dataset.column_names]
 
-        if version.parse(datasets.__version__) < version.parse("1.4.0"):
+        if Version(datasets.__version__).release < Version("1.4.0").release:
             dataset.set_format(
                 type=dataset.format["type"], columns=columns, format_kwargs=dataset.format["format_kwargs"]
             )

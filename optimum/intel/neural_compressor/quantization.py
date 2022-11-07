@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable, ClassVar, Dict, Optional, Union
 
 import torch
+from packaging.version import Version
 from torch.quantization import add_observer_, convert
 from torch.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_fx
 from torch.utils.data import DataLoader
@@ -41,7 +42,7 @@ from transformers.utils.versions import require_version
 
 import neural_compressor
 from huggingface_hub import hf_hub_download
-from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
+from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig, get_torch_version
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization
@@ -90,6 +91,7 @@ class IncQuantizer:
         self.approach = IncQuantizationMode(self.config.usr_cfg.quantization.approach)
         self.eval_func = eval_func
         self.train_func = train_func
+        version = get_torch_version()
         if calib_dataloader is not None:
             calib_dataloader = IncDataLoader.from_pytorch_dataloader(calib_dataloader)
         self.calib_dataloader = calib_dataloader
@@ -110,6 +112,10 @@ class IncQuantizer:
             if self.train_func is None:
                 raise ValueError("train_func must be provided for quantization aware training.")
             self.quantization.q_func = self.train_func
+            if version.release >= Version("1.13.0").release:
+                if self.calib_dataloader is None:
+                    raise ValueError("calib_dataloader must be provided for PyTorch1.13 or above.")
+                self.quantization._calib_dataloader = self.calib_dataloader
 
 
 # Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96

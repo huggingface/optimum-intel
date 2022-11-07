@@ -17,7 +17,7 @@ import os
 from typing import Callable, Optional, Union
 
 import torch
-from transformers import AutoModel, PreTrainedModel
+from transformers import AutoModel, PretrainedConfig, PreTrainedModel
 
 from neural_compressor.experimental import Pruning, Quantization, common
 from neural_compressor.experimental.scheduler import Scheduler
@@ -62,7 +62,7 @@ class IncOptimizer:
             train_func (`Callable`, *optional*):
                 Training function which will be combined with pruning.
         """
-        self.config = model.config
+        self.config = getattr(model, "config", None)
         self.scheduler = Scheduler()
         self.scheduler.model = common.Model(model)
         self._model = None
@@ -86,8 +86,9 @@ class IncOptimizer:
             if quantizer.approach == IncQuantizationMode.AWARE_TRAINING:
                 components.append(quantizer.quantization)
             self.apply_quantization = True
-            self.config.torch_dtype = "int8"
-            self.config.framework = quantizer.config.usr_cfg.model.framework
+            if self.config is not None:
+                self.config.torch_dtype = "int8"
+                self.config.framework = quantizer.config.usr_cfg.model.framework
 
         if one_shot_optimization and len(components) > 1:
             agent = self.scheduler.combine(*components)
@@ -138,7 +139,8 @@ class IncOptimizer:
             return
 
         os.makedirs(save_directory, exist_ok=True)
-        self.config.save_pretrained(save_directory)
+        if isinstance(self.config, PretrainedConfig):
+            self.config.save_pretrained(save_directory)
         state_dict = self._model.model.state_dict()
         if hasattr(self._model, "q_config"):
             state_dict["best_configure"] = self._model.q_config

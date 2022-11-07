@@ -178,8 +178,6 @@ class IncQuantizationTest(unittest.TestCase):
         q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
         q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
         q8_config.set_config("model.framework", "pytorch_fx")
-        quantizer = IncQuantizer(q8_config, eval_func=eval_func, train_func=train_func)
-        optimizer = IncOptimizer(model, quantizer=quantizer)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(tmp_dir, num_train_epochs=1.0)
@@ -193,6 +191,11 @@ class IncQuantizationTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
+
+            quantizer = IncQuantizer(
+                q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader(), train_func=train_func
+            )
+            optimizer = IncOptimizer(model, quantizer=quantizer)
 
             model_result = eval_func(model)
             optimized_model = optimizer.fit()
@@ -381,23 +384,7 @@ class IncOptimizerTest(unittest.TestCase):
         q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
         q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
         q8_config.set_config("model.framework", "pytorch_fx")
-        quantizer = IncQuantizer(q8_config, eval_func=eval_func, train_func=train_func)
         distillation_config = IncDistillationConfig.from_pretrained(config_path)
-        distiller = IncDistiller(
-            teacher_model=teacher_model,
-            config=distillation_config,
-            eval_func=eval_func,
-            train_func=train_func,
-        )
-        optimizer = IncOptimizer(
-            model,
-            quantizer=quantizer,
-            distiller=distiller,
-            one_shot_optimization=True,
-            eval_func=eval_func,
-            train_func=train_func,
-        )
-        agent = optimizer.get_agent()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(tmp_dir, num_train_epochs=1.0)
@@ -410,6 +397,26 @@ class IncOptimizerTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
+
+            quantizer = IncQuantizer(
+                q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader(), train_func=train_func
+            )
+            distiller = IncDistiller(
+                teacher_model=teacher_model,
+                config=distillation_config,
+                eval_func=eval_func,
+                train_func=train_func,
+            )
+            optimizer = IncOptimizer(
+                model,
+                quantizer=quantizer,
+                distiller=distiller,
+                one_shot_optimization=True,
+                eval_func=eval_func,
+                train_func=train_func,
+            )
+            agent = optimizer.get_agent()
+
             model_result = eval_func(model)
             optimized_model = optimizer.fit()
             optimized_model_result = eval_func(optimized_model)

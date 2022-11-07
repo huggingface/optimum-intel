@@ -14,8 +14,9 @@
 
 import logging
 from collections import UserDict
-from typing import Dict, List
+from typing import Dict
 
+from packaging.version import Version, parse
 from torch.utils.data import DataLoader
 
 
@@ -56,13 +57,31 @@ def _cfgs_to_fx_cfgs(op_cfgs: Dict, observer_type: str = "post_training_static_q
         fx_op_cfgs (`dict`):
             Dictionary of quantization configure that meets the requirements of torch.fx.
     """
-    fx_op_cfgs = dict()
-    op_tuple_cfg_list = []
+
+    import torch
+
+    parsed_torch_version_base = parse(parse(torch.__version__).base_version)
+    if parsed_torch_version_base >= Version("1.13.0"):
+        from torch.ao.quantization import QConfigMapping
+
+        fx_op_cfgs = QConfigMapping()
+    else:
+        fx_op_cfgs = dict()
+        op_tuple_cfg_list = []
     for key, value in op_cfgs.items():
         if key == "default_qconfig":
-            fx_op_cfgs[""] = value
+            if parsed_torch_version_base >= Version("1.13.0"):  # pragma: no cover
+                fx_op_cfgs.set_global(value)
+            else:
+                fx_op_cfgs[""] = value
             continue
-        op_tuple = (key, value)
-        op_tuple_cfg_list.append(op_tuple)
-    fx_op_cfgs["module_name"] = op_tuple_cfg_list
+        if parsed_torch_version_base >= Version("1.13.0"):  # pragma: no cover
+            fx_op_cfgs.set_module_name(key, value)
+        else:
+            op_tuple = (key, value)
+            op_tuple_cfg_list.append(op_tuple)
+
+    if parsed_torch_version_base < Version("1.13.0"):
+        fx_op_cfgs["module_name"] = op_tuple_cfg_list
+
     return fx_op_cfgs
