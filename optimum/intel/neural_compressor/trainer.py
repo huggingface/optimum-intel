@@ -77,9 +77,9 @@ class IncTrainer(Trainer):
             agent (:obj:`Component`, *optional*):
                 Component object containing the compression objects to apply during the training process.
             resume_from_checkpoint (`str` or `bool`, *optional*):
-                If a `str`, local path to a saved checkpoint as saved by a previous instance of [`Trainer`]. If a
+                If a `str`, local path to a saved checkpoint as saved by a previous instance of [`IncTrainer`]. If a
                 `bool` and equals `True`, load the last checkpoint in *args.output_dir* as saved by a previous instance
-                of [`Trainer`]. If present, training will resume from the model/optimizer/scheduler states loaded here.
+                of [`IncTrainer`]. If present, training will resume from the model/optimizer/scheduler states loaded here.
             trial (`optuna.Trial` or `Dict[str, Any]`, *optional*):
                 The trial run or the hyperparameter dictionary for hyperparameter search.
             ignore_keys_for_eval (`List[str]`, *optional*):
@@ -541,7 +541,7 @@ class IncTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """
-        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+        How the loss is computed. By default, all models return the loss in the first element.
         """
         if self.label_smoother is not None and "labels" in inputs:
             labels = inputs.pop("labels")
