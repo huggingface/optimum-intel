@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+import warnings
 from typing import Callable, Optional, Union
 
 from transformers import PreTrainedModel
@@ -54,3 +55,6 @@ class IncDistiller:
         self.distillation.train_func = self.train_func
         self.distillation.eval_func = self.eval_func
         self.distillation.teacher_model = common.Model(teacher_model)
+        warnings.warn(
+            "`IncDistiller` will be soon deprecated, distillation will be supported through the `IncTrainer`."
+        )

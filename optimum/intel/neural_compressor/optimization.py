@@ -14,6 +14,7 @@
 
 import logging
 import os
+import warnings
 from typing import Callable, Optional, Union
 
 import torch
@@ -101,6 +102,11 @@ class IncOptimizer:
 
         if self.apply_quantization and quantizer.approach != IncQuantizationMode.AWARE_TRAINING:
             self.scheduler.append(quantizer.quantization)
+        warnings.warn(
+            "`IncOptimizer` will be soon deprecated, dynamic and static quantization will be supported using the"
+            " `IncQuantizer` class while pruning, distillation and quantization aware training will be supported through"
+            " the `IncTrainer` class."
+        )
 
     def fit(self):
         # If no optimization, the original model is returned
