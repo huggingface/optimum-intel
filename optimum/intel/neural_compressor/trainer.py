@@ -35,6 +35,7 @@ from tqdm.auto import tqdm
 from transformers import Trainer
 from transformers.configuration_utils import PretrainedConfig
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
+from transformers.deepspeed import deepspeed_init
 from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
 
 # Integrations must be imported before ML frameworks:
