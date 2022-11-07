@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable, ClassVar, Dict, Optional, Union
 
 import torch
+from packaging.version import Version
 from torch.quantization import add_observer_, convert
 from torch.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_fx
 from torch.utils.data import DataLoader
@@ -32,6 +33,7 @@ from transformers import (
     AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
+    AutoModelForVision2Seq,
     XLNetLMHeadModel,
 )
 from transformers.models.auto.auto_factory import _get_model_class
@@ -40,18 +42,18 @@ from transformers.utils.versions import require_version
 
 import neural_compressor
 from huggingface_hub import hf_hub_download
-from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
+from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig, get_torch_version
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization
 from neural_compressor.utils.pytorch import _load_int8_orchestration
 
 from .configuration import IncOptimizedConfig, IncQuantizationConfig
-from .utils import WEIGHTS_NAME, IncDataLoader, _cfgs_to_fx_cfgs
+from .utils import WEIGHTS_NAME, IncDataLoader, _cfgs_to_fx_cfgs, is_torch_less_than_1_13
 
 
 logger = logging.getLogger(__name__)
-require_version("neural_compressor>=1.9.0", "To fix: pip install neural_compressor")
+require_version("neural-compressor>=1.13.0")
 
 
 class IncQuantizationMode(Enum):
@@ -89,6 +91,7 @@ class IncQuantizer:
         self.approach = IncQuantizationMode(self.config.usr_cfg.quantization.approach)
         self.eval_func = eval_func
         self.train_func = train_func
+
         if calib_dataloader is not None:
             calib_dataloader = IncDataLoader.from_pytorch_dataloader(calib_dataloader)
         self.calib_dataloader = calib_dataloader
@@ -109,6 +112,12 @@ class IncQuantizer:
             if self.train_func is None:
                 raise ValueError("train_func must be provided for quantization aware training.")
             self.quantization.q_func = self.train_func
+            if not is_torch_less_than_1_13:
+                if self.calib_dataloader is None:
+                    raise ValueError(
+                        "For quantization aware training, a calibration dataloader `calib_dataloader` must be provided for PyTorch 1.13 or above."
+                    )
+                self.quantization._calib_dataloader = self.calib_dataloader
 
 
 # Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
@@ -371,3 +380,8 @@ class IncQuantizedModelForMaskedLM(IncQuantizedModel):
 class IncQuantizedModelForXLNetLM(IncQuantizedModel):
 
     TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel
+
+
+class IncQuantizedModelForVision2Seq(IncQuantizedModel):
+
+    TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq

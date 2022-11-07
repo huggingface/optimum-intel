@@ -14,8 +14,10 @@
 
 import logging
 from collections import UserDict
-from typing import Dict, List
+from typing import Dict
 
+import torch
+from packaging.version import Version, parse
 from torch.utils.data import DataLoader
 
 
@@ -25,6 +27,9 @@ logger = logging.getLogger(__name__)
 CONFIG_NAME = "best_configure.yaml"
 WEIGHTS_NAME = "pytorch_model.bin"
 TRAINING_ARGS_NAME = "training_args.bin"
+
+parsed_torch_version_base = version.parse(version.parse(torch.__version__).base_version)
+is_torch_less_than_1_13 = parsed_torch_version_base < Version("1.13.0")
 
 
 class IncDataLoader(DataLoader):
@@ -56,13 +61,27 @@ def _cfgs_to_fx_cfgs(op_cfgs: Dict, observer_type: str = "post_training_static_q
         fx_op_cfgs (`dict`):
             Dictionary of quantization configure that meets the requirements of torch.fx.
     """
-    fx_op_cfgs = dict()
-    op_tuple_cfg_list = []
+    if not is_torch_less_than_1_13:
+        from torch.ao.quantization import QConfigMapping
+
+        fx_op_cfgs = QConfigMapping()
+    else:
+        fx_op_cfgs = dict()
+        op_tuple_cfg_list = []
     for key, value in op_cfgs.items():
         if key == "default_qconfig":
-            fx_op_cfgs[""] = value
+            if not is_torch_less_than_1_13:
+                fx_op_cfgs.set_global(value)
+            else:
+                fx_op_cfgs[""] = value
             continue
-        op_tuple = (key, value)
-        op_tuple_cfg_list.append(op_tuple)
-    fx_op_cfgs["module_name"] = op_tuple_cfg_list
+        if not is_torch_less_than_1_13:
+            fx_op_cfgs.set_module_name(key, value)
+        else:
+            op_tuple = (key, value)
+            op_tuple_cfg_list.append(op_tuple)
+
+    if is_torch_less_than_1_13:
+        fx_op_cfgs["module_name"] = op_tuple_cfg_list
+
     return fx_op_cfgs

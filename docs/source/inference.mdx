@@ -28,8 +28,10 @@ model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 cls_pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
 result = cls_pipe("He's a dreadful magician.")
+
 [{'label': 'NEGATIVE', 'score': 0.9919503927230835}]
 ```
+An important thing to mention is that the model is compiled just before the first inference, which will inflate the latency of the first inference.
 
 To easily save the resulting model, you can use the `save_pretrained()` method, which will save both the BIN and XML files describing the graph.
 

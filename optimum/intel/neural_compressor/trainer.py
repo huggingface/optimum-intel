@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 import datasets
 import torch
 import torch.distributed as dist
-from packaging import version
+from packaging.version import Version
 
 # from packaging import version
 from torch import nn
@@ -40,6 +40,7 @@ from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
 # Integrations must be imported before ML frameworks:
 from transformers.integrations import hp_params
 from transformers.modeling_utils import get_parameter_dtype
+from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_callback import TrainerState
 from transformers.trainer_pt_utils import IterableDatasetShard
@@ -48,7 +49,7 @@ from transformers.utils import is_sagemaker_mp_enabled, logging
 
 from neural_compressor.experimental import Component
 
-from .utils import TRAINING_ARGS_NAME
+from .utils import TRAINING_ARGS_NAME, is_torch_less_than_1_13
 
 
 if TYPE_CHECKING:
@@ -259,7 +260,10 @@ class IncTrainer(Trainer):
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
         if isinstance(self.agent, Component):
-            self.agent.on_train_begin()
+            if is_torch_less_than_1_13:
+                self.agent.on_train_begin()
+            else:
+                self.agent.on_train_begin(self.get_train_dataloader())
 
         # Skip the first epochs_trained epochs to get the random state of the dataloader at the right point.
         if not args.ignore_data_skip:
@@ -527,7 +531,7 @@ class IncTrainer(Trainer):
 
         columns = [k for k in signature_columns if k in dataset.column_names]
 
-        if version.parse(datasets.__version__) < version.parse("1.4.0"):
+        if Version(datasets.__version__).release < Version("1.4.0").release:
             dataset.set_format(
                 type=dataset.format["type"], columns=columns, format_kwargs=dataset.format["format_kwargs"]
             )
@@ -614,7 +618,7 @@ class IncTrainer(Trainer):
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
-        if getattr(self.model.config, "torch_dtype", None) == "int8":
+        if hasattr(self.model, "config") and getattr(self.model.config, "torch_dtype", None) == "int8":
             if self.model.config.framework in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
                 logger.warn(
                     f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
