@@ -17,7 +17,7 @@ from collections import UserDict
 from typing import Dict
 
 import torch
-from packaging.version import Version, parse
+from packaging import version
 from torch.utils.data import DataLoader
 
 
@@ -29,7 +29,7 @@ WEIGHTS_NAME = "pytorch_model.bin"
 TRAINING_ARGS_NAME = "training_args.bin"
 
 parsed_torch_version_base = version.parse(version.parse(torch.__version__).base_version)
-is_torch_less_than_1_13 = parsed_torch_version_base < Version("1.13.0")
+is_torch_less_than_1_13 = parsed_torch_version_base < version.parse("1.13.0")
 
 
 class IncDataLoader(DataLoader):
