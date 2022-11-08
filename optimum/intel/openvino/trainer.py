@@ -22,8 +22,11 @@ import warnings
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
+import openvino
 import torch
 import torch.distributed as dist
+from openvino.offline_transformations import compress_quantize_weights_transformation
+from openvino.runtime import Core
 from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, Dataset, RandomSampler
@@ -52,19 +55,16 @@ from transformers.trainer_utils import (
 from transformers.training_args import TrainingArguments
 from transformers.utils import WEIGHTS_NAME, TensorType, is_apex_available, is_sagemaker_mp_enabled, logging
 
-import openvino
 from nncf import NNCFConfig
 from nncf.common.utils.logger import set_log_level
 from nncf.config.structures import BNAdaptationInitArgs, QuantizationRangeInitArgs
 from nncf.torch import create_compressed_model
 from nncf.torch.nncf_network import NNCFNetwork
-from openvino.offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core
 from optimum.utils import logging
 
 from .configuration import OVConfig
 from .quantization import OVDataLoader
-from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, OV_XML_FILE_NAME, MIN_ONNX_QDQ_OPSET
+from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, MIN_ONNX_QDQ_OPSET, OV_XML_FILE_NAME
 
 
 if is_apex_available():
