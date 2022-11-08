@@ -18,9 +18,9 @@ from functools import reduce
 from pathlib import Path
 from typing import Any, Optional, Union
 
+import yaml
 from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
 
-import yaml
 from huggingface_hub import hf_hub_download
 from neural_compressor.conf.config import Conf, Distillation_Conf, Pruning_Conf, Quantization_Conf
 from optimum.intel.neural_compressor.utils import CONFIG_NAME
