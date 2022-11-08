@@ -647,10 +647,15 @@ def main():
 
             q8_config.set_config("model.framework", "pytorch_fx")
 
-        calib_dataloader = trainer.get_train_dataloader() if quant_approach != IncQuantizationMode.DYNAMIC else None
-        quantizer = IncQuantizer(
-            q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
-        )
+        if quant_approach == IncQuantizationMode.STATIC:
+            calib_dataloader = trainer.get_train_dataloader()
+            quantizer = IncQuantizer(q8_config, eval_func=eval_func, calib_dataloader=calib_dataloader)
+        else:
+            example_inputs = next(iter(trainer.get_train_dataloader()))
+            example_inputs = [example_inputs[key] for key in example_inputs]
+            quantizer = IncQuantizer(
+                q8_config, eval_func=eval_func, train_func=train_func, example_inputs=example_inputs
+            )
 
     if optim_args.apply_pruning:
 

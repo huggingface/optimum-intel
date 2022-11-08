@@ -301,7 +301,14 @@ def main():
         if quant_approach == IncQuantizationMode.STATIC:
             q8_config.set_config("quantization.calibration.sampling_size", [data_args.max_calibration_samples])
         q8_config.set_config("tuning.accuracy_criterion.higher_is_better", False)
-        quantizer = IncQuantizer(q8_config, eval_func=eval_func, calib_dataloader=test_dataloader)
+
+        if quant_approach == IncQuantizationMode.STATIC:
+            quantizer = IncQuantizer(q8_config, eval_func=eval_func, calib_dataloader=test_dataloader)
+        else:
+            example_inputs = next(iter(test_dataloader))
+            example_inputs = [example_inputs[key] for key in example_inputs]
+            quantizer = IncQuantizer(q8_config, eval_func=eval_func, example_inputs=example_inputs)
+
         optimizer = IncOptimizer(model, quantizer=quantizer)
         q_model = optimizer.fit()
         result_optimized_model = eval_func(q_model, 20)
