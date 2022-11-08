@@ -42,6 +42,7 @@ The following example fine-tunes MiniLM_L3 on the clinc_oos task with knowledge 
 python run_clinc.py \
     --model_name_or_path sentence-transformers/paraphrase-MiniLM-L3-v2 \
     --apply_distillation \
+    --distillation_config distillation.yml \
     --teacher_model_name_or_path sentence-transformers/paraphrase-mpnet-base-v2 \
     --apply_quantization \
     --quantization_approach static \
