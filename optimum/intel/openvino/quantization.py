@@ -171,7 +171,7 @@ class OVQuantizer(OptimumQuantizer):
                 f"OpenVINO only supports opset inferior or equal to {MAX_ONNX_OPSET_2022_2_0} which could result in "
                 "export issue."
             )
-        max_onnx_opset = max(config.default_onnx_opset, MAX_ONNX_OPSET)
+        max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
         opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
         opset = opset if not ov_config.dump_onnx else max(opset, MIN_ONNX_QDQ_OPSET)
         with torch.no_grad():
