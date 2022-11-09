@@ -236,7 +236,7 @@ class OptimizationArguments:
 
 #Mean Pooling - Take attention mask into account for correct averaging
 def mean_pooling(model_output, attention_mask):
-    token_embeddings = model_output[0] #First element of model_output contains all token embeddings
+    token_embeddings = model_output['last_hidden_state'] #First element of model_output contains all token embeddings
     input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
     return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
@@ -255,6 +255,16 @@ class SetFitModel(torch.nn.Module):
         sentence_embeddings = mean_pooling(model_output, attention_mask)
         return sentence_embeddings
 
+class CalibrationDataset():
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __getitem__(self, idx):
+        data = self.dataset[idx]
+        return torch.tensor(data['input_ids']), torch.tensor(data['attention_mask']), torch.tensor(data['token_type_ids'])
+
+    def __len__(self):
+        return len(self.dataset)
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -465,6 +475,7 @@ def main():
 
     quantizer = None
     distiller = None
+    train_func = None
 
     if not optim_args.apply_quantization and not optim_args.apply_distillation:
         raise ValueError("No optimization activated.")
@@ -483,7 +494,7 @@ def main():
                 if hasattr(model, 'config'):
                     self.config = model.config
             
-            def forward(self, sentences, *args, **kwargs):
+            def forward(self, sentences=None, *args, **kwargs):
                 assert isinstance(sentences, (tuple, list)) and len(sentences) == 2, \
                     "sentences should be a tuple or a list with 2 sentences string."
                 inputs = self.tokenizer(sentences[0]+sentences[1], padding=padding, max_length=max_seq_length, truncation=True, return_tensors='pt')
@@ -520,14 +531,15 @@ def main():
         )
 
         examples = raw_datasets['train']['text']
+        examples_duplicate_ratio = 100
+        examples_duplicate = []
+        for i in range(int(examples_duplicate_ratio)):
+            examples_duplicate.extend(examples)
+        examples_duplicate.extend(examples[:int(len(examples) * (examples_duplicate_ratio - int(examples_duplicate_ratio)))])
         if data_args.max_train_samples is not None:
-            examples = raw_datasets['train'].select(range(data_args.max_train_samples))['text']
-        shuffled_examples = copy.deepcopy(examples)
-        distillation_dataset = []
-        examples_extension_iters = 100
-        for i in range(examples_extension_iters):
-            random.shuffle(shuffled_examples)
-            distillation_dataset.extend(list(zip(examples, shuffled_examples)))
+            examples_duplicate = raw_datasets['train'].select(range(data_args.max_train_samples))['text']
+        shuffled_examples_duplicate = copy.deepcopy(examples_duplicate)
+        distillation_dataset = list(zip(examples_duplicate, shuffled_examples_duplicate))
 
         def sentences_data_collator(sentences_pairs):
             return {'sentences':[[sp[i] for sp in sentences_pairs] for i in range(len(sentences_pairs[0]))]}
@@ -593,12 +605,10 @@ def main():
 
             q8_config.set_config("model.framework", "pytorch_fx")
 
-        trainer.train_dataset = train_dataset.remove_columns(['label'])
-        calib_dataloader = trainer.get_train_dataloader() if quant_approach == IncQuantizationMode.STATIC else None
+        calib_dataloader = DataLoader(CalibrationDataset(train_dataset), 1) if quant_approach == IncQuantizationMode.STATIC else None
         quantizer = IncQuantizer(
             q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
         )
-        trainer.train_dataset = train_dataset
 
     optimizer = IncOptimizer(
         model,
