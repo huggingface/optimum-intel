@@ -48,7 +48,7 @@ from neural_compressor.experimental import Quantization
 from neural_compressor.utils.pytorch import _load_int8_orchestration
 
 from .configuration import IncOptimizedConfig, IncQuantizationConfig
-from .utils import WEIGHTS_NAME, IncDataLoader, _cfgs_to_fx_cfgs, is_torch_less_than_1_13, inputs_to_dataloader
+from .utils import WEIGHTS_NAME, IncDataLoader, _cfgs_to_fx_cfgs, inputs_to_dataloader, is_torch_less_than_1_13
 
 
 logger = logging.getLogger(__name__)
@@ -134,7 +134,9 @@ class IncQuantizer:
 
 
 # Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
-def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module, example_inputs: list[torch.Tensor]=None) -> torch.nn.Module:
+def apply_quantization_from_config(
+    q_config: Dict, model: torch.nn.Module, example_inputs: list[torch.Tensor] = None
+) -> torch.nn.Module:
     """
     Apply Intel Neural Compressor quantization steps on the given model.
 
@@ -357,10 +359,9 @@ class IncQuantizedModel:
             inc_config = IncOptimizedConfig.from_pretrained(config_path, **download_kwargs).config
 
         if "is_oneshot" in inc_config and inc_config["is_oneshot"]:
-            return _load_int8_orchestration(model,
-                                            inc_config,
-                                            state_dict,
-                                            dataloader=inputs_to_dataloader(example_inputs))
+            return _load_int8_orchestration(
+                model, inc_config, state_dict, dataloader=inputs_to_dataloader(example_inputs)
+            )
 
         q_model = apply_quantization_from_config(inc_config, model, example_inputs)
 
