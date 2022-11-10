@@ -543,7 +543,7 @@ class OVTrainer(Trainer):
             use_external_data_format = (
                 onnx_config.use_external_data_format(self.model.num_parameters()) or self.ov_config.dump_onnx
             )
-            f = io.BytesIO() if not use_external_data_format else os.path.Path(output_dir) / "model.onnx"
+            f = io.BytesIO() if not use_external_data_format else os.path.join(output_dir, "model.onnx")
             self._onnx_export(self.model, onnx_config, self.ov_config, f)
 
             # Load and save the compressed model
