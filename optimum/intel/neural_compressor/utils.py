@@ -118,10 +118,9 @@ def inputs_to_dataloader(example_inputs):
         torch dataloader
     """
 
-    import torch
-
     if not isinstance(example_inputs, Tuple) and not isinstance(example_inputs, List):
-        raise ValueError("example_inputs should be a tuple.")
+        # raise ValueError("example_inputs should be a tuple.")
+        return None
 
     dataset = torch.utils.data.TensorDataset(*(example_inputs))
     return torch.utils.data.DataLoader(dataset, batch_size=example_inputs[0].shape[0])

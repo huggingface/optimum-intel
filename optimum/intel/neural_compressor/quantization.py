@@ -48,7 +48,7 @@ from neural_compressor.experimental import Quantization
 from neural_compressor.utils.pytorch import _load_int8_orchestration
 
 from .configuration import IncOptimizedConfig, IncQuantizationConfig
-from .utils import WEIGHTS_NAME, IncDataLoader, _cfgs_to_fx_cfgs, is_torch_less_than_1_13
+from .utils import WEIGHTS_NAME, IncDataLoader, _cfgs_to_fx_cfgs, is_torch_less_than_1_13, inputs_to_dataloader
 
 
 logger = logging.getLogger(__name__)
@@ -102,9 +102,7 @@ class IncQuantizer:
             calib_dataloader = IncDataLoader.from_pytorch_dataloader(calib_dataloader)
         elif example_inputs is not None:
             if is_torch_less_than_1_13:
-                raise ValueError("PyTorch must be 1.13 or above.")
-
-            from optimum.intel.neural_compressor.utils import inputs_to_dataloader
+                raise EnvironmentError("PyTorch must be 1.13 or above.")
 
             calib_dataloader = inputs_to_dataloader(example_inputs)
 
@@ -136,7 +134,7 @@ class IncQuantizer:
 
 
 # Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
-def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> torch.nn.Module:
+def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module, example_inputs: list[torch.Tensor]=None) -> torch.nn.Module:
     """
     Apply Intel Neural Compressor quantization steps on the given model.
 
@@ -168,9 +166,19 @@ def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> to
         if not q_config["fx_sub_module_list"]:
             if quant_mode == IncQuantizationMode.AWARE_TRAINING:
                 q_model.train()
-                q_model = prepare_qat_fx(q_model, fx_op_cfgs)
+                if is_torch_less_than_1_13:
+                    q_model = prepare_qat_fx(q_model, fx_op_cfgs)
+                else:
+                    if example_inputs is None:
+                        logging.warning("PyTorch 1.13 or above version need example_inputs for FX trace.")
+                    q_model = prepare_qat_fx(q_model, fx_op_cfgs, example_inputs)
             else:
-                q_model = prepare_fx(q_model, fx_op_cfgs)
+                if is_torch_less_than_1_13:
+                    q_model = prepare_fx(q_model, fx_op_cfgs)
+                else:
+                    if example_inputs is None:
+                        logging.warning("PyTorch 1.13 or above version need example_inputs for FX trace.")
+                    q_model = prepare_fx(q_model, fx_op_cfgs, example_inputs)
             q_model = convert_fx(q_model)
 
         else:
@@ -246,6 +254,8 @@ class IncQuantizedModel:
             state_dict (`Dict[str, torch.Tensor]`, *optional*):
                 State dictionary of the quantized model, if not specified q_model_name will be used to load the
                 state dictionary.
+            example_inputs(List[torch.Tensor], *optional*):
+                List of input tensors for FX trace if PyTorch >= 1.13.
         Returns:
             q_model: Quantized model.
         """
@@ -257,6 +267,7 @@ class IncQuantizedModel:
         ]
         download_kwargs = {name: kwargs.get(name, default_value) for (name, default_value) in download_kwarg_default}
         state_dict = kwargs.get("state_dict", None)
+        example_inputs = kwargs.get("example_inputs", None)
 
         config = AutoConfig.from_pretrained(model_name_or_path)
         model_class = _get_model_class(config, cls.TRANSFORMERS_AUTO_CLASS._model_mapping)
@@ -346,9 +357,12 @@ class IncQuantizedModel:
             inc_config = IncOptimizedConfig.from_pretrained(config_path, **download_kwargs).config
 
         if "is_oneshot" in inc_config and inc_config["is_oneshot"]:
-            return _load_int8_orchestration(model, inc_config, state_dict)
+            return _load_int8_orchestration(model,
+                                            inc_config,
+                                            state_dict,
+                                            dataloader=inputs_to_dataloader(example_inputs))
 
-        q_model = apply_quantization_from_config(inc_config, model)
+        q_model = apply_quantization_from_config(inc_config, model, example_inputs)
 
         q_model.load_state_dict(state_dict, strict=False)
 
