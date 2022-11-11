@@ -17,7 +17,7 @@ import logging
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Dict, Optional, Union
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Union
 
 import torch
 from torch.quantization import add_observer_, convert
@@ -88,8 +88,8 @@ class IncQuantizer:
                 DataLoader for post-training quantization calibration.
             calib_func (`Callable`):
                 Calibration function for post training static quantization, If user specifies calib_func, calib_dataloader is also needed for PyTorch>1.12.
-            example_inputs (`Union[torch.Tensor, numpy array]`, *optional*):
-                Be used to FX trace for PyTorch>1.13, if calib_dataloader is not be specified,
+            example_inputs (`List`, *optional*):
+                List of the torch.Tensor which be used to FX trace for PyTorch>1.13, if calib_dataloader is not be specified,
                 then you must specify the example_inputs.
         """
 
@@ -135,7 +135,7 @@ class IncQuantizer:
 
 # Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
 def apply_quantization_from_config(
-    q_config: Dict, model: torch.nn.Module, example_inputs: list[torch.Tensor] = None
+    q_config: Dict, model: torch.nn.Module, example_inputs: List = None
 ) -> torch.nn.Module:
     """
     Apply Intel Neural Compressor quantization steps on the given model.
