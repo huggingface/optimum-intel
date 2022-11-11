@@ -55,6 +55,12 @@ def parse_args():
         help="The input of the model, like: 'a photo of an astronaut riding a horse on mars'.",
     )
     parser.add_argument(
+        "--calib_text",
+        type=str,
+        default="Womens Princess Little Deer Native American Costume",
+        help="The calibration data of the model, like: 'Womens Princess Little Deer Native American Costume'.",
+    )
+    parser.add_argument(
         "--output_dir",
         type=str,
         default="saved_results",
@@ -80,7 +86,7 @@ def parse_args():
     parser.add_argument(
         "--tolerance_criterion",
         type=float,
-        default=100,
+        default=0.01,
         help="Performance tolerance when optimizing the model.",
     )
     parser.add_argument(
@@ -105,6 +111,9 @@ def parse_args():
         help="random seed",
     )
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed: local_rank")
+    parser.add_argument(
+        "--base_images", type=str, default="base_images", help="Path to training images for FID input."
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -196,7 +205,7 @@ def main():
             num_images_per_prompt=args.num_images_per_prompt,
         ).images
         grid = image_grid(fp32_images, rows=_rows, cols=args.num_images_per_prompt // _rows)
-        grid.save(os.path.join(tmp_fp32_images, "astronaut_rides_horse-fp32.png"))
+        grid.save(os.path.join(tmp_fp32_images, "fp32.png"))
 
         attr_list = ["unet"]
         for name in attr_list:
@@ -207,13 +216,13 @@ def main():
                 setattr(pipe, name, model)
                 with torch.no_grad():
                     for i in range(calib_num):
-                        new_images = pipe(
-                            args.input_text,
+                        pipe(
+                            args.calib_text,
                             guidance_scale=7.5,
                             num_inference_steps=50,
                             generator=generator,
                             num_images_per_prompt=args.num_images_per_prompt,
-                        ).images
+                        )
 
             def eval_func(model):
                 setattr(pipe, name, model)
@@ -226,11 +235,11 @@ def main():
                         generator=generator,
                         num_images_per_prompt=args.num_images_per_prompt,
                     ).images
-                    if os.path.isfile(os.path.join(tmp_int8_images, "astronaut_rides_horse-int8.png")):
-                        os.remove(os.path.join(tmp_int8_images, "astronaut_rides_horse-int8.png"))
+                    if os.path.isfile(os.path.join(tmp_int8_images, "int8.png")):
+                        os.remove(os.path.join(tmp_int8_images, "int8.png"))
                     grid = image_grid(new_images, rows=_rows, cols=args.num_images_per_prompt // _rows)
-                    grid.save(os.path.join(tmp_int8_images, "astronaut_rides_horse-int8.png"))
-                    fid = fid_score.calculate_fid_given_paths((tmp_fp32_images, tmp_int8_images), 1, "cpu", 2048, 8)
+                    grid.save(os.path.join(tmp_int8_images, "int8.png"))
+                    fid = fid_score.calculate_fid_given_paths((args.base_images, tmp_int8_images), 1, "cpu", 2048, 8)
                     return fid
 
             quantizer = None
