@@ -88,7 +88,7 @@ IMAGE_INPUTS_DOCSTRING = r"""
 
 class OVModel(OVBaseModel):
 
-    base_model_prefix = "ov_model"
+    base_model_prefix = "openvino_model"
     auto_model_class = AutoModel
 
     def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):

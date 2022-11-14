@@ -40,8 +40,8 @@ DEFAULT_QUANTIZATION_CONFIG = {
 
 class OVConfig(BaseConfig):
 
-    CONFIG_NAME = "ov_config.json"
-    FULL_CONFIGURATION_FILE = "ov_config.json"
+    CONFIG_NAME = "openvino_config.json"
+    FULL_CONFIGURATION_FILE = "openvino_config.json"
 
     def __init__(
         self,
