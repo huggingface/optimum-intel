@@ -22,6 +22,7 @@ import logging
 import math
 import os
 import sys
+import time
 
 import torch
 from PIL import Image
@@ -30,6 +31,7 @@ from torch.utils.data import DataLoader, Dataset
 from accelerate.utils import set_seed
 from diffusers import StableDiffusionPipeline
 from optimum.intel.neural_compressor import IncOptimizer, IncQuantizationConfig, IncQuantizationMode, IncQuantizer
+from optimum.intel.neural_compressor.utils import load_quantized_model
 from pytorch_fid import fid_score
 
 
@@ -41,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 def parse_args():
     """Parse arguments"""
-    parser = argparse.ArgumentParser(description="Simple example of a quntization script.")
+    parser = argparse.ArgumentParser(description="Example of a post-training quantization script.")
     parser.add_argument(
         "--model_name_or_path",
         type=str,
@@ -124,7 +126,8 @@ def parse_args():
 
 
 def image_grid(imgs, rows, cols):
-    assert len(imgs) == rows * cols
+    if not len(imgs) == rows * cols:
+        raise ValueError("The specified number of rows and columns are not correct.")
 
     w, h = imgs[0].size
     grid = Image.new("RGB", size=(cols * w, rows * h))
@@ -136,8 +139,6 @@ def image_grid(imgs, rows, cols):
 
 
 def benchmark(pipe, generator):
-    import time
-
     warmup = 2
     total = 5
     total_time = 0
@@ -149,8 +150,8 @@ def benchmark(pipe, generator):
             end2 = time.time()
             if i >= warmup:
                 total_time += end2 - start2
-            print("inference latency: ", str(end2 - start2) + "s")
-    print("avg_latency: ", (total_time) / (total - warmup), "s")
+            print("Total inference latency: ", str(end2 - start2) + "s")
+    print("Average latency: ", (total_time) / (total - warmup), "s")
 
 
 class CalibDataset(Dataset):
@@ -250,11 +251,7 @@ def main():
             default_config = os.path.dirname(__file__)
 
             if args.apply_quantization:
-
-                q8_config = IncQuantizationConfig.from_pretrained(
-                    default_config,
-                    config_file_name="quantization.yml",
-                )
+                q8_config = IncQuantizationConfig.from_pretrained(default_config)
 
                 # Set metric tolerance if specified
                 if args.tolerance_criterion is not None:
@@ -282,11 +279,7 @@ def main():
                     calib_func=calibration_func,
                 )
 
-                optimizer = IncOptimizer(
-                    model,
-                    quantizer=quantizer,
-                )
-
+                optimizer = IncOptimizer(model, quantizer=quantizer)
                 optimized_model = optimizer.fit()
                 result_optimized_model = eval_func(optimized_model)
                 setattr(pipe, name, optimized_model)
@@ -296,11 +289,8 @@ def main():
 
                 logger.info(f"Optimized model {name} saved to: {args.output_dir}.")
         if args.apply_quantization and args.verify_loading:
-
             # Load the model obtained after Intel Neural Compressor quantization
-            from neural_compressor.utils.pytorch import load
-
-            loaded_model = load(args.output_dir, model=getattr(pipe, "unet"))
+            loaded_model = load_quantized_model(args.output_dir, model=getattr(pipe, "unet"))
             loaded_model.eval()
             result_loaded_model = eval_func(loaded_model)
 
@@ -310,8 +300,6 @@ def main():
                 logger.info(f"The quantized model was successfully loaded.")
     if args.benchmark and args.int8:
         print("====int8 inference====")
-        from optimum.intel.neural_compressor.utils import load_quantized_model
-
         loaded_model = load_quantized_model(args.output_dir, model=getattr(pipe, "unet"))
         loaded_model.eval()
         setattr(pipe, "unet", loaded_model)

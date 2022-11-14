@@ -17,18 +17,9 @@ limitations under the License.
 # Stable Diffusion
 
 The script [`run_diffusion.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/text-to-image/run_diffusion.py)
-allows us to apply different quantization approaches (such as dynamic, static) using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for 
-text to image tasks.
+allows us to apply different post-training quantization approaches (such as dynamic and static) using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for text to image tasks.
 
-The following example applies post-training static quantization on a stable-diffusion with pretrained model:[lambdalabs/sd-pokemon-diffusers](https://huggingface.co/lambdalabs/sd-pokemon-diffusers). In this example, we only quantize the unet model which is the performance critical in the diffusion pipeline, and the diffusion pipeline has four models: safety_checker, text_encoder, unet, vae. 
-
-## Prepare 
-### pretrained model
-```bash
-git lfs install
-git clone https://huggingface.co/lambdalabs/sd-pokemon-diffusers
-```
-Now, the models are in sd-pokemon-diffusers
+The following example applies post-training static quantization on a stable diffusion [model](https://huggingface.co/lambdalabs/sd-pokemon-diffusers)fine-tuned on Pokémon. In this example, we only quantize the unet model which is the performance critical in the diffusion pipeline, the diffusion pipeline has four models: safety_checker, text_encoder, unet, vae.
 
 ### Ground Truth Images
 In this case, we used FID metric to evaluate the model, so we should download [training datasets](https://huggingface.co/datasets/lambdalabs/pokemon-blip-captions) and choose one image to a directory(like "base_images").
@@ -37,7 +28,7 @@ In this case, we used FID metric to evaluate the model, so we should download [t
 ## Quantization
 ```bash
 python run_diffusion.py \
-    --model_name_or_path sd-pokemon-diffusers \
+    --model_name_or_path lambdalabs/sd-pokemon-diffusers \
     --apply_quantization \
     --quantization_approach static \
     --tolerance_criterion 0.02 \
