@@ -85,3 +85,26 @@ def _cfgs_to_fx_cfgs(op_cfgs: Dict, observer_type: str = "post_training_static_q
         fx_op_cfgs["module_name"] = op_tuple_cfg_list
 
     return fx_op_cfgs
+
+
+def load_quantized_model(checkpoint_dir_or_file, model, **kwargs):
+    """Load quantized model which quantized with neural_compressor.
+
+    args:
+        checkpoint_dir_or_file (str): path or saved weights and configures which quantized.
+        model (torch.nn.Module): Original FP32 model.
+
+    return:
+        quantized model.
+
+    """
+    import os
+
+    from neural_compressor.utils.pytorch import load
+
+    if os.path.isdir(checkpoint_dir_or_file):
+        checkpoint_dir_or_file = os.path.join(
+            os.path.abspath(os.path.expanduser(checkpoint_dir_or_file)), WEIGHTS_NAME
+        )
+
+    return load(checkpoint_dir_or_file, model, **kwargs)

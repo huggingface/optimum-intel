@@ -42,7 +42,7 @@ from transformers.utils.versions import require_version
 
 import neural_compressor
 from huggingface_hub import hf_hub_download
-from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
+from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig, get_torch_version
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization
@@ -73,6 +73,7 @@ class IncQuantizer:
         eval_func: Optional[Callable],
         train_func: Optional[Callable] = None,
         calib_dataloader: Optional[DataLoader] = None,
+        calib_func: Optional[Callable] = None,
     ):
         """
         Arguments:
@@ -85,13 +86,15 @@ class IncQuantizer:
                 Training function for quantization aware training approach.
             calib_dataloader (`DataLoader`, *optional*):
                 DataLoader for post-training quantization calibration.
+            calib_func (`Callable`):
+                Calibration function for post training static quantization, If user specifies calib_func, calib_dataloader is also needed for PyTorch>1.12.
         """
 
         self.config = config.config if isinstance(config, IncQuantizationConfig) else Quantization_Conf(config)
         self.approach = IncQuantizationMode(self.config.usr_cfg.quantization.approach)
         self.eval_func = eval_func
         self.train_func = train_func
-
+        self.calib_func = calib_func
         if calib_dataloader is not None:
             calib_dataloader = IncDataLoader.from_pytorch_dataloader(calib_dataloader)
         self.calib_dataloader = calib_dataloader
@@ -104,9 +107,10 @@ class IncQuantizer:
         self.quantization.eval_func = self.eval_func
 
         if self.approach == IncQuantizationMode.STATIC:
-            if self.calib_dataloader is None:
-                raise ValueError("calib_dataloader must be provided for static quantization.")
-            self.quantization._calib_dataloader = self.calib_dataloader
+            if self.calib_func is not None:
+                self.quantization.calib_func = self.calib_func
+            if self.calib_dataloader is not None:
+                self.quantization._calib_dataloader = self.calib_dataloader
 
         if self.approach == IncQuantizationMode.AWARE_TRAINING:
             if self.train_func is None:
