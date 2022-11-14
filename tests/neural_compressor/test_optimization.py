@@ -41,7 +41,7 @@ from optimum.intel.neural_compressor.quantization import (
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
-set_seed(2022)
+set_seed(1009)
 
 
 class IncQuantizationTest(unittest.TestCase):
