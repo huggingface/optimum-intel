@@ -95,4 +95,4 @@ python run_diffusion.py \
     --benchmark \
     --int8
 ```
->**Nonte:** You will see the inference performance speedup with Intel DL Boost (VNNI) on Intel(R) Xeon(R) hardware. You may also refer to [Performance Tuning Guide](https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/performance_tuning/tuning_guide.html) for more optimizations.
+>**Note:** You will see the inference performance speedup with Intel DL Boost (VNNI) on Intel(R) Xeon(R) hardware. You may also refer to [Performance Tuning Guide](https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/performance_tuning/tuning_guide.html) for more optimizations.
