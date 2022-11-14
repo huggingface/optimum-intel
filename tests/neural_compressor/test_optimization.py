@@ -25,7 +25,7 @@ from transformers import (
     EvalPrediction,
     TrainingArguments,
     default_data_collator,
-    set_seed
+    set_seed,
 )
 
 from optimum.intel.neural_compressor import IncDistiller, IncOptimizer, IncPruner, IncQuantizer, IncTrainer
@@ -465,6 +465,3 @@ class IncOptimizerTest(unittest.TestCase):
 
             # Verification quantized model was correctly loaded
             self.assertEqual(optimized_model_result, loaded_model_result)
-
-if __name__ == "__main__":
-    unittest.main()
