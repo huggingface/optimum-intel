@@ -95,4 +95,4 @@ python run_diffusion.py \
     --benchmark \
     --int8
 ```
->**Nonte:** The performance of quantized model will get 2.56X speedup in Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz with Tcmalloc and IOMP. The Tcmalloc and IOMP usage are in [Performance Tuning Guide](https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/performance_tuning/tuning_guide.html)
+>**Nonte:** You will see the inference performance speedup with Intel DL Boost (VNNI) on Intel(R) Xeon(R) hardware. You may also refer to [Performance Tuning Guide](https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/performance_tuning/tuning_guide.html) for more optimizations.
