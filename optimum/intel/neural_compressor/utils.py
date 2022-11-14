@@ -13,12 +13,15 @@
 #  limitations under the License.
 
 import logging
+import os
 from collections import UserDict
 from typing import Dict
 
 import torch
 from packaging import version
 from torch.utils.data import DataLoader
+
+from neural_compressor.utils.pytorch import load
 
 
 logger = logging.getLogger(__name__)
@@ -52,7 +55,8 @@ class IncDataLoader(DataLoader):
 
 def _cfgs_to_fx_cfgs(op_cfgs: Dict, observer_type: str = "post_training_static_quant") -> Dict:
     """Inc function which convert a quantization config to a format that meets the requirements of torch.fx.
-    Args:
+
+    Arguments:
         op_cfgs (`dict`):
             Dictionary of quantization configure for each op.
         observer_type (`str`):
@@ -87,21 +91,16 @@ def _cfgs_to_fx_cfgs(op_cfgs: Dict, observer_type: str = "post_training_static_q
     return fx_op_cfgs
 
 
-def load_quantized_model(checkpoint_dir_or_file, model, **kwargs):
-    """Load quantized model which quantized with neural_compressor.
-
-    args:
-        checkpoint_dir_or_file (str): path or saved weights and configures which quantized.
-        model (torch.nn.Module): Original FP32 model.
-
-    return:
-        quantized model.
-
+def load_quantized_model(checkpoint_dir_or_file: str, model: torch.nn.Module, **kwargs) -> torch.nn.Module:
     """
-    import os
+    Returns the quantized model, which was quantized through neural_compressor.
 
-    from neural_compressor.utils.pytorch import load
-
+    Arguments:
+        checkpoint_dir_or_file (`str`):
+            The path to the model checkpoint containing the quantization information.
+        model (`torch.nn.Module`):
+            The original FP32 model.
+    """
     if os.path.isdir(checkpoint_dir_or_file):
         checkpoint_dir_or_file = os.path.join(
             os.path.abspath(os.path.expanduser(checkpoint_dir_or_file)), WEIGHTS_NAME
