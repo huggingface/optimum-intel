@@ -234,37 +234,46 @@ class OptimizationArguments:
     )
 
 
-#Mean Pooling - Take attention mask into account for correct averaging
+# Mean Pooling - Take attention mask into account for correct averaging
 def mean_pooling(model_output, attention_mask):
-    token_embeddings = model_output['last_hidden_state'] #First element of model_output contains all token embeddings
+    token_embeddings = model_output["last_hidden_state"]  # First element of model_output contains all token embeddings
     input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
     return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+
 
 class SetFitModel(torch.nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
-        if hasattr(model, 'config'):
+        if hasattr(model, "config"):
             self.config = model.config
-    
+
     def forward(self, input_ids, attention_mask, token_type_ids=None, *args, **kwargs):
         if token_type_ids is not None:
-            model_output = self.model(input_ids=input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
+            model_output = self.model(
+                input_ids=input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask
+            )
         else:
             model_output = self.model(input_ids=input_ids, attention_mask=attention_mask)
         sentence_embeddings = mean_pooling(model_output, attention_mask)
         return sentence_embeddings
 
-class CalibrationDataset():
+
+class CalibrationDataset:
     def __init__(self, dataset):
         self.dataset = dataset
 
     def __getitem__(self, idx):
         data = self.dataset[idx]
-        return torch.tensor(data['input_ids']), torch.tensor(data['attention_mask']), torch.tensor(data['token_type_ids'])
+        return (
+            torch.tensor(data["input_ids"]),
+            torch.tensor(data["attention_mask"]),
+            torch.tensor(data["token_type_ids"]),
+        )
 
     def __len__(self):
         return len(self.dataset)
+
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -396,7 +405,7 @@ def main():
 
     def preprocess_function(examples):
         # Tokenize the texts
-        args = ((examples["text"],))
+        args = (examples["text"],)
         result = tokenizer(*args, padding=padding, max_length=max_seq_length, truncation=True)
         result["label"] = examples["intent"]
         return result
@@ -405,7 +414,7 @@ def main():
         preprocessed_datasets = raw_datasets.map(
             preprocess_function, batched=True, load_from_cache_file=not data_args.overwrite_cache
         )
-        preprocessed_datasets = preprocessed_datasets.remove_columns(['text', 'intent'])
+        preprocessed_datasets = preprocessed_datasets.remove_columns(["text", "intent"])
 
     if training_args.do_train:
         if "train" not in preprocessed_datasets:
@@ -452,16 +461,19 @@ def main():
 
     resume_from_checkpoint = training_args.resume_from_checkpoint
     metric_name = "accuracy"
+
     def eval_func(model):
         setfit_model = SetFitModel(model)
+
         def get_data(model, dataloader):
             embeddings = []
             labels = []
             for model_input in tqdm(dataloader):
-                labels.append(model_input.pop('labels').numpy())
+                labels.append(model_input.pop("labels").numpy())
                 embedding = model(**model_input)
                 embeddings.append(embedding.detach().cpu().numpy())
             return np.concatenate(embeddings, axis=0), np.concatenate(labels, axis=0)
+
         # train logistic regressor
         embeddings, labels = get_data(setfit_model, trainer.get_train_dataloader())
         sgd = LogisticRegression(max_iter=200)
@@ -482,7 +494,9 @@ def main():
 
     result_baseline_model = eval_func(model)
 
-    default_config = os.path.join(os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir, os.path.pardir)), "config")
+    default_config = os.path.join(
+        os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir, os.path.pardir)), "config"
+    )
 
     if optim_args.apply_distillation:
 
@@ -491,16 +505,23 @@ def main():
                 super().__init__()
                 self.model = SetFitModel(model)
                 self.tokenizer = tokenizer
-                if hasattr(model, 'config'):
+                if hasattr(model, "config"):
                     self.config = model.config
-            
+
             def forward(self, sentences=None, *args, **kwargs):
-                assert isinstance(sentences, (tuple, list)) and len(sentences) == 2, \
-                    "sentences should be a tuple or a list with 2 sentences string."
-                inputs = self.tokenizer(sentences[0]+sentences[1], padding=padding, max_length=max_seq_length, truncation=True, return_tensors='pt')
+                assert (
+                    isinstance(sentences, (tuple, list)) and len(sentences) == 2
+                ), "sentences should be a tuple or a list with 2 sentences string."
+                inputs = self.tokenizer(
+                    sentences[0] + sentences[1],
+                    padding=padding,
+                    max_length=max_seq_length,
+                    truncation=True,
+                    return_tensors="pt",
+                )
                 embeddings = self.model(**inputs)
                 length = len(embeddings) // 2
-                return {"logits":torch.cosine_similarity(embeddings[:length], embeddings[length:]), "loss":0}
+                return {"logits": torch.cosine_similarity(embeddings[:length], embeddings[length:]), "loss": 0}
 
         if optim_args.teacher_model_name_or_path is None:
             raise ValueError("A teacher model is needed to apply distillation.")
@@ -508,9 +529,7 @@ def main():
         if not training_args.do_train:
             raise ValueError("do_train must be set to True for distillation.")
 
-        teacher_config = AutoConfig.from_pretrained(
-            optim_args.teacher_model_name_or_path
-        )
+        teacher_config = AutoConfig.from_pretrained(optim_args.teacher_model_name_or_path)
         teacher_tokenizer = AutoTokenizer.from_pretrained(
             optim_args.teacher_model_name_or_path,
             use_fast=model_args.use_fast_tokenizer,
@@ -530,20 +549,22 @@ def main():
             cache_dir=model_args.cache_dir,
         )
 
-        examples = raw_datasets['train']['text']
+        examples = raw_datasets["train"]["text"]
         examples_duplicate_ratio = 100
         examples_duplicate = []
         for i in range(int(examples_duplicate_ratio)):
             examples_duplicate.extend(examples)
-        examples_duplicate.extend(examples[:int(len(examples) * (examples_duplicate_ratio - int(examples_duplicate_ratio)))])
+        examples_duplicate.extend(
+            examples[: int(len(examples) * (examples_duplicate_ratio - int(examples_duplicate_ratio)))]
+        )
         if data_args.max_train_samples is not None:
-            examples_duplicate = raw_datasets['train'].select(range(data_args.max_train_samples))['text']
+            examples_duplicate = raw_datasets["train"].select(range(data_args.max_train_samples))["text"]
         shuffled_examples_duplicate = copy.deepcopy(examples_duplicate)
         distillation_dataset = list(zip(examples_duplicate, shuffled_examples_duplicate))
 
         def sentences_data_collator(sentences_pairs):
-            return {'sentences':[[sp[i] for sp in sentences_pairs] for i in range(len(sentences_pairs[0]))]}
-        
+            return {"sentences": [[sp[i] for sp in sentences_pairs] for i in range(len(sentences_pairs[0]))]}
+
         def train_func(model):
             model = SetFitModelTraining(model, tokenizer)
             trainer.model_wrapped = model
@@ -568,7 +589,7 @@ def main():
 
         # Creation Distillation object used for IncTrainer training loop
         distiller = IncDistiller(
-            teacher_model=teacher_model, config=distillation_config, eval_func=lambda x:1, train_func=train_func
+            teacher_model=teacher_model, config=distillation_config, eval_func=lambda x: 1, train_func=train_func
         )
 
     if optim_args.apply_quantization:
@@ -605,7 +626,9 @@ def main():
 
             q8_config.set_config("model.framework", "pytorch_fx")
 
-        calib_dataloader = DataLoader(CalibrationDataset(train_dataset), 1) if quant_approach == IncQuantizationMode.STATIC else None
+        calib_dataloader = (
+            DataLoader(CalibrationDataset(train_dataset), 1) if quant_approach == IncQuantizationMode.STATIC else None
+        )
         quantizer = IncQuantizer(
             q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
         )
