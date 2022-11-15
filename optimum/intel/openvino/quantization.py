@@ -144,7 +144,8 @@ class OVQuantizer(OptimumQuantizer):
         onnx_config = onnx_config_cls(self.model.config)
         compressed_model.eval()
         use_external_data_format = (
-            onnx_config.use_external_data_format(compressed_model.num_parameters()) or quantization_config.save_onnx_model
+            onnx_config.use_external_data_format(compressed_model.num_parameters())
+            or quantization_config.save_onnx_model
         )
         f = io.BytesIO() if not use_external_data_format else save_directory / "model.onnx"
 

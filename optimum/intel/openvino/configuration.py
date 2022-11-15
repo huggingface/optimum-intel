@@ -44,7 +44,11 @@ class OVConfig(BaseConfig):
     FULL_CONFIGURATION_FILE = "openvino_config.json"
 
     def __init__(
-        self, compression: Optional[Dict] = None, input_info: Optional[List] = None, save_onnx_model: bool = False, **kwargs
+        self,
+        compression: Optional[Dict] = None,
+        input_info: Optional[List] = None,
+        save_onnx_model: bool = False,
+        **kwargs,
     ):
         super().__init__()
         self.compression = compression or DEFAULT_QUANTIZATION_CONFIG

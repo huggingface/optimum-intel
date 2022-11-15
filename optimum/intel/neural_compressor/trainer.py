@@ -37,6 +37,7 @@ from transformers.configuration_utils import PretrainedConfig
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 from transformers.deepspeed import deepspeed_init
 from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
+
 # Integrations must be imported before ML frameworks:
 from transformers.integrations import hp_params
 from transformers.modeling_utils import get_parameter_dtype
@@ -609,7 +610,7 @@ class IncTrainer(Trainer):
             teacher_output = teacher_output / self.agent.criterion.temperature
             loss = self.agent.criterion.teacher_student_loss_cal(student_output, teacher_output)
             distillation_loss = loss if distillation_loss is None else distillation_loss + loss
-        distillation_loss *= self.agent.criterion.temperature**2
+        distillation_loss *= self.agent.criterion.temperature ** 2
         return distillation_loss
 
     def evaluate(
