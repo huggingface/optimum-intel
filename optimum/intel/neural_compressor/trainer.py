@@ -24,7 +24,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 import datasets
 import torch
 import torch.distributed as dist
-from packaging import version
+from packaging.version import Version
+
 # from packaging import version
 from torch import nn
 from torch.utils.data import Dataset
@@ -34,33 +35,28 @@ from tqdm.auto import tqdm
 from transformers import Trainer
 from transformers.configuration_utils import PretrainedConfig
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
+from transformers.deepspeed import deepspeed_init
 from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
 # Integrations must be imported before ML frameworks:
 from transformers.integrations import hp_params
 from transformers.modeling_utils import get_parameter_dtype
+from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_callback import TrainerState
 from transformers.trainer_pt_utils import IterableDatasetShard
-from transformers.trainer_utils import (
-    HPSearchBackend,
-    ShardedDDPOption,
-    TrainOutput,
-    get_last_checkpoint,
-    set_seed,
-    speed_metrics,
-)
-from transformers.utils import logging
+from transformers.trainer_utils import HPSearchBackend, ShardedDDPOption, TrainOutput, has_length, speed_metrics
+from transformers.utils import is_sagemaker_mp_enabled, logging
 
 from neural_compressor.experimental import Component
 
-from .utils import TRAINING_ARGS_NAME
+from .utils import TRAINING_ARGS_NAME, is_torch_less_than_1_13
 
 
 if TYPE_CHECKING:
     import optuna
 
 
-__version__ = "4.9.2"
+__version__ = "4.22.2"
 
 logger = logging.get_logger(__name__)
 
@@ -74,17 +70,16 @@ class IncTrainer(Trainer):
         ignore_keys_for_eval: Optional[List[str]] = None,
         **kwargs,
     ):
+
         """
         Main training entry point.
-
         Args:
             agent (:obj:`Component`, *optional*):
                 Component object containing the compression objects to apply during the training process.
             resume_from_checkpoint (`str` or `bool`, *optional*):
-                If a `str`, local path to a saved checkpoint as saved by a previous instance of
-                :class:`~transformers.Trainer`. If a `bool` and equals `True`, load the last checkpoint in
-                `args.output_dir` as saved by a previous instance of :class:`~transformers.Trainer`. If present,
-                training will resume from the model/optimizer/scheduler states loaded here.
+                If a `str`, local path to a saved checkpoint as saved by a previous instance of [`IncTrainer`]. If a
+                `bool` and equals `True`, load the last checkpoint in *args.output_dir* as saved by a previous instance
+                of [`IncTrainer`]. If present, training will resume from the model/optimizer/scheduler states loaded here.
             trial (`optuna.Trial` or `Dict[str, Any]`, *optional*):
                 The trial run or the hyperparameter dictionary for hyperparameter search.
             ignore_keys_for_eval (`List[str]`, *optional*):
@@ -93,84 +88,15 @@ class IncTrainer(Trainer):
             kwargs:
                 Additional keyword arguments used to hide deprecated arguments
         """
-        resume_from_checkpoint = None if not resume_from_checkpoint else resume_from_checkpoint
-        # memory metrics - must set up as early as possible
-        self._memory_tracker.start()
-
-        args = self.args
-
-        self.is_in_train = True
         self.agent = agent
 
-        if isinstance(agent, Component):
-            agent.pre_epoch_begin()
+        return super().train(resume_from_checkpoint, trial, ignore_keys_for_eval)
 
-        # do_train is not a reliable argument, as it might not be set and .train() still called, so
-        # the following is a workaround:
-        if args.fp16_full_eval and not args.do_train:
-            self._move_model_to_device(self.model, args.device)
+    def _inner_training_loop(
+        self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
+    ):
 
-        if "model_path" in kwargs:
-            resume_from_checkpoint = kwargs.pop("model_path")
-            warnings.warn(
-                "`model_path` is deprecated and will be removed in a future version. Use `resume_from_checkpoint` "
-                "instead.",
-                FutureWarning,
-            )
-        if len(kwargs) > 0:
-            raise TypeError(f"train() received got unexpected keyword arguments: {', '.join(list(kwargs.keys()))}.")
-        # This might change the seed so needs to run first.
-        self._hp_search_setup(trial)
-
-        # Model re-init
-        model_reloaded = False
-        if self.model_init is not None:
-            # Seed must be set before instantiating the model when using model_init.
-            set_seed(args.seed)
-            self.model = self.call_model_init(trial)
-            model_reloaded = True
-            # Reinitializes optimizer and scheduler
-            self.optimizer, self.lr_scheduler = None, None
-
-        # Load potential model checkpoint
-        if isinstance(resume_from_checkpoint, bool) and resume_from_checkpoint:
-            resume_from_checkpoint = get_last_checkpoint(args.output_dir)
-            if resume_from_checkpoint is None:
-                raise ValueError(f"No valid checkpoint found in output directory ({args.output_dir})")
-
-        if resume_from_checkpoint is not None:
-            if not os.path.isfile(os.path.join(resume_from_checkpoint, WEIGHTS_NAME)):
-                raise ValueError(f"Can't find a valid checkpoint at {resume_from_checkpoint}")
-
-            logger.info(f"Loading model from {resume_from_checkpoint}).")
-
-            if os.path.isfile(os.path.join(resume_from_checkpoint, CONFIG_NAME)):
-                config = PretrainedConfig.from_json_file(os.path.join(resume_from_checkpoint, CONFIG_NAME))
-                checkpoint_version = config.transformers_version
-                if checkpoint_version is not None and checkpoint_version != __version__:
-                    logger.warn(
-                        f"You are resuming training from a checkpoint trained with {checkpoint_version} of "
-                        f"Transformers but your current version is {__version__}. This is not recommended and could "
-                        "yield to errors or unwanted behaviors."
-                    )
-
-            # We load the model state dict on the CPU to avoid an OOM error.
-            state_dict = torch.load(os.path.join(resume_from_checkpoint, WEIGHTS_NAME), map_location="cpu")
-            # If the model is on the GPU, it still works!
-            self._load_state_dict_in_model(state_dict)
-
-            # release memory
-            del state_dict
-
-        # If model was re-initialized, put it on the right device and update self.model_wrapped
-        if model_reloaded:
-            if self.place_model_on_device:
-                self._move_model_to_device(self.model, args.device)
-            self.model_wrapped = self.model
-
-        # Keeping track whether we can can len() on the dataset or not
-        train_dataset_is_sized = isinstance(self.train_dataset, collections.abc.Sized)
-
+        self._train_batch_size = batch_size
         # Data loader and number of training steps
         train_dataloader = self.get_train_dataloader()
 
@@ -179,42 +105,65 @@ class IncTrainer(Trainer):
         # number of training steps per epoch: num_update_steps_per_epoch
         # total number of training steps to execute: max_steps
         total_train_batch_size = args.train_batch_size * args.gradient_accumulation_steps * args.world_size
-        if train_dataset_is_sized:
-            num_update_steps_per_epoch = len(train_dataloader) // args.gradient_accumulation_steps
+
+        len_dataloader = None
+        if has_length(train_dataloader):
+            len_dataloader = len(train_dataloader)
+            num_update_steps_per_epoch = len_dataloader // args.gradient_accumulation_steps
             num_update_steps_per_epoch = max(num_update_steps_per_epoch, 1)
+            num_examples = self.num_examples(train_dataloader)
             if args.max_steps > 0:
                 max_steps = args.max_steps
                 num_train_epochs = args.max_steps // num_update_steps_per_epoch + int(
                     args.max_steps % num_update_steps_per_epoch > 0
                 )
-                # May be slightly incorrect if the last batch in the training datalaoder has a smaller size but it's
+                # May be slightly incorrect if the last batch in the training dataloader has a smaller size but it's
                 # the best we can do.
                 num_train_samples = args.max_steps * total_train_batch_size
             else:
                 max_steps = math.ceil(args.num_train_epochs * num_update_steps_per_epoch)
                 num_train_epochs = math.ceil(args.num_train_epochs)
-                num_train_samples = len(self.train_dataset) * args.num_train_epochs
-        else:
-            # see __init__. max_steps is set when the dataset has no __len__
+                num_train_samples = self.num_examples(train_dataloader) * args.num_train_epochs
+        elif args.max_steps > 0:  # Rely on max_steps when dataloader does not have a working size
             max_steps = args.max_steps
             # Setting a very large number of epochs so we go as many times as necessary over the iterator.
             num_train_epochs = sys.maxsize
             num_update_steps_per_epoch = max_steps
+            num_examples = total_train_batch_size * args.max_steps
             num_train_samples = args.max_steps * total_train_batch_size
+        else:
+            raise ValueError(
+                "args.max_steps must be set to a positive value if dataloader does not have a length, was"
+                f" {args.max_steps}"
+            )
 
         if DebugOption.UNDERFLOW_OVERFLOW in self.args.debug:
             if self.args.n_gpu > 1:
                 # nn.DataParallel(model) replicates the model, creating new variables and module
                 # references registered here no longer work on other gpus, breaking the module
                 raise ValueError(
-                    "Currently --debug underflow_overflow is not supported under DP. Please use DDP (torch.distributed.launch)."
+                    "Currently --debug underflow_overflow is not supported under DP. Please use DDP"
+                    " (torch.distributed.launch)."
                 )
             else:
                 debug_overflow = DebugUnderflowOverflow(self.model)  # noqa
 
-        delay_optimizer_creation = self.sharded_ddp is not None and self.sharded_ddp != ShardedDDPOption.SIMPLE
-
-        if not delay_optimizer_creation:
+        delay_optimizer_creation = (
+            self.sharded_ddp is not None
+            and self.sharded_ddp != ShardedDDPOption.SIMPLE
+            or is_sagemaker_mp_enabled()
+            or self.fsdp is not None
+        )
+        if args.deepspeed:
+            deepspeed_engine, optimizer, lr_scheduler = deepspeed_init(
+                self, num_training_steps=max_steps, resume_from_checkpoint=resume_from_checkpoint
+            )
+            self.model = deepspeed_engine.module
+            self.model_wrapped = deepspeed_engine
+            self.deepspeed = deepspeed_engine
+            self.optimizer = optimizer
+            self.lr_scheduler = lr_scheduler
+        elif not delay_optimizer_creation:
             self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
         self.state = TrainerState()
@@ -225,6 +174,9 @@ class IncTrainer(Trainer):
             self.model.gradient_checkpointing_enable()
 
         model = self._wrap_model(self.model_wrapped)
+
+        if is_sagemaker_mp_enabled() and resume_from_checkpoint is not None:
+            self._load_from_checkpoint(resume_from_checkpoint, model)
 
         # for the rest of this function `model` is the outside model, whether it was wrapped or not
         if model is not self.model:
@@ -241,10 +193,6 @@ class IncTrainer(Trainer):
         # self.model_wrapped is DDP(Transformers Model), Deepspeed(Transformers Model), etc.
 
         # Train!
-        num_examples = (
-            self.num_examples(train_dataloader) if train_dataset_is_sized else total_train_batch_size * args.max_steps
-        )
-
         logger.info("***** Running training *****")
         logger.info(f"  Num examples = {num_examples}")
         logger.info(f"  Num Epochs = {num_train_epochs}")
@@ -302,6 +250,7 @@ class IncTrainer(Trainer):
         self.state.is_local_process_zero = self.is_local_process_zero()
         self.state.is_world_process_zero = self.is_world_process_zero()
 
+        # tr_loss is a tensor to avoid synchronization of TPUs through .item()
         tr_loss = torch.tensor(0.0).to(args.device)
         # _total_loss_scalar is updated everytime .item() has to be called on tr_loss and stores the sum of all losses
         self._total_loss_scalar = 0.0
@@ -310,17 +259,32 @@ class IncTrainer(Trainer):
 
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
+        if isinstance(self.agent, Component):
+            if is_torch_less_than_1_13:
+                self.agent.on_train_begin()
+            else:
+                self.agent.on_train_begin(self.get_train_dataloader())
+
         # Skip the first epochs_trained epochs to get the random state of the dataloader at the right point.
         if not args.ignore_data_skip:
             for epoch in range(epochs_trained):
-                # We just need to begin an iteration to create the randomization of the sampler.
-                for _ in train_dataloader:
-                    break
+                is_random_sampler = hasattr(train_dataloader, "sampler") and isinstance(
+                    train_dataloader.sampler, RandomSampler
+                )
+                if is_torch_less_than_1_11 or not is_random_sampler:
+                    # We just need to begin an iteration to create the randomization of the sampler.
+                    # That was before PyTorch 1.11 however...
+                    for _ in train_dataloader:
+                        break
+                else:
+                    # Otherwise we need to call the whooooole sampler cause there is some random operation added
+                    # AT THE VERY END!
+                    _ = list(train_dataloader.sampler)
 
         for epoch in range(epochs_trained, num_train_epochs):
             if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
                 train_dataloader.sampler.set_epoch(epoch)
-            elif isinstance(train_dataloader.dataset, IterableDatasetShard):
+            elif hasattr(train_dataloader, "dataset") and isinstance(train_dataloader.dataset, IterableDatasetShard):
                 train_dataloader.dataset.set_epoch(epoch)
 
             epoch_iterator = train_dataloader
@@ -330,12 +294,19 @@ class IncTrainer(Trainer):
                 self._past = None
 
             steps_in_epoch = (
-                len(epoch_iterator) if train_dataset_is_sized else args.max_steps * args.gradient_accumulation_steps
+                len(epoch_iterator)
+                if len_dataloader is not None
+                else args.max_steps * args.gradient_accumulation_steps
             )
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
-            if isinstance(agent, Component):
-                agent.on_epoch_begin(epoch)
 
+            if isinstance(self.agent, Component):
+                self.agent.on_epoch_begin(epoch)
+
+            if epoch == epochs_trained and resume_from_checkpoint is not None and steps_trained_in_current_epoch == 0:
+                self._load_rng_state(resume_from_checkpoint)
+
+            step = -1
             for step, inputs in enumerate(epoch_iterator):
 
                 # Skip past any already trained steps if resuming training
@@ -352,8 +323,9 @@ class IncTrainer(Trainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-                    if isinstance(agent, Component):
-                        agent.on_batch_begin(step)
+                    if isinstance(self.agent, Component):
+                        self.agent.on_step_begin(step)
+
                 if (
                     ((step + 1) % args.gradient_accumulation_steps != 0)
                     and args.local_rank != -1
@@ -365,9 +337,6 @@ class IncTrainer(Trainer):
                 else:
                     tr_loss_step = self.training_step(model, inputs)
 
-                if isinstance(agent, Component):
-                    agent.on_post_grad()
-
                 if args.logging_nan_inf_filter and (torch.isnan(tr_loss_step) or torch.isinf(tr_loss_step)):
                     # if loss is nan or inf simply add the average of previous logged losses
                     tr_loss += tr_loss / (1 + self.state.global_step - self._globalstep_last_logged)
@@ -376,15 +345,26 @@ class IncTrainer(Trainer):
 
                 self.current_flos += float(self.floating_point_ops(inputs))
 
+                # Optimizer step for deepspeed must be called on every step regardless of the value of gradient_accumulation_steps
+                if self.deepspeed:
+                    self.deepspeed.step()
+
                 if (step + 1) % args.gradient_accumulation_steps == 0 or (
                     # last step in epoch but step is always smaller than gradient_accumulation_steps
                     steps_in_epoch <= args.gradient_accumulation_steps
                     and (step + 1) == steps_in_epoch
                 ):
                     # Gradient clipping
-                    if args.max_grad_norm is not None and args.max_grad_norm > 0:
+                    if args.max_grad_norm is not None and args.max_grad_norm > 0 and not self.deepspeed:
+                        # deepspeed does its own clipping
 
-                        if hasattr(self.optimizer, "clip_grad_norm"):
+                        if self.do_grad_scaling:
+                            # AMP: gradients need unscaling
+                            self.scaler.unscale_(self.optimizer)
+
+                        if is_sagemaker_mp_enabled() and args.fp16:
+                            self.optimizer.clip_master_grads(args.max_grad_norm)
+                        elif hasattr(self.optimizer, "clip_grad_norm"):
                             # Some optimizers (like the sharded optimizer) have a specific way to do gradient clipping
                             self.optimizer.clip_grad_norm(args.max_grad_norm)
                         elif hasattr(model, "clip_grad_norm_"):
@@ -393,46 +373,60 @@ class IncTrainer(Trainer):
                         else:
                             # Revert to normal clipping otherwise, handling Apex or full precision
                             nn.utils.clip_grad_norm_(
-                                model.parameters(),
+                                amp.master_params(self.optimizer) if self.use_apex else model.parameters(),
                                 args.max_grad_norm,
                             )
 
+                    if isinstance(self.agent, Component):
+                        self.agent.on_before_optimizer_step()
+
                     # Optimizer step
                     optimizer_was_run = True
-                    self.optimizer.step()
+                    if self.deepspeed:
+                        pass  # called outside the loop
+                    elif self.do_grad_scaling:
+                        scale_before = self.scaler.get_scale()
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                        scale_after = self.scaler.get_scale()
+                        optimizer_was_run = scale_before <= scale_after
+                    else:
+                        self.optimizer.step()
 
-                    if optimizer_was_run:
+                    if optimizer_was_run and not self.deepspeed:
                         self.lr_scheduler.step()
 
                     model.zero_grad()
                     self.state.global_step += 1
                     self.state.epoch = epoch + (step + 1) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
-                    if isinstance(agent, Component):
-                        agent.on_batch_end()
+                    if isinstance(self.agent, Component):
+                        self.agent.on_step_end()
+
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
 
                 if self.control.should_epoch_stop or self.control.should_training_stop:
                     break
+            if step < 0:
+                logger.warning(
+                    "There seems to be not a single sample in your epoch_iterator, stopping training at step"
+                    f" {self.state.global_step}! This is expected if you're using an IterableDataset and set"
+                    f" num_steps ({max_steps}) higher than the number of available samples."
+                )
+                self.control.should_training_stop = True
 
             self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
-            if isinstance(agent, Component):
-                agent.on_epoch_end()
+            if isinstance(self.agent, Component):
+                self.agent.on_epoch_end()
             self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
-
-            if DebugOption.TPU_METRICS_DEBUG in self.args.debug:
-                logger.warning(
-                    "You enabled PyTorch/XLA debug metrics but you don't have a TPU "
-                    "configured. Check your training configuration if this is unexpected."
-                )
 
             if self.control.should_training_stop:
                 break
 
-        if isinstance(agent, Component):
-            agent.post_epoch_end()
+        if isinstance(self.agent, Component):
+            self.agent.post_epoch_end()
 
         if args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of training
@@ -441,24 +435,13 @@ class IncTrainer(Trainer):
         logger.info("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
         if args.load_best_model_at_end and self.state.best_model_checkpoint is not None:
             # Wait for everyone to get here so we are sur the model has been saved by process 0.
+
             if args.local_rank != -1:
                 dist.barrier()
+            elif is_sagemaker_mp_enabled():
+                smp.barrier()
 
-            logger.info(
-                f"Loading best model from {self.state.best_model_checkpoint} (score: {self.state.best_metric})."
-            )
-
-            best_model_path = os.path.join(self.state.best_model_checkpoint, WEIGHTS_NAME)
-            if os.path.exists(best_model_path):
-                # We load the model state dict on the CPU to avoid an OOM error.
-                state_dict = torch.load(best_model_path, map_location="cpu")
-                # If the model is on the GPU, it still works!
-                self._load_state_dict_in_model(state_dict)
-            else:
-                logger.warn(
-                    f"Could not locate the best model at {best_model_path}, if you are running a distributed training "
-                    "on multiple nodes, you should activate `--save_on_each_node`."
-                )
+            self._load_best_model()
 
         # add remaining tr_loss
         self._total_loss_scalar += tr_loss.item()
@@ -548,7 +531,7 @@ class IncTrainer(Trainer):
 
         columns = [k for k in signature_columns if k in dataset.column_names]
 
-        if version.parse(datasets.__version__) < version.parse("1.4.0"):
+        if Version(datasets.__version__).release < Version("1.4.0").release:
             dataset.set_format(
                 type=dataset.format["type"], columns=columns, format_kwargs=dataset.format["format_kwargs"]
             )
@@ -558,7 +541,7 @@ class IncTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """
-        How the loss is computed by Trainer. By default, all models return the loss in the first element.
+        How the loss is computed. By default, all models return the loss in the first element.
         """
         if self.label_smoother is not None and "labels" in inputs:
             labels = inputs.pop("labels")
@@ -635,7 +618,7 @@ class IncTrainer(Trainer):
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
-        if getattr(self.model.config, "torch_dtype", None) == "int8":
+        if hasattr(self.model, "config") and getattr(self.model.config, "torch_dtype", None) == "int8":
             if self.model.config.framework in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
                 logger.warn(
                     f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."

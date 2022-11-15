@@ -25,6 +25,7 @@ from transformers.onnx.utils import get_preprocessor
 
 import openvino
 from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError
 from openvino.offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from optimum.modeling_base import OptimizedModel
@@ -60,13 +61,13 @@ class OVBaseModel(OptimizedModel):
     def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):
         self.config = config
         self.model_save_dir = kwargs.get("model_save_dir")
-        self.device = kwargs.get("device", "CPU")
+        self._device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
         cache_dir = Path(self.model_save_dir).joinpath("model_cache")
         cache_dir.mkdir(parents=True, exist_ok=True)
         self.ov_config["CACHE_DIR"] = str(cache_dir)
-        if "GPU" in self.device and self.is_dynamic:
+        if "GPU" in self._device and self.is_dynamic:
             raise ValueError(
                 "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
             )
@@ -154,6 +155,12 @@ class OVBaseModel(OptimizedModel):
         # Load the model from local directory
         if os.path.isdir(model_id):
             file_name = os.path.join(model_id, file_name)
+            if os.path.isfile(os.path.join(model_id, "ov_model.xml")):
+                file_name = os.path.join(model_id, "ov_model.xml")
+                logger.warning(
+                    "The file names `ov_model.xml` and `ov_model.bin` will be soon deprecated."
+                    "Make sure to rename your file to respectively `openvino_model.xml` and `openvino_model.bin`"
+                )
             bin_file_name = file_name.replace(".xml", ".bin") if not from_onnx else None
             model = cls.load_model(file_name, bin_file_name)
             kwargs["model_save_dir"] = model_id
@@ -164,17 +171,37 @@ class OVBaseModel(OptimizedModel):
             if not from_onnx:
                 model_file_names.append(file_name.replace(".xml", ".bin"))
             file_names = []
-            for file_name in model_file_names:
-                model_cache_path = hf_hub_download(
-                    repo_id=model_id,
-                    filename=file_name,
-                    use_auth_token=use_auth_token,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
+            try:
+                for file_name in model_file_names:
+                    model_cache_path = hf_hub_download(
+                        repo_id=model_id,
+                        filename=file_name,
+                        use_auth_token=use_auth_token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                    )
+                    file_names.append(model_cache_path)
+            except EntryNotFoundError:
+                file_names = []
+                model_file_names = ["ov_model.xml", "ov_model.bin"]
+                for file_name in model_file_names:
+                    model_cache_path = hf_hub_download(
+                        repo_id=model_id,
+                        filename=file_name,
+                        use_auth_token=use_auth_token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                    )
+                    file_names.append(model_cache_path)
+                logger.warning(
+                    "The file names `ov_model.xml` and `ov_model.bin` will be soon deprecated."
+                    "Make sure to rename your file to respectively `openvino_model.xml` and `openvino_model.bin`"
                 )
-                file_names.append(model_cache_path)
+
             kwargs["model_save_dir"] = Path(model_cache_path).parent
             bin_file_name = file_names[1] if not from_onnx else None
             model = cls.load_model(file_names[0], bin_file_name=bin_file_name)
@@ -245,7 +272,7 @@ class OVBaseModel(OptimizedModel):
     def _create_inference_request(self):
         if self.request is None:
             logger.info("Compiling the model and creating the inference request ...")
-            compiled_model = core.compile_model(self.model, self.device, self.ov_config)
+            compiled_model = core.compile_model(self.model, self._device, self.ov_config)
             self.request = compiled_model.create_infer_request()
 
     def _reshape(
@@ -296,7 +323,7 @@ class OVBaseModel(OptimizedModel):
         return self
 
     def _ensure_supported_device(self, device: str = None):
-        device = device if device is not None else self.device
+        device = device if device is not None else self._device
         if device not in _SUPPORTED_DEVICES:
             raise ValueError(f"Unknown device: {device}. Expected one of {_SUPPORTED_DEVICES}.")
 

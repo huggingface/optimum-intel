@@ -31,7 +31,6 @@ python run_glue.py \
     --task_name sst2 \
     --apply_quantization \
     --quantization_approach static \
-    --do_train \
     --do_eval \
     --verify_loading \
     --output_dir /tmp/sst2_output

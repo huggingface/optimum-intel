@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+import warnings
 from enum import Enum
 from typing import Callable, ClassVar, Optional, Union
 
@@ -57,3 +58,4 @@ class IncPruner:
         self.pruning = Pruning(self.config)
         self.pruning.train_func = self.train_func
         self.pruning.eval_func = self.eval_func
+        warnings.warn("`IncPruner` will be soon deprecated, pruning will be supported through the `IncTrainer`.")

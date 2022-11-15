@@ -28,7 +28,6 @@ python run_swag.py \
     --model_name_or_path ehdwns1516/bert-base-uncased_SWAG \
     --apply_quantization \
     --quantization_approach static \
-    --do_train \
     --do_eval \
     --verify_loading \
     --output_dir /tmp/swag_output
