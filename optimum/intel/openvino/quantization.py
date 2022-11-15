@@ -144,7 +144,7 @@ class OVQuantizer(OptimumQuantizer):
         onnx_config = onnx_config_cls(self.model.config)
         compressed_model.eval()
         use_external_data_format = (
-            onnx_config.use_external_data_format(compressed_model.num_parameters()) or quantization_config.dump_onnx
+            onnx_config.use_external_data_format(compressed_model.num_parameters()) or quantization_config.save_onnx_model
         )
         f = io.BytesIO() if not use_external_data_format else save_directory / "model.onnx"
 
@@ -173,7 +173,7 @@ class OVQuantizer(OptimumQuantizer):
             )
         max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
         opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
-        opset = opset if not ov_config.dump_onnx else max(opset, MIN_ONNX_QDQ_OPSET)
+        opset = opset if not ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
         with torch.no_grad():
             # Disable node additions to be exported in the graph
             model.disable_dynamic_graph_building()

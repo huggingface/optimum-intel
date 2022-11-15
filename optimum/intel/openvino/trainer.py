@@ -541,7 +541,7 @@ class OVTrainer(Trainer):
             onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][self.feature]
             onnx_config = onnx_config_cls(self.model.config)
             use_external_data_format = (
-                onnx_config.use_external_data_format(self.model.num_parameters()) or self.ov_config.dump_onnx
+                onnx_config.use_external_data_format(self.model.num_parameters()) or self.ov_config.save_onnx_model
             )
             f = io.BytesIO() if not use_external_data_format else os.path.join(output_dir, "model.onnx")
             self._onnx_export(self.model, onnx_config, self.ov_config, f)
@@ -570,7 +570,7 @@ class OVTrainer(Trainer):
             )
         max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
         opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
-        opset = opset if not ov_config.dump_onnx else max(opset, MIN_ONNX_QDQ_OPSET)
+        opset = opset if not ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
 
         model_inputs = config.generate_dummy_inputs(self.tokenizer, framework=TensorType.PYTORCH)
         device = model.device
