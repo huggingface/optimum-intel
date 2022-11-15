@@ -49,7 +49,7 @@ class OVConfig(BaseConfig):
         super().__init__()
         self.compression = compression or DEFAULT_QUANTIZATION_CONFIG
         self.input_info = input_info
-        self.dump_onnx = dump_onnx
+        self.save_onnx_model = save_onnx_model
         self._enable_standard_onnx_export_option()
         self.optimum_version = kwargs.pop("optimum_version", None)
 
