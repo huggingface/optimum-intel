@@ -610,7 +610,7 @@ class IncTrainer(Trainer):
             teacher_output = teacher_output / self.agent.criterion.temperature
             loss = self.agent.criterion.teacher_student_loss_cal(student_output, teacher_output)
             distillation_loss = loss if distillation_loss is None else distillation_loss + loss
-        distillation_loss *= self.agent.criterion.temperature ** 2
+        distillation_loss *= self.agent.criterion.temperature**2
         return distillation_loss
 
     def evaluate(

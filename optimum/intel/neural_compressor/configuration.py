@@ -18,7 +18,6 @@ from functools import reduce
 from pathlib import Path
 from typing import Any, Optional, Union
 
-import yaml
 from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
 
 from huggingface_hub import hf_hub_download
