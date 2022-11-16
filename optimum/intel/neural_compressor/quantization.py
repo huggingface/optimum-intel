@@ -73,7 +73,7 @@ class IncQuantizer:
         train_func: Optional[Callable] = None,
         calib_dataloader: Optional[DataLoader] = None,
         calib_func: Optional[Callable] = None,
-        example_inputs: Optional[Any] = None
+        example_inputs: Optional[Any] = None,
     ):
         """
         Arguments:
