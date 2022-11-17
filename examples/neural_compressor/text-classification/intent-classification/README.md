@@ -23,11 +23,12 @@ allows us to apply static quantization approach as well as distillation
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for 
 sequence classification task.
 
-The following example applies post-training static quantization on a distilled MiniLM_L3 fine-tuned on the clinc_oos task.
+The following example applies post-training static quantization on a distilled MiniLM [model](https://huggingface.co/SetFit/MiniLM_L3_clinc_oos_plus_distilled) fine-tuned on the [CLINC150](https://huggingface.co/datasets/clinc_oos) dataset.
 
 ```bash
 python run_clinc.py \
     --model_name_or_path SetFit/MiniLM_L3_clinc_oos_plus_distilled \
+    -- dataset_name clinc_oos \
     --apply_quantization \
     --quantization_approach static \
     --do_train \
@@ -36,12 +37,13 @@ python run_clinc.py \
     --output_dir /tmp/clinc_output
 ```
 
-The following example fine-tunes MiniLM_L3 on the clinc_oos task with knowledge distillation and then applies post-training static quantization on the distilled MiniLM_L3.
+The following example fine-tunes a MiniLM [model](https://huggingface.co/SetFit/MiniLM_L3_clinc_oos_plus_distilled)  on the [CLINC150](https://huggingface.co/datasets/clinc_oos) dataset while applying knowledge distillation and then applies post-training static quantization on the resulting model.
 
 ```bash
 python run_clinc.py \
     --model_name_or_path sentence-transformers/paraphrase-MiniLM-L3-v2 \
-    --apply_distillation \
+    -- dataset_name clinc_oos \
+    --apply_quantization \
     --distillation_config distillation.yml \
     --teacher_model_name_or_path sentence-transformers/paraphrase-mpnet-base-v2 \
     --apply_quantization \

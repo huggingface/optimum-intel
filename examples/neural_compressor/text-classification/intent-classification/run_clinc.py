@@ -545,7 +545,6 @@ def main():
 
         distillation_config = IncDistillationConfig.from_pretrained(
             optim_args.distillation_config if optim_args.distillation_config is not None else default_config,
-            config_file_name="distillation.yml",
             cache_dir=model_args.cache_dir,
         )
 
@@ -599,7 +598,6 @@ def main():
 
         q8_config = IncQuantizationConfig.from_pretrained(
             optim_args.quantization_config if optim_args.quantization_config is not None else default_config,
-            config_file_name="quantization.yml",
             cache_dir=model_args.cache_dir,
         )
 
