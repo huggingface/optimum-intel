@@ -29,7 +29,7 @@ To install the latest release of this package with the corresponding required de
 | Accelerator                                                                                                      | Installation                                                        |
 |:-----------------------------------------------------------------------------------------------------------------|:--------------------------------------------------------------------|
 | [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum[neural-compressor]`                  |
-| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino,nncf] transformers==4.23.*` |
+| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino,nncf] optimum==1.4.1` |
 
 ## Running the examples
 
