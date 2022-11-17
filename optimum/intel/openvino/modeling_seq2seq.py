@@ -148,17 +148,20 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         encoder_cache_dir.mkdir(parents=True, exist_ok=True)
         ov_encoder_config = {**self.ov_config, "CACHE_DIR": str(encoder_cache_dir)}
         self.encoder = OVEncoder(self.encoder_model, self._device, ov_encoder_config)
+        self.encoder._create_inference_request()
 
         decoder_cache_dir = Path(self.model_save_dir).joinpath("decoder_cache")
         decoder_cache_dir.mkdir(parents=True, exist_ok=True)
         ov_decoder_config = {**self.ov_config, "CACHE_DIR": str(decoder_cache_dir)}
         self.decoder = OVDecoder(self.decoder_model, self._device, ov_decoder_config)
+        self.decoder._create_inference_request()
 
         if self.use_cache:
             decoder_past_cache_dir = Path(self.model_save_dir).joinpath("decoder_past_cache")
             decoder_past_cache_dir.mkdir(parents=True, exist_ok=True)
             ov_decoder_past_config = {**self.ov_config, "CACHE_DIR": str(decoder_past_cache_dir)}
             self.decoder_with_past = OVDecoder(self.decoder_with_past_model, self._device, ov_decoder_past_config)
+            self.decoder_with_past._create_inference_request()
 
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -307,10 +310,7 @@ class OVEncoder:
         **kwargs,
     ) -> BaseModelOutput:
 
-        if self.request is None:
-            logger.info("Compiling the encoder and creating the inference request ...")
-            compiled_model = core.compile_model(self.model, self._device, self.ov_config)
-            self.request = compiled_model.create_infer_request()
+        self._create_inference_request()
 
         inputs = {
             "input_ids": input_ids,
@@ -328,6 +328,12 @@ class OVEncoder:
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
+
+    def _create_inference_request(self):
+        if self.request is None:
+            logger.info("Compiling the encoder and creating the inference request ...")
+            compiled_model = core.compile_model(self.model, self._device, self.ov_config)
+            self.request = compiled_model.create_infer_request()
 
 
 class OVDecoder:
@@ -359,10 +365,7 @@ class OVDecoder:
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
     ) -> Seq2SeqLMOutput:
 
-        if self.request is None:
-            logger.info("Compiling the decoder and creating the inference request ...")
-            compiled_model = core.compile_model(self.model, self._device, self.ov_config)
-            self.request = compiled_model.create_infer_request()
+        self._create_inference_request()
 
         inputs = {
             "input_ids": input_ids,
@@ -401,3 +404,9 @@ class OVDecoder:
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
+
+    def _create_inference_request(self):
+        if self.request is None:
+            logger.info("Compiling the decoder and creating the inference request ...")
+            compiled_model = core.compile_model(self.model, self._device, self.ov_config)
+            self.request = compiled_model.create_infer_request()
