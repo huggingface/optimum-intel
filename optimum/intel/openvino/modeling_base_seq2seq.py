@@ -161,10 +161,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
         from_onnx = kwargs.pop("from_onnx", False)
-        config_dict = kwargs.pop("config", {})
-        config = PretrainedConfig.from_dict(config_dict)
         local_files_only = kwargs.pop("local_files_only", False)
         use_cache = kwargs.pop("use_cache", True)
+        config = kwargs.pop("config", {})
+        if isinstance(config, dict):
+            config = PretrainedConfig.from_dict(config)
         default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
         default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
         default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
