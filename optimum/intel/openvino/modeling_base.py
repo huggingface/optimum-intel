@@ -147,8 +147,9 @@ class OVBaseModel(OptimizedModel):
         """
         from_onnx = kwargs.pop("from_onnx", False)
         local_files_only = kwargs.pop("local_files_only", False)
-        config_dict = kwargs.pop("config", {})
-        config = PretrainedConfig.from_dict(config_dict)
+        config = kwargs.pop("config", {})
+        if isinstance(config, dict):
+            config = PretrainedConfig.from_dict(config)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
 
