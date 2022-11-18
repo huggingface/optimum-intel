@@ -562,12 +562,20 @@ class OVTrainer(Trainer):
             self.feature = "default"
 
     def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, ov_config: OVConfig, f: Union[str, io.BytesIO]):
-        if config.default_onnx_opset > MAX_ONNX_OPSET_2022_2_0 + 1:
-            logger.warning(
-                f"The minimal ONNX opset for the given model architecture is {config.default_onnx_opset}, currently "
-                f"OpenVINO only supports opset inferior or equal to {MAX_ONNX_OPSET_2022_2_0} which could result in "
-                "export issue."
-            )
+        if _openvino_version <= version.Version("2022.2.0"):
+            if config.default_onnx_opset > MAX_ONNX_OPSET_2022_2_0 + 1:
+                if not ov_config.save_onnx_model:
+                    logger.warning(
+                        f"The minimal ONNX opset for the given model architecture is {config.default_onnx_opset}. Currently, "
+                        f"some models may not work with the installed version of OpenVINO. You can update OpenVINO "
+                        f"to 2022.3.* version or use ONNX opset version {MAX_ONNX_OPSET_2022_2_0} to resolve the issue."
+                    )
+                else:
+                    logger.warning(
+                        f"The minimal ONNX opset for QDQ format export is {MIN_ONNX_QDQ_OPSET}. Currently, some models"
+                        f"may not work with the installed version of OpenVINO in this opset. You can update OpenVINO "
+                        f"to 2022.3.* version or do not use \"save_onnx_model\" option."
+                    )
         max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
         opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
         opset = opset if not ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
