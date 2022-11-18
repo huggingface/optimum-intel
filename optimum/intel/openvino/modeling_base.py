@@ -64,6 +64,7 @@ class OVBaseModel(OptimizedModel):
         self._device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        enable_compilation = kwargs.get("compile", True)
         cache_dir = Path(self.model_save_dir).joinpath("model_cache")
         cache_dir.mkdir(parents=True, exist_ok=True)
         self.ov_config["CACHE_DIR"] = str(cache_dir)
@@ -78,9 +79,8 @@ class OVBaseModel(OptimizedModel):
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
         self.model = model
         self.request = None
-        disable_compilation = kwargs.get("disable_compilation", False)
-        if not disable_compilation:
-            self._create_inference_request()
+        if enable_compilation:
+            self.compile()
 
     @staticmethod
     def load_model(file_name: Union[str, Path], bin_file_name: Optional[Union[str, Path]] = None):
@@ -273,7 +273,7 @@ class OVBaseModel(OptimizedModel):
 
         return cls._from_pretrained(save_dir, **kwargs)
 
-    def _create_inference_request(self):
+    def compile(self):
         if self.request is None:
             logger.info("Compiling the model and creating the inference request ...")
             compiled_model = core.compile_model(self.model, self._device, self.ov_config)

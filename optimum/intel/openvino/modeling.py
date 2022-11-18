@@ -150,7 +150,7 @@ class OVModelForSequenceClassification(OVModel):
         token_type_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
-        self._create_inference_request()
+        self.compile()
 
         inputs = {
             "input_ids": input_ids,
@@ -212,7 +212,7 @@ class OVModelForQuestionAnswering(OVModel):
         token_type_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
-        self._create_inference_request()
+        self.compile()
 
         inputs = {
             "input_ids": input_ids,
@@ -274,7 +274,7 @@ class OVModelForTokenClassification(OVModel):
         token_type_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
-        self._create_inference_request()
+        self.compile()
 
         inputs = {
             "input_ids": input_ids,
@@ -329,7 +329,7 @@ class OVModelForFeatureExtraction(OVModel):
         token_type_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
-        self._create_inference_request()
+        self.compile()
 
         inputs = {
             "input_ids": input_ids,
@@ -427,7 +427,7 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
         token_type_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
-        self._create_inference_request()
+        self.compile()
 
         inputs = {
             "input_ids": input_ids,
@@ -498,7 +498,7 @@ class OVModelForMaskedLM(OVModel):
         token_type_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
-        self._create_inference_request()
+        self.compile()
 
         inputs = {
             "input_ids": input_ids,
@@ -560,7 +560,7 @@ class OVModelForImageClassification(OVModel):
         pixel_values: torch.Tensor,
         **kwargs,
     ):
-        self._create_inference_request()
+        self.compile()
 
         inputs = {
             "pixel_values": pixel_values,
