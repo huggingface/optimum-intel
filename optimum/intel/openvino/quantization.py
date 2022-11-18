@@ -178,7 +178,7 @@ class OVQuantizer(OptimumQuantizer):
                     logger.warning(
                         f"The minimal ONNX opset for QDQ format export is {MIN_ONNX_QDQ_OPSET}. Currently, some models"
                         f"may not work with the installed version of OpenVINO in this opset. You can update OpenVINO "
-                        f"to 2022.3.* version or do not use \"save_onnx_model\" option."
+                        f"to 2022.3.* version or set `save_onnx_model` to `False`."
                     )
         max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
         opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
