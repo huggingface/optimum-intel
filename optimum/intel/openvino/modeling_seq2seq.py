@@ -143,25 +143,29 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.device = torch.device("cpu")
         self.main_input_name = "input_ids"
         self.decoder_with_past = None
+        disable_compilation = kwargs.get("disable_compilation", False)
 
         encoder_cache_dir = Path(self.model_save_dir).joinpath("encoder_cache")
         encoder_cache_dir.mkdir(parents=True, exist_ok=True)
         ov_encoder_config = {**self.ov_config, "CACHE_DIR": str(encoder_cache_dir)}
         self.encoder = OVEncoder(self.encoder_model, self._device, ov_encoder_config)
-        self.encoder._create_inference_request()
+        if not disable_compilation:
+            self.encoder._create_inference_request()
 
         decoder_cache_dir = Path(self.model_save_dir).joinpath("decoder_cache")
         decoder_cache_dir.mkdir(parents=True, exist_ok=True)
         ov_decoder_config = {**self.ov_config, "CACHE_DIR": str(decoder_cache_dir)}
         self.decoder = OVDecoder(self.decoder_model, self._device, ov_decoder_config)
-        self.decoder._create_inference_request()
+        if not disable_compilation:
+            self.decoder._create_inference_request()
 
         if self.use_cache:
             decoder_past_cache_dir = Path(self.model_save_dir).joinpath("decoder_past_cache")
             decoder_past_cache_dir.mkdir(parents=True, exist_ok=True)
             ov_decoder_past_config = {**self.ov_config, "CACHE_DIR": str(decoder_past_cache_dir)}
             self.decoder_with_past = OVDecoder(self.decoder_with_past_model, self._device, ov_decoder_past_config)
-            self.decoder_with_past._create_inference_request()
+            if not disable_compilation:
+                self.decoder_with_past._create_inference_request()
 
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)

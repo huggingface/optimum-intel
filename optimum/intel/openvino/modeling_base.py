@@ -78,7 +78,9 @@ class OVBaseModel(OptimizedModel):
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
         self.model = model
         self.request = None
-        self._create_inference_request()
+        disable_compilation = kwargs.get("disable_compilation", False)
+        if not disable_compilation:
+            self._create_inference_request()
 
     @staticmethod
     def load_model(file_name: Union[str, Path], bin_file_name: Optional[Union[str, Path]] = None):
