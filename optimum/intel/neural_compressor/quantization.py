@@ -230,8 +230,6 @@ class INCQuantizer(OptimumQuantizer):
                 remove_unused_columns=remove_unused_columns,
                 data_collator=data_collator,
             )
-            # model_inputs = next(iter(calibration_dataloader))
-            # model_inputs = self.model.dummy_inputs
 
         compressed_model = quantization.fit(
             model=self.model, conf=quantization_config, calib_dataloader=calibration_dataloader
