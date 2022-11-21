@@ -28,7 +28,7 @@ The following example applies post-training static quantization on a distilled M
 ```bash
 python run_clinc.py \
     --model_name_or_path SetFit/MiniLM_L3_clinc_oos_plus_distilled \
-    -- dataset_name clinc_oos \
+    --dataset_name clinc_oos \
     --apply_quantization \
     --quantization_approach static \
     --do_train \
@@ -42,7 +42,7 @@ The following example fine-tunes a MiniLM [model](https://huggingface.co/SetFit/
 ```bash
 python run_clinc.py \
     --model_name_or_path sentence-transformers/paraphrase-MiniLM-L3-v2 \
-    -- dataset_name clinc_oos \
+    --dataset_name clinc_oos \
     --apply_quantization \
     --distillation_config distillation.yml \
     --teacher_model_name_or_path sentence-transformers/paraphrase-mpnet-base-v2 \

@@ -509,9 +509,8 @@ def main():
                     self.config = model.config
 
             def forward(self, sentences=None, *args, **kwargs):
-                assert (
-                    isinstance(sentences, (tuple, list)) and len(sentences) == 2
-                ), "sentences should be a tuple or a list with 2 sentences string."
+                if not (isinstance(sentences, (tuple, list)) and len(sentences) == 2):
+                    raise ValueError("sentences should be a tuple or a list with 2 sentences string.")
                 inputs = self.tokenizer(
                     sentences[0] + sentences[1],
                     padding=padding,
