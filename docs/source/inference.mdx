@@ -85,6 +85,18 @@ metric = eval.compute(model_or_pipeline=qa_pipe, data=eval_dataset, metric="squa
 
 By default the model will be compiled when instantiating our `OVModel`. In the case where the model is reshaped, placed to an other device or if FP16 precision is enabled, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by passing `compile=False` to the `from_pretrained()` method. The model can also be compiled before the first inference with `model.compile()`.
 
+```python
+from optimum.intel.openvino import OVModelForSequenceClassification
+
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+# Load the model and disable the model compilation
+model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True, compile=False)
+model.half()
+model.to("GPU")
+# Compile the model before the first inference
+model.compile()
+```
+
 ## Run inference for sequence-to-sequence models
 
 Sequence-to-sequence (Seq2Seq) models, that generate a new sequence from an input, can also be used when running inference with OpenVINO. When Seq2Seq models are exported to the OpenVINO IR, they are decomposed into two parts : the encoder and the "decoder" (which actually consists of the decoder with the language modeling head), that are later combined during inference.
