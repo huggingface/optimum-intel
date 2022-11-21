@@ -26,6 +26,7 @@ from .quantization import (
     IncQuantizedModelForSequenceClassification,
     IncQuantizedModelForTokenClassification,
     IncQuantizer,
+    INCQuantizer,
 )
 from .trainer import IncTrainer
 from .trainer_seq2seq import IncSeq2SeqTrainer
