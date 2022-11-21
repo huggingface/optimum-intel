@@ -13,17 +13,21 @@
 #  limitations under the License.
 
 import copy
+import inspect
 import logging
 import os
 from enum import Enum
+from itertools import chain
 from pathlib import Path
-from typing import Callable, ClassVar, Dict, Optional, Union
+from typing import Callable, ClassVar, Dict, List, Optional, Tuple, Union
 
 import torch
-from packaging.version import Version
+import transformers
+from datasets import Dataset, load_dataset
+from packaging import version
 from torch.quantization import add_observer_, convert
 from torch.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_fx
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -35,26 +39,52 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
+    DataCollator,
+    PretrainedConfig,
+    PreTrainedModel,
     XLNetLMHeadModel,
+    default_data_collator,
 )
 from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
-from transformers.utils.versions import require_version
 
 import neural_compressor
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download
+from neural_compressor import PostTrainingConfig, quantization
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig, get_torch_version
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization
+from neural_compressor.model.torch_model import PyTorchModel
 from neural_compressor.utils.pytorch import _load_int8_orchestration
+from optimum.exporters import TasksManager
+from optimum.exporters.onnx import OnnxConfig
+from optimum.quantization_base import OptimumQuantizer
 
 from .configuration import IncOptimizedConfig, IncQuantizationConfig
-from .utils import WEIGHTS_NAME, IncDataLoader, _cfgs_to_fx_cfgs, is_torch_less_than_1_13
+from .utils import (
+    MIN_QDQ_ONNX_OPSET,
+    ONNX_WEIGHTS_NAME,
+    WEIGHTS_NAME,
+    INCDataLoader,
+    _cfgs_to_fx_cfgs,
+    is_torch_less_than_1_13,
+)
 
 
 logger = logging.getLogger(__name__)
-require_version("neural-compressor>=1.13.0")
+
+
+_neural_compressor_version = version.parse(version.parse(neural_compressor.__version__).base_version)
+# NEURAL_COMPRESSOR_REQUIRED_VERSION = version.parse("2.0.0")
+NEURAL_COMPRESSOR_REQUIRED_VERSION = version.parse("1.14.2")
+
+
+if _neural_compressor_version < NEURAL_COMPRESSOR_REQUIRED_VERSION:
+    raise ImportError(
+        f"Found an incompatible version of neural-compressor. Found version {_neural_compressor_version}, "
+        f"but only version {NEURAL_COMPRESSOR_REQUIRED_VERSION} is supported."
+    )
 
 
 class IncQuantizationMode(Enum):
@@ -97,7 +127,7 @@ class IncQuantizer:
         self.train_func = train_func
         self.calib_func = calib_func
         if calib_dataloader is not None:
-            calib_dataloader = IncDataLoader.from_pytorch_dataloader(calib_dataloader)
+            calib_dataloader = INCDataLoader.from_pytorch_dataloader(calib_dataloader)
         self.calib_dataloader = calib_dataloader
 
         if self.config.usr_cfg.model.framework == "pytorch_fx":
@@ -126,6 +156,221 @@ class IncQuantizer:
                         "For quantization aware training, a calibration dataloader `calib_dataloader` must be provided for PyTorch 1.13 or above."
                     )
                 self.quantization._calib_dataloader = self.calib_dataloader
+
+
+class INCQuantizer(OptimumQuantizer):
+    """
+    Handle the Neural Compressor quantization process.
+    """
+
+    def __init__(self, model: torch.nn.Module, **kwargs):
+        """
+        Args:
+            model (`torch.nn.Module`):
+                The model to quantize.
+            seed (`int`, defaults to 42):
+                The random seed to use when shuffling the calibration dataset.
+        """
+        super().__init__()
+        self.model = model
+        self.seed = kwargs.pop("seed", 42)
+        self.feature = kwargs.pop("feature", None)
+        signature = inspect.signature(self.model.forward)
+        self._signature_columns = list(signature.parameters.keys())
+        self.input_names = None
+
+    @classmethod
+    def from_pretrained(cls, model: PreTrainedModel, **kwargs):
+        # TODO : Create model
+        return cls(model, **kwargs)
+
+    def quantize(
+        self,
+        save_directory: Union[str, Path],
+        quantization_config: PostTrainingConfig,
+        calibration_dataset: Dataset = None,
+        file_name: Optional[str] = None,
+        batch_size: int = 8,
+        data_collator: Optional[DataCollator] = None,
+        remove_unused_columns: bool = True,
+        **kwargs,
+    ):
+        """
+        Quantize a model given the optimization specifications defined in `quantization_config`.
+
+        Args:
+            calibration_dataset (`datasets.Dataset`):
+                The dataset to use for the calibration step.
+            save_directory (`Union[str, Path]`):
+                The directory where the quantized model should be saved.
+            quantization_config (`PostTrainingConfig`, *optional*):
+                The configuration containing the parameters related to quantization.
+            file_name (`str`, *optional*):
+                The model file name to use when saving the model. Overwrites the default file name `"pytorch_model.bin"`.
+            batch_size (`int`, defaults to 8):
+                The number of calibration samples to load per batch.
+            data_collator (`DataCollator`, *optional*):
+                The function to use to form a batch from a list of elements of the calibration dataset.
+            remove_unused_columns (`bool`, defaults to `True`):
+                Whether or not to remove the columns unused by the model forward method.
+        """
+        save_directory = Path(save_directory)
+        save_directory.mkdir(parents=True, exist_ok=True)
+        save_onnx_model = kwargs.pop("save_onnx_model", False)
+        file_name = file_name if file_name is not None else WEIGHTS_NAME
+        output_path = save_directory.joinpath(file_name)
+        calibration_dataloader = None
+
+        if quantization_config.approach == "post_training_static_quant":
+            if calibration_dataset is None:
+                raise ValueError("Post-training static quantization needs a calibration dataset.")
+            calibration_dataloader = self._get_calibration_dataloader(
+                calibration_dataset=calibration_dataset,
+                batch_size=batch_size,
+                remove_unused_columns=remove_unused_columns,
+                data_collator=data_collator,
+            )
+            # model_inputs = next(iter(calibration_dataloader))
+            # model_inputs = self.model.dummy_inputs
+
+        compressed_model = quantization.fit(
+            model=self.model, conf=quantization_config, calib_dataloader=calibration_dataloader
+        )
+
+        if isinstance(self.model.config, PretrainedConfig):
+            self.model.config.save_pretrained(save_directory)
+
+        if save_onnx_model:
+            self._set_feature()
+            model_type = self.model.config.model_type.replace("_", "-")
+            model_name = getattr(self.model, "name", None)
+            onnx_config_constructor = TasksManager.get_exporter_config_constructor(
+                model_type, "onnx", task=self.feature, model_name=model_name
+            )
+            onnx_config = onnx_config_constructor(self.model.config)
+            compressed_model.eval()
+            output_onnx_path = save_directory.joinpath("model.onnx")
+            # Export the compressed model to the ONNX format
+            self._onnx_export(compressed_model, onnx_config, output_onnx_path, calibration_dataloader)
+
+        # Save the quantized model
+        self._save_pretrained(compressed_model, output_path)
+        # TODO : Save quantization_config
+
+    @staticmethod
+    def _save_pretrained(model: PyTorchModel, output_path: str):
+        state_dict = model._model.state_dict()
+        if hasattr(model, "q_config"):
+            state_dict["best_configure"] = model.q_config
+        torch.save(state_dict, output_path)
+        logger.info(f"Model weights saved to {output_path}")
+
+    def _onnx_export(
+        self,
+        model: PyTorchModel,
+        config: OnnxConfig,
+        output_path: Union[str, Path],
+        calibration_dataloader: INCDataLoader = None,
+    ):
+        opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
+        dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
+        inputs = config.generate_dummy_inputs(framework="pt")
+        model.export_to_int8_onnx(
+            save_path=str(output_path),
+            example_inputs=inputs,
+            opset_version=opset,
+            dynamic_axes=dynamic_axes,
+            fp32_model=self.model,
+            calib_dataloader=calibration_dataloader,
+        )
+
+    def _set_feature(self):
+        if self.feature is None:
+            self.feature = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
+            if self.feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+                self.feature = "sequence-classification"
+            elif self.feature in ["feature-extraction", "fill-mask"]:
+                self.feature = "default"
+            elif self.feature is None:
+                raise ValueError("The feature could not be extracted and needs to be specified for the ONNX export.")
+        if self.feature in ["seq2seq-lm", "translation", "summarization"]:
+            raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
+
+    def get_calibration_dataset(
+        self,
+        dataset_name: str,
+        num_samples: int = 100,
+        dataset_config_name: Optional[str] = None,
+        dataset_split: str = "train",
+        preprocess_function: Optional[Callable] = None,
+        preprocess_batch: bool = True,
+        use_auth_token: bool = False,
+    ) -> Dataset:
+        """
+        Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
+
+        Args:
+            dataset_name (`str`):
+                The dataset repository name on the Hugging Face Hub or path to a local directory containing data files
+                in generic formats and optionally a dataset script, if it requires some code to read the data files.
+            num_samples (`int`, defaults to 100):
+                The maximum number of samples composing the calibration dataset.
+            dataset_config_name (`str`, *optional*):
+                The name of the dataset configuration.
+            dataset_split (`str`, defaults to `"train"`):
+                Which split of the dataset to use to perform the calibration step.
+            preprocess_function (`Callable`, *optional*):
+                Processing function to apply to each example after loading dataset.
+            preprocess_batch (`bool`, defaults to `True`):
+                Whether the `preprocess_function` should be batched.
+            use_auth_token (`bool`, defaults to `False`):
+                Whether to use the token generated when running `transformers-cli login`.
+        Returns:
+            The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
+        """
+        calibration_dataset = load_dataset(
+            dataset_name,
+            name=dataset_config_name,
+            split=dataset_split,
+            use_auth_token=use_auth_token,
+        )
+
+        if num_samples is not None:
+            num_samples = min(num_samples, len(calibration_dataset))
+            calibration_dataset = calibration_dataset.shuffle(seed=self.seed).select(range(num_samples))
+
+        if preprocess_function is not None:
+            calibration_dataset = calibration_dataset.map(preprocess_function, batched=preprocess_batch)
+
+        return calibration_dataset
+
+    def _get_calibration_dataloader(
+        self,
+        calibration_dataset: Dataset,
+        batch_size: int,
+        remove_unused_columns: bool,
+        data_collator: Optional[DataCollator] = None,
+    ) -> INCDataLoader:
+        data_collator = data_collator if data_collator is not None else default_data_collator
+        if remove_unused_columns:
+            calibration_dataset = self._remove_unused_columns(calibration_dataset)
+        self.input_names = calibration_dataset.column_names
+        generator = torch.Generator()
+        generator.manual_seed(self.seed)
+        sampler = RandomSampler(calibration_dataset, generator=generator)
+        calibration_dataloader = DataLoader(
+            calibration_dataset,
+            batch_size=batch_size,
+            sampler=sampler,
+            collate_fn=data_collator,
+            drop_last=False,
+        )
+
+        return INCDataLoader.from_pytorch_dataloader(calibration_dataloader)
+
+    def _remove_unused_columns(self, dataset: Dataset):
+        ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
+        return dataset.remove_columns(ignored_columns)
 
 
 # Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
