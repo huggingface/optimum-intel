@@ -93,7 +93,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
+        model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True, compile=False)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
         text = "This restaurant is awesome"
@@ -105,11 +105,13 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         if model_arch == "bert":
             # Test FP16 conversion
             model.half()
+            model.compile()
             outputs = pipe(text)
             self.assertGreaterEqual(outputs[0]["score"], 0.0)
             self.assertIsInstance(outputs[0]["label"], str)
             # Test static shapes
             model.reshape(1, 25)
+            model.compile()
             outputs = pipe(text)
             self.assertTrue(not model.is_dynamic)
             self.assertGreaterEqual(outputs[0]["score"], 0.0)
