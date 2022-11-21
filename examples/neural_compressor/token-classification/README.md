@@ -22,13 +22,13 @@ allows us to apply different quantization approaches (such as dynamic, static an
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for token classification tasks.
 
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the CoNLL-2003 task.
+
 ```bash
 python run_ner.py \
     --model_name_or_path elastic/distilbert-base-uncased-finetuned-conll03-english \
     --dataset_name conll2003 \
     --apply_quantization \
     --quantization_approach static \
-    --do_train \
     --do_eval \
     --verify_loading \
     --output_dir /tmp/conll03_output

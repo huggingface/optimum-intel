@@ -372,6 +372,9 @@ def main():
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
 
+    if optim_args.apply_quantization and optim_args.quantization_approach == "static":
+        training_args.do_train = True
+
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
@@ -709,10 +712,11 @@ def main():
         # dynamic quantization will be added when torch FX is more mature
         if quant_approach != IncQuantizationMode.DYNAMIC:
             if not training_args.do_train:
-                raise ValueError("do_train must be set to True for static and aware training quantization.")
+                raise ValueError("do_train must be set to True for quantization aware training.")
+
             q8_config.set_config("model.framework", "pytorch_fx")
 
-        calib_dataloader = trainer.get_train_dataloader() if quant_approach == IncQuantizationMode.STATIC else None
+        calib_dataloader = trainer.get_train_dataloader() if quant_approach != IncQuantizationMode.DYNAMIC else None
         quantizer = IncQuantizer(
             q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
         )

@@ -30,7 +30,6 @@ python run_summarization.py \
     --apply_quantization \
     --quantization_approach static
     --tolerance_criterion 0.1 \
-    --do_train \
     --do_eval \
     --verify_loading \
     --predict_with_generate \

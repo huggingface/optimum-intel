@@ -25,6 +25,7 @@ from transformers import (
     EvalPrediction,
     TrainingArguments,
     default_data_collator,
+    set_seed,
 )
 
 from optimum.intel.neural_compressor import IncDistiller, IncOptimizer, IncPruner, IncQuantizer, IncTrainer
@@ -40,6 +41,7 @@ from optimum.intel.neural_compressor.quantization import (
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
+set_seed(1009)
 
 
 class IncQuantizationTest(unittest.TestCase):
@@ -142,6 +144,37 @@ class IncQuantizationTest(unittest.TestCase):
             # Verification quantized model was correctly loaded
             self.assertEqual(q_model_result, loaded_model_result)
 
+    def test_static_quantization_with_calib_func(self):
+        model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model, trainer, eval_func = self.helper(model_name, tmp_dir)
+            model.config.save_pretrained(tmp_dir)
+            model_result = eval_func(model)
+            q8_config = IncQuantizationConfig.from_pretrained(config_path)
+            q8_config.set_config("quantization.approach", IncQuantizationMode.STATIC.value)
+            q8_config.set_config("tuning.accuracy_criterion.relative", 0.04)
+            q8_config.set_config("model.framework", "pytorch_fx")
+            quantizer = IncQuantizer(
+                q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader(), calib_func=eval_func
+            )
+            optimizer = IncOptimizer(model, quantizer=quantizer)
+            q_model = optimizer.fit()
+            q_model_result = eval_func(q_model)
+
+            # Verification accuracy loss is under 4%
+            self.assertGreaterEqual(q_model_result, model_result * 0.96)
+
+            optimizer.save_pretrained(tmp_dir)
+
+            loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
+            loaded_model.eval()
+            loaded_model_result = eval_func(loaded_model)
+
+            # Verification quantized model was correctly loaded
+            self.assertEqual(q_model_result, loaded_model_result)
+
     def test_quantization_aware_training(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
         task = "sst2"
@@ -178,8 +211,6 @@ class IncQuantizationTest(unittest.TestCase):
         q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
         q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
         q8_config.set_config("model.framework", "pytorch_fx")
-        quantizer = IncQuantizer(q8_config, eval_func=eval_func, train_func=train_func)
-        optimizer = IncOptimizer(model, quantizer=quantizer)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(tmp_dir, num_train_epochs=1.0)
@@ -194,6 +225,11 @@ class IncQuantizationTest(unittest.TestCase):
                 data_collator=default_data_collator,
             )
 
+            quantizer = IncQuantizer(
+                q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader(), train_func=train_func
+            )
+            optimizer = IncOptimizer(model, quantizer=quantizer)
+
             model_result = eval_func(model)
             optimized_model = optimizer.fit()
 
@@ -205,8 +241,8 @@ class IncQuantizationTest(unittest.TestCase):
             loaded_model.eval()
             loaded_model_result = eval_func(loaded_model)
 
-            # Verification accuracy loss is under 20%
-            self.assertGreaterEqual(optimized_model_result, model_result * 0.80)
+            # Verification accuracy loss is under 25%
+            self.assertGreaterEqual(optimized_model_result, model_result * 0.75)
 
             # Verification quantized model was correctly loaded
             self.assertEqual(optimized_model_result, loaded_model_result)
@@ -381,23 +417,7 @@ class IncOptimizerTest(unittest.TestCase):
         q8_config.set_config("quantization.approach", IncQuantizationMode.AWARE_TRAINING.value)
         q8_config.set_config("tuning.accuracy_criterion.relative", 0.2)
         q8_config.set_config("model.framework", "pytorch_fx")
-        quantizer = IncQuantizer(q8_config, eval_func=eval_func, train_func=train_func)
         distillation_config = IncDistillationConfig.from_pretrained(config_path)
-        distiller = IncDistiller(
-            teacher_model=teacher_model,
-            config=distillation_config,
-            eval_func=eval_func,
-            train_func=train_func,
-        )
-        optimizer = IncOptimizer(
-            model,
-            quantizer=quantizer,
-            distiller=distiller,
-            one_shot_optimization=True,
-            eval_func=eval_func,
-            train_func=train_func,
-        )
-        agent = optimizer.get_agent()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(tmp_dir, num_train_epochs=1.0)
@@ -410,6 +430,26 @@ class IncOptimizerTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
+
+            quantizer = IncQuantizer(
+                q8_config, eval_func=eval_func, calib_dataloader=trainer.get_eval_dataloader(), train_func=train_func
+            )
+            distiller = IncDistiller(
+                teacher_model=teacher_model,
+                config=distillation_config,
+                eval_func=eval_func,
+                train_func=train_func,
+            )
+            optimizer = IncOptimizer(
+                model,
+                quantizer=quantizer,
+                distiller=distiller,
+                one_shot_optimization=True,
+                eval_func=eval_func,
+                train_func=train_func,
+            )
+            agent = optimizer.get_agent()
+
             model_result = eval_func(model)
             optimized_model = optimizer.fit()
             optimized_model_result = eval_func(optimized_model)
@@ -420,8 +460,8 @@ class IncOptimizerTest(unittest.TestCase):
             loaded_model.eval()
             loaded_model_result = eval_func(loaded_model)
 
-            # Verification accuracy loss is under 20%
-            self.assertGreaterEqual(optimized_model_result, model_result * 0.80)
+            # Verification accuracy loss is under 25%
+            self.assertGreaterEqual(optimized_model_result, model_result * 0.75)
 
             # Verification quantized model was correctly loaded
             self.assertEqual(optimized_model_result, loaded_model_result)
