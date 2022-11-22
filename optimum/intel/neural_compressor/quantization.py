@@ -256,8 +256,6 @@ class IncQuantizedModel:
             state_dict (`Dict[str, torch.Tensor]`, *optional*):
                 State dictionary of the quantized model, if not specified q_model_name will be used to load the
                 state dictionary.
-            example_inputs(List[torch.Tensor], *optional*):
-                List of input tensors for FX trace if PyTorch >= 1.13.
         Returns:
             q_model: Quantized model.
         """
@@ -269,8 +267,6 @@ class IncQuantizedModel:
         ]
         download_kwargs = {name: kwargs.get(name, default_value) for (name, default_value) in download_kwarg_default}
         state_dict = kwargs.get("state_dict", None)
-
-        example_inputs = list(model.dummy_inputs.values())
 
         config = AutoConfig.from_pretrained(model_name_or_path)
         model_class = _get_model_class(config, cls.TRANSFORMERS_AUTO_CLASS._model_mapping)
@@ -358,6 +354,8 @@ class IncQuantizedModel:
         else:
             config_path = inc_config if inc_config is not None else model_name_or_path
             inc_config = IncOptimizedConfig.from_pretrained(config_path, **download_kwargs).config
+
+        example_inputs = list(model.dummy_inputs.values())
 
         if "is_oneshot" in inc_config and inc_config["is_oneshot"]:
             return _load_int8_orchestration(
