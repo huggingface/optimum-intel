@@ -26,6 +26,7 @@ from torch.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_f
 from torch.utils.data import DataLoader
 from transformers import (
     AutoConfig,
+    AutoModel,
     AutoModelForCausalLM,
     AutoModelForMaskedLM,
     AutoModelForMultipleChoice,
@@ -190,7 +191,7 @@ def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> to
 
 class IncQuantizedModel:
 
-    TRANSFORMERS_AUTO_CLASS: ClassVar
+    TRANSFORMERS_AUTO_CLASS: ClassVar = AutoModel
 
     def __init__(self, *args, **kwargs):
         raise EnvironmentError(
