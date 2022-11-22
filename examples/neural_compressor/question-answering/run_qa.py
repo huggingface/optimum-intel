@@ -811,7 +811,10 @@ def main():
             if not training_args.do_train:
                 raise ValueError("do_train must be set to True for quantization aware training.")
 
-            q8_config.set_config("model.framework", "pytorch_fx")
+            if training_args.use_ipex:
+                q8_config.set_config("model.framework", "pytorch_ipex")
+            else:
+                q8_config.set_config("model.framework", "pytorch_fx")
 
         calib_dataloader = trainer.get_train_dataloader() if quant_approach != IncQuantizationMode.DYNAMIC else None
         quantizer = IncQuantizer(

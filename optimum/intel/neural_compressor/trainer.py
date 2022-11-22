@@ -90,6 +90,7 @@ class IncTrainer(Trainer):
                 Additional keyword arguments used to hide deprecated arguments
         """
         self.agent = agent
+        self.args.use_ipex = False
 
         return super().train(resume_from_checkpoint, trial, ignore_keys_for_eval)
 
@@ -619,6 +620,7 @@ class IncTrainer(Trainer):
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
+        self.args.use_ipex = False
         if hasattr(self.model, "config") and getattr(self.model.config, "torch_dtype", None) == "int8":
             if self.model.config.framework in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
                 logger.warn(
