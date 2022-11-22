@@ -269,7 +269,9 @@ class IncQuantizedModel:
         ]
         download_kwargs = {name: kwargs.get(name, default_value) for (name, default_value) in download_kwarg_default}
         state_dict = kwargs.get("state_dict", None)
-        example_inputs = kwargs.get("example_inputs", None)
+
+
+        example_inputs = list(model.dummy_inputs.values())
 
         config = AutoConfig.from_pretrained(model_name_or_path)
         model_class = _get_model_class(config, cls.TRANSFORMERS_AUTO_CLASS._model_mapping)
