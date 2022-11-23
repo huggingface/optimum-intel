@@ -115,6 +115,8 @@ class IncQuantizer:
         if self.approach == IncQuantizationMode.AWARE_TRAINING:
             if self.train_func is None:
                 raise ValueError("train_func must be provided for quantization aware training.")
+            if self.config.usr_cfg.model.framework == "pytorch_ipex":
+                raise ValueError("INC IPEX only supports static quantization for now.")
             self.quantization.q_func = self.train_func
             if not is_torch_less_than_1_13:
                 if self.calib_dataloader is None:
@@ -278,8 +280,8 @@ class IncQuantizedModel:
             model_class._keys_to_ignore_on_load_missing.extend(missing_keys_to_ignore_on_load)
 
         model = model_class.from_pretrained(model_name_or_path, **kwargs)
-
-        dummy_inputs = list(model.dummy_inputs.keys())
+        
+        dummy_inputs = list(model.dummy_inputs.values())
 
         model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
         model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
