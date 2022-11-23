@@ -115,6 +115,8 @@ class IncQuantizer:
         if self.approach == IncQuantizationMode.AWARE_TRAINING:
             if self.train_func is None:
                 raise ValueError("train_func must be provided for quantization aware training.")
+            if self.config.usr_cfg.model.framework == "pytorch_ipex":
+                raise ValueError("INC IPEX only supports static quantization for now.")
             self.quantization.q_func = self.train_func
             if not is_torch_less_than_1_13:
                 if self.calib_dataloader is None:
@@ -279,6 +281,8 @@ class IncQuantizedModel:
 
         model = model_class.from_pretrained(model_name_or_path, **kwargs)
 
+        dummy_inputs = list(model.dummy_inputs.values())
+
         model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
         model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
 
@@ -324,7 +328,17 @@ class IncQuantizedModel:
 
                     raise EnvironmentError(msg)
 
-            state_dict = torch.load(state_dict_path)
+            if config.framework == "pytorch_ipex":
+                state_dict = torch.jit.load(state_dict_path)
+                q_model = torch.jit.freeze(stat_dict.eval())
+                # After freezing, run 1 time to warm up the profiling graph executor to insert prim::profile
+                # At the 2nd run, the llga pass will be triggered and the model is turned int
+                # an int8 model: prim::profile will be removed and will have LlgaFusionGroup in the graph
+                q_model(*dummy_inputs)
+                q_model(*dummy_inputs)
+                return q_model
+            else:
+                state_dict = torch.load(state_dict_path)
 
         if "best_configure" in state_dict:
             inc_config = state_dict.pop("best_configure")

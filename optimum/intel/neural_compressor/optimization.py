@@ -147,6 +147,9 @@ class IncOptimizer:
         os.makedirs(save_directory, exist_ok=True)
         if isinstance(self.config, PretrainedConfig):
             self.config.save_pretrained(save_directory)
+        if isinstance(self._model.model, torch.jit._script.RecursiveScriptModule):
+            self._model.model.save(os.path.join(save_directory, WEIGHTS_NAME))
+            return
         state_dict = self._model.model.state_dict()
         if hasattr(self._model, "q_config"):
             state_dict["best_configure"] = self._model.q_config
