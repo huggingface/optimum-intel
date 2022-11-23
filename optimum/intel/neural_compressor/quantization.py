@@ -280,7 +280,7 @@ class IncQuantizedModel:
             model_class._keys_to_ignore_on_load_missing.extend(missing_keys_to_ignore_on_load)
 
         model = model_class.from_pretrained(model_name_or_path, **kwargs)
-        
+
         dummy_inputs = list(model.dummy_inputs.values())
 
         model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
