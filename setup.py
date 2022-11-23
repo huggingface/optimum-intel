@@ -18,6 +18,7 @@ INSTALL_REQUIRES = [
     "torch",
     "sentencepiece",
     "scipy",
+    "intel_extension_for_pytorch"
 ]
 
 TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate"]
