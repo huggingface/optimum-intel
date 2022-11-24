@@ -56,7 +56,7 @@ from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.conf.config import Quantization_Conf
 from neural_compressor.experimental import Quantization
 from neural_compressor.model.torch_model import PyTorchModel
-from neural_compressor.utils.pytorch import _load_int8_orchestration
+from neural_compressor.utils.pytorch import _load_int8_orchestration, load
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
@@ -71,14 +71,12 @@ from .utils import (
     is_torch_less_than_1_13,
 )
 
-
 logger = logging.getLogger(__name__)
 
-
 _neural_compressor_version = version.parse(version.parse(neural_compressor.__version__).base_version)
-# NEURAL_COMPRESSOR_REQUIRED_VERSION = version.parse("2.0.0")
-NEURAL_COMPRESSOR_REQUIRED_VERSION = version.parse("1.14.2")
 
+# TODO : Replace required version to 2.0.0
+NEURAL_COMPRESSOR_REQUIRED_VERSION = version.parse("1.14.2")
 
 if _neural_compressor_version < NEURAL_COMPRESSOR_REQUIRED_VERSION:
     raise ImportError(
@@ -247,7 +245,7 @@ class INCQuantizer(OptimumQuantizer):
             )
             onnx_config = onnx_config_constructor(self.model.config)
             compressed_model.eval()
-            output_onnx_path = save_directory.joinpath("model.onnx")
+            output_onnx_path = save_directory.joinpath(ONNX_WEIGHTS_NAME)
             # Export the compressed model to the ONNX format
             self._onnx_export(compressed_model, onnx_config, output_onnx_path, calibration_dataloader)
 
@@ -372,7 +370,7 @@ class INCQuantizer(OptimumQuantizer):
 
 
 # Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
-def apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> torch.nn.Module:
+def _apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> torch.nn.Module:
     """
     Apply Intel Neural Compressor quantization steps on the given model.
 
@@ -529,7 +527,6 @@ class IncQuantizedModel:
         model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
 
         if state_dict is None:
-
             q_model_name = q_model_name if q_model_name is not None else WEIGHTS_NAME
             revision = download_kwargs.pop("revision", None)
             if os.path.isdir(model_name_or_path):
@@ -570,29 +567,10 @@ class IncQuantizedModel:
 
                     raise EnvironmentError(msg)
 
-            if config.framework == "pytorch_ipex":
-                raise ValueError("INC IPEX is currently not supported")
+        if getattr(config, "framework", None) == "pytorch_ipex":
+            raise ValueError("INC IPEX is currently not supported")
 
-            state_dict = torch.load(state_dict_path)
-
-        if "best_configure" in state_dict:
-            inc_config = state_dict.pop("best_configure")
-        elif isinstance(inc_config, IncOptimizedConfig):
-            inc_config = inc_config.config
-        else:
-            config_path = inc_config if inc_config is not None else model_name_or_path
-            inc_config = IncOptimizedConfig.from_pretrained(config_path, **download_kwargs).config
-
-        if "is_oneshot" in inc_config and inc_config["is_oneshot"]:
-            return _load_int8_orchestration(model, inc_config, state_dict)
-
-        q_model = apply_quantization_from_config(inc_config, model)
-
-        q_model.load_state_dict(state_dict, strict=False)
-
-        get_embedding_contiguous(q_model)
-
-        return q_model
+        return load(state_dict_path, model)
 
 
 class IncQuantizedModelForQuestionAnswering(IncQuantizedModel):
