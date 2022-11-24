@@ -15,6 +15,7 @@
 import os
 import tempfile
 import unittest
+from functools import partial
 
 import numpy as np
 from datasets import load_dataset, load_metric
@@ -28,20 +29,8 @@ from transformers import (
     set_seed,
 )
 
-from neural_compressor import PostTrainingConfig
-from optimum.intel.neural_compressor import INCQuantizer
-from optimum.intel.neural_compressor.configuration import (
-    IncDistillationConfig,
-    IncPruningConfig,
-    IncQuantizationConfig,
-)
-from optimum.intel.neural_compressor.quantization import (
-    IncQuantizationMode,
-    IncQuantizedModelForSequenceClassification,
-    INCQuantizer,
-)
-from functools import partial
-
+from neural_compressor import PostTrainingConfig, QuantizationAwareTrainingConfig
+from optimum.intel.neural_compressor import INCQuantizer, INCTrainer, IncQuantizedModelForSequenceClassification
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(1009)
@@ -63,7 +52,6 @@ class INCQuantizationTest(unittest.TestCase):
             )
             # TODO : Add quantization + loading verification
             loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
-
 
     def test_static_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
@@ -93,4 +81,36 @@ class INCQuantizationTest(unittest.TestCase):
                 save_onnx_model=True,
             )
             # TODO : Add quantization + loading verification
+            loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
+
+    def test_aware_training_quantization(self):
+        model_name = "distilbert-base-uncased"
+        quantization_config = QuantizationAwareTrainingConfig()
+        quantization_config.backend = "pytorch_fx"
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        metric = load_metric("glue", "sst2")
+        dataset = load_dataset("glue", "sst2")
+        dataset = dataset.map(
+            lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
+        )
+
+        def compute_metrics(p: EvalPrediction):
+            return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = INCTrainer(
+                model=model,
+                quantization_config=quantization_config,
+                feature="sequence-classification",
+                args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
+                train_dataset=dataset["train"].select(range(64)),
+                eval_dataset=dataset["validation"].select(range(64)),
+                compute_metrics=compute_metrics,
+                tokenizer=tokenizer,
+                data_collator=default_data_collator,
+            )
+            train_result = trainer.train()
+            metrics = trainer.evaluate()
+            trainer.save_model()
             loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)

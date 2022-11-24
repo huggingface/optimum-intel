@@ -28,5 +28,5 @@ from .quantization import (
     IncQuantizer,
     INCQuantizer,
 )
-from .trainer import IncTrainer
-from .trainer_seq2seq import IncSeq2SeqTrainer
+from .trainer import INCTrainer
+from .trainer_seq2seq import INCSeq2SeqTrainer

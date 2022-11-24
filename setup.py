@@ -14,7 +14,7 @@ except Exception as error:
 INSTALL_REQUIRES = [
     "optimum",
     "transformers>=4.20.0",
-    "datasets",
+    "datasets>=1.4.0",
     "torch",
     "sentencepiece",
     "scipy",

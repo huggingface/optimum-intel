@@ -21,13 +21,13 @@ from transformers.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import PredictionOutput
 from transformers.utils import logging
 
-from .trainer import IncTrainer
+from .trainer import INCTrainer
 
 
 logger = logging.get_logger(__name__)
 
 
-class IncSeq2SeqTrainer(IncTrainer):
+class INCSeq2SeqTrainer(INCTrainer):
     def evaluate(
         self,
         eval_dataset: Optional[Dataset] = None,
