@@ -30,7 +30,8 @@ from transformers import (
 )
 
 from neural_compressor import PostTrainingConfig, QuantizationAwareTrainingConfig
-from optimum.intel.neural_compressor import INCQuantizer, INCTrainer, IncQuantizedModelForSequenceClassification
+from optimum.intel.neural_compressor import IncQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer
+
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(1009)
