@@ -44,8 +44,6 @@ from transformers.integrations import hp_params
 
 from transformers.modeling_utils import get_parameter_dtype, unwrap_model
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
-
-
 from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_callback import TrainerState
@@ -55,7 +53,7 @@ from transformers.utils import is_sagemaker_mp_enabled, logging
 
 from neural_compressor.experimental import Component
 
-from .utils import TRAINING_ARGS_NAME, is_torch_less_than_1_13, ONNX_WEIGHTS_NAME, MIN_QDQ_ONNX_OPSET
+from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME, is_torch_less_than_1_13
 
 
 if TYPE_CHECKING:
@@ -68,6 +66,8 @@ __version__ = "4.22.2"
 logger = logging.get_logger(__name__)
 
 
+from itertools import chain
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.data.data_collator import DataCollator
@@ -80,9 +80,7 @@ from transformers.training_args import TrainingArguments
 from neural_compressor import QuantizationAwareTrainingConfig, training
 from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
 from neural_compressor.model.torch_model import PyTorchModel
-from pathlib import Path
 from optimum.exporters import TasksManager
-from itertools import chain
 
 
 class INCTrainer(Trainer):
@@ -135,7 +133,7 @@ class INCTrainer(Trainer):
         self.model.config.framework = "pytorch_fx"
         self.model.config.architectures = [self.model.__class__.__name__]
         self.config = getattr(self.model, "config", None)
-        
+
         self._set_signature_columns_if_needed()
 
         for inc_config in [quantization_config, pruning_config, distillation_config]:
@@ -543,7 +541,7 @@ class INCTrainer(Trainer):
 
         # If we save using the predefined names, we can load using `from_pretrained`
         output_model_file = os.path.join(output_dir, WEIGHTS_NAME)
-        
+
         # Save the config
         if self.config is not None:
             self.config.save_pretrained(output_dir)
@@ -562,7 +560,7 @@ class INCTrainer(Trainer):
             if hasattr(self.model, "q_config"):
                 state_dict["best_configure"] = self.model.q_config
         torch.save(state_dict, output_model_file)
-        
+
         # Export the compressed model to the ONNX format
         if save_onnx_model and isinstance(self.model, PyTorchModel):
             self._set_feature()
@@ -602,7 +600,7 @@ class INCTrainer(Trainer):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
         dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
         inputs = config.generate_dummy_inputs(framework="pt")
-        
+
         if self.dtype == "int8":
             model.export_to_int8_onnx(
                 save_path=output_path,
@@ -656,7 +654,7 @@ class INCTrainer(Trainer):
             self._past = outputs[self.args.past_index]
 
         if labels is not None:
-            model_name = unwrap_model(getattr(model, "_model", model))._get_name() 
+            model_name = unwrap_model(getattr(model, "_model", model))._get_name()
             if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
                 loss = self.label_smoother(outputs, labels, shift_labels=True)
             else:
@@ -669,11 +667,11 @@ class INCTrainer(Trainer):
                 )
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-        
+
         """
         if self.compression_controller is not None:
             loss = self.compression_controller.callbacks.on_after_compute_loss(inputs, outputs, loss)
-        """    
+        """
         return (loss, outputs) if return_outputs else loss
 
     @staticmethod

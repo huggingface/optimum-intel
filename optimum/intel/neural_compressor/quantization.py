@@ -71,6 +71,7 @@ from .utils import (
     is_torch_less_than_1_13,
 )
 
+
 logger = logging.getLogger(__name__)
 
 _neural_compressor_version = version.parse(version.parse(neural_compressor.__version__).base_version)
