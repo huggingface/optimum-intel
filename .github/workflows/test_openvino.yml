@@ -19,6 +19,9 @@ jobs:
       matrix:
         python-version: [3.8, 3.9]
         os: [ubuntu-18.04]
+        include:
+          - python-version: 3.9
+            transformers: "git+https://github.com/huggingface/transformers.git"
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -31,6 +34,11 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install .[openvino,nncf,tests]
+    - if: ${{ matrix.transformers }}
+        run: python -m pip install ${{ matrix.transformers }}
+    - name: Test
+      run: |
+        pip freeze
     - name: Test with Pytest
       run: |
         pytest tests/openvino/
