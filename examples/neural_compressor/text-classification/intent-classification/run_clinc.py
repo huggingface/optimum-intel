@@ -232,6 +232,13 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to verify the loading of the quantized model."},
     )
+    examples_duplicate_ratio: float = field(
+        default=100,
+        metadata={
+            "help": "How much times to duplicate the sentences dataset to construct the dataset "
+            "of randomly paired two sentences for distillation of the SetFit model."
+        },
+    )
 
 
 # Mean Pooling - Take attention mask into account for correct averaging
@@ -548,15 +555,16 @@ def main():
         )
 
         examples = raw_datasets["train"]["text"]
-        examples_duplicate_ratio = 100
-        examples_duplicate = []
-        for i in range(int(examples_duplicate_ratio)):
-            examples_duplicate.extend(examples)
-        examples_duplicate.extend(
-            examples[: int(len(examples) * (examples_duplicate_ratio - int(examples_duplicate_ratio)))]
-        )
         if data_args.max_train_samples is not None:
             examples_duplicate = raw_datasets["train"].select(range(data_args.max_train_samples))["text"]
+        else:
+            examples_duplicate_ratio = optim_args.examples_duplicate_ratio
+            examples_duplicate = []
+            for i in range(int(examples_duplicate_ratio)):
+                examples_duplicate.extend(examples)
+            examples_duplicate.extend(
+                examples[: int(len(examples) * (examples_duplicate_ratio - int(examples_duplicate_ratio)))]
+            )
         shuffled_examples_duplicate = copy.deepcopy(examples_duplicate)
         distillation_dataset = list(zip(examples_duplicate, shuffled_examples_duplicate))
 

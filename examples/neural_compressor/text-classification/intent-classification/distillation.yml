@@ -23,9 +23,6 @@ distillation:
     optimizer:
       SGD:
         learning_rate: 0.001
-        momentum: 0.1
-        nesterov: True
-        weight_decay: 0.001
     criterion:
       KnowledgeDistillationLoss:
         temperature: 1.0
