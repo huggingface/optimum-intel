@@ -460,8 +460,8 @@ class IncOptimizerTest(unittest.TestCase):
             loaded_model.eval()
             loaded_model_result = eval_func(loaded_model)
 
-            # Verification accuracy loss is under 25%
-            self.assertGreaterEqual(optimized_model_result, model_result * 0.75)
+            # Verification accuracy loss is under 30%
+            self.assertGreaterEqual(optimized_model_result, model_result * 0.70)
 
             # Verification quantized model was correctly loaded
             self.assertEqual(optimized_model_result, loaded_model_result)

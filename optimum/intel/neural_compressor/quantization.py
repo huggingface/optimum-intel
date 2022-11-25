@@ -113,6 +113,9 @@ class IncQuantizer:
             if self.calib_dataloader is not None:
                 self.quantization._calib_dataloader = self.calib_dataloader
 
+        if self.config.usr_cfg.model.framework == "pytorch_ipex":
+            raise ValueError("INC IPEX only is not currently supported.")
+
         if self.approach == IncQuantizationMode.AWARE_TRAINING:
             if self.train_func is None:
                 raise ValueError("train_func must be provided for quantization aware training.")
@@ -279,7 +282,6 @@ class IncQuantizedModel:
             model_class._keys_to_ignore_on_load_missing.extend(missing_keys_to_ignore_on_load)
 
         model = model_class.from_pretrained(model_name_or_path, **kwargs)
-
         model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
         model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
 
@@ -324,6 +326,9 @@ class IncQuantizedModel:
                         )
 
                     raise EnvironmentError(msg)
+
+            if config.framework == "pytorch_ipex":
+                raise ValueError("INC IPEX is currently not supported")
 
             state_dict = torch.load(state_dict_path)
 
