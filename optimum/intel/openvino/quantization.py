@@ -40,11 +40,14 @@ from openvino.runtime import Core
 from optimum.quantization_base import OptimumQuantizer
 
 from .configuration import OVConfig
-from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, MIN_ONNX_QDQ_OPSET, ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
-
-
-_openvino_version_str = openvino.runtime.get_version()
-_openvino_version = version.parse(_openvino_version_str.split("-")[0])
+from .utils import (
+    MAX_ONNX_OPSET,
+    MAX_ONNX_OPSET_2022_2_0,
+    MIN_ONNX_QDQ_OPSET,
+    ONNX_WEIGHTS_NAME,
+    OV_XML_FILE_NAME,
+    _openvino_version,
+)
 
 
 core = Core()
@@ -166,7 +169,10 @@ class OVQuantizer(OptimumQuantizer):
     def _onnx_export(
         model: NNCFNetwork, config: OnnxConfig, model_inputs: Dict, ov_config: OVConfig, f: Union[str, io.BytesIO]
     ):
-        if _openvino_version <= version.Version("2022.2.0"):
+        openvino_version = version.parse(version.parse(_openvino_version).base_version)
+        is_openvino_version_greater_2022_2_0 = openvino_version > version.Version("2022.2.0")
+
+        if not is_openvino_version_greater_2022_2_0:
             if config.default_onnx_opset > MAX_ONNX_OPSET_2022_2_0 + 1:
                 if not ov_config.save_onnx_model:
                     logger.warning(
@@ -181,7 +187,7 @@ class OVQuantizer(OptimumQuantizer):
                         f"to 2022.3.* version or set `save_onnx_model` to `False`."
                     )
         max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
-        opset = max_onnx_opset if _openvino_version > version.Version("2022.2.0") else MAX_ONNX_OPSET_2022_2_0
+        opset = max_onnx_opset if is_openvino_version_greater_2022_2_0 else MAX_ONNX_OPSET_2022_2_0
         opset = opset if ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
         with torch.no_grad():
             # Disable node additions to be exported in the graph
