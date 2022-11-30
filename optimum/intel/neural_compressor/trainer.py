@@ -77,7 +77,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import TrainingArguments
 
-from neural_compressor import QuantizationAwareTrainingConfig, training
+from neural_compressor import training
 from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
 from neural_compressor.model.torch_model import PyTorchModel
 from optimum.exporters import TasksManager
