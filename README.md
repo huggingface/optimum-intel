@@ -26,9 +26,11 @@ Optimum Intel is a fast-moving project, and you may want to install from source.
 pip install git+https://github.com/huggingface/optimum-intel.git
 ```
 
-# How to use it?
+# Quick tour
 
 ## Neural Compressor
+
+#### Dynamic quantization:
 
 Here is an example on how to apply dynamic quantization on a DistilBERT fine-tuned on the SQuAD1.0 dataset.
 Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in this example.
@@ -80,9 +82,13 @@ loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrain
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
 ## OpenVINO
+
 Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework for model optimization, quantization, and inference.
 
-#### OpenVINO inference example:
+#### Inference:
+
+To load a model and run inference with OpenVINO Runtime, you can just replace your `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
+If you want to load a PyTorch checkpoint, set `from_transformers=True` to convert your model to the OpenVINO IR.
 
 ```diff
 -from transformers import AutoModelForSequenceClassification
@@ -98,7 +104,10 @@ text = "He's a dreadful magician."
 outputs = pipe_cls(text)
 ```
 
-#### Post-training quantization example:
+#### Post-training static quantization:
+
+Post-training static quantization introduces an additional calibration step where data is fed through the network in order to compute the activations quantization parameters. Here is how to apply static quantization on a fine-tuned DistilBERT:
+
 ```python
 from functools import partial
 from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
@@ -129,7 +138,9 @@ quantizer.quantize(calibration_dataset=calibration_dataset, save_directory=save_
 optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
-#### Quantization-aware training example:
+#### Quantization-aware training:
+
+Quantization aware training (QAT) is applied in order to simulate the effects of quantization during training, to alleviate its effects on the model’s accuracy. Here is an example on how to fine-tune a DistilBERT model on the sst-2 task while applying quantization aware training (QAT).
 
 ```diff
 import numpy as np
