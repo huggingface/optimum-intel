@@ -79,8 +79,6 @@ loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrain
 
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
-Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
-
 ## OpenVINO
 Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework for model optimization, quantization, and inference.
 
@@ -182,9 +180,9 @@ You can find more OpenVINO examples in the corresponding [Optimum Intel document
 
 ## Running the examples
 
-There are a number of examples provided in the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory.
+Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory to see how 🤗 Optimum Intel can be used to accelerate inference.
 
-Please install the requirements for every example:
+Do not forget to install requirements for every example:
 
 ```
 cd <example-folder>
