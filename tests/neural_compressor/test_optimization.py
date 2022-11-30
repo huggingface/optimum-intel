@@ -29,8 +29,10 @@ from transformers import (
     set_seed,
 )
 
-from neural_compressor import PostTrainingConfig, QuantizationAwareTrainingConfig
-from optimum.intel.neural_compressor import IncQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer
+from neural_compressor.config import PostTrainingQuantConfig
+from neural_compressor import  QuantizationAwareTrainingConfig, PostTrainingConfig
+
+from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -40,7 +42,7 @@ set_seed(1009)
 class INCQuantizationTest(unittest.TestCase):
     def test_dynamic_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-        approach = "post_training_dynamic_quant"
+        # quantization_config = PostTrainingQuantConfig(approach="dynamic", backend="pytorch")
         quantization_config = PostTrainingConfig(approach="post_training_dynamic_quant")
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
 
@@ -52,11 +54,11 @@ class INCQuantizationTest(unittest.TestCase):
                 save_onnx_model=True,
             )
             # TODO : Add quantization + loading verification
-            loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
+            loaded_model = INCQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
 
     def test_static_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-        approach = "post_training_dynamic_quant"
+        # quantization_config = PostTrainingQuantConfig(approach="static", backend="pytorch_fx")
         quantization_config = PostTrainingConfig(approach="post_training_static_quant")
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -82,12 +84,11 @@ class INCQuantizationTest(unittest.TestCase):
                 save_onnx_model=True,
             )
             # TODO : Add quantization + loading verification
-            loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
+            loaded_model = INCQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
 
     def test_aware_training_quantization(self):
         model_name = "distilbert-base-uncased"
-        quantization_config = QuantizationAwareTrainingConfig()
-        quantization_config.backend = "pytorch_fx"
+        quantization_config = QuantizationAwareTrainingConfig(backend="pytorch_fx")
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         metric = load_metric("glue", "sst2")
@@ -113,5 +114,7 @@ class INCQuantizationTest(unittest.TestCase):
             )
             train_result = trainer.train()
             metrics = trainer.evaluate()
+            # trainer.save_model(save_onnx_model=True)
             trainer.save_model()
-            loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
+
+            loaded_model = INCQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
