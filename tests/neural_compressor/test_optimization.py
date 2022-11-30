@@ -29,9 +29,8 @@ from transformers import (
     set_seed,
 )
 
+from neural_compressor import PostTrainingConfig, QuantizationAwareTrainingConfig
 from neural_compressor.config import PostTrainingQuantConfig
-from neural_compressor import  QuantizationAwareTrainingConfig, PostTrainingConfig
-
 from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer
 
 

@@ -16,11 +16,11 @@ import copy
 import inspect
 import logging
 import os
+import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
 from typing import Callable, ClassVar, Dict, List, Optional, Tuple, Union
-import warnings
 
 import torch
 import transformers
@@ -51,14 +51,15 @@ from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
 
 import neural_compressor
 from huggingface_hub import HfApi, hf_hub_download
-from neural_compressor.quantization import fit
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig, get_torch_version
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.model.torch_model import PyTorchModel
+from neural_compressor.quantization import fit
 from neural_compressor.utils.pytorch import _load_int8_orchestration, load
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
+
 from .configuration import IncOptimizedConfig, IncQuantizationConfig
 from .utils import (
     MIN_QDQ_ONNX_OPSET,
@@ -157,7 +158,7 @@ class INCQuantizer(OptimumQuantizer):
         output_path = save_directory.joinpath(file_name)
         calibration_dataloader = None
 
-        if  INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
+        if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
             if calibration_dataset is None:
                 raise ValueError("Post-training static quantization needs a calibration dataset.")
             calibration_dataloader = self._get_calibration_dataloader(
