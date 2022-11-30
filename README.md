@@ -83,7 +83,7 @@ You can load many more quantized models hosted on the hub under the Intel organi
 
 ## OpenVINO
 
-Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework for model optimization, quantization, and inference.
+Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework to accelerate inference.
 
 #### Inference:
 
@@ -106,7 +106,7 @@ outputs = pipe_cls(text)
 
 #### Post-training static quantization:
 
-Post-training static quantization introduces an additional calibration step where data is fed through the network in order to compute the activations quantization parameters. Here is how to apply static quantization on a fine-tuned DistilBERT:
+Post-training static quantization introduces an additional calibration step where data is fed through the network in order to compute the activations quantization parameters. Here is an example on how to apply static quantization on a fine-tuned DistilBERT.
 
 ```python
 from functools import partial
