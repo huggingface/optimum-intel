@@ -31,6 +31,11 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install .[neural-compressor,tests]
+        git clone https://github.com/intel/neural-compressor.git
+        cd neural-compressor
+        pip install -r requirements.txt
+        pip install -i https://test.pypi.org/simple/ neural-compressor
+        cd ..
     - name: Test with Pytest
       run: |
         pytest tests/neural_compressor/

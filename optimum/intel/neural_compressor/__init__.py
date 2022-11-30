@@ -13,19 +13,15 @@
 #  limitations under the License.
 
 from .configuration import IncConfig, IncDistillationConfig, IncPruningConfig, IncQuantizationConfig
-from .distillation import IncDistiller
-from .optimization import IncOptimizer
-from .pruning import IncPruner, IncPruningMode
 from .quantization import (
-    IncQuantizationMode,
-    IncQuantizedModelForCausalLM,
-    IncQuantizedModelForMaskedLM,
-    IncQuantizedModelForMultipleChoice,
-    IncQuantizedModelForQuestionAnswering,
-    IncQuantizedModelForSeq2SeqLM,
-    IncQuantizedModelForSequenceClassification,
-    IncQuantizedModelForTokenClassification,
-    IncQuantizer,
+    INCQuantizationMode,
+    INCQuantizedModelForCausalLM,
+    INCQuantizedModelForMaskedLM,
+    INCQuantizedModelForMultipleChoice,
+    INCQuantizedModelForQuestionAnswering,
+    INCQuantizedModelForSeq2SeqLM,
+    INCQuantizedModelForSequenceClassification,
+    INCQuantizedModelForTokenClassification,
     INCQuantizer,
 )
 from .trainer import INCTrainer
