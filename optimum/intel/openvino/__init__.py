@@ -14,10 +14,10 @@
 
 import importlib.util
 
+from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME, is_nncf_available
 
-_nncf_available = importlib.util.find_spec("nncf") is not None
 
-if _nncf_available:
+if is_nncf_available():
     from nncf.torch import patch_torch_operators
 
     patch_torch_operators()
@@ -36,4 +36,3 @@ from .modeling import (
     OVModelForTokenClassification,
 )
 from .modeling_seq2seq import OVModelForSeq2SeqLM
-from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
