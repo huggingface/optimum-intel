@@ -12,11 +12,13 @@ Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tool
 
 ## Installation
 
-🤗 Optimum Intel can be installed using `pip` as follows:
+To install the latest release of 🤗 Optimum Intel with the corresponding required dependencies, you can use `pip` as follows:
 
-```bash
-python -m pip install optimum[intel]
-```
+| Accelerator                                                                                                      | Installation                                                        |
+|:-----------------------------------------------------------------------------------------------------------------|:--------------------------------------------------------------------|
+| [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum[neural-compressor]`                  |
+| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino,nncf]`                      |
+
 
 Optimum Intel is a fast-moving project, and you may want to install from source.
 
@@ -24,27 +26,11 @@ Optimum Intel is a fast-moving project, and you may want to install from source.
 pip install git+https://github.com/huggingface/optimum-intel.git
 ```
 
-To install the latest release of this package with the corresponding required dependencies, you can do respectively:
-
-| Accelerator                                                                                                      | Installation                                                        |
-|:-----------------------------------------------------------------------------------------------------------------|:--------------------------------------------------------------------|
-| [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum[neural-compressor]`                  |
-| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino,nncf]`                      |
-
-## Running the examples
-
-There are a number of examples provided in the `examples` directory.
-
-Please install the requirements for every example:
-
-```
-cd <example-folder>
-pip install -r requirements.txt
-```
-
-# How to use it?
+# Quick tour
 
 ## Neural Compressor
+
+#### Dynamic quantization:
 
 Here is an example on how to apply dynamic quantization on a DistilBERT fine-tuned on the SQuAD1.0 dataset.
 Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in this example.
@@ -95,12 +81,14 @@ loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrain
 
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
-Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
-
 ## OpenVINO
-Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework for model optimization, quantization, and inference.
 
-#### OpenVINO inference example:
+Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework to accelerate inference.
+
+#### Inference:
+
+To load a model and run inference with OpenVINO Runtime, you can just replace your `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
+If you want to load a PyTorch checkpoint, set `from_transformers=True` to convert your model to the OpenVINO IR.
 
 ```diff
 -from transformers import AutoModelForSequenceClassification
@@ -116,7 +104,10 @@ text = "He's a dreadful magician."
 outputs = pipe_cls(text)
 ```
 
-#### Post-training quantization example:
+#### Post-training static quantization:
+
+Post-training static quantization introduces an additional calibration step where data is fed through the network in order to compute the activations quantization parameters. Here is an example on how to apply static quantization on a fine-tuned DistilBERT.
+
 ```python
 from functools import partial
 from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
@@ -147,7 +138,9 @@ quantizer.quantize(calibration_dataset=calibration_dataset, save_directory=save_
 optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
-#### Quantization-aware training example:
+#### Quantization-aware training:
+
+Quantization aware training (QAT) is applied in order to simulate the effects of quantization during training, to alleviate its effects on the model’s accuracy. Here is an example on how to fine-tune a DistilBERT model on the sst-2 task while applying quantization aware training (QAT).
 
 ```diff
 import numpy as np
@@ -193,4 +186,16 @@ trainer.save_model()
 +optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
-You can find more OpenVINO examples in the corresponding [Optimum Intel documentation](https://huggingface.co/docs/optimum/main/en/intel_inference).
+You can find more examples in the [documentation](https://huggingface.co/docs/optimum/intel/index).
+
+
+## Running the examples
+
+Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory to see how 🤗 Optimum Intel can be used to accelerate inference.
+
+Do not forget to install requirements for every example:
+
+```
+cd <example-folder>
+pip install -r requirements.txt
+```
