@@ -14,6 +14,8 @@ Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tool
 
 To install the latest release of 🤗 Optimum Intel with the corresponding required dependencies, you can use `pip` as follows:
 
+| Accelerator                                                                                                      | Installation                                                        |
+|:-----------------------------------------------------------------------------------------------------------------|:--------------------------------------------------------------------|
 | [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum[neural-compressor]`                  |
 | [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino,nncf]`                      |
 
