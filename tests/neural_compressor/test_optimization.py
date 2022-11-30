@@ -29,8 +29,7 @@ from transformers import (
     set_seed,
 )
 
-from neural_compressor import PostTrainingConfig, QuantizationAwareTrainingConfig
-from neural_compressor.config import PostTrainingQuantConfig
+from neural_compressor.config import PostTrainingQuantConfig, QuantizationAwareTrainingConfig
 from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer
 
 
@@ -41,8 +40,8 @@ set_seed(1009)
 class INCQuantizationTest(unittest.TestCase):
     def test_dynamic_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-        # quantization_config = PostTrainingQuantConfig(approach="dynamic", backend="pytorch")
-        quantization_config = PostTrainingConfig(approach="post_training_dynamic_quant")
+        quantization_config = PostTrainingQuantConfig(approach="dynamic", backend="pytorch")
+        # quantization_config = PostTrainingConfig(approach="post_training_dynamic_quant")
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -57,8 +56,8 @@ class INCQuantizationTest(unittest.TestCase):
 
     def test_static_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-        # quantization_config = PostTrainingQuantConfig(approach="static", backend="pytorch_fx")
-        quantization_config = PostTrainingConfig(approach="post_training_static_quant")
+        quantization_config = PostTrainingQuantConfig(approach="static", backend="pytorch_fx")
+        # quantization_config = PostTrainingConfig(approach="post_training_static_quant")
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
