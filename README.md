@@ -12,34 +12,18 @@ Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tool
 
 ## Installation
 
-🤗 Optimum Intel can be installed using `pip` as follows:
-
-```bash
-python -m pip install optimum[intel]
-```
-
-Optimum Intel is a fast-moving project, and you may want to install from source.
-
-```bash
-pip install git+https://github.com/huggingface/optimum-intel.git
-```
-
-To install the latest release of this package with the corresponding required dependencies, you can do respectively:
+To install the latest release of 🤗 Optimum Intel with the corresponding required dependencies, you can use `pip` as follows:
 
 | Accelerator                                                                                                      | Installation                                                        |
 |:-----------------------------------------------------------------------------------------------------------------|:--------------------------------------------------------------------|
 | [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum[neural-compressor]`                  |
 | [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino,nncf]`                      |
 
-## Running the examples
 
-There are a number of examples provided in the `examples` directory.
+Optimum Intel is a fast-moving project, and you may want to install from source.
 
-Please install the requirements for every example:
-
-```
-cd <example-folder>
-pip install -r requirements.txt
+```bash
+pip install git+https://github.com/huggingface/optimum-intel.git
 ```
 
 # How to use it?
@@ -194,3 +178,15 @@ trainer.save_model()
 ```
 
 You can find more OpenVINO examples in the corresponding [Optimum Intel documentation](https://huggingface.co/docs/optimum/main/en/intel_inference).
+
+
+## Running the examples
+
+There are a number of examples provided in the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory.
+
+Please install the requirements for every example:
+
+```
+cd <example-folder>
+pip install -r requirements.txt
+```
