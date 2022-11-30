@@ -175,7 +175,7 @@ trainer.save_model()
 +optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
-You can find more OpenVINO examples in the corresponding [Optimum Intel documentation](https://huggingface.co/docs/optimum/main/en/intel_inference).
+You can find more examples in the [documentation](https://huggingface.co/docs/optimum/intel/index).
 
 
 ## Running the examples
