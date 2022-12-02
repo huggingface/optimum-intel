@@ -12,41 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import importlib.util
-import sys
-
-
-if sys.version_info < (3, 8):
-    import importlib_metadata
-else:
-    import importlib.metadata as importlib_metadata
-
-
-_openvino_available = importlib.util.find_spec("openvino") is not None
-_openvino_version = "N/A"
-if _openvino_available:
-    try:
-        _openvino_version = importlib_metadata.version("openvino")
-    except importlib_metadata.PackageNotFoundError:
-        _openvino_available = False
-
-
-def is_openvino_available():
-    return _openvino_available
-
-
-_nncf_available = importlib.util.find_spec("nncf") is not None
-_nncf_version = "N/A"
-if _nncf_available:
-    try:
-        _nncf_version = importlib_metadata.version("nncf")
-    except importlib_metadata.PackageNotFoundError:
-        _nncf_available = False
-
-
-def is_nncf_available():
-    return _nncf_available
-
 
 OV_XML_FILE_NAME = "openvino_model.xml"
 OV_ENCODER_NAME = "openvino_encoder_model.xml"

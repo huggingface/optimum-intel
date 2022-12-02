@@ -20,14 +20,19 @@ import torch
 import transformers
 from transformers import AutoConfig, AutoModelForSeq2SeqLM
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
-from transformers.generation_utils import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 
 import openvino
 from openvino.runtime import Core
 
+from ..utils.import_utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 
+
+if is_transformers_version("<", "4.25.0"):
+    from transformers.generation_utils import GenerationMixin
+else:
+    from transformers.generation import GenerationMixin
 
 core = Core()
 
