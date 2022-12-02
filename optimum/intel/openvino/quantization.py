@@ -39,15 +39,9 @@ from openvino.offline_transformations import compress_quantize_weights_transform
 from openvino.runtime import Core
 from optimum.quantization_base import OptimumQuantizer
 
+from ..utils.import_utils import _openvino_version
 from .configuration import OVConfig
-from .utils import (
-    MAX_ONNX_OPSET,
-    MAX_ONNX_OPSET_2022_2_0,
-    MIN_ONNX_QDQ_OPSET,
-    ONNX_WEIGHTS_NAME,
-    OV_XML_FILE_NAME,
-    _openvino_version,
-)
+from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, MIN_ONNX_QDQ_OPSET, ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
 
 core = Core()

@@ -28,7 +28,6 @@ from transformers import (
     AutoModelForTokenClassification,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
-from transformers.generation_utils import GenerationMixin
 from transformers.modeling_outputs import (
     BaseModelOutput,
     CausalLMOutputWithCrossAttentions,
@@ -41,8 +40,14 @@ from transformers.modeling_outputs import (
 
 import openvino
 
+from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 
+
+if is_transformers_version("<", "4.25.0"):
+    from transformers.generation_utils import GenerationMixin
+else:
+    from transformers.generation import GenerationMixin
 
 logger = logging.getLogger(__name__)
 

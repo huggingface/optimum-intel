@@ -62,9 +62,10 @@ from openvino.offline_transformations import compress_quantize_weights_transform
 from openvino.runtime import Core
 from optimum.utils import logging
 
+from ..utils.import_utils import _openvino_version
 from .configuration import OVConfig
 from .quantization import OVDataLoader
-from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, MIN_ONNX_QDQ_OPSET, OV_XML_FILE_NAME, _openvino_version
+from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, MIN_ONNX_QDQ_OPSET, OV_XML_FILE_NAME
 
 
 if is_apex_available():

@@ -14,7 +14,8 @@
 
 import importlib.util
 
-from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME, is_nncf_available
+from ..utils.import_utils import is_nncf_available
+from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 
 
 if is_nncf_available():
