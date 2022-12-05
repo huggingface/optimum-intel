@@ -42,7 +42,6 @@ class inference_mode:
         self._original = None
 
     def __enter__(self):
-
         with torch.inference_mode():
             with ipex.verbose(self._verbose):
                 ipex.enable_onednn_fusion(True)
@@ -57,9 +56,11 @@ class inference_mode:
                         auto_kernel_selection=True
                     )
 
-                    # Patching model with the new one
-                    self._model.model = _ModelFallbackWrapper(model, self._original)
-                    return self._model
+                    # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
+                    with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)):
+                        # Patching model with the new one
+                        self._model.model = _ModelFallbackWrapper(model, self._original)
+                        return self._model
                 else:
                     self._original = self._model
                     model = ipex.optimize(
@@ -70,7 +71,9 @@ class inference_mode:
                         auto_kernel_selection=True
                     )
 
-                    return model
+                    # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
+                    with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)):
+                        return model
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._model = self._original
