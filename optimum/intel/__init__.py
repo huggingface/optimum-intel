@@ -12,4 +12,5 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from .ipex import inference_mode
 from .version import __version__
