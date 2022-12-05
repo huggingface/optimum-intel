@@ -4,8 +4,17 @@ import torch
 from torch import nn
 from transformers import add_start_docstrings
 from transformers.pipelines import Pipeline
+from transformers.utils import is_ipex_available
 
-import intel_extension_for_pytorch as ipex
+
+IPEX_NOT_AVAILABLE_ERROR_MSG = (
+    "Intel PyTorch Extensions was not found."
+    "please make sure you've installed the package or run "
+    "pip install intel_extension_for_pytorch"
+)
+
+if is_ipex_available():
+    import intel_extension_for_pytorch as ipex
 
 
 class _ModelFallbackWrapper:
@@ -51,6 +60,9 @@ class inference_mode:
             verbose (`boolean = False`, *optional*):
                 Enable IPEx verbose output to see the kernels and optimizations applied.
         """
+        if not is_ipex_available():
+            raise ImportError(IPEX_NOT_AVAILABLE_ERROR_MSG)
+
         self._model = model
         self._verbose = ipex.utils.verbose.VERBOSE_ON if verbose else ipex.utils.verbose.VERBOSE_OFF
         self._dtype = dtype
