@@ -18,7 +18,6 @@ INSTALL_REQUIRES = [
     "torch",
     "sentencepiece",
     "scipy",
-    "intel_extension_for_pytorch"
 ]
 
 TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate"]
@@ -33,6 +32,7 @@ EXTRAS_REQUIRE = {
     "neural-compressor": "neural-compressor>=1.13.0",
     "openvino": ["openvino>=2022.2.0"],
     "nncf": ["nncf"],
+    "ipex": ["intel_extension_for_pytorch"],
     "quality": QUALITY_REQUIRES,
     "tests": TESTS_REQUIRE,
 }
