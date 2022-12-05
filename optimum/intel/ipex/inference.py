@@ -1,9 +1,11 @@
-import intel_extension_for_pytorch as ipex
+from typing import Union
+
 import torch
 from torch import nn
 from transformers import add_start_docstrings
 from transformers.pipelines import Pipeline
-from typing import Union
+
+import intel_extension_for_pytorch as ipex
 
 
 class _ModelFallbackWrapper:
@@ -36,12 +38,7 @@ class _ModelFallbackWrapper:
 class inference_mode:
     __slots__ = ("_model", "_dtype", "_graph_mode", "_verbose", "_original")
 
-    def __init__(
-        self,
-        model: Union[nn.Module, Pipeline],
-        dtype: torch.dtype = torch.float32,
-        verbose: bool = False
-    ):
+    def __init__(self, model: Union[nn.Module, Pipeline], dtype: torch.dtype = torch.float32, verbose: bool = False):
         """
         Args:
             model (`torch.nn.Module` or `transformers.Pipeline`):
@@ -72,7 +69,7 @@ class inference_mode:
                         dtype=self._dtype,
                         graph_mode=self._graph_mode,
                         level="O1",
-                        auto_kernel_selection=True
+                        auto_kernel_selection=True,
                     )
 
                     # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
@@ -87,7 +84,7 @@ class inference_mode:
                         dtype=self._dtype,
                         graph_mode=self._graph_mode,
                         level="O1",
-                        auto_kernel_selection=True
+                        auto_kernel_selection=True,
                     )
 
                     # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
