@@ -27,20 +27,18 @@ class _ModelFallbackWrapper:
 
 
 class inference_mode:
-    __slots__ = ("_model", "_dtype", "_graph_mode", "_use_onednn", "_verbose", "_original")
+    __slots__ = ("_model", "_dtype", "_graph_mode", "_verbose", "_original")
 
     def __init__(
         self,
         model: Union[nn.Module, Pipeline],
         dtype: torch.dtype = torch.float32,
-        use_onednn: bool = True,
         verbose: bool = False
     ):
         self._model = model
         self._verbose = ipex.utils.verbose.VERBOSE_ON if verbose else ipex.utils.verbose.VERBOSE_OFF
         self._dtype = dtype
         self._graph_mode = False  # Let's keep for future use when it doesn't hang anymore
-        self._use_onednn = use_onednn
         self._original = None
 
     def __enter__(self):
