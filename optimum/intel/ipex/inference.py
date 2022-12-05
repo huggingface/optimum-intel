@@ -1,6 +1,7 @@
 import intel_extension_for_pytorch as ipex
 import torch
 from torch import nn
+from transformers import add_start_docstrings
 from transformers.pipelines import Pipeline
 from typing import Union
 
@@ -26,6 +27,12 @@ class _ModelFallbackWrapper:
             return self.item
 
 
+@add_start_docstrings(
+    """
+    inference_mode is an Intel specific context-manager analogous to PyTorch's inference_mode to use for inference
+    workload on Intel CPUs, especially Intel Xeon Scalable CPUs.
+    """,
+)
 class inference_mode:
     __slots__ = ("_model", "_dtype", "_graph_mode", "_verbose", "_original")
 
@@ -35,6 +42,18 @@ class inference_mode:
         dtype: torch.dtype = torch.float32,
         verbose: bool = False
     ):
+        """
+        Args:
+            model (`torch.nn.Module` or `transformers.Pipeline`):
+                The model or pipeline instance to optimize.
+            dtype (`torch.dtype = torch.float32`), *optional*):
+                The data type used to do the computation.
+                Acceptable type are `torch.float32` (default) and `torch.bfloat16`.
+                Please note `torch.bfloat16` requires `avx512_bf16` instructions set as present on
+                4th Generation of Intel Xeon Scalable CPUs (Sapphire Rapids).
+            verbose (`boolean = False`, *optional*):
+                Enable IPEx verbose output to see the kernels and optimizations applied.
+        """
         self._model = model
         self._verbose = ipex.utils.verbose.VERBOSE_ON if verbose else ipex.utils.verbose.VERBOSE_OFF
         self._dtype = dtype
