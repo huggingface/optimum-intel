@@ -331,10 +331,6 @@ class IncQuantizedModel:
                     raise EnvironmentError(msg)
 
             if config.framework == "pytorch_ipex":
-                try:
-                    import intel_extension_for_pytorch
-                except:
-                    raise ValueError("Please install intel-extension-for-pytorch")
                 state_dict = torch.jit.load(state_dict_path)
                 state_dict = torch.jit.freeze(state_dict.eval())
                 return state_dict

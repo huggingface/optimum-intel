@@ -815,6 +815,8 @@ def main():
             if training_args.use_ipex:
                 q8_config.set_config("model.framework", "pytorch_ipex")
                 calib_dataloader = trainer.get_eval_dataloader()
+                if not training_args.bf16:
+                    q8_config.usr_cfg.use_bf16 = False
             else:
                 q8_config.set_config("model.framework", "pytorch_fx")
 
