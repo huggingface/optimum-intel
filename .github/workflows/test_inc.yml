@@ -36,6 +36,7 @@ jobs:
         pip install -r requirements.txt
         pip install -i https://test.pypi.org/simple/ neural-compressor
         cd ..
+        pip freeze
     - name: Test with Pytest
       run: |
         pytest tests/neural_compressor/
