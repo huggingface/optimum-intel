@@ -37,8 +37,10 @@ from transformers import (
     AutoModelForVision2Seq,
     XLNetLMHeadModel,
 )
+from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
+from transformers.utils.generic import ContextManagers
 from transformers.utils.versions import require_version
 
 import neural_compressor
@@ -112,9 +114,6 @@ class IncQuantizer:
                 self.quantization.calib_func = self.calib_func
             if self.calib_dataloader is not None:
                 self.quantization._calib_dataloader = self.calib_dataloader
-
-        if self.config.usr_cfg.model.framework == "pytorch_ipex":
-            raise ValueError("INC IPEX only is not currently supported.")
 
         if self.approach == IncQuantizationMode.AWARE_TRAINING:
             if self.train_func is None:
@@ -281,7 +280,11 @@ class IncQuantizedModel:
         else:
             model_class._keys_to_ignore_on_load_missing.extend(missing_keys_to_ignore_on_load)
 
-        model = model_class.from_pretrained(model_name_or_path, **kwargs)
+        # init model with no weights
+        init_contexts = [no_init_weights(_enable=True)]
+        with ContextManagers(init_contexts):
+            model = model_class(config, **kwargs)
+
         model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
         model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
 
@@ -328,9 +331,15 @@ class IncQuantizedModel:
                     raise EnvironmentError(msg)
 
             if config.framework == "pytorch_ipex":
-                raise ValueError("INC IPEX is currently not supported")
-
-            state_dict = torch.load(state_dict_path)
+                try:
+                    import intel_extension_for_pytorch
+                except:
+                    raise ValueError("Please install intel-extension-for-pytorch")
+                state_dict = torch.jit.load(state_dict_path)
+                state_dict = torch.jit.freeze(state_dict.eval())
+                return state_dict
+            else:
+                state_dict = torch.load(state_dict_path)
 
         if "best_configure" in state_dict:
             inc_config = state_dict.pop("best_configure")

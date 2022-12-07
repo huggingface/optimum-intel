@@ -805,15 +805,19 @@ def main():
             q8_config.set_config("quantization.approach", quant_approach)
 
         quant_approach = IncQuantizationMode(q8_config.get_config("quantization.approach"))
+        calib_dataloader = trainer.get_train_dataloader() if quant_approach != IncQuantizationMode.DYNAMIC else None
         # torch FX used for post-training quantization and quantization aware training
         # dynamic quantization will be added when torch FX is more mature
         if quant_approach != IncQuantizationMode.DYNAMIC:
             if not training_args.do_train:
                 raise ValueError("do_train must be set to True for quantization aware training.")
 
-            q8_config.set_config("model.framework", "pytorch_fx")
+            if training_args.use_ipex:
+                q8_config.set_config("model.framework", "pytorch_ipex")
+                calib_dataloader = trainer.get_eval_dataloader()
+            else:
+                q8_config.set_config("model.framework", "pytorch_fx")
 
-        calib_dataloader = trainer.get_train_dataloader() if quant_approach != IncQuantizationMode.DYNAMIC else None
         quantizer = IncQuantizer(
             q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
         )
