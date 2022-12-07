@@ -29,7 +29,7 @@ QUALITY_REQUIRES = [
 ]
 
 EXTRAS_REQUIRE = {
-    "neural-compressor": "neural-compressor>=1.13.0",
+    "neural-compressor": ["neural-compressor>=1.13.0", "onnx", "onnxruntime"],
     "openvino": ["openvino>=2022.2.0", "transformers>=4.20.0,<4.24.1"],
     "nncf": ["nncf"],
     "ipex": ["intel_extension_for_pytorch"],
