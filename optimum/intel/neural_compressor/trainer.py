@@ -40,8 +40,6 @@ from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
 
 # Integrations must be imported before ML frameworks:
 from transformers.integrations import hp_params
-
-
 from transformers.modeling_utils import get_parameter_dtype, unwrap_model
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
 from transformers.pytorch_utils import is_torch_less_than_1_11
