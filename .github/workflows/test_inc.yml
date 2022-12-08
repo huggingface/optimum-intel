@@ -30,7 +30,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install .[onnxruntime,tests]
+        pip install optimum[onnxruntime]
+        pip install .[tests]
         git clone https://github.com/intel/neural-compressor.git
         cd neural-compressor
         pip install -r requirements.txt
