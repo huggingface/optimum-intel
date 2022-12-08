@@ -211,8 +211,10 @@ class INCQuantizer(OptimumQuantizer):
         model.export_to_int8_onnx(
             save_path=str(output_path),
             example_inputs=inputs,
-            opset_version=opset,
+            input_names=list(config.inputs.keys()),
+            output_names=list(config.outputs.keys()),
             dynamic_axes=dynamic_axes,
+            opset_version=opset,
             fp32_model=self.model,
             calib_dataloader=calibration_dataloader,
         )
