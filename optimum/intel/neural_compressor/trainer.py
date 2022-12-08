@@ -569,7 +569,14 @@ class INCTrainer(Trainer):
             )
             onnx_config = onnx_config_constructor(self.config)
             output_onnx_path = os.path.join(output_dir, ONNX_WEIGHTS_NAME)
+
+            signature_columns = copy.deepcopy(self._signature_columns)
+            self._signature_columns = list(
+                set(self._signature_columns) - set(["label", "label_ids"] + self.label_names)
+            )
             calibration_dataloader = self.get_train_dataloader()
+            self._signature_columns = signature_columns
+
             self.model.eval()
             self._onnx_export(self.model, onnx_config, output_onnx_path, calibration_dataloader)
             # dynamic_axes = {name: axes for name, axes in chain(onnx_config.inputs.items(), onnx_config.outputs.items())}

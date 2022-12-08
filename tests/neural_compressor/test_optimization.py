@@ -110,7 +110,6 @@ class INCQuantizationTest(unittest.TestCase):
             )
             train_result = trainer.train()
             metrics = trainer.evaluate()
-            # trainer.save_model(save_onnx_model=True)
-            trainer.save_model()
+            trainer.save_model(save_onnx_model=True)
 
             loaded_model = INCQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
