@@ -61,7 +61,7 @@ class INCQuantizationTest(unittest.TestCase):
             self.assertTrue("logits" in onnx_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
-            # TODO: fix
+            # TODO: Enable
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
     def test_static_quantization(self):
@@ -97,7 +97,7 @@ class INCQuantizationTest(unittest.TestCase):
             self.assertTrue("logits" in onnx_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
-            # TODO: fix
+            # TODO: Enable
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
     def test_aware_training_quantization(self):
@@ -137,5 +137,5 @@ class INCQuantizationTest(unittest.TestCase):
             self.assertTrue("logits" in onnx_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
-            # TODO: fix
+            # TODO: Enable
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
