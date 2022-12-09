@@ -23,7 +23,7 @@ from transformers.file_utils import add_start_docstrings, add_start_docstrings_t
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 
 import openvino
-from openvino.runtime import Core
+from openvino.runtime import Core, Tensor
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
@@ -320,17 +320,22 @@ class OVEncoder:
 
         self._create_inference_request()
 
+        # TODO: check if inputs are c-like, if not - convert them.
+
         inputs = {
-            "input_ids": input_ids,
+            "input_ids": Tensor(input_ids.numpy()),
         }
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
-            inputs["attention_mask"] = attention_mask
+            inputs["attention_mask"] = Tensor(attention_mask.numpy(), shared_memory=True)
 
         # Run inference
-        outputs = self.request.infer(inputs)
-        outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        last_hidden_state = torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
+        self.request.start_async()
+        self.request.wait()
+
+        last_hidden_state = torch.from_numpy(
+                                self.request.get_tensor("last_hidden_state").data
+                            ).to(self.device)
 
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
@@ -375,25 +380,31 @@ class OVDecoder:
 
         self._create_inference_request()
 
+        # TODO: check if inputs are c-like, if not - convert them.
+
         inputs = {
-            "input_ids": input_ids,
-            "encoder_attention_mask": encoder_attention_mask,
+            "input_ids": Tensor(input_ids.numpy()),
+            "encoder_attention_mask": Tensor(encoder_attention_mask.numpy(), shared_memory=True),
         }
 
         # Add the encoder_hidden_states inputs when needed
         if "encoder_hidden_states" in self.input_names:
-            inputs["encoder_hidden_states"] = encoder_hidden_states
+            inputs["encoder_hidden_states"] = Tensor(encoder_hidden_states.numpy(), shared_memory=True)
 
         if past_key_values is not None:
             # Flatten the past_key_values
-            past_key_values = [past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer]
+            past_key_values = [Tensor(past_key_value.numpy(), shared_memory=True) for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer]
             # Add the past_key_values to the decoder inputs
             for input_name, past_key_value in zip(self.key_value_input_names, past_key_values):
                 inputs[input_name] = past_key_value
 
         # Run inference
-        outputs = self.request.infer(inputs)
-        outputs = {key.get_any_name(): value for key, value in outputs.items()}
+        self.request.start_async(inputs)
+        self.request.wait()
+
+        outputs = {
+            key.get_any_name(): value.data for key, value in zip(self.request.model_outputs, self.request.outputs)
+        }
 
         # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
         # self-attention layer and 2 to the cross-attention layer)
