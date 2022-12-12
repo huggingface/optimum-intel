@@ -32,11 +32,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install optimum[onnxruntime]
         pip install .[tests]
-        git clone https://github.com/intel/neural-compressor.git
-        cd neural-compressor
-        pip install -r requirements.txt
-        pip install -i https://test.pypi.org/simple/ neural-compressor
-        cd ..
+        pip install git+https://github.com/intel/neural-compressor
         pip freeze
     - name: Test with Pytest
       run: |
