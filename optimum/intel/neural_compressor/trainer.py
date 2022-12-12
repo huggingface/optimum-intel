@@ -587,9 +587,7 @@ class INCTrainer(Trainer):
 
     def _set_task(self):
         if self.task is None:
-            raise ValueError(
-                "The model task defining the model topology needs to be specified for the ONNX export."
-            )
+            raise ValueError("The model task defining the model topology needs to be specified for the ONNX export.")
         elif self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
             self.task = "sequence-classification"
         elif self.task in ["feature-extraction", "fill-mask"]:

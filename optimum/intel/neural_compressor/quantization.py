@@ -227,7 +227,9 @@ class INCQuantizer(OptimumQuantizer):
             elif self.task in ["feature-extraction", "fill-mask"]:
                 self.task = "default"
             elif self.task is None:
-                raise ValueError("The task defining the model topology could not be extracted and needs to be specified for the ONNX export.")
+                raise ValueError(
+                    "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
+                )
         if self.task in ["seq2seq-lm", "translation", "summarization"]:
             raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
 
