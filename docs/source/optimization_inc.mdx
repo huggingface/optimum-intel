@@ -21,64 +21,44 @@ Note that quantization is currently only supported for CPUs (only CPU backends a
 To apply dynamic quantization on a fine-tuned DistilBERT, we first need to create the corresponding configuration describing the quantization details as well as the quantizer object used to later apply quantization:
 
 ```python
-from datasets import load_dataset
-from transformers import AutoModelForQuestionAnswering, AutoTokenizer, pipeline
-from evaluate import evaluator
-from optimum.intel.neural_compressor import IncQuantizationConfig, IncQuantizer
+from transformers import AutoModelForQuestionAnswering
+from neural_compressor.config import PostTrainingQuantConfig
+from optimum.intel.neural_compressor import INCQuantizer
 
-model_id = "distilbert-base-cased-distilled-squad"
-max_eval_samples = 100
-model = AutoModelForQuestionAnswering.from_pretrained(model_id)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-eval_dataset = load_dataset("squad", split="validation").select(range(max_eval_samples))
-eval = evaluator("question-answering")
-qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
 
-def eval_func(model):
-    qa_pipeline.model = model
-    metrics = eval.compute(model_or_pipeline=qa_pipeline, data=eval_dataset, metric="squad")
-    return metrics["f1"]
-
+model_name = "distilbert-base-cased-distilled-squad"
+model = AutoModelForQuestionAnswering.from_pretrained(model_name)
+# The directory where the quantized model will be saved
+save_dir = "quantized_model"
 # Load the quantization configuration detailing the quantization we wish to apply
-config_name = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
-quantization_config = IncQuantizationConfig.from_pretrained(config_name)
-
-# Instantiate our IncQuantizer using the desired configuration and the evaluation function
-# used for the INC accuracy-driven tuning strategy
-quantizer = IncQuantizer(quantization_config, eval_func=eval_func)
+quantization_config = PostTrainingQuantConfig(approach="dynamic")
+quantizer = INCQuantizer.from_pretrained(model)
+# Apply dynamic quantization and save the resulting model in the ONNX format
+quantizer.quantize(quantization_config=quantization_config, save_directory=save_dir, save_onnx_model=True)
 ```
 
-In a second step, we create our optimizer which will take care of the optimization process.
-
-```python
-from optimum.intel.neural_compressor import IncOptimizer
-
-# To instantiate the optimizer, we need the model we wish to optimize and the
-# quantizer defining the quantization process
-optimizer = IncOptimizer(model, quantizer=quantizer)
-
-# Apply dynamic quantization
-quantized_model = optimizer.fit()
-
-# Save the resulting model and its corresponding configuration in the given directory
-save_dir = "./quantized_model"
-optimizer.save_pretrained(save_dir)
-```
 
 ## While training optimization
 
-The [`IncTrainer`] class provides an API to train your model while combining different compression techniques such as knowledge distillation, pruning and quantization.
-The `IncTrainer` is very similar to the 🤗 Transformers [`Trainer`](https://huggingface.co/docs/transformers/main/en/main_classes/trainer#trainer), which can be replaced with minimal changes in your code.
+The [`INCTrainer`] class provides an API to train your model while combining different compression techniques such as knowledge distillation, pruning and quantization.
+The `INCTrainer` is very similar to the 🤗 Transformers [`Trainer`](https://huggingface.co/docs/transformers/main/en/main_classes/trainer#trainer), which can be replaced with minimal changes in your code.
 
 ```diff
 from transformers import TrainingArguments, default_data_collator
 -from transformers import Trainer
-+from optimum.intel.neural_compressor import IncTrainer
++from optimum.intel.neural_compressor import INCTrainer
++from neural_compressor import QuantizationAwareTrainingConfig
 
-# Initialize our IncTrainer
+# Load the quantization configuration detailing the quantization we wish to apply
++quantization_config = QuantizationAwareTrainingConfig()
+
+output_dir = "quantized_model"
+
 -trainer = Trainer(
-+trainer = IncTrainer(
++trainer = INCTrainer(
     model=model,
++   quantization_config=quantization_config,
++   task="sequence-classification",
     args=TrainingArguments(output_dir, num_train_epochs=3.0),
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
@@ -86,38 +66,8 @@ from transformers import TrainingArguments, default_data_collator
     tokenizer=tokenizer,
     data_collator=default_data_collator,
 )
-```
 
-Here is an example on how to combine magnitude pruning with dynamic quantization while fine-tuning a DistilBERT
-First, we create the corresponding configuration describing the quantization and the pruning processes we wish to apply on the model.
-
-```python
-from optimum.intel.neural_compressor import IncPruningConfig, IncQuantizationConfig
-
-# The targeted sparsity is set to 10%
-target_sparsity = 0.1
-config_name = "echarlaix/distilbert-sst2-inc-dynamic-quantization-magnitude-pruning-0.1"
-# Load the quantization configuration detailing the quantization we wish to apply
-quantization_config = IncQuantizationConfig.from_pretrained(config_name)
-# Load the pruning configuration detailing the pruning we wish to apply
-pruning_config = IncPruningConfig.from_pretrained(config_name)
-```
-
-Finally we instantiate our optimizer which will take care of the optimization process. The training function `train_func` will characterize the training step ([see](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/question-answering/run_qa.py#L748-L766) for more examples).
-
-```python
-from optimum.intel.neural_compressor import IncOptimizer, IncPruner, IncQuantizer
-
-# Instantiate our IncQuantizer using the desired configuration
-quantizer = IncQuantizer(quantization_config, eval_func=eval_func)
-# Instantiate our IncPruner using the desired configuration
-pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
-optimizer = IncOptimizer(model, quantizer=quantizer, pruner=pruner)
-# Apply pruning and quantization 
-optimized_model = optimizer.fit()
-
-# Save the resulting model and its corresponding configuration in the given directory
-optimizer.save_pretrained(save_dir)
++trainer.save_model(save_onnx_model=True)
 ```
 
 ## Loading a quantized model
@@ -125,10 +75,10 @@ optimizer.save_pretrained(save_dir)
 To load a quantized model hosted locally or on the 🤗 hub, you must instantiate you model using our [`IncQuantizedModelForXxx`](https://huggingface.co/docs/optimum/intel_optimization#optimum.intel.neural_compressor.quantization.IncQuantizedModel) classes.
 
 ```python
-from optimum.intel.neural_compressor import IncQuantizedModelForSequenceClassification
+from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification
 
-model_id = "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
-model = IncQuantizedModelForSequenceClassification.from_pretrained(model_id)
+model_name = "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
+model = INCQuantizedModelForSequenceClassification.from_pretrained(model_name)
 ```
 
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
