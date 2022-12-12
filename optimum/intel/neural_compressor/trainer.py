@@ -702,3 +702,9 @@ class INCTrainer(Trainer):
                 )
                 self.use_cpu_amp = False
         return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+
+    def get_model_sparsity(self):
+        sparsity = 0.0
+        if isinstance(self.model, PyTorchModel):
+            sparsity = self.model.report_sparsity()[-1]
+        return sparsity

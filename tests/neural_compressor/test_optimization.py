@@ -30,7 +30,7 @@ from transformers import (
     set_seed,
 )
 
-from neural_compressor.config import PostTrainingQuantConfig, QuantizationAwareTrainingConfig
+from neural_compressor.config import PostTrainingQuantConfig, PruningConfig, QuantizationAwareTrainingConfig
 from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer
 from optimum.onnxruntime import ORTModelForSequenceClassification
 from optimum.pipelines import pipeline
@@ -43,7 +43,7 @@ set_seed(1009)
 class INCQuantizationTest(unittest.TestCase):
     def test_dynamic_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-        quantization_config = PostTrainingQuantConfig(approach="dynamic", backend="pytorch")
+        quantization_config = PostTrainingQuantConfig(approach="dynamic")
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
@@ -66,7 +66,7 @@ class INCQuantizationTest(unittest.TestCase):
 
     def test_static_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-        quantization_config = PostTrainingQuantConfig(approach="static", backend="pytorch_fx")
+        quantization_config = PostTrainingQuantConfig(approach="static")
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
@@ -102,7 +102,7 @@ class INCQuantizationTest(unittest.TestCase):
 
     def test_aware_training_quantization(self):
         model_name = "distilbert-base-uncased"
-        quantization_config = QuantizationAwareTrainingConfig(backend="pytorch_fx")
+        quantization_config = QuantizationAwareTrainingConfig()
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
@@ -139,3 +139,44 @@ class INCQuantizationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
             # TODO: Enable
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+    def test_magnitude_pruning(self):
+        model_name = "distilbert-base-uncased"
+        target_sparsity = 0.9
+        pruning_config = PruningConfig(start_epoch=0, end_epoch=1, target_sparsity=target_sparsity)
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        metric = load_metric("glue", "sst2")
+        dataset = load_dataset("glue", "sst2")
+        dataset = dataset.map(
+            lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
+        )
+
+        def compute_metrics(p: EvalPrediction):
+            return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = INCTrainer(
+                model=model,
+                pruning_config=pruning_config,
+                feature="sequence-classification",
+                args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=True),
+                train_dataset=dataset["train"].select(range(64)),
+                eval_dataset=dataset["validation"].select(range(64)),
+                compute_metrics=compute_metrics,
+                tokenizer=tokenizer,
+                data_collator=default_data_collator,
+            )
+            train_result = trainer.train()
+            metrics = trainer.evaluate()
+            trainer.save_model(save_onnx_model=True)
+            transformers_model = AutoModelForSequenceClassification.from_pretrained(tmp_dir)
+            onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
+            onnx_outputs = onnx_model(**tokens)
+            self.assertTrue("logits" in onnx_outputs)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
+            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            sparsity = trainer.get_model_sparsity()
+            self.assertGreaterEqual(sparsity, target_sparsity * 100)
