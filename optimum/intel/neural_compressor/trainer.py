@@ -102,7 +102,7 @@ class INCTrainer(Trainer):
         quantization_config: Optional[_BaseQuantizationConfig] = None,
         pruning_config: Optional[_BaseQuantizationConfig] = None,
         distillation_config: Optional[_BaseQuantizationConfig] = None,
-        feature: Optional[str] = None,
+        task: Optional[str] = None,
         save_onnx_model: bool = False,
     ):
 
@@ -121,7 +121,7 @@ class INCTrainer(Trainer):
         )
 
         self.inc_config = []
-        self.feature = feature
+        self.task = task
         self.compression_controller = None
         self.save_onnx_model = save_onnx_model
 
@@ -561,11 +561,11 @@ class INCTrainer(Trainer):
 
         # Export the compressed model to the ONNX format
         if save_onnx_model and isinstance(self.model, PyTorchModel):
-            self._set_feature()
+            self._set_task()
             model_type = self.config.model_type.replace("_", "-")
             model_name = getattr(_model, "name", None)
             onnx_config_constructor = TasksManager.get_exporter_config_constructor(
-                model_type, "onnx", task=self.feature, model_name=model_name
+                model_type, "onnx", task=self.task, model_name=model_name
             )
             onnx_config = onnx_config_constructor(self.config)
             output_onnx_path = os.path.join(output_dir, ONNX_WEIGHTS_NAME)
@@ -585,15 +585,15 @@ class INCTrainer(Trainer):
 
         logger.info(f"Model weights saved in {output_model_file}")
 
-    def _set_feature(self):
-        if self.feature is None:
+    def _set_task(self):
+        if self.task is None:
             raise ValueError(
-                "The model feature defining the model topology needs to be specified for the ONNX export."
+                "The model task defining the model topology needs to be specified for the ONNX export."
             )
-        elif self.feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-            self.feature = "sequence-classification"
-        elif self.feature in ["feature-extraction", "fill-mask"]:
-            self.feature = "default"
+        elif self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+            self.task = "sequence-classification"
+        elif self.task in ["feature-extraction", "fill-mask"]:
+            self.task = "default"
 
     def _onnx_export(
         self,

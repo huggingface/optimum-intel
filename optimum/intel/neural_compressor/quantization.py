@@ -111,7 +111,7 @@ class INCQuantizer(OptimumQuantizer):
         super().__init__()
         self.model = model
         self.seed = kwargs.pop("seed", 42)
-        self.feature = kwargs.pop("feature", None)
+        self.task = kwargs.pop("task", None)
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
         self.input_names = None
@@ -174,11 +174,11 @@ class INCQuantizer(OptimumQuantizer):
             self.model.config.save_pretrained(save_directory)
 
         if save_onnx_model:
-            self._set_feature()
+            self._set_task()
             model_type = self.model.config.model_type.replace("_", "-")
             model_name = getattr(self.model, "name", None)
             onnx_config_constructor = TasksManager.get_exporter_config_constructor(
-                model_type, "onnx", task=self.feature, model_name=model_name
+                model_type, "onnx", task=self.task, model_name=model_name
             )
             onnx_config = onnx_config_constructor(self.model.config)
             compressed_model.eval()
@@ -219,16 +219,16 @@ class INCQuantizer(OptimumQuantizer):
             calib_dataloader=calibration_dataloader,
         )
 
-    def _set_feature(self):
-        if self.feature is None:
-            self.feature = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
-            if self.feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-                self.feature = "sequence-classification"
-            elif self.feature in ["feature-extraction", "fill-mask"]:
-                self.feature = "default"
-            elif self.feature is None:
-                raise ValueError("The feature could not be extracted and needs to be specified for the ONNX export.")
-        if self.feature in ["seq2seq-lm", "translation", "summarization"]:
+    def _set_task(self):
+        if self.task is None:
+            self.task = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
+            if self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+                self.task = "sequence-classification"
+            elif self.task in ["feature-extraction", "fill-mask"]:
+                self.task = "default"
+            elif self.task is None:
+                raise ValueError("The task defining the model topology could not be extracted and needs to be specified for the ONNX export.")
+        if self.task in ["seq2seq-lm", "translation", "summarization"]:
             raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(
