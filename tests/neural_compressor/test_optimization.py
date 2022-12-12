@@ -119,7 +119,7 @@ class INCQuantizationTest(unittest.TestCase):
             trainer = INCTrainer(
                 model=model,
                 quantization_config=quantization_config,
-                feature="sequence-classification",
+                task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
                 train_dataset=dataset["train"].select(range(64)),
                 eval_dataset=dataset["validation"].select(range(64)),
@@ -140,6 +140,7 @@ class INCQuantizationTest(unittest.TestCase):
             # TODO: Enable
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
+class INCPruningTest(unittest.TestCase):
     def test_magnitude_pruning(self):
         model_name = "distilbert-base-uncased"
         target_sparsity = 0.9
@@ -160,7 +161,7 @@ class INCQuantizationTest(unittest.TestCase):
             trainer = INCTrainer(
                 model=model,
                 pruning_config=pruning_config,
-                feature="sequence-classification",
+                task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=True),
                 train_dataset=dataset["train"].select(range(64)),
                 eval_dataset=dataset["validation"].select(range(64)),
