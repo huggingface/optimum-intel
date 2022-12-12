@@ -19,7 +19,8 @@ from functools import partial
 
 import numpy as np
 import torch
-from datasets import load_dataset, load_metric
+import evaluate
+from datasets import load_dataset
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -30,7 +31,12 @@ from transformers import (
     set_seed,
 )
 
-from neural_compressor.config import PostTrainingQuantConfig, PruningConfig, QuantizationAwareTrainingConfig
+from neural_compressor.config import (
+    DistillationConfig,
+    PostTrainingQuantConfig,
+    PruningConfig,
+    QuantizationAwareTrainingConfig,
+)
 from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer
 from optimum.onnxruntime import ORTModelForSequenceClassification
 from optimum.pipelines import pipeline
@@ -40,7 +46,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(1009)
 
 
-class INCQuantizationTest(unittest.TestCase):
+class QuantizationTest(unittest.TestCase):
     def test_dynamic_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
         quantization_config = PostTrainingQuantConfig(approach="dynamic")
@@ -106,7 +112,7 @@ class INCQuantizationTest(unittest.TestCase):
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        metric = load_metric("glue", "sst2")
+        metric = evaluate.load("accuracy")
         dataset = load_dataset("glue", "sst2")
         dataset = dataset.map(
             lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
@@ -141,7 +147,7 @@ class INCQuantizationTest(unittest.TestCase):
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
 
-class INCPruningTest(unittest.TestCase):
+class PruningTest(unittest.TestCase):
     def test_magnitude_pruning(self):
         model_name = "distilbert-base-uncased"
         target_sparsity = 0.9
@@ -149,7 +155,7 @@ class INCPruningTest(unittest.TestCase):
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        metric = load_metric("glue", "sst2")
+        metric = evaluate.load("accuracy")
         dataset = load_dataset("glue", "sst2")
         dataset = dataset.map(
             lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
@@ -182,3 +188,43 @@ class INCPruningTest(unittest.TestCase):
             self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
             sparsity = trainer.get_model_sparsity()
             self.assertGreaterEqual(sparsity, target_sparsity * 100)
+
+
+class DistillationTest(unittest.TestCase):
+    def test_knowledge_distillation(self):
+        model_name = "distilbert-base-uncased"
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        metric = evaluate.load("accuracy")
+        dataset = load_dataset("glue", "sst2")
+        dataset = dataset.map(
+            lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
+        )
+        distillation_config = DistillationConfig(teacher_model=model)
+
+        def compute_metrics(p: EvalPrediction):
+            return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = INCTrainer(
+                model=model,
+                distillation_config=distillation_config,
+                task="sequence-classification",
+                args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=True),
+                train_dataset=dataset["train"].select(range(64)),
+                eval_dataset=dataset["validation"].select(range(64)),
+                compute_metrics=compute_metrics,
+                tokenizer=tokenizer,
+                data_collator=default_data_collator,
+            )
+            train_result = trainer.train()
+            metrics = trainer.evaluate()
+            trainer.save_model(save_onnx_model=True)
+            transformers_model = AutoModelForSequenceClassification.from_pretrained(tmp_dir)
+            onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
+            onnx_outputs = onnx_model(**tokens)
+            self.assertTrue("logits" in onnx_outputs)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
+            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))

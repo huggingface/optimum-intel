@@ -120,8 +120,12 @@ class INCTrainer(Trainer):
             preprocess_logits_for_metrics,
         )
 
-        self.inc_config = []
+        inc_config = []
         self.task = task
+        self.quantization_config = quantization_config
+        self.pruning_config = pruning_config
+        self.distillation_config = distillation_config
+
         self.compression_controller = None
         self.save_onnx_model = save_onnx_model
 
@@ -134,12 +138,12 @@ class INCTrainer(Trainer):
 
         self._set_signature_columns_if_needed()
 
-        for inc_config in [quantization_config, pruning_config, distillation_config]:
-            if inc_config is not None:
-                self.inc_config.append(inc_config)
+        for config in [quantization_config, pruning_config, distillation_config]:
+            if config is not None:
+                inc_config.append(config)
 
-        if len(self.inc_config) >= 1 and self.args.do_train:
-            inc_config = self.inc_config if len(self.inc_config) > 1 else self.inc_config.pop()
+        if len(inc_config) >= 1 and self.args.do_train:
+            inc_config = inc_config if len(inc_config) > 1 else inc_config.pop()
             self.compression_controller = training.prepare_compression(self.model, confs=inc_config)
             self.model = self.compression_controller.model
             self.model_wrapped = self.model
@@ -646,6 +650,11 @@ class INCTrainer(Trainer):
 
         return dataset.remove_columns(ignored_columns)
 
+    @staticmethod
+    def _get_logits(model_outputs):
+        output_names = ["logits", "start_logits", "end_logits"]
+        return tuple(model_outputs.get(name) for name in output_names if name in model_outputs)
+
     def compute_loss(self, model, inputs, return_outputs=False):
         """
         How the loss is computed by Trainer. By default, all models return the loss in the first element.
@@ -654,6 +663,7 @@ class INCTrainer(Trainer):
             labels = inputs.pop("labels")
         else:
             labels = None
+        teacher_outputs = inputs.pop("teacher_logits", None)
         outputs = model(**inputs)
 
         # Save past state if it exists
@@ -675,16 +685,50 @@ class INCTrainer(Trainer):
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
-        """
-        if self.compression_controller is not None:
-            loss = self.compression_controller.callbacks.on_after_compute_loss(inputs, outputs, loss)
-        """
+        if self.distillation_config is not None:
+            student_outputs = self._get_logits(outputs)
+            if teacher_outputs is not None:
+                if len(teacher_outputs.shape) == 3 and teacher_outputs.shape[1] == 2:
+                    teacher_outputs = tuple(teacher_outputs.transpose(1, 0))
+            else:
+                self.distillation_config.teacher_model.eval()
+                teacher_outputs = self.distillation_config.teacher_model(**inputs)
+                teacher_outputs = self._get_logits(teacher_outputs)
+
+            if teacher_outputs is not None:
+                self.compression_controller.callbacks.callbacks.create_criterion()
+                distillation_loss = self.compute_distillation_loss(student_outputs, teacher_outputs)
+                loss *= self.compression_controller.callbacks.callbacks.criterion.loss_weights[0]
+                loss += distillation_loss * self.compression_controller.callbacks.callbacks.criterion.loss_weights[1]
+                loss /= sum(self.compression_controller.callbacks.callbacks.criterion.loss_weights)
+
+                if isinstance(outputs, dict):
+                    outputs["loss"] = loss
+                else:
+                    outputs[0] = loss
+
         return (loss, outputs) if return_outputs else loss
 
     @staticmethod
     def _get_logits(model_outputs):
         output_names = ["logits", "start_logits", "end_logits"]
         return tuple(model_outputs.get(name) for name in output_names if name in model_outputs)
+
+    def compute_distillation_loss(self, student_outputs, teacher_outputs):
+        """
+        How the distillation loss is computed given the student and teacher outputs.
+        """
+        distillation_loss = None
+        temperature = self.compression_controller.callbacks.callbacks.criterion.temperature
+        for student_output, teacher_output in zip(student_outputs, teacher_outputs):
+            student_output = student_output / temperature
+            teacher_output = teacher_output / temperature
+            loss = self.compression_controller.callbacks.callbacks.criterion.teacher_student_loss_cal(
+                student_output, teacher_output
+            )
+            distillation_loss = loss if distillation_loss is None else distillation_loss + loss
+        distillation_loss *= temperature**2
+        return distillation_loss
 
     def evaluate(
         self,
