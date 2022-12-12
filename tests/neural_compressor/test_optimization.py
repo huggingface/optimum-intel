@@ -19,7 +19,6 @@ from functools import partial
 
 import numpy as np
 import torch
-import evaluate
 from datasets import load_dataset
 from transformers import (
     AutoModelForSequenceClassification,
@@ -31,6 +30,7 @@ from transformers import (
     set_seed,
 )
 
+import evaluate
 from neural_compressor.config import (
     DistillationConfig,
     PostTrainingQuantConfig,
