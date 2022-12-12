@@ -140,6 +140,7 @@ class INCQuantizationTest(unittest.TestCase):
             # TODO: Enable
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
+
 class INCPruningTest(unittest.TestCase):
     def test_magnitude_pruning(self):
         model_name = "distilbert-base-uncased"
