@@ -70,38 +70,44 @@ class inference_mode:
         self._original = None
 
     def __enter__(self):
-        with torch.inference_mode():
-            with ipex.verbose(self._verbose):
-                ipex.enable_onednn_fusion(True)
-                if isinstance(self._model, Pipeline):
-                    self._original = self._model.model
+        if self._model.framework == "pt":
+            with torch.inference_mode():
+                try:
+                    with ipex.verbose(self._verbose):
+                        ipex.enable_onednn_fusion(True)
+                        if isinstance(self._model, Pipeline):
+                            self._original = self._model.model
 
-                    model = ipex.optimize(
-                        self._model.model,
-                        dtype=self._dtype,
-                        graph_mode=self._graph_mode,
-                        level="O1",
-                        auto_kernel_selection=True,
-                    )
+                            model = ipex.optimize(
+                                self._model.model,
+                                dtype=self._dtype,
+                                graph_mode=self._graph_mode,
+                                level="O1",
+                                auto_kernel_selection=True,
+                            )
 
-                    # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
-                    with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)):
-                        # Patching model with the new one
-                        self._model.model = _ModelFallbackWrapper(model, self._original)
-                        return self._model
-                else:
-                    self._original = self._model
-                    model = ipex.optimize(
-                        self._model,
-                        dtype=self._dtype,
-                        graph_mode=self._graph_mode,
-                        level="O1",
-                        auto_kernel_selection=True,
-                    )
+                            # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
+                            with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)):
+                                # Patching model with the new one
+                                self._model.model = _ModelFallbackWrapper(model, self._original)
+                                return self._model
+                        else:
+                            self._original = self._model
+                            model = ipex.optimize(
+                                self._model,
+                                dtype=self._dtype,
+                                graph_mode=self._graph_mode,
+                                level="O1",
+                                auto_kernel_selection=True,
+                            )
 
-                    # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
-                    with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)):
-                        return model
+                            # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
+                            with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)):
+                                return model
+                except RuntimeError:
+                    return self._model
+        else:
+            return self._model
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._model = self._original
