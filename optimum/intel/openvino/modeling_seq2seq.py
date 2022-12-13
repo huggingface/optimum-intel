@@ -330,12 +330,10 @@ class OVEncoder:
             inputs["attention_mask"] = Tensor(attention_mask.numpy(), shared_memory=True)
 
         # Run inference
-        self.request.start_async()
+        self.request.start_async(inputs)
         self.request.wait()
 
-        last_hidden_state = torch.from_numpy(
-                                self.request.get_tensor("last_hidden_state").data
-                            ).to(self.device)
+        last_hidden_state = torch.from_numpy(self.request.get_tensor("last_hidden_state").data).to(self.device)
 
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
@@ -393,7 +391,11 @@ class OVDecoder:
 
         if past_key_values is not None:
             # Flatten the past_key_values
-            past_key_values = [Tensor(past_key_value.numpy(), shared_memory=True) for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer]
+            past_key_values = [
+                Tensor(past_key_value.numpy(), shared_memory=True)
+                for pkv_per_layer in past_key_values
+                for past_key_value in pkv_per_layer
+            ]
             # Add the past_key_values to the decoder inputs
             for input_name, past_key_value in zip(self.key_value_input_names, past_key_values):
                 inputs[input_name] = past_key_value
