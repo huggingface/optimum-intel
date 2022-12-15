@@ -85,7 +85,7 @@ class QuantizationTest(unittest.TestCase):
         eval_dataset = load_dataset("squad", split="validation").select(range(64))
         task_evaluator = evaluate.evaluator("question-answering")
         qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
-        tolerance_criterion = 0.08
+        tolerance_criterion = 0.05
 
         def eval_fn(model):
             qa_pipeline.model = model
@@ -109,7 +109,7 @@ class QuantizationTest(unittest.TestCase):
             )
             loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(tmp_dir)
             quantized_model_metric = eval_fn(loaded_model)
-            # Verification accuracy loss is under 4%
+            # Verification accuracy loss is under 5%
             self.assertGreaterEqual(quantized_model_metric, original_model_metric * (1 - tolerance_criterion))
 
     def test_static_quantization(self):
