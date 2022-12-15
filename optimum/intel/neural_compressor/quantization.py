@@ -100,18 +100,30 @@ class INCQuantizer(OptimumQuantizer):
     Handle the Neural Compressor quantization process.
     """
 
-    def __init__(self, model: torch.nn.Module, **kwargs):
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        eval_fn: Optional[Callable[[PreTrainedModel], int]] = None,
+        task: Optional[str] = None,
+        seed: int = 42,
+    ):
         """
         Args:
             model (`torch.nn.Module`):
                 The model to quantize.
+            eval_fn (`Callable[[PreTrainedModel], int]`, defaults to None):
+                The evaluation function to use for the accuracy driven strategy of the quantization process.
+                The accuracy driven strategy will be enabled only if `eval_fn` is provided.
+            task (`str`, defaults to None):
+                The task defining the model topology used for the ONNX export.
             seed (`int`, defaults to 42):
                 The random seed to use when shuffling the calibration dataset.
         """
         super().__init__()
         self.model = model
-        self.seed = kwargs.pop("seed", 42)
-        self.task = kwargs.pop("task", None)
+        self.eval_fn = eval_fn
+        self.task = task
+        self.seed = seed
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
         self.input_names = None
@@ -168,7 +180,9 @@ class INCQuantizer(OptimumQuantizer):
                 data_collator=data_collator,
             )
 
-        compressed_model = fit(self.model, conf=quantization_config, calib_dataloader=calibration_dataloader)
+        compressed_model = fit(
+            self.model, conf=quantization_config, calib_dataloader=calibration_dataloader, eval_func=self.eval_fn
+        )
 
         if isinstance(self.model.config, PretrainedConfig):
             self.model.config.save_pretrained(save_directory)
