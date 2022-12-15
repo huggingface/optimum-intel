@@ -100,7 +100,7 @@ class QuantizationTest(unittest.TestCase):
         tokens = tokenizer("This is a sample input", return_tensors="pt")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer = INCQuantizer.from_pretrained(model)
+            quantizer = INCQuantizer.from_pretrained(model, eval_fn=eval_fn)
             quantizer.quantize(
                 quantization_config=quantization_config,
                 save_directory=tmp_dir,
