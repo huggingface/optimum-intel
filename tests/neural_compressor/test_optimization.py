@@ -41,7 +41,12 @@ from neural_compressor.config import (
     QuantizationAwareTrainingConfig,
     TuningCriterion,
 )
-from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer, INCQuantizedModelForQuestionAnswering
+from optimum.intel.neural_compressor import (
+    INCQuantizedModelForQuestionAnswering,
+    INCQuantizedModelForSequenceClassification,
+    INCQuantizer,
+    INCTrainer,
+)
 from optimum.onnxruntime import ORTModelForQuestionAnswering, ORTModelForSequenceClassification
 
 
@@ -103,7 +108,6 @@ class QuantizationTest(unittest.TestCase):
             )
             loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(tmp_dir)
             quantized_model_metric = eval_fn(loaded_model)
-            import pdb;pdb.set_trace()
             # Verification accuracy loss is under 3%
             self.assertGreaterEqual(quantized_model_metric, original_model_metric * 0.97)
 
