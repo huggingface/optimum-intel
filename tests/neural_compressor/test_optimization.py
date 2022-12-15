@@ -85,6 +85,7 @@ class QuantizationTest(unittest.TestCase):
         eval_dataset = load_dataset("squad", split="validation").select(range(64))
         task_evaluator = evaluate.evaluator("question-answering")
         qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
+        tolerance_criterion = 0.04
 
         def eval_fn(model):
             qa_pipeline.model = model
@@ -93,7 +94,7 @@ class QuantizationTest(unittest.TestCase):
 
         original_model_metric = eval_fn(model)
         tuning_criterion = TuningCriterion(max_trials=10)
-        accuracy_criterion = AccuracyCriterion(tolerable_loss=0.03)
+        accuracy_criterion = AccuracyCriterion(tolerable_loss=tolerance_criterion)
         quantization_config = PostTrainingQuantConfig(
             approach="dynamic", accuracy_criterion=accuracy_criterion, tuning_criterion=tuning_criterion
         )
@@ -108,8 +109,8 @@ class QuantizationTest(unittest.TestCase):
             )
             loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(tmp_dir)
             quantized_model_metric = eval_fn(loaded_model)
-            # Verification accuracy loss is under 3%
-            self.assertGreaterEqual(quantized_model_metric, original_model_metric * 0.97)
+            # Verification accuracy loss is under 4%
+            self.assertGreaterEqual(quantized_model_metric, original_model_metric * (1 - tolerance_criterion))
 
     def test_static_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
