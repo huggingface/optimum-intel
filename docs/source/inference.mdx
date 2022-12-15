@@ -71,7 +71,7 @@ model = OVModelForQuestionAnswering.from_pretrained(model_id, from_transformers=
 model.reshape(1, 384)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 eval_dataset = load_dataset("squad", split="validation").select(range(50))
-eval = evaluator("question-answering")
+task_evaluator = evaluator("question-answering")
 qa_pipe = pipeline(
     "question-answering",
     model=model,
@@ -80,7 +80,7 @@ qa_pipe = pipeline(
     padding="max_length",
     truncation=True,
 )
-metric = eval.compute(model_or_pipeline=qa_pipe, data=eval_dataset, metric="squad")
+metric = task_evaluator.compute(model_or_pipeline=qa_pipe, data=eval_dataset, metric="squad")
 ```
 
 By default the model will be compiled when instantiating our `OVModel`. In the case where the model is reshaped, placed to an other device or if FP16 precision is enabled, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by passing `compile=False` to the `from_pretrained()` method. The model can also be compiled before the first inference with `model.compile()`.

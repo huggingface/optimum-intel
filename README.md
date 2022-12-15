@@ -40,7 +40,6 @@ from transformers import AutoModelForQuestionAnswering
 from neural_compressor.config import PostTrainingQuantConfig
 from optimum.intel.neural_compressor import INCQuantizer
 
-
 model_name = "distilbert-base-cased-distilled-squad"
 model = AutoModelForQuestionAnswering.from_pretrained(model_name)
 # The directory where the quantized model will be saved
@@ -130,8 +129,9 @@ optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 Quantization aware training (QAT) is applied in order to simulate the effects of quantization during training, to alleviate its effects on the model’s accuracy. Here is an example on how to fine-tune a DistilBERT model on the sst-2 task while applying quantization aware training (QAT).
 
 ```diff
+import evaluate
 import numpy as np
-from datasets import load_dataset, load_metric
+from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
 -from transformers import Trainer
 +from optimum.intel.openvino import OVConfig, OVModelForSequenceClassification, OVTrainer
@@ -143,7 +143,7 @@ dataset = load_dataset("glue", "sst2")
 dataset = dataset.map(
     lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
 )
-metric = load_metric("accuracy")
+metric = evaluate.load("glue", "sst2")
 compute_metrics = lambda p: metric.compute(
     predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
 )

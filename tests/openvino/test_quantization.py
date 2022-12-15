@@ -17,9 +17,10 @@ import unittest
 from functools import partial
 
 import numpy as np
-from datasets import load_dataset, load_metric
+from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
 
+import evaluate
 from optimum.intel.openvino.configuration import OVConfig
 from optimum.intel.openvino.modeling import OVModelForSequenceClassification
 from optimum.intel.openvino.quantization import OVQuantizer
@@ -85,7 +86,7 @@ class OVTrainerTest(unittest.TestCase):
         )
         train_dataset = dataset["train"].select(range(16))
         eval_dataset = dataset["validation"].select(range(16))
-        metric = load_metric("glue", "sst2")
+        metric = evaluate.load("glue", "sst2")
         compute_metrics = lambda p: metric.compute(
             predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
         )
