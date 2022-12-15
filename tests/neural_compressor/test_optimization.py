@@ -21,25 +21,28 @@ import numpy as np
 import torch
 from datasets import load_dataset
 from transformers import (
+    AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoTokenizer,
     BertForSequenceClassification,
     EvalPrediction,
     TrainingArguments,
     default_data_collator,
+    pipeline,
     set_seed,
 )
 
 import evaluate
 from neural_compressor.config import (
+    AccuracyCriterion,
     DistillationConfig,
     PostTrainingQuantConfig,
     PruningConfig,
     QuantizationAwareTrainingConfig,
+    TuningCriterion,
 )
-from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer
-from optimum.onnxruntime import ORTModelForSequenceClassification
-from optimum.pipelines import pipeline
+from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer, INCQuantizedModelForQuestionAnswering
+from optimum.onnxruntime import ORTModelForQuestionAnswering, ORTModelForSequenceClassification
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -69,6 +72,40 @@ class QuantizationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
             # TODO: Enable
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+    def test_dynamic_accuracy_strategy_quantization(self):
+        model_name = "distilbert-base-cased-distilled-squad"
+        model = AutoModelForQuestionAnswering.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        eval_dataset = load_dataset("squad", split="validation").select(range(64))
+        task_evaluator = evaluate.evaluator("question-answering")
+        qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
+
+        def eval_fn(model):
+            qa_pipeline.model = model
+            metrics = task_evaluator.compute(model_or_pipeline=qa_pipeline, data=eval_dataset, metric="squad")
+            return metrics["f1"]
+
+        original_model_metric = eval_fn(model)
+        tuning_criterion = TuningCriterion(max_trials=10)
+        accuracy_criterion = AccuracyCriterion(tolerable_loss=0.03)
+        quantization_config = PostTrainingQuantConfig(
+            approach="dynamic", accuracy_criterion=accuracy_criterion, tuning_criterion=tuning_criterion
+        )
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer = INCQuantizer.from_pretrained(model)
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                save_directory=tmp_dir,
+                save_onnx_model=True,
+            )
+            loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(tmp_dir)
+            quantized_model_metric = eval_fn(loaded_model)
+            import pdb;pdb.set_trace()
+            # Verification accuracy loss is under 3%
+            self.assertGreaterEqual(quantized_model_metric, original_model_metric * 0.97)
 
     def test_static_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
