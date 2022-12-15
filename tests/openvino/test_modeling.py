@@ -66,6 +66,16 @@ MODEL_NAMES = {
 SEED = 42
 
 
+class ORTModelIntegrationTest(unittest.TestCase):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
+
+    def test_load_model_from_hub(self):
+        model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID)
+        self.assertIsInstance(model.config, PretrainedConfig)
+
+
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bert",
