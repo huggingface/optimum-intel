@@ -85,7 +85,7 @@ class QuantizationTest(unittest.TestCase):
         eval_dataset = load_dataset("squad", split="validation").select(range(64))
         task_evaluator = evaluate.evaluator("question-answering")
         qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
-        tolerance_criterion = 0.04
+        tolerance_criterion = 0.08
 
         def eval_fn(model):
             qa_pipeline.model = model
