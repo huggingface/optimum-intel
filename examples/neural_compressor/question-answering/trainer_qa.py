@@ -41,7 +41,9 @@ class QuestionAnsweringIncTrainer(IncTrainer):
                     f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
                 )
                 self.use_cpu_amp = False
-
+        if hasattr(self.model, "config") and getattr(self.model.config, "framework", None) == "pytorch_ipex":
+            self.args.use_ipex = False
+            self.args.bf16 = False
         # Temporarily disable metric computation, we will do it in the loop here.
         compute_metrics = self.compute_metrics
         self.compute_metrics = None

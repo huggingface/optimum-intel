@@ -55,7 +55,7 @@ python run_qa.py \
     --output_dir /tmp/squad_output
 ```
 
-The flag `--use_ipex` can be passed along to use INC IPEX backend. Default backend is `pytorch_fx` if value not specified. INC IPEX (Intel Extension for PyTorch) extends PyTorch with up-to-date features optimizations for an extra performance boost on Intel hardware. INC IPEX only supports static quantization for now.
+IPEX (Intel Extension for PyTorch) extends PyTorch with up-to-date features optimizations for an extra performance boost on Intel hardware. INC has integrated the IPEX quantization. The flag `--use_ipex` can be passed along to use INC IPEX backend and `--bf16 --no_cuda` will enable mixed precision. INC IPEX only supports static quantization for now.
 
 The distillation process can be accelerated by the flag `--generate_teacher_logits`, which will add an additional step where the teacher outputs will be computed and saved in the training dataset, removing the need to compute the teacher outputs at every training step.
 

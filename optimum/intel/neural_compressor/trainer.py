@@ -90,7 +90,6 @@ class IncTrainer(Trainer):
                 Additional keyword arguments used to hide deprecated arguments
         """
         self.agent = agent
-        self.args.use_ipex = False
 
         return super().train(resume_from_checkpoint, trial, ignore_keys_for_eval)
 
@@ -620,11 +619,14 @@ class IncTrainer(Trainer):
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
-        self.args.use_ipex = False
         if hasattr(self.model, "config") and getattr(self.model.config, "torch_dtype", None) == "int8":
             if self.model.config.framework in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
                 logger.warn(
                     f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
                 )
-                self.use_cpu_amp = False
+                self.use_cpu_amp = False 
+        if hasattr(self.model, "config") and getattr(self.model.config, "framework", None) == "pytorch_ipex":
+            self.args.use_ipex = False
+            self.args.bf16 = False
+
         return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)

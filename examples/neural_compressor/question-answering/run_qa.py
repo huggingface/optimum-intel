@@ -738,6 +738,7 @@ def main():
     metric_name = optim_args.metric
 
     def take_eval_steps(model, trainer, metric_name, save_metrics=False):
+        model = model.model if hasattr(model, "model") else model
         trainer.model = model
         metrics = trainer.evaluate()
         if save_metrics:
