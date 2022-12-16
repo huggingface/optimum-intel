@@ -19,11 +19,14 @@ import os
 import sys
 import time
 import warnings
+from collections import defaultdict
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
+from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
@@ -34,11 +37,12 @@ from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 from transformers.deepspeed import deepspeed_init
 from transformers.integrations import hp_params
 from transformers.modeling_utils import PreTrainedModel, unwrap_model
-from transformers.pytorch_utils import is_torch_less_than_1_11
+from transformers.onnx import FeaturesManager, OnnxConfig
+from transformers.pytorch_utils import is_torch_less_than_1_11, ALL_LAYERNORM_LAYERS
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer import TRAINER_STATE_NAME, TRAINING_ARGS_NAME
 from transformers.trainer_callback import TrainerCallback, TrainerState
-from transformers.trainer_pt_utils import IterableDatasetShard
+from transformers.trainer_pt_utils import IterableDatasetShard, get_parameter_names
 from transformers.trainer_utils import (
     EvalPrediction,
     HPSearchBackend,
@@ -47,12 +51,12 @@ from transformers.trainer_utils import (
     has_length,
     speed_metrics,
 )
-from transformers.training_args import TrainingArguments
-from transformers.utils import WEIGHTS_NAME, TensorType, is_apex_available, is_sagemaker_mp_enabled, logging
+from transformers.utils import WEIGHTS_NAME, TensorType, is_apex_available, is_sagemaker_mp_enabled, is_torch_tpu_available, logging
 
 import openvino
 from nncf import NNCFConfig
-from nncf.common.utils.logger import set_log_level
+from nncf.common.logging.logger import set_log_level
+from nncf.common.utils.tensorboard import prepare_for_tensorboard
 from nncf.config.structures import BNAdaptationInitArgs, QuantizationRangeInitArgs
 from nncf.torch import create_compressed_model
 from nncf.torch.nncf_network import NNCFNetwork
@@ -72,7 +76,7 @@ from .utils import (
     OV_XML_FILE_NAME,
     use_external_data_format,
 )
-
+from .training_args import OVTrainingArguments
 
 if is_apex_available():
     from apex import amp
@@ -94,7 +98,8 @@ class OVTrainer(Trainer):
     def __init__(
         self,
         model: Union[PreTrainedModel, torch.nn.Module] = None,
-        args: TrainingArguments = None,
+        teacher_model: Union[PreTrainedModel, torch.nn.Module] = None,
+        args: OVTrainingArguments = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Dataset] = None,
@@ -130,7 +135,15 @@ class OVTrainer(Trainer):
                     f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export."
                 )
         self.task = task or feature
+        self.teacher = None
+        if teacher_model is not None:
+            self.teacher = teacher_model.to(args.device)
+            self.teacher.eval()
+            self.distillation_weight = args.distillation_weight
+            self.temperature = args.distillation_temperature 
         self.compression_controller = None
+        self.loss_counter = 0
+        self.metrics = defaultdict(float)
 
         if self.ov_config is not None and self.args.do_train:
             self._set_task()
@@ -240,6 +253,10 @@ class OVTrainer(Trainer):
         if args.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
+        # TODO: verify NNCF-wrapped distributed training
+        if self.args.local_rank != -1:
+            if self.compression_controller is not None:
+                self.compression_controller.distributed()
         model = self._wrap_model(self.model_wrapped)
 
         if is_sagemaker_mp_enabled() and resume_from_checkpoint is not None:
@@ -342,6 +359,9 @@ class OVTrainer(Trainer):
                     _ = list(train_dataloader.sampler)
 
         for epoch in range(epochs_trained, num_train_epochs):
+            if self.compression_controller is not None:
+                self.compression_controller.scheduler.epoch_step()
+                print(self.compression_controller.statistics().to_str())
             if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
                 train_dataloader.sampler.set_epoch(epoch)
             elif hasattr(train_dataloader, "dataset") and isinstance(train_dataloader.dataset, IterableDatasetShard):
@@ -381,9 +401,11 @@ class OVTrainer(Trainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-                    if self.compression_controller is not None:
-                        # Must be called at the beginning of each training step to prepare the compression method
-                        self.compression_controller.scheduler.step()
+                    # TODO: this was the original adaptation for nncf scheduler stepping. 
+                    # To review if this is the right place or at line 439
+                    # if self.compression_controller is not None:
+                    #     # Must be called at the beginning of each training step to prepare the compression method
+                    #     self.compression_controller.scheduler.step()
 
                 if (
                     ((step + 1) % args.gradient_accumulation_steps != 0)
@@ -436,6 +458,8 @@ class OVTrainer(Trainer):
                             )
 
                     # Optimizer step
+                    if self.compression_controller is not None:
+                        self.compression_controller.scheduler.step()
                     optimizer_was_run = True
                     if self.deepspeed:
                         pass  # called outside the loop
@@ -454,6 +478,7 @@ class OVTrainer(Trainer):
                     model.zero_grad()
                     self.state.global_step += 1
                     self.state.epoch = epoch + (step + 1) / steps_in_epoch
+                    self.state.curr_loss = tr_loss_step.cpu().detach().item()
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
@@ -508,6 +533,98 @@ class OVTrainer(Trainer):
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
+
+
+    def compute_distillation_loss(self, inputs, student_logits):
+        with torch.no_grad():
+            teacher_logits = self.teacher(**inputs)
+        return F.kl_div(
+                input=F.log_softmax(student_logits / self.temperature, dim=-1),
+                target=F.softmax(teacher_logits / self.temperature, dim=-1),
+                reduction="batchmean"
+                ) * (self.temperature ** 2)
+
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        self.loss_counter += 1
+        if self.teacher is None:
+            retval = super().compute_loss(model, inputs, return_outputs)
+        
+            if return_outputs is True:
+                loss, outputs = retval
+            else:
+                loss = retval
+        else:
+            task_loss, outputs = super().compute_loss(model, inputs, return_outputs=True)
+            distillation_loss = self.compute_distillation_loss(inputs, outputs)
+            loss = ((1 - self.distillation_weight) * task_loss) + (self.distillation_weight * distillation_loss)
+
+            self.metrics["task_loss"] = task_loss.item()
+            self.metrics["distillation_loss"] = distillation_loss.item()
+
+        if self.compression_controller is not None:
+            compression_loss = self.compression_controller.loss()
+            loss += compression_loss
+            self.metrics["compression_loss"] = compression_loss.item()
+            
+        return (loss, outputs) if return_outputs else loss
+
+
+    def log(self, logs):
+        if self.loss_counter != 0:
+            for k, v in self.metrics.items():
+                logs[k] = float(v) / self.loss_counter
+
+            self.loss_counter = 0
+            self.metrics = defaultdict(float)
+
+        return super().log(logs)
+
+
+    def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
+        if self.control.should_log:
+            if is_torch_tpu_available():
+                xm.mark_step()
+
+            logs: Dict[str, float] = {}
+
+            # all_gather + mean() to get average loss over all processes
+            tr_loss_scalar = self._nested_gather(tr_loss).mean().item()
+
+            # reset tr_loss to zero
+            tr_loss -= tr_loss
+
+            logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
+            logs["learning_rate"] = self._get_learning_rate()
+
+            if self.compression_controller is not None:
+                logs["compression_loss"] = self.compression_controller.loss().item()
+                compression_stats = self.compression_controller.statistics()
+                for key, value in prepare_for_tensorboard(compression_stats).items():
+                    logs["compression/statistics/{0}".format(key)] = value
+
+            self._total_loss_scalar += tr_loss_scalar
+            self._globalstep_last_logged = self.state.global_step
+            self.store_flos()
+
+            self.log(logs)
+
+        metrics = None
+        if self.control.should_evaluate:
+            if isinstance(self.eval_dataset, dict):
+                for eval_dataset_name, eval_dataset in self.eval_dataset.items():
+                    metrics = self.evaluate(
+                        eval_dataset=eval_dataset,
+                        ignore_keys=ignore_keys_for_eval,
+                        metric_key_prefix=f"eval_{eval_dataset_name}",
+                    )
+            else:
+                metrics = self.evaluate(ignore_keys=ignore_keys_for_eval)
+            self._report_to_hp_search(trial, self.state.global_step, metrics)
+
+        if self.control.should_save:
+            self._save_checkpoint(model, trial, metrics=metrics)
+            self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def _save(self, output_dir: Optional[str] = None, state_dict=None):
         # If we are executing this function, we are the process zero, so we don't check for that.

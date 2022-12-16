@@ -53,7 +53,7 @@ class OVConfig(BaseConfig):
         self.compression = compression or DEFAULT_QUANTIZATION_CONFIG
         self.input_info = input_info
         self.save_onnx_model = save_onnx_model
-        self._enable_standard_onnx_export_option()
+        # self._enable_standard_onnx_export_option() # TODO: review
         self.optimum_version = kwargs.pop("optimum_version", None)
 
     def add_input_info(self, model_inputs: Dict):

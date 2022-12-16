@@ -40,3 +40,29 @@ python run_image_classification.py \
     --seed 1337 \
     --output_dir /tmp/beans_outputs/
 ```
+
+### Joint Pruning, Quantization and Distillation (JPQD) Swin on food101
+```bash
+python run_image_classification.py \
+    --model_name_or_path microsoft/swin-base-patch4-window7-224 \
+    --ignore_mismatched_sizes \
+    --dataset_name food101 \
+    --remove_unused_columns False \
+    --dataloader_num_workers 8 \
+    --do_train \
+    --per_device_train_batch_size 16 \
+    --gradient_accumulation_steps 4 \
+    --learning_rate 5e-5 \
+    --warmup_ratio 0.1 \
+    --num_train_epochs 8 \
+    --logging_steps 1 \
+    --do_eval \
+    --per_device_eval_batch_size 128 \
+    --evaluation_strategy steps \
+    --eval_steps 500 \
+    --save_steps 1000 \
+    --seed 42 \
+    --overwrite_output_dir \
+    --output_dir /tmp/food101_outputs/ \
+    --nncf_compression_config configs/swin-base-movement-sparsity.json
+```

@@ -45,3 +45,29 @@ python run_qa.py \
   --doc_stride 128 \
   --output_dir /tmp/outputs_squad/
 ```
+
+### Joint Pruning, Quantization and Distillation (JPQD) for BERT on SQuAD1.0
+
+```bash
+python run_qa.py \
+    --model_name_or_path bert-base-uncased \
+    --dataset_name squad \
+    --teacher_model_or_path bert-large-uncased-whole-word-masking-finetuned-squad \
+    --distillation_weight 0.9 \
+    --do_eval \
+    --fp16 \
+    --do_train \
+    --learning_rate 3e-5 \
+    --num_train_epochs 10 \
+    --per_device_eval_batch_size 128 \
+    --per_device_train_batch_size 16 \
+    --max_seq_length 384 \
+    --doc_stride 128 \
+    --logging_steps 1 \
+    --evaluation_strategy steps \
+    --eval_steps 250 \
+    --save_steps 500 \
+    --overwrite_output_dir \
+    --output_dir /tmp/jpqd_bert_squad/ \
+    --nncf_compression_config configs/bert-base-jpqd.json \
+```

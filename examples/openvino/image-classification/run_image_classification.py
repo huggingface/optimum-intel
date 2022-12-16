@@ -50,8 +50,11 @@ from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
 import evaluate
-from optimum.intel.openvino import OVConfig, OVTrainer
+from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
 
+import jstyleson as json
+from pathlib import Path
+from nncf.common.utils.os import safe_open
 
 logger = logging.getLogger(__name__)
 
@@ -169,7 +172,7 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OVTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -342,7 +345,13 @@ def main():
         # Set the validation transforms
         dataset["validation"].set_transform(val_transforms)
 
-    ov_config = OVConfig()
+    if training_args.nncf_compression_config is not None:
+        file_path = Path(training_args.nncf_compression_config).resolve()
+        with safe_open(file_path) as f:
+            compression = json.load(f)
+        ov_config = OVConfig(compression=compression)
+    else:
+        ov_config = OVConfig()
 
     # Initalize our trainer
     trainer = OVTrainer(
