@@ -126,7 +126,7 @@ class INCTrainer(Trainer):
         self.pruning_config = pruning_config
         self.distillation_config = distillation_config
 
-        self.compression_controller = None
+        self._compression_manager = None
         self.save_onnx_model = save_onnx_model
 
         # Attach dtype and architectur to the config
@@ -144,8 +144,8 @@ class INCTrainer(Trainer):
 
         if len(inc_config) >= 1 and self.args.do_train:
             inc_config = inc_config if len(inc_config) > 1 else inc_config.pop()
-            self.compression_controller = training.prepare_compression(self.model, confs=inc_config)
-            self.model = self.compression_controller.model
+            self._compression_manager = training.prepare_compression(self.model, confs=inc_config)
+            self.model = self._compression_manager.model
             self.model_wrapped = self.model
 
     def _inner_training_loop(
@@ -315,11 +315,11 @@ class INCTrainer(Trainer):
 
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
-        if self.compression_controller is not None:
+        if self._compression_manager is not None:
             if is_torch_less_than_1_13:
-                self.compression_controller.callbacks.on_train_begin()
+                self._compression_manager.callbacks.on_train_begin()
             else:
-                self.compression_controller.callbacks.on_train_begin(self.get_train_dataloader())
+                self._compression_manager.callbacks.on_train_begin(self.get_train_dataloader())
 
         # Skip the first epochs_trained epochs to get the random state of the dataloader at the right point.
         if not args.ignore_data_skip:
@@ -356,8 +356,8 @@ class INCTrainer(Trainer):
             )
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
 
-            if self.compression_controller is not None:
-                self.compression_controller.callbacks.on_epoch_begin(epoch)
+            if self._compression_manager is not None:
+                self._compression_manager.callbacks.on_epoch_begin(epoch)
 
             if epoch == epochs_trained and resume_from_checkpoint is not None and steps_trained_in_current_epoch == 0:
                 self._load_rng_state(resume_from_checkpoint)
@@ -378,8 +378,8 @@ class INCTrainer(Trainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-                    if self.compression_controller is not None:
-                        self.compression_controller.callbacks.on_step_begin(step)
+                    if self._compression_manager is not None:
+                        self._compression_manager.callbacks.on_step_begin(step)
 
                 if (
                     ((step + 1) % args.gradient_accumulation_steps != 0)
@@ -432,8 +432,8 @@ class INCTrainer(Trainer):
                                 args.max_grad_norm,
                             )
 
-                    if self.compression_controller is not None:
-                        self.compression_controller.callbacks.on_before_optimizer_step()
+                    if self._compression_manager is not None:
+                        self._compression_manager.callbacks.on_before_optimizer_step()
 
                     # Optimizer step
                     optimizer_was_run = True
@@ -455,8 +455,8 @@ class INCTrainer(Trainer):
                     self.state.global_step += 1
                     self.state.epoch = epoch + (step + 1) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
-                    if self.compression_controller is not None:
-                        self.compression_controller.callbacks.on_step_end()
+                    if self._compression_manager is not None:
+                        self._compression_manager.callbacks.on_step_end()
 
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
                 else:
@@ -473,8 +473,8 @@ class INCTrainer(Trainer):
                 self.control.should_training_stop = True
 
             self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
-            if self.compression_controller is not None:
-                self.compression_controller.callbacks.on_epoch_end()
+            if self._compression_manager is not None:
+                self._compression_manager.callbacks.on_epoch_end()
 
             self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
 
@@ -512,8 +512,8 @@ class INCTrainer(Trainer):
         self.log(metrics)
 
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
-        if self.compression_controller is not None:
-            self.compression_controller.callbacks.on_train_end()
+        if self._compression_manager is not None:
+            self._compression_manager.callbacks.on_train_end()
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
 
@@ -583,9 +583,6 @@ class INCTrainer(Trainer):
 
             self.model.eval()
             self._onnx_export(self.model, onnx_config, output_onnx_path, calibration_dataloader)
-            # dynamic_axes = {name: axes for name, axes in chain(onnx_config.inputs.items(), onnx_config.outputs.items())}
-            # inputs = onnx_config.generate_dummy_inputs(framework="pt")
-            # self.compression_controller.export(output_onnx_path, input=inputs)
 
         logger.info(f"Model weights saved in {output_model_file}")
 
@@ -616,7 +613,7 @@ class INCTrainer(Trainer):
                 output_names=list(config.outputs.keys()),
                 dynamic_axes=dynamic_axes,
                 opset_version=opset,
-                fp32_model=self.compression_controller.fp32_model,
+                fp32_model=self._compression_manager.fp32_model,
                 calib_dataloader=calibration_dataloader,
             )
         else:
@@ -696,11 +693,11 @@ class INCTrainer(Trainer):
                 teacher_outputs = self._get_logits(teacher_outputs)
 
             if teacher_outputs is not None:
-                self.compression_controller.callbacks.callbacks.create_criterion()
+                self._compression_manager.callbacks.callbacks.create_criterion()
                 distillation_loss = self.compute_distillation_loss(student_outputs, teacher_outputs)
-                loss *= self.compression_controller.callbacks.callbacks.criterion.loss_weights[0]
-                loss += distillation_loss * self.compression_controller.callbacks.callbacks.criterion.loss_weights[1]
-                loss /= sum(self.compression_controller.callbacks.callbacks.criterion.loss_weights)
+                loss *= self._compression_manager.callbacks.callbacks.criterion.loss_weights[0]
+                loss += distillation_loss * self._compression_manager.callbacks.callbacks.criterion.loss_weights[1]
+                loss /= sum(self._compression_manager.callbacks.callbacks.criterion.loss_weights)
 
                 if isinstance(outputs, dict):
                     outputs["loss"] = loss
@@ -719,11 +716,11 @@ class INCTrainer(Trainer):
         How the distillation loss is computed given the student and teacher outputs.
         """
         distillation_loss = None
-        temperature = self.compression_controller.callbacks.callbacks.criterion.temperature
+        temperature = self._compression_manager.callbacks.callbacks.criterion.temperature
         for student_output, teacher_output in zip(student_outputs, teacher_outputs):
             student_output = student_output / temperature
             teacher_output = teacher_output / temperature
-            loss = self.compression_controller.callbacks.callbacks.criterion.teacher_student_loss_cal(
+            loss = self._compression_manager.callbacks.callbacks.criterion.teacher_student_loss_cal(
                 student_output, teacher_output
             )
             distillation_loss = loss if distillation_loss is None else distillation_loss + loss
