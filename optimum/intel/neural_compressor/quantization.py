@@ -138,7 +138,6 @@ class INCQuantizer(OptimumQuantizer):
         quantization_config: "PostTrainingQuantConfig",
         save_directory: Union[str, Path],
         calibration_dataset: Dataset = None,
-        file_name: Optional[str] = None,
         batch_size: int = 8,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
@@ -148,17 +147,15 @@ class INCQuantizer(OptimumQuantizer):
         Quantize a model given the optimization specifications defined in `quantization_config`.
 
         Args:
-            quantization_config (`PostTrainingQuantConfig`, *optional*):
+            quantization_config (`PostTrainingQuantConfig`):
                 The configuration containing the parameters related to quantization.
             save_directory (`Union[str, Path]`):
                 The directory where the quantized model should be saved.
-            calibration_dataset (`datasets.Dataset`):
-                The dataset to use for the calibration step.
-            file_name (`str`, *optional*):
-                The model file name to use when saving the model. Overwrites the default file name `"pytorch_model.bin"`.
+            calibration_dataset (`datasets.Dataset`, defaults to `None`):
+                The dataset to use for the calibration step, needed for post-training static quantization.
             batch_size (`int`, defaults to 8):
                 The number of calibration samples to load per batch.
-            data_collator (`DataCollator`, *optional*):
+            data_collator (`DataCollator`, defaults to `None`):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether or not to remove the columns unused by the model forward method.
@@ -166,8 +163,7 @@ class INCQuantizer(OptimumQuantizer):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         save_onnx_model = kwargs.pop("save_onnx_model", False)
-        file_name = file_name if file_name is not None else WEIGHTS_NAME
-        output_path = save_directory.joinpath(file_name)
+        output_path = save_directory.joinpath(WEIGHTS_NAME)
         calibration_dataloader = None
 
         if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
