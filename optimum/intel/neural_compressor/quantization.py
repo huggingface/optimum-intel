@@ -55,7 +55,7 @@ from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.model.torch_model import PyTorchModel
 from neural_compressor.quantization import fit
-from neural_compressor.utils.pytorch import _load_int8_orchestration, load
+from neural_compressor.utils.pytorch import load
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
