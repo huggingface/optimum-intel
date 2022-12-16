@@ -135,8 +135,8 @@ class INCQuantizer(OptimumQuantizer):
 
     def quantize(
         self,
-        save_directory: Union[str, Path],
         quantization_config: "PostTrainingQuantConfig",
+        save_directory: Union[str, Path],
         calibration_dataset: Dataset = None,
         file_name: Optional[str] = None,
         batch_size: int = 8,
@@ -148,10 +148,10 @@ class INCQuantizer(OptimumQuantizer):
         Quantize a model given the optimization specifications defined in `quantization_config`.
 
         Args:
-            save_directory (`Union[str, Path]`):
-                The directory where the quantized model should be saved.
             quantization_config (`PostTrainingQuantConfig`, *optional*):
                 The configuration containing the parameters related to quantization.
+            save_directory (`Union[str, Path]`):
+                The directory where the quantized model should be saved.
             calibration_dataset (`datasets.Dataset`):
                 The dataset to use for the calibration step.
             file_name (`str`, *optional*):
