@@ -29,6 +29,7 @@ python run_ner.py \
     --dataset_name conll2003 \
     --apply_quantization \
     --quantization_approach static \
+    --num_calibration_samples 50 \
     --do_eval \
     --verify_loading \
     --output_dir /tmp/conll03_output
@@ -44,6 +45,8 @@ python run_ner.py \
     --teacher_model_name_or_path elastic/distilbert-base-uncased-finetuned-conll03-english \
     --apply_quantization \
     --quantization_approach aware_training \
+    --num_train_epochs 1 \
+    --max_train_samples 100 \
     --do_train \
     --do_eval \
     --verify_loading \
@@ -61,6 +64,8 @@ python run_ner.py \
     --quantization_approach dynamic \
     --apply_pruning \
     --target_sparsity 0.1 \
+    --num_train_epochs 4 \
+    --max_train_samples 100 \
     --do_train \
     --do_eval \
     --verify_loading \

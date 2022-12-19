@@ -29,7 +29,7 @@ python run_summarization.py \
     --dataset_config "3.0.0"
     --apply_quantization \
     --quantization_approach static
-    --tolerance_criterion 0.1 \
+    --num_calibration_samples 50 \
     --do_eval \
     --verify_loading \
     --predict_with_generate \
@@ -51,7 +51,8 @@ python run_summarization.py \
     --quantization_approach dynamic \
     --apply_pruning \
     --target_sparsity 0.1 \
-    --tolerance_criterion 0.1 \
+    --num_train_epochs 4 \
+    --max_train_samples 100 \
     --do_train \
     --do_eval \
     --num_train_epochs 3 \

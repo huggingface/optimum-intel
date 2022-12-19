@@ -32,7 +32,7 @@ python run_translation.py \
     --source_prefix "translate English to Romanian: " \
     --apply_quantization \
     --quantization_approach static \
-    --tolerance_criterion 0.7 \
+    --num_calibration_samples 50 \
     --do_eval \
     --verify_loading \
     --predict_with_generate \
@@ -57,7 +57,8 @@ python run_translation.py \
     --quantization_approach dynamic \
     --apply_pruning \
     --target_sparsity 0.1 \
-    --tolerance_criterion 0.7 \
+    --num_train_epochs 4 \
+    --max_train_samples 100 \
     --do_train \
     --do_eval \
     --num_train_epochs 3 \

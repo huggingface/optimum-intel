@@ -14,14 +14,14 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import HfArgumentParser, TrainingArguments, TrOCRProcessor, VisionEncoderDecoderModel
 from transformers.utils import check_min_version
 
-from optimum.intel.neural_compressor import IncOptimizer, IncQuantizationConfig, IncQuantizationMode, IncQuantizer
-from optimum.intel.neural_compressor.quantization import IncQuantizedModelForVision2Seq
+from neural_compressor import PostTrainingQuantConfig
+from optimum.intel.neural_compressor import INCQuantizedModelForVision2Seq, INCQuantizer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.17.0")
+check_min_version("4.20.0")
 
 logger = logging.getLogger(__name__)
 
@@ -98,20 +98,13 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
     )
-    quantization_approach: Optional[str] = field(
-        default=None,
-        metadata={"help": "Quantization approach. Supported approach are static and dynamic."},
+    quantization_approach: str = field(
+        default="dynamic",
+        metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
     )
-    quantization_config: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Path to the directory containing the YAML configuration file used to control the quantization and "
-            "tuning behavior."
-        },
-    )
-    tolerance_criterion: Optional[float] = field(
-        default=None,
-        metadata={"help": "Performance tolerance when optimizing the model."},
+    num_calibration_samples: int = field(
+        default=50,
+        metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
     )
     verify_loading: bool = field(
         default=False,

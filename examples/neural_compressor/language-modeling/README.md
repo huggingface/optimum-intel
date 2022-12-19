@@ -39,9 +39,10 @@ python run_clm.py \
     --dataset_config_name wikitext-2-raw-v1 \
     --apply_quantization \
     --quantization_approach aware_training \
-    --prune \
+    --apply_pruning \
     --target_sparsity 0.02 \
-    --tolerance_criterion 0.5 \
+    --num_train_epochs 4 \
+    --max_train_samples 100 \
     --do_train \
     --do_eval \
     --verify_loading \
@@ -56,14 +57,15 @@ that was used during their pre-training: masked language modeling (MLM) loss.
 
 ```bash
 python run_mlm.py \
-    --model_name_or_path bert-base-uncased  \
+    --model_name_or_path bert-base-uncased \
     --dataset_name wikitext \
     --dataset_config_name wikitext-2-raw-v1 \
     --apply_quantization \
     --quantization_approach aware_training \
     --apply_pruning \
-    --target_sparsity 0.1 \
-    --tolerance_criterion 0.5 \
+    --target_sparsity 0.02 \
+    --num_train_epochs 4 \
+    --max_train_samples 100 \
     --do_train \
     --do_eval \
     --verify_loading \
