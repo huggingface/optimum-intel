@@ -27,7 +27,7 @@ from typing import Optional
 import datasets
 import numpy as np
 import transformers
-from datasets import load_dataset, load_metric
+from datasets import load_dataset
 from transformers import (
     AutoConfig,
     AutoModelForSequenceClassification,
@@ -36,6 +36,7 @@ from transformers import (
     EvalPrediction,
     HfArgumentParser,
     PretrainedConfig,
+    PreTrainedModel,
     TrainingArguments,
     default_data_collator,
     set_seed,
@@ -44,27 +45,26 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from optimum.intel.neural_compressor import (
-    IncDistillationConfig,
-    IncDistiller,
-    IncOptimizer,
-    IncPruner,
-    IncPruningConfig,
-    IncQuantizationConfig,
-    IncQuantizationMode,
-    IncQuantizer,
-    IncTrainer,
+import evaluate
+from neural_compressor import (
+    DistillationConfig,
+    PostTrainingQuantConfig,
+    PruningConfig,
+    QuantizationAwareTrainingConfig,
 )
-from optimum.intel.neural_compressor.quantization import IncQuantizedModelForSequenceClassification
+from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.15.0")
+check_min_version("4.20.0")
 
-require_version("datasets>=1.8.0", "To fix: pip install -r examples/text-classification/requirements.txt")
+require_version(
+    "datasets>=1.8.0", "To fix: pip install -r examples/neural_compressor/text-classification/requirements.txt"
+)
+
 
 task_to_keys = {
     "cola": ("sentence", None),
@@ -210,52 +210,46 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
     )
-    quantization_approach: Optional[str] = field(
-        default=None,
+    quantization_approach: str = field(
+        default="dynamic",
         metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
+    )
+    num_calibration_samples: int = field(
+        default=50,
+        metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
     )
     apply_pruning: bool = field(
         default=False,
         metadata={"help": "Whether or not to apply pruning."},
     )
-    target_sparsity: Optional[float] = field(
-        default=None,
+    target_sparsity: float = field(
+        default=0.1,
         metadata={"help": "Targeted sparsity when pruning the model."},
+    )
+    start_epoch: int = field(
+        default=0,
+        metadata={"help": "Epoch for which the pruning process will start."},
+    )
+    end_epoch: Optional[int] = field(
+        default=None,
+        metadata={"help": "Epoch for which the pruning process will end."},
+    )
+    pruning_approach: str = field(
+        default="basic_magnitude",
+        metadata={"help": "Pruning approach. Supported approach is basic_magnitude."},
     )
     apply_distillation: bool = field(
         default=False,
         metadata={"help": "Whether or not to apply distillation."},
     )
-    teacher_model_name_or_path: str = field(
+    generate_teacher_logits: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to compute and save the teacher's outputs to accelerate training when applying distillation."
+        },
+    )
+    teacher_model_name_or_path: Optional[str] = field(
         default=False, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
-    )
-    quantization_config: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Path to the directory containing the YAML configuration file used to control the quantization and"
-            "tuning behavior."
-        },
-    )
-    pruning_config: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Path to the directory containing the YAML configuration file used to control the pruning behavior."
-        },
-    )
-    distillation_config: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Path to the directory containing the YAML configuration file used to control the distillation"
-            "behavior."
-        },
-    )
-    metric: Optional[str] = field(
-        default=None,
-        metadata={"help": "Metric used for the tuning strategy."},
-    )
-    tolerance_criterion: Optional[float] = field(
-        default=None,
-        metadata={"help": "Performance tolerance when optimizing the model."},
     )
     verify_loading: bool = field(
         default=False,
@@ -313,9 +307,6 @@ def main():
                 f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
-
-    if optim_args.apply_quantization and optim_args.quantization_approach == "static":
-        training_args.do_train = True
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
@@ -473,7 +464,7 @@ def main():
         raw_datasets = raw_datasets.map(
             preprocess_function, batched=True, load_from_cache_file=not data_args.overwrite_cache
         )
-    if training_args.do_train:
+    if training_args.do_train or (optim_args.apply_quantization and optim_args.quantization_approach == "static"):
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = raw_datasets["train"]
@@ -494,9 +485,9 @@ def main():
 
     # Get the metric function
     if data_args.task_name is not None:
-        metric = load_metric("glue", data_args.task_name)
+        metric = evaluate.load("glue", data_args.task_name)
     else:
-        metric = load_metric("accuracy")
+        metric = evaluate.load("accuracy")
 
     # You can define your custom compute_metrics function. It takes an `EvalPrediction` object (a namedtuple with a
     # predictions and label_ids field) and has to return a dictionary string to float.
@@ -521,218 +512,201 @@ def main():
     else:
         data_collator = None
 
-    # Initialize our Trainer
-    trainer = IncTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
-        compute_metrics=compute_metrics,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-    )
-
-    resume_from_checkpoint = training_args.resume_from_checkpoint
-    metric_name = optim_args.metric
-    if metric_name is None:
-        metric_name = "eval_" + (
-            "pearson"
-            if data_args.task_name == "stsb"
-            else "matthews_correlation"
-            if data_args.task_name == "cola"
-            else "accuracy"
-        )
-
-    def take_eval_steps(model, trainer, metric_name, save_metrics=False):
-        trainer.model = model
-        metrics = trainer.evaluate()
-        if save_metrics:
-            trainer.save_metrics("eval", metrics)
-        logger.info("{}: {}".format(metric_name, metrics.get(metric_name)))
-        logger.info("Throughput: {} samples/sec".format(metrics.get("eval_samples_per_second")))
-        return metrics[metric_name]
-
-    def eval_func(model):
-        return take_eval_steps(model, trainer, metric_name)
-
-    def take_train_steps(model, trainer, resume_from_checkpoint, last_checkpoint):
-        trainer.model_wrapped = model
-        trainer.model = model
-        checkpoint = None
-        if resume_from_checkpoint is not None:
-            checkpoint = resume_from_checkpoint
-        elif last_checkpoint is not None:
-            checkpoint = last_checkpoint
-        train_result = trainer.train(agent, resume_from_checkpoint=checkpoint)
-        metrics = train_result.metrics
-        trainer.save_model()  # Saves the tokenizer too for easy upload
-        trainer.log_metrics("train", metrics)
-        trainer.save_metrics("train", metrics)
-        trainer.save_state()
-        return trainer.model
-
-    def train_func(model):
-        return take_train_steps(model, trainer, resume_from_checkpoint, last_checkpoint)
-
-    quantizer = None
-    pruner = None
-    distiller = None
+    quantization_config = None
+    pruning_config = None
+    distillation_config = None
 
     if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
         raise ValueError("No optimization activated.")
 
-    result_baseline_model = take_eval_steps(model, trainer, metric_name)
-
-    default_config = os.path.join(os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir)), "config")
+    if not training_args.do_train and (
+        optim_args.apply_distillation
+        or optim_args.apply_pruning
+        or (optim_args.apply_quantization and optim_args.quantization_approach == "aware_training")
+    ):
+        raise ValueError("`do_train` must be set to True.")
 
     if optim_args.apply_quantization:
 
-        if not training_args.do_eval:
-            raise ValueError("do_eval must be set to True for quantization.")
-
-        q8_config = IncQuantizationConfig.from_pretrained(
-            optim_args.quantization_config if optim_args.quantization_config is not None else default_config,
-            config_file_name="quantization.yml",
-            cache_dir=model_args.cache_dir,
-        )
-
-        # Set metric tolerance if specified
-        if optim_args.tolerance_criterion is not None:
-            q8_config.set_tolerance(optim_args.tolerance_criterion)
-
-        # Set quantization approach if specified
-        if optim_args.quantization_approach is not None:
-            supported_approach = {"static", "dynamic", "aware_training"}
-            if optim_args.quantization_approach not in supported_approach:
-                raise ValueError(
-                    "Unknown quantization approach. Supported approach are " + ", ".join(supported_approach)
-                )
-            quant_approach = getattr(IncQuantizationMode, optim_args.quantization_approach.upper()).value
-            q8_config.set_config("quantization.approach", quant_approach)
-
-        quant_approach = IncQuantizationMode(q8_config.get_config("quantization.approach"))
-        # torch FX used for post-training quantization and quantization aware training
-        # dynamic quantization will be added when torch FX is more mature
-        if quant_approach != IncQuantizationMode.DYNAMIC:
-            if not training_args.do_train:
-                raise ValueError("do_train must be set to True for quantization aware training.")
-
-            q8_config.set_config("model.framework", "pytorch_fx")
-
-        calib_dataloader = trainer.get_train_dataloader() if quant_approach != IncQuantizationMode.DYNAMIC else None
-        quantizer = IncQuantizer(
-            q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
-        )
+        supported_approach = {"static", "dynamic", "aware_training"}
+        if optim_args.quantization_approach not in supported_approach:
+            raise ValueError(
+                f"Unknown quantization approach. Supported approach are {supported_approach}."
+                f"{optim_args.quantization_approach} was given."
+            )
+        if optim_args.quantization_approach == "aware_training":
+            quantization_config = QuantizationAwareTrainingConfig()
+        else:
+            quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
 
     if optim_args.apply_pruning:
 
-        if not training_args.do_train:
-            raise ValueError("do_train must be set to True for pruning.")
+        if optim_args.end_epoch is None:
+            end_epoch = training_args.num_train_epochs
+        else:
+            end_epoch = min(optim_args.end_epoch, training_args.num_train_epochs - 1)
 
-        pruning_config = IncPruningConfig.from_pretrained(
-            optim_args.pruning_config if optim_args.pruning_config is not None else default_config,
-            config_file_name="prune.yml",
-            cache_dir=model_args.cache_dir,
+        pruning_config = PruningConfig(
+            start_epoch=optim_args.start_epoch,
+            end_epoch=end_epoch,
+            target_sparsity=optim_args.target_sparsity,
+            prune_type=optim_args.pruning_approach,
         )
-
-        # Set targeted sparsity if specified
-        if optim_args.target_sparsity is not None:
-            pruning_config.set_config(
-                "pruning.approach.weight_compression.target_sparsity", optim_args.target_sparsity
-            )
-
-        pruning_start_epoch = pruning_config.get_config("pruning.approach.weight_compression.start_epoch")
-        pruning_end_epoch = pruning_config.get_config("pruning.approach.weight_compression.end_epoch")
-
-        if pruning_start_epoch > training_args.num_train_epochs - 1:
-            logger.warning(
-                f"Pruning end epoch {pruning_start_epoch} is higher than the total number of training epoch "
-                f"{training_args.num_train_epochs}. No pruning will be applied."
-            )
-
-        if pruning_end_epoch > training_args.num_train_epochs - 1:
-            logger.warning(
-                f"Pruning end epoch {pruning_end_epoch} is higher than the total number of training epoch "
-                f"{training_args.num_train_epochs}. The target sparsity will not be reached."
-            )
-
-        # Creation Pruning object used for IncTrainer training loop
-        pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
 
     if optim_args.apply_distillation:
 
         if optim_args.teacher_model_name_or_path is None:
             raise ValueError("A teacher model is needed to apply distillation.")
 
-        if not training_args.do_train:
-            raise ValueError("do_train must be set to True for distillation.")
-
-        teacher_config = AutoConfig.from_pretrained(
-            optim_args.teacher_model_name_or_path,
-            num_labels=num_labels,
-            finetuning_task=data_args.task_name,
-        )
-        teacher_tokenizer = AutoTokenizer.from_pretrained(
-            optim_args.teacher_model_name_or_path,
-            use_fast=model_args.use_fast_tokenizer,
-        )
         teacher_model = AutoModelForSequenceClassification.from_pretrained(
             optim_args.teacher_model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=teacher_config,
+            from_tf=bool(".ckpt" in optim_args.teacher_model_name_or_path),
+            cache_dir=model_args.cache_dir,
+            revision=model_args.model_revision,
+            use_auth_token=True if model_args.use_auth_token else None,
         )
 
         teacher_model.to(training_args.device)
 
+        teacher_tokenizer = AutoTokenizer.from_pretrained(optim_args.teacher_model_name_or_path, use_fast=True)
         if teacher_tokenizer.vocab != tokenizer.vocab:
             raise ValueError("Teacher model and student model should have same tokenizer.")
 
-        distillation_config = IncDistillationConfig.from_pretrained(
-            optim_args.distillation_config if optim_args.distillation_config is not None else default_config,
-            config_file_name="distillation.yml",
-            cache_dir=model_args.cache_dir,
-        )
+        distillation_config = DistillationConfig(teacher_model=teacher_model)
 
-        # Creation Distillation object used for IncTrainer training loop
-        distiller = IncDistiller(
-            teacher_model=teacher_model, config=distillation_config, eval_func=eval_func, train_func=train_func
-        )
-
-    optimizer = IncOptimizer(
-        model,
-        quantizer=quantizer,
-        pruner=pruner,
-        distiller=distiller,
-        one_shot_optimization=True,
-        eval_func=eval_func,
-        train_func=train_func,
+    # Initialize our Trainer
+    trainer = INCTrainer(
+        model=model,
+        task="sequence-classification",
+        quantization_config=quantization_config if optim_args.quantization_approach == "aware_training" else None,
+        pruning_config=pruning_config,
+        distillation_config=distillation_config,
+        args=training_args,
+        train_dataset=train_dataset if training_args.do_train else None,
+        eval_dataset=eval_dataset if training_args.do_eval else None,
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+        compute_metrics=compute_metrics,
     )
 
-    agent = optimizer.get_agent()
-    optimized_model = optimizer.fit()
-    result_optimized_model = take_eval_steps(optimized_model, trainer, metric_name, save_metrics=True)
+    # Training
+    if training_args.do_train:
+        checkpoint = None
+        if training_args.resume_from_checkpoint is not None:
+            checkpoint = training_args.resume_from_checkpoint
+        elif last_checkpoint is not None:
+            checkpoint = last_checkpoint
+        train_result = trainer.train(resume_from_checkpoint=checkpoint)
+        metrics = train_result.metrics
+        max_train_samples = (
+            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+        )
+        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
 
-    # Save the resulting model and its corresponding configuration in the given directory
-    optimizer.save_pretrained(training_args.output_dir)
-    # Compute the model's sparsity
-    sparsity = optimizer.get_sparsity()
+        trainer.save_model()  # Saves the tokenizer too for easy upload
 
-    logger.info(
-        f"Optimized model with {metric_name} of {result_optimized_model} and sparsity of {round(sparsity, 2)}% "
-        f"saved to: {training_args.output_dir}. Original model had an {metric_name} of {result_baseline_model}."
-    )
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
 
-    if optim_args.apply_quantization and optim_args.verify_loading:
+    if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic"}:
+        model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
+        quantizer = INCQuantizer.from_pretrained(model)
+        if optim_args.quantization_approach == "static":
+            num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
+            train_dataset.select(range(num_calibration_samples))
+            quantization_config.calibration_sampling_size = num_calibration_samples
 
-        # Load the model obtained after Intel Neural Compressor quantization
-        loaded_model = IncQuantizedModelForSequenceClassification.from_pretrained(training_args.output_dir)
-        loaded_model.eval()
-        result_loaded_model = take_eval_steps(loaded_model, trainer, metric_name)
+        quantizer.quantize(
+            quantization_config=quantization_config,
+            save_directory=training_args.output_dir,
+            calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
+            batch_size=training_args.per_device_train_batch_size,
+            # save_onnx_model=True,
+        )
+        trainer.model = quantizer._quantized_model
+        if optim_args.apply_quantization and optim_args.verify_loading:
+            loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(training_args.output_dir)
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            with torch.no_grad():
+                original_model_outputs = quantizer._quantized_model(**tokens)
+                quantized_model_outputs = loaded_model(**tokens)
+                if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
+                    logger.info("The quantized model was successfully loaded.")
+                else:
+                    logger.warning("The quantized model was not successfully loaded.")
 
-        if result_loaded_model != result_optimized_model:
-            logger.error("The quantized model was not successfully loaded.")
-        else:
-            logger.info(f"The quantized model was successfully loaded.")
+    # Evaluation
+    if training_args.do_eval:
+        logger.info("*** Evaluate ***")
+
+        # Loop to handle MNLI double evaluation (matched, mis-matched)
+        tasks = [data_args.task_name]
+        eval_datasets = [eval_dataset]
+        if data_args.task_name == "mnli":
+            tasks.append("mnli-mm")
+            valid_mm_dataset = raw_datasets["validation_mismatched"]
+            if data_args.max_eval_samples is not None:
+                max_eval_samples = min(len(valid_mm_dataset), data_args.max_eval_samples)
+                valid_mm_dataset = valid_mm_dataset.select(range(max_eval_samples))
+            eval_datasets.append(valid_mm_dataset)
+            combined = {}
+
+        for eval_dataset, task in zip(eval_datasets, tasks):
+            metrics = trainer.evaluate(eval_dataset=eval_dataset)
+
+            max_eval_samples = (
+                data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
+            )
+            metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
+
+            if task == "mnli-mm":
+                metrics = {k + "_mm": v for k, v in metrics.items()}
+            if task is not None and "mnli" in task:
+                combined.update(metrics)
+
+            trainer.log_metrics("eval", metrics)
+            trainer.save_metrics("eval", combined if task is not None and "mnli" in task else metrics)
+
+    if training_args.do_predict:
+        logger.info("*** Predict ***")
+
+        # Loop to handle MNLI double evaluation (matched, mis-matched)
+        tasks = [data_args.task_name]
+        predict_datasets = [predict_dataset]
+        if data_args.task_name == "mnli":
+            tasks.append("mnli-mm")
+            predict_datasets.append(raw_datasets["test_mismatched"])
+
+        for predict_dataset, task in zip(predict_datasets, tasks):
+            # Removing the `label` columns because it contains -1 and Trainer won't like that.
+            predict_dataset = predict_dataset.remove_columns("label")
+            predictions = trainer.predict(predict_dataset, metric_key_prefix="predict").predictions
+            predictions = np.squeeze(predictions) if is_regression else np.argmax(predictions, axis=1)
+
+            output_predict_file = os.path.join(training_args.output_dir, f"predict_results_{task}.txt")
+            if trainer.is_world_process_zero():
+                with open(output_predict_file, "w") as writer:
+                    logger.info(f"***** Predict results {task} *****")
+                    writer.write("index\tprediction\n")
+                    for index, item in enumerate(predictions):
+                        if is_regression:
+                            writer.write(f"{index}\t{item:3.3f}\n")
+                        else:
+                            item = label_list[item]
+                            writer.write(f"{index}\t{item}\n")
+
+    kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-classification"}
+    if data_args.task_name is not None:
+        kwargs["language"] = "en"
+        kwargs["dataset_tags"] = "glue"
+        kwargs["dataset_args"] = data_args.task_name
+        kwargs["dataset"] = f"GLUE {data_args.task_name.upper()}"
+
+    if training_args.push_to_hub:
+        trainer.push_to_hub(**kwargs)
+    else:
+        trainer.create_model_card(**kwargs)
 
 
 def _mp_fn(index):

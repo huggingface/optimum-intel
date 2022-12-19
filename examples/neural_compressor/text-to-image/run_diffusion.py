@@ -30,7 +30,8 @@ from torch.utils.data import DataLoader, Dataset
 
 from accelerate.utils import set_seed
 from diffusers import StableDiffusionPipeline
-from optimum.intel.neural_compressor import IncOptimizer, IncQuantizationConfig, IncQuantizationMode, IncQuantizer
+from neural_compressor import PostTrainingQuantConfig
+from optimum.intel.neural_compressor import INCQuantizer
 from optimum.intel.neural_compressor.utils import load_quantized_model
 from pytorch_fid import fid_score
 

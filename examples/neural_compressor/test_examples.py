@@ -66,7 +66,6 @@ class TestExamples(unittest.TestCase):
                 --apply_quantization
                 --quantization_approach {quantization_approach}
                 --metric eval_accuracy
-                --tolerance_criterion 0.1
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
@@ -97,7 +96,6 @@ class TestExamples(unittest.TestCase):
                 --apply_quantization
                 --quantization_approach {quantization_approach}
                 --metric eval_f1
-                --tolerance_criterion 0.1
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
@@ -129,7 +127,6 @@ class TestExamples(unittest.TestCase):
                 --apply_quantization
                 --quantization_approach {quantization_approach}
                 --metric eval_f1
-                --tolerance_criterion 0.1
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
@@ -163,7 +160,6 @@ class TestExamples(unittest.TestCase):
                 --apply_quantization
                 --quantization_approach {quantization_approach}
                 --metric eval_accuracy
-                --tolerance_criterion 0.1
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
@@ -198,7 +194,6 @@ class TestExamples(unittest.TestCase):
                 --apply_pruning
                 --target_sparsity 0.02
                 --metric eval_loss
-                --tolerance_criterion 0.8
                 --do_eval
                 --do_train
                 --per_device_eval_batch_size 1
@@ -230,7 +225,6 @@ class TestExamples(unittest.TestCase):
                 --apply_pruning
                 --target_sparsity 0.02
                 --metric eval_loss
-                --tolerance_criterion 0.8
                 --do_eval
                 --do_train
                 --per_device_eval_batch_size 1

@@ -31,6 +31,7 @@ python run_glue.py \
     --task_name sst2 \
     --apply_quantization \
     --quantization_approach static \
+    --num_calibration_samples 50 \
     --do_eval \
     --verify_loading \
     --output_dir /tmp/sst2_output
@@ -46,6 +47,8 @@ python run_glue.py \
     --teacher_model_name_or_path distilbert-base-uncased-finetuned-sst-2-english \
     --apply_quantization \
     --quantization_approach aware_training \
+    --num_train_epochs 1 \
+    --max_train_samples 100 \
     --do_train \
     --do_eval \
     --verify_loading \
@@ -63,6 +66,8 @@ python run_glue.py \
     --quantization_approach dynamic \
     --apply_pruning \
     --target_sparsity 0.1 \
+    --num_train_epochs 4 \
+    --max_train_samples 100 \
     --do_train \
     --do_eval \
     --verify_loading \

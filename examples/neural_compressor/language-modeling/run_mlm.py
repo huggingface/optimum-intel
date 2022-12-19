@@ -39,6 +39,7 @@ from transformers import (
     AutoTokenizer,
     DataCollatorForLanguageModeling,
     HfArgumentParser,
+    PreTrainedModel,
     TrainingArguments,
     set_seed,
 )
@@ -46,24 +47,23 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from optimum.intel.neural_compressor import (
-    IncOptimizer,
-    IncPruner,
-    IncPruningConfig,
-    IncQuantizationConfig,
-    IncQuantizationMode,
-    IncQuantizer,
-    IncTrainer,
+from neural_compressor import (
+    DistillationConfig,
+    PostTrainingQuantConfig,
+    PruningConfig,
+    QuantizationAwareTrainingConfig,
 )
-from optimum.intel.neural_compressor.quantization import IncQuantizedModelForMaskedLM
+from optimum.intel.neural_compressor import INCQuantizedModelForMaskedLM, INCQuantizer, INCTrainer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.15.0")
+check_min_version("4.20.0")
 
-require_version("datasets>=1.8.0", "To fix: pip install -r examples/language-modeling/requirements.txt")
+require_version(
+    "datasets>=1.8.0", "To fix: pip install -r examples/neural_compressor/language-modeling/requirements.txt"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,38 +138,46 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
     )
-    quantization_approach: Optional[str] = field(
-        default=None,
+    quantization_approach: str = field(
+        default="dynamic",
         metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
+    )
+    num_calibration_samples: int = field(
+        default=50,
+        metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
     )
     apply_pruning: bool = field(
         default=False,
         metadata={"help": "Whether or not to apply pruning."},
     )
-    target_sparsity: Optional[float] = field(
-        default=None,
+    target_sparsity: float = field(
+        default=0.1,
         metadata={"help": "Targeted sparsity when pruning the model."},
     )
-    quantization_config: Optional[str] = field(
+    start_epoch: int = field(
+        default=0,
+        metadata={"help": "Epoch for which the pruning process will start."},
+    )
+    end_epoch: Optional[int] = field(
         default=None,
+        metadata={"help": "Epoch for which the pruning process will end."},
+    )
+    pruning_approach: str = field(
+        default="basic_magnitude",
+        metadata={"help": "Pruning approach. Supported approach is basic_magnitude."},
+    )
+    apply_distillation: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to apply distillation."},
+    )
+    generate_teacher_logits: bool = field(
+        default=False,
         metadata={
-            "help": "Path to the directory containing the YAML configuration file used to control the quantization and "
-            "tuning behavior."
+            "help": "Whether to compute and save the teacher's outputs to accelerate training when applying distillation."
         },
     )
-    pruning_config: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Path to the directory containing the YAML configuration file used to control the pruning behavior."
-        },
-    )
-    metric: str = field(
-        default="eval_loss",
-        metadata={"help": "Metric used for the tuning strategy."},
-    )
-    tolerance_criterion: Optional[float] = field(
-        default=None,
-        metadata={"help": "Performance tolerance when optimizing the model."},
+    teacher_model_name_or_path: Optional[str] = field(
+        default=False, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
     verify_loading: bool = field(
         default=False,
@@ -309,9 +317,6 @@ def main():
                 "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
             )
 
-    if optim_args.apply_quantization and optim_args.quantization_approach == "static":
-        training_args.do_train = True
-
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
@@ -327,7 +332,10 @@ def main():
     if data_args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         raw_datasets = load_dataset(
-            data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir
+            data_args.dataset_name,
+            data_args.dataset_config_name,
+            cache_dir=model_args.cache_dir,
+            use_auth_token=True if model_args.use_auth_token else None,
         )
         if "validation" not in raw_datasets.keys():
             raw_datasets["validation"] = load_dataset(
@@ -335,12 +343,14 @@ def main():
                 data_args.dataset_config_name,
                 split=f"train[:{data_args.validation_split_percentage}%]",
                 cache_dir=model_args.cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
             )
             raw_datasets["train"] = load_dataset(
                 data_args.dataset_name,
                 data_args.dataset_config_name,
                 split=f"train[{data_args.validation_split_percentage}%:]",
                 cache_dir=model_args.cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
             )
     else:
         data_files = {}
@@ -352,7 +362,12 @@ def main():
             extension = data_args.validation_file.split(".")[-1]
         if extension == "txt":
             extension = "text"
-        raw_datasets = load_dataset(extension, data_files=data_files, cache_dir=model_args.cache_dir)
+        raw_datasets = load_dataset(
+            extension,
+            data_files=data_files,
+            cache_dir=model_args.cache_dir,
+            use_auth_token=True if model_args.use_auth_token else None,
+        )
 
         # If no validation data is there, validation_split_percentage will be used to divide the dataset.
         if "validation" not in raw_datasets.keys():
@@ -361,12 +376,14 @@ def main():
                 data_files=data_files,
                 split=f"train[:{data_args.validation_split_percentage}%]",
                 cache_dir=model_args.cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
             )
             raw_datasets["train"] = load_dataset(
                 extension,
                 data_files=data_files,
                 split=f"train[{data_args.validation_split_percentage}%:]",
                 cache_dir=model_args.cache_dir,
+                use_auth_token=True if model_args.use_auth_token else None,
             )
 
     # See more about loading any type of standard or custom dataset (from files, python dict, pandas DataFrame, etc) at
@@ -392,6 +409,7 @@ def main():
         if model_args.config_overrides is not None:
             logger.info(f"Overriding config: {model_args.config_overrides}")
             config.update_from_string(model_args.config_overrides)
+            logger.info(f"New config: {config}")
 
     tokenizer_kwargs = {
         "cache_dir": model_args.cache_dir,
@@ -422,7 +440,11 @@ def main():
         logger.info("Training new model from scratch")
         model = AutoModelForMaskedLM.from_config(config)
 
-    model.resize_token_embeddings(len(tokenizer))
+    # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
+    # on a small vocab and want a smaller embedding size, remove this test.
+    embedding_size = model.get_input_embeddings().weight.shape[0]
+    if len(tokenizer) > embedding_size:
+        model.resize_token_embeddings(len(tokenizer))
 
     # Preprocessing the datasets.
     # First we tokenize all the texts.
@@ -497,7 +519,7 @@ def main():
         # max_seq_length.
         def group_texts(examples):
             # Concatenate all texts.
-            concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
+            concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
             total_length = len(concatenated_examples[list(examples.keys())[0]])
             # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
             # customize this part to your needs.
@@ -526,19 +548,41 @@ def main():
                 desc=f"Grouping texts in chunks of {max_seq_length}",
             )
 
-    if training_args.do_train:
+    if training_args.do_train or (optim_args.apply_quantization and optim_args.quantization_approach == "static"):
         if "train" not in tokenized_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = tokenized_datasets["train"]
         if data_args.max_train_samples is not None:
-            train_dataset = train_dataset.select(range(data_args.max_train_samples))
+            max_train_samples = min(len(train_dataset), data_args.max_train_samples)
+            train_dataset = train_dataset.select(range(max_train_samples))
 
     if training_args.do_eval:
         if "validation" not in tokenized_datasets:
             raise ValueError("--do_eval requires a validation dataset")
         eval_dataset = tokenized_datasets["validation"]
         if data_args.max_eval_samples is not None:
-            eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
+            max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
+            eval_dataset = eval_dataset.select(range(max_eval_samples))
+
+        def preprocess_logits_for_metrics(logits, labels):
+            if isinstance(logits, tuple):
+                # Depending on the model and config, logits may contain extra tensors,
+                # like past_key_values, but logits always come first
+                logits = logits[0]
+            return logits.argmax(dim=-1)
+
+        metric = evaluate.load("accuracy")
+
+        def compute_metrics(eval_preds):
+            preds, labels = eval_preds
+            # preds have the same shape as the labels, after the argmax(-1) has been calculated
+            # by preprocess_logits_for_metrics
+            labels = labels.reshape(-1)
+            preds = preds.reshape(-1)
+            mask = labels != -100
+            labels = labels[mask]
+            preds = preds[mask]
+            return metric.compute(predictions=preds, references=labels)
 
     # Data collator
     # This one will take care of randomly masking the tokens.
@@ -549,178 +593,161 @@ def main():
         pad_to_multiple_of=8 if pad_to_multiple_of_8 else None,
     )
 
+    quantization_config = None
+    pruning_config = None
+    distillation_config = None
+
+    if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
+        raise ValueError("No optimization activated.")
+
+    if not training_args.do_train and (
+        optim_args.apply_distillation
+        or optim_args.apply_pruning
+        or (optim_args.apply_quantization and optim_args.quantization_approach == "aware_training")
+    ):
+        raise ValueError("`do_train` must be set to True.")
+
+    if optim_args.apply_quantization:
+
+        supported_approach = {"static", "dynamic", "aware_training"}
+        if optim_args.quantization_approach not in supported_approach:
+            raise ValueError(
+                f"Unknown quantization approach. Supported approach are {supported_approach}."
+                f"{optim_args.quantization_approach} was given."
+            )
+        if optim_args.quantization_approach == "aware_training":
+            quantization_config = QuantizationAwareTrainingConfig()
+        else:
+            quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
+
+    if optim_args.apply_pruning:
+
+        if optim_args.end_epoch is None:
+            end_epoch = training_args.num_train_epochs
+        else:
+            end_epoch = min(optim_args.end_epoch, training_args.num_train_epochs - 1)
+
+        pruning_config = PruningConfig(
+            start_epoch=optim_args.start_epoch,
+            end_epoch=end_epoch,
+            target_sparsity=optim_args.target_sparsity,
+            prune_type=optim_args.pruning_approach,
+        )
+
+    if optim_args.apply_distillation:
+
+        if optim_args.teacher_model_name_or_path is None:
+            raise ValueError("A teacher model is needed to apply distillation.")
+
+        teacher_model = AutoModelForMaskedLM.from_pretrained(
+            optim_args.teacher_model_name_or_path,
+            from_tf=bool(".ckpt" in optim_args.teacher_model_name_or_path),
+            cache_dir=model_args.cache_dir,
+            revision=model_args.model_revision,
+            use_auth_token=True if model_args.use_auth_token else None,
+        )
+
+        teacher_model.to(training_args.device)
+
+        teacher_tokenizer = AutoTokenizer.from_pretrained(optim_args.teacher_model_name_or_path, use_fast=True)
+        if teacher_tokenizer.vocab != tokenizer.vocab:
+            raise ValueError("Teacher model and student model should have same tokenizer.")
+
+        distillation_config = DistillationConfig(teacher_model=teacher_model)
+
     # Initialize our Trainer
-    trainer = IncTrainer(
+    trainer = INCTrainer(
         model=model,
+        task="masked-lm",
+        quantization_config=quantization_config if optim_args.quantization_approach == "aware_training" else None,
+        pruning_config=pruning_config,
+        distillation_config=distillation_config,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
         data_collator=data_collator,
+        compute_metrics=compute_metrics if training_args.do_eval else None,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics if training_args.do_eval else None,
     )
 
-    resume_from_checkpoint = training_args.resume_from_checkpoint
-    metric_name = optim_args.metric
+    # Training
+    if training_args.do_train:
+        checkpoint = None
+        if training_args.resume_from_checkpoint is not None:
+            checkpoint = training_args.resume_from_checkpoint
+        elif last_checkpoint is not None:
+            checkpoint = last_checkpoint
+        train_result = trainer.train(resume_from_checkpoint=checkpoint)
+        trainer.save_model()  # Saves the tokenizer too for easy upload
+        metrics = train_result.metrics
 
-    def take_eval_steps(model, trainer, metric_name, save_metrics=False):
-        # set seed to ensure the consistency of input data for fp32 model, quantized model
-        # and reload quantized model
-        torch.manual_seed(training_args.seed)
-        trainer.model = model
+        max_train_samples = (
+            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+        )
+        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
+
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
+
+    if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic"}:
+        model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
+        quantizer = INCQuantizer.from_pretrained(model)
+        if optim_args.quantization_approach == "static":
+            num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
+            train_dataset.select(range(num_calibration_samples))
+            quantization_config.calibration_sampling_size = num_calibration_samples
+
+        quantizer.quantize(
+            quantization_config=quantization_config,
+            save_directory=training_args.output_dir,
+            calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
+            batch_size=training_args.per_device_train_batch_size,
+            # save_onnx_model=True,
+        )
+        trainer.model = quantizer._quantized_model
+        if optim_args.apply_quantization and optim_args.verify_loading:
+            loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(training_args.output_dir)
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            with torch.no_grad():
+                original_model_outputs = quantizer._quantized_model(**tokens)
+                quantized_model_outputs = loaded_model(**tokens)
+                if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
+                    logger.info("The quantized model was successfully loaded.")
+                else:
+                    logger.warning("The quantized model was not successfully loaded.")
+
+    # Evaluation
+    if training_args.do_eval:
+        logger.info("*** Evaluate ***")
+
         metrics = trainer.evaluate()
+
+        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
+        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
         try:
             perplexity = math.exp(metrics["eval_loss"])
         except OverflowError:
             perplexity = float("inf")
         metrics["perplexity"] = perplexity
-        if save_metrics:
-            trainer.save_metrics("eval", metrics)
-        logger.info("{}: {}".format(metric_name, metrics.get(metric_name)))
-        logger.info("Throughput: {} samples/sec".format(metrics.get("eval_samples_per_second")))
-        return metrics[metric_name]
 
-    def eval_func(model):
-        return take_eval_steps(model, trainer, metric_name)
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
 
-    def take_train_steps(model, trainer, resume_from_checkpoint, last_checkpoint):
-        trainer.model_wrapped = model
-        trainer.model = model
-        checkpoint = None
-        if resume_from_checkpoint is not None:
-            checkpoint = resume_from_checkpoint
-        elif last_checkpoint is not None:
-            checkpoint = last_checkpoint
-        train_result = trainer.train(agent, resume_from_checkpoint=checkpoint)
-        metrics = train_result.metrics
-        trainer.save_model()  # Saves the tokenizer too for easy upload
-        trainer.log_metrics("train", metrics)
-        trainer.save_metrics("train", metrics)
-        trainer.save_state()
-        return trainer.model
-
-    def train_func(model):
-        return take_train_steps(model, trainer, resume_from_checkpoint, last_checkpoint)
-
-    quantizer = None
-    pruner = None
-
-    if not optim_args.apply_quantization and not optim_args.apply_pruning:
-        raise ValueError("No optimization activated.")
-
-    result_baseline_model = take_eval_steps(model, trainer, metric_name)
-
-    default_config = os.path.join(os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir)), "config")
-
-    if optim_args.apply_quantization:
-
-        if not training_args.do_eval:
-            raise ValueError("do_eval must be set to True for quantization.")
-
-        q8_config = IncQuantizationConfig.from_pretrained(
-            optim_args.quantization_config if optim_args.quantization_config is not None else default_config,
-            config_file_name="quantization.yml",
-            cache_dir=model_args.cache_dir,
-        )
-
-        # Set metric tolerance if specified
-        if optim_args.tolerance_criterion is not None:
-            q8_config.set_tolerance(optim_args.tolerance_criterion)
-
-        # Set quantization approach if specified
-        if optim_args.quantization_approach is not None:
-            supported_approach = {"static", "dynamic", "aware_training"}
-            if optim_args.quantization_approach not in supported_approach:
-                raise ValueError(
-                    "Unknown quantization approach. Supported approach are " + ", ".join(supported_approach)
-                )
-            quant_approach = getattr(IncQuantizationMode, optim_args.quantization_approach.upper()).value
-            q8_config.set_config("quantization.approach", quant_approach)
-
-        q8_config.set_config("tuning.accuracy_criterion.higher_is_better", False)
-
-        quant_approach = IncQuantizationMode(q8_config.get_config("quantization.approach"))
-        # torch FX used for post-training quantization and quantization aware training
-        # dynamic quantization will be added when torch FX is more mature
-        if quant_approach != IncQuantizationMode.DYNAMIC:
-            if not training_args.do_train:
-                raise ValueError("do_train must be set to True for quantization aware training.")
-
-            q8_config.set_config("model.framework", "pytorch_fx")
-
-        calib_dataloader = trainer.get_train_dataloader() if quant_approach != IncQuantizationMode.DYNAMIC else None
-        quantizer = IncQuantizer(
-            q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
-        )
-
-    if optim_args.apply_pruning:
-
-        if not training_args.do_train:
-            raise ValueError("do_train must be set to True for pruning.")
-
-        pruning_config = IncPruningConfig.from_pretrained(
-            optim_args.pruning_config if optim_args.pruning_config is not None else default_config,
-            config_file_name="prune.yml",
-            cache_dir=model_args.cache_dir,
-        )
-
-        # Set targeted sparsity if specified
-        if optim_args.target_sparsity is not None:
-            pruning_config.set_config(
-                "pruning.approach.weight_compression.target_sparsity", optim_args.target_sparsity
-            )
-
-        pruning_start_epoch = pruning_config.get_config("pruning.approach.weight_compression.start_epoch")
-        pruning_end_epoch = pruning_config.get_config("pruning.approach.weight_compression.end_epoch")
-
-        if pruning_start_epoch > training_args.num_train_epochs - 1:
-            logger.warning(
-                f"Pruning end epoch {pruning_start_epoch} is higher than the total number of training epoch "
-                f"{training_args.num_train_epochs}. No pruning will be applied."
-            )
-
-        if pruning_end_epoch > training_args.num_train_epochs - 1:
-            logger.warning(
-                f"Pruning end epoch {pruning_end_epoch} is higher than the total number of training epoch "
-                f"{training_args.num_train_epochs}. The target sparsity will not be reached."
-            )
-
-        # Creation Pruning object used for IncTrainer training loop
-        pruner = IncPruner(pruning_config, eval_func=eval_func, train_func=train_func)
-
-    optimizer = IncOptimizer(
-        model,
-        quantizer=quantizer,
-        pruner=pruner,
-        one_shot_optimization=True,
-        eval_func=eval_func,
-        train_func=train_func,
-    )
-
-    agent = optimizer.get_agent()
-    optimized_model = optimizer.fit()
-    result_optimized_model = take_eval_steps(optimized_model, trainer, metric_name, save_metrics=True)
-
-    # Save the resulting model and its corresponding configuration in the given directory
-    optimizer.save_pretrained(training_args.output_dir)
-    # Compute the model's sparsity
-    sparsity = optimizer.get_sparsity()
-
-    logger.info(
-        f"Optimized model with {metric_name} of {result_optimized_model} and sparsity of {round(sparsity, 2)}% "
-        f"saved to: {training_args.output_dir}. Original model had an {metric_name} of {result_baseline_model}."
-    )
-
-    if optim_args.apply_quantization and optim_args.verify_loading:
-
-        # Load the model obtained after Intel Neural Compressor quantization
-        loaded_model = IncQuantizedModelForMaskedLM.from_pretrained(training_args.output_dir)
-        loaded_model.eval()
-        result_loaded_model = take_eval_steps(loaded_model, trainer, metric_name)
-
-        if result_loaded_model != result_optimized_model:
-            logger.error("The quantized model was not successfully loaded.")
+    kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "fill-mask"}
+    if data_args.dataset_name is not None:
+        kwargs["dataset_tags"] = data_args.dataset_name
+        if data_args.dataset_config_name is not None:
+            kwargs["dataset_args"] = data_args.dataset_config_name
+            kwargs["dataset"] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
         else:
-            logger.info(f"The quantized model was successfully loaded.")
+            kwargs["dataset"] = data_args.dataset_name
+
+    if training_args.push_to_hub:
+        trainer.push_to_hub(**kwargs)
+    else:
+        trainer.create_model_card(**kwargs)
 
 
 def _mp_fn(index):
