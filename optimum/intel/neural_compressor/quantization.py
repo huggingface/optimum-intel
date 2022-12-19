@@ -120,13 +120,14 @@ class INCQuantizer(OptimumQuantizer):
                 The random seed to use when shuffling the calibration dataset.
         """
         super().__init__()
-        self.model = model
+        self._original_model = model
         self.eval_fn = eval_fn
         self.task = task
         self.seed = seed
-        signature = inspect.signature(self.model.forward)
+        signature = inspect.signature(self._original_model.forward)
         self._signature_columns = list(signature.parameters.keys())
         self.input_names = None
+        self._quantized_model = None
 
     @classmethod
     def from_pretrained(cls, model: PreTrainedModel, **kwargs):
@@ -177,20 +178,22 @@ class INCQuantizer(OptimumQuantizer):
             )
 
         compressed_model = fit(
-            self.model, conf=quantization_config, calib_dataloader=calibration_dataloader, eval_func=self.eval_fn
+            self._original_model, conf=quantization_config, calib_dataloader=calibration_dataloader, eval_func=self.eval_fn
         )
 
-        if isinstance(self.model.config, PretrainedConfig):
-            self.model.config.save_pretrained(save_directory)
+        if isinstance(self._original_model.config, PretrainedConfig):
+            self._original_model.config.save_pretrained(save_directory)
+
+        self._quantized_model = compressed_model
 
         if save_onnx_model:
             self._set_task()
-            model_type = self.model.config.model_type.replace("_", "-")
-            model_name = getattr(self.model, "name", None)
+            model_type = self._original_model.config.model_type.replace("_", "-")
+            model_name = getattr(self._original_model, "name", None)
             onnx_config_constructor = TasksManager.get_exporter_config_constructor(
                 model_type, "onnx", task=self.task, model_name=model_name
             )
-            onnx_config = onnx_config_constructor(self.model.config)
+            onnx_config = onnx_config_constructor(self._original_model.config)
             compressed_model.eval()
             output_onnx_path = save_directory.joinpath(ONNX_WEIGHTS_NAME)
             # Export the compressed model to the ONNX format
@@ -225,13 +228,13 @@ class INCQuantizer(OptimumQuantizer):
             output_names=list(config.outputs.keys()),
             dynamic_axes=dynamic_axes,
             opset_version=opset,
-            fp32_model=self.model,
+            fp32_model=self._original_model,
             calib_dataloader=calibration_dataloader,
         )
 
     def _set_task(self):
         if self.task is None:
-            self.task = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
+            self.task = HfApi().model_info(self._original_model.config._name_or_path).pipeline_tag
             if self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
                 self.task = "sequence-classification"
             elif self.task in ["feature-extraction", "fill-mask"]:
