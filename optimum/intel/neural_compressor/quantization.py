@@ -178,7 +178,10 @@ class INCQuantizer(OptimumQuantizer):
             )
 
         compressed_model = fit(
-            self._original_model, conf=quantization_config, calib_dataloader=calibration_dataloader, eval_func=self.eval_fn
+            self._original_model,
+            conf=quantization_config,
+            calib_dataloader=calibration_dataloader,
+            eval_func=self.eval_fn,
         )
 
         if isinstance(self._original_model.config, PretrainedConfig):
