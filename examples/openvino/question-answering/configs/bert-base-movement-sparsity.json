@@ -2,8 +2,8 @@
     "algorithm": "movement_sparsity",
     "params": {
         "warmup_start_epoch": 1,
-        "warmup_end_epoch": 5,
-        "importance_regularization_factor": 0.030,
+        "warmup_end_epoch": 4,
+        "importance_regularization_factor": 0.01,
         "enable_structured_masking": true
     },
     "sparse_structure_by_scopes": [

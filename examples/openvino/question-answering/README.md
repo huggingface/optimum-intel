@@ -47,7 +47,9 @@ python run_qa.py \
 ```
 
 ### Joint Pruning, Quantization and Distillation (JPQD) for BERT on SQuAD1.0
+Though `OVTrainer` performs QAT out of the box, it relies on [NNCF](https://github.com/openvinotoolkit/nncf) to compress underlying model. In other words, it can leverage other compression algorithms supported by NNCF, e.g. sparsification, distillation etc. Following is an example to jointly prune, quantize BERT-base for SQuAD 1.0 through NNCF config `--nncf_compression_config` and distilled from BERT-large teacher. This example closely resembles the movement sparsification work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf). The output model of this example attains about 40% structured sparsity (denominated by linear layers only). The joint pruned and quantized OpenVINO IR provides >60% more throughput over quantize-only model on AWS EC2 instance (c6i.32xlarge). Attributed to large teacher distillation, the F1 score is improved to >89%.
 
+More on how to configure movement sparsity. See NNCF documentation [here](https://github.com/vuiseng9/nncf/blob/p4-jpqd-dev/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 ```bash
 python run_qa.py \
     --model_name_or_path bert-base-uncased \
@@ -58,7 +60,7 @@ python run_qa.py \
     --fp16 \
     --do_train \
     --learning_rate 3e-5 \
-    --num_train_epochs 10 \
+    --num_train_epochs 8 \
     --per_device_eval_batch_size 128 \
     --per_device_train_batch_size 16 \
     --max_seq_length 384 \
@@ -67,7 +69,7 @@ python run_qa.py \
     --evaluation_strategy steps \
     --eval_steps 250 \
     --save_steps 500 \
-    --overwrite_output_dir \
     --output_dir /tmp/jpqd_bert_squad/ \
-    --nncf_compression_config configs/bert-base-jpqd.json \
+    --overwrite_output_dir \
+    --nncf_compression_config configs/bert-base-jpqd.json
 ```
