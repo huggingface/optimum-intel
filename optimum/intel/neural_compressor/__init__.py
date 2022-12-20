@@ -22,6 +22,7 @@ from .quantization import (
     INCQuantizedModelForSeq2SeqLM,
     INCQuantizedModelForSequenceClassification,
     INCQuantizedModelForTokenClassification,
+    INCQuantizedModelForVision2Seq,
     INCQuantizer,
 )
 from .trainer import INCTrainer
