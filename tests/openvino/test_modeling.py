@@ -13,6 +13,8 @@
 #  limitations under the License.
 
 import gc
+import os
+import tempfile
 import unittest
 
 import torch
@@ -36,16 +38,18 @@ from transformers import (
 
 import requests
 from evaluate import evaluator
-from optimum.intel.openvino.modeling import (
+from optimum.intel.openvino import (
+    OV_XML_FILE_NAME,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
     OVModelForQuestionAnswering,
+    OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
 )
-from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder, OVModelForSeq2SeqLM
+from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from parameterized import parameterized
 
 
@@ -72,8 +76,13 @@ class ORTModelIntegrationTest(unittest.TestCase):
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
 
     def test_load_model_from_hub(self):
-        model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID)
-        self.assertIsInstance(model.config, PretrainedConfig)
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID)
+            self.assertIsInstance(model.config, PretrainedConfig)
+            model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertTrue(OV_XML_FILE_NAME in folder_contents)
+            self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):

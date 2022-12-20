@@ -74,6 +74,7 @@ class OVBaseModel(OptimizedModel):
         self._device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
         cache_dir = Path(self.model_save_dir).joinpath("model_cache")
         cache_dir.mkdir(parents=True, exist_ok=True)
