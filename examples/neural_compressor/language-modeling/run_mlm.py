@@ -55,7 +55,7 @@ from neural_compressor import (
     QuantizationAwareTrainingConfig,
     WeightPruningConfig,
 )
-from optimum.intel.neural_compressor import INCQuantizedModelForMaskedLM, INCQuantizer, INCTrainer
+from optimum.intel.neural_compressor import INCModelForMaskedLM, INCQuantizer, INCTrainer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -710,7 +710,7 @@ def main():
         )
         trainer.model = quantizer._quantized_model
     if optim_args.apply_quantization and optim_args.verify_loading:
-        loaded_model = INCQuantizedModelForMaskedLM.from_pretrained(training_args.output_dir)
+        loaded_model = INCModelForMaskedLM.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         with torch.no_grad():
             original_model_outputs = trainer.model(**tokens)

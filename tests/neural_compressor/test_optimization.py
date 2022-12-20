@@ -42,8 +42,8 @@ from neural_compressor.config import (
     WeightPruningConfig,
 )
 from optimum.intel.neural_compressor import (
-    INCQuantizedModelForQuestionAnswering,
-    INCQuantizedModelForSequenceClassification,
+    INCModelForQuestionAnswering,
+    INCModelForSequenceClassification,
     INCQuantizer,
     INCTrainer,
 )
@@ -69,7 +69,7 @@ class QuantizationTest(unittest.TestCase):
                 save_directory=tmp_dir,
                 save_onnx_model=True,
             )
-            transformers_model = INCQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
+            transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_outputs = onnx_model(**tokens)
             self.assertTrue("logits" in onnx_outputs)
@@ -107,7 +107,7 @@ class QuantizationTest(unittest.TestCase):
                 save_directory=tmp_dir,
                 save_onnx_model=True,
             )
-            loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(tmp_dir)
+            loaded_model = INCModelForQuestionAnswering.from_pretrained(tmp_dir)
             quantized_model_metric = eval_fn(loaded_model)
             # Verification accuracy loss is under 5%
             self.assertGreaterEqual(quantized_model_metric, original_model_metric * (1 - tolerance_criterion))
@@ -139,7 +139,7 @@ class QuantizationTest(unittest.TestCase):
                 save_directory=tmp_dir,
                 save_onnx_model=True,
             )
-            transformers_model = INCQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
+            transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_outputs = onnx_model(**tokens)
             self.assertTrue("logits" in onnx_outputs)
@@ -179,7 +179,7 @@ class QuantizationTest(unittest.TestCase):
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
 
-            transformers_model = INCQuantizedModelForSequenceClassification.from_pretrained(tmp_dir)
+            transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_outputs = onnx_model(**tokens)
             self.assertTrue("logits" in onnx_outputs)

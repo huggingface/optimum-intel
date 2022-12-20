@@ -56,7 +56,7 @@ from neural_compressor import (
     QuantizationAwareTrainingConfig,
     WeightPruningConfig,
 )
-from optimum.intel.neural_compressor import INCQuantizedModelForQuestionAnswering, INCQuantizer
+from optimum.intel.neural_compressor import INCModelForQuestionAnswering, INCQuantizer
 from trainer_qa import QuestionAnsweringINCTrainer
 from utils_qa import postprocess_qa_predictions
 
@@ -823,7 +823,7 @@ def main():
         )
         trainer.model = quantizer._quantized_model
     if optim_args.apply_quantization and optim_args.verify_loading:
-        loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(training_args.output_dir)
+        loaded_model = INCModelForQuestionAnswering.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         with torch.no_grad():
             original_model_outputs = trainer.model(**tokens)

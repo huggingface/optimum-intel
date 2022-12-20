@@ -14,16 +14,16 @@
 
 from .configuration import IncConfig, IncDistillationConfig, IncPruningConfig, IncQuantizationConfig
 from .quantization import (
+    INCModel,
+    INCModelForCausalLM,
+    INCModelForMaskedLM,
+    INCModelForMultipleChoice,
+    INCModelForQuestionAnswering,
+    INCModelForSeq2SeqLM,
+    INCModelForSequenceClassification,
+    INCModelForTokenClassification,
+    INCModelForVision2Seq,
     INCQuantizationMode,
-    INCQuantizedModel,
-    INCQuantizedModelForCausalLM,
-    INCQuantizedModelForMaskedLM,
-    INCQuantizedModelForMultipleChoice,
-    INCQuantizedModelForQuestionAnswering,
-    INCQuantizedModelForSeq2SeqLM,
-    INCQuantizedModelForSequenceClassification,
-    INCQuantizedModelForTokenClassification,
-    INCQuantizedModelForVision2Seq,
     INCQuantizer,
 )
 from .trainer import INCTrainer

@@ -393,7 +393,7 @@ def _apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> t
     return q_model
 
 
-class INCQuantizedModel:
+class INCModel:
 
     TRANSFORMERS_AUTO_CLASS: ClassVar = AutoModel
 
@@ -533,46 +533,46 @@ class INCQuantizedModel:
         return load(state_dict_path, model)
 
 
-class INCQuantizedModelForQuestionAnswering(INCQuantizedModel):
+class INCModelForQuestionAnswering(INCModel):
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
 
 
-class INCQuantizedModelForSequenceClassification(INCQuantizedModel):
+class INCModelForSequenceClassification(INCModel):
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
 
 
-class INCQuantizedModelForTokenClassification(INCQuantizedModel):
+class INCModelForTokenClassification(INCModel):
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
 
 
-class INCQuantizedModelForMultipleChoice(INCQuantizedModel):
+class INCModelForMultipleChoice(INCModel):
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForMultipleChoice
 
 
-class INCQuantizedModelForSeq2SeqLM(INCQuantizedModel):
+class INCModelForSeq2SeqLM(INCModel):
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
 
 
-class INCQuantizedModelForCausalLM(INCQuantizedModel):
+class INCModelForCausalLM(INCModel):
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
 
 
-class INCQuantizedModelForMaskedLM(INCQuantizedModel):
+class INCModelForMaskedLM(INCModel):
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForMaskedLM
 
 
-class INCQuantizedModelForXLNetLM(INCQuantizedModel):
+class INCModelForXLNetLM(INCModel):
 
     TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel
 
 
-class INCQuantizedModelForVision2Seq(INCQuantizedModel):
+class INCModelForVision2Seq(INCModel):
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq

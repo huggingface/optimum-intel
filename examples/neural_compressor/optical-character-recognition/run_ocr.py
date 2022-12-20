@@ -15,7 +15,7 @@ from transformers.utils import check_min_version
 
 import evaluate
 from neural_compressor import PostTrainingQuantConfig
-from optimum.intel.neural_compressor import INCQuantizedModelForVision2Seq, INCQuantizer
+from optimum.intel.neural_compressor import INCModelForVision2Seq, INCQuantizer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -278,7 +278,7 @@ def main():
             remove_unused_columns=False,
         )
         if optim_args.verify_loading:
-            loaded_model = INCQuantizedModelForVision2Seq.from_pretrained(training_args.output_dir)
+            loaded_model = INCModelForVision2Seq.from_pretrained(training_args.output_dir)
             result_loaded_model = eval_func(loaded_model, iters=20)
             result_optimized_model = eval_func(quantizer._quantized_model, iters=20)
             if result_loaded_model != result_optimized_model:

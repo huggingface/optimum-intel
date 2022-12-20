@@ -53,14 +53,14 @@ quantizer.quantize(quantization_config=quantization_config, save_directory=save_
 
 To load a quantized model hosted locally or on the 🤗 hub, you can do as follows :
 ```python
-from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification
+from optimum.intel.neural_compressor import INCModelForSequenceClassification
 from optimum.onnxruntime import ORTModelForSequenceClassification
 
 # Load the ONNX model hosted locally
 onnx_model = ORTModelForSequenceClassification.from_pretrained(save_dir)
 
 # Load the PyTorch model hosted on the hub
-loaded_model_from_hub = INCQuantizedModelForSequenceClassification.from_pretrained(
+loaded_model_from_hub = INCModelForSequenceClassification.from_pretrained(
     "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
 )
 ```

@@ -52,7 +52,7 @@ from transformers.utils.versions import require_version
 
 import evaluate
 from neural_compressor import PostTrainingQuantConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
-from optimum.intel.neural_compressor import INCQuantizedModelForSeq2SeqLM, INCQuantizer, INCSeq2SeqTrainer
+from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCQuantizer, INCSeq2SeqTrainer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -674,7 +674,7 @@ def main():
         )
         trainer.model = quantizer._quantized_model
     if optim_args.apply_quantization and optim_args.verify_loading:
-        loaded_model = INCQuantizedModelForSeq2SeqLM.from_pretrained(training_args.output_dir)
+        loaded_model = INCModelForSeq2SeqLM.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         decoder_start_token_id = (
             loaded_model.config.decoder_start_token_id if loaded_model.config.model_type != "mbart" else 2

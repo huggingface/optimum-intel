@@ -52,7 +52,7 @@ from neural_compressor import (
     QuantizationAwareTrainingConfig,
     WeightPruningConfig,
 )
-from optimum.intel.neural_compressor import INCQuantizedModelForTokenClassification, INCQuantizer, INCTrainer
+from optimum.intel.neural_compressor import INCModelForTokenClassification, INCQuantizer, INCTrainer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -666,7 +666,7 @@ def main():
         trainer.model = quantizer._quantized_model
 
     if optim_args.apply_quantization and optim_args.verify_loading:
-        loaded_model = INCQuantizedModelForTokenClassification.from_pretrained(training_args.output_dir)
+        loaded_model = INCModelForTokenClassification.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         with torch.no_grad():
             original_model_outputs = trainer.model(**tokens)
