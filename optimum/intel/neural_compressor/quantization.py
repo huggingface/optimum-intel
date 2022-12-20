@@ -104,6 +104,7 @@ class INCQuantizer(OptimumQuantizer):
         self,
         model: torch.nn.Module,
         eval_fn: Optional[Callable[[PreTrainedModel], int]] = None,
+        calibration_fn: Optional[Callable[[PreTrainedModel], int]] = None,
         task: Optional[str] = None,
         seed: int = 42,
     ):
@@ -122,6 +123,7 @@ class INCQuantizer(OptimumQuantizer):
         super().__init__()
         self._original_model = model
         self.eval_fn = eval_fn
+        self.calibration_fn = calibration_fn
         self.task = task
         self.seed = seed
         signature = inspect.signature(self._original_model.forward)
@@ -182,6 +184,7 @@ class INCQuantizer(OptimumQuantizer):
             conf=quantization_config,
             calib_dataloader=calibration_dataloader,
             eval_func=self.eval_fn,
+            calib_func=self.calibration_fn,
         )
 
         if isinstance(self._original_model.config, PretrainedConfig):
