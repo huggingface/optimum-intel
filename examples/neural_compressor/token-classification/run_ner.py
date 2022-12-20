@@ -27,6 +27,7 @@ from typing import Optional
 
 import datasets
 import numpy as np
+import torch
 import transformers
 from datasets import ClassLabel, load_dataset
 from transformers import (
@@ -140,14 +141,6 @@ class DataTrainingArguments:
         metadata={
             "help": "The maximum total input sequence length after tokenization. If set, sequences longer "
             "than this will be truncated, sequences shorter will be padded."
-        },
-    )
-    pad_to_max_length: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to pad all samples to model maximum sentence length. "
-            "If False, will pad the samples dynamically when batching to the maximum length in the batch. More "
-            "efficient on GPU but very bad for TPU."
         },
     )
     max_train_samples: Optional[int] = field(
@@ -436,7 +429,7 @@ def main():
 
     # Preprocessing the dataset
     # Padding strategy
-    padding = "max_length" if data_args.pad_to_max_length else False
+    padding = "max_length"
 
     # Tokenize all texts and align the labels with them.
     def tokenize_and_align_labels(examples):
@@ -660,7 +653,7 @@ def main():
         quantizer = INCQuantizer.from_pretrained(model)
         if optim_args.quantization_approach == "static":
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
-            train_dataset.select(range(num_calibration_samples))
+            train_dataset = train_dataset.select(range(num_calibration_samples))
             quantization_config.calibration_sampling_size = num_calibration_samples
 
         quantizer.quantize(
@@ -671,16 +664,17 @@ def main():
             # save_onnx_model=True,
         )
         trainer.model = quantizer._quantized_model
-        if optim_args.apply_quantization and optim_args.verify_loading:
-            loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(training_args.output_dir)
-            tokens = tokenizer("This is a sample input", return_tensors="pt")
-            with torch.no_grad():
-                original_model_outputs = quantizer._quantized_model(**tokens)
-                quantized_model_outputs = loaded_model(**tokens)
-                if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
-                    logger.info("The quantized model was successfully loaded.")
-                else:
-                    logger.warning("The quantized model was not successfully loaded.")
+
+    if optim_args.apply_quantization and optim_args.verify_loading:
+        loaded_model = INCQuantizedModelForTokenClassification.from_pretrained(training_args.output_dir)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        with torch.no_grad():
+            original_model_outputs = trainer.model(**tokens)
+            quantized_model_outputs = loaded_model(**tokens)
+            if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
+                logger.info("The quantized model was successfully loaded.")
+            else:
+                logger.warning("The quantized model was not successfully loaded.")
 
     # Evaluation
     if training_args.do_eval:

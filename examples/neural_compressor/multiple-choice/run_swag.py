@@ -43,6 +43,7 @@ from transformers.file_utils import PaddingStrategy
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
+from transformers.utils.versions import require_version
 
 from neural_compressor import (
     DistillationConfig,
@@ -181,14 +182,6 @@ class DataTrainingArguments:
         metadata={
             "help": "The maximum total input sequence length after tokenization. If passed, sequences longer "
             "than this will be truncated, sequences shorter will be padded."
-        },
-    )
-    pad_to_max_length: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to pad all samples to the maximum sentence length. "
-            "If False, will pad the samples dynamically when batching to the maximum length in the batch. More "
-            "efficient on GPU but very bad for TPU."
         },
     )
     max_train_samples: Optional[int] = field(
@@ -414,7 +407,7 @@ def main():
             second_sentences,
             truncation=True,
             max_length=max_seq_length,
-            padding="max_length" if data_args.pad_to_max_length else False,
+            padding="max_length",
         )
         # Un-flatten
         return {k: [v[i : i + 4] for i in range(0, len(v), 4)] for k, v in tokenized_examples.items()}
@@ -446,13 +439,6 @@ def main():
                 num_proc=data_args.preprocessing_num_workers,
                 load_from_cache_file=not data_args.overwrite_cache,
             )
-
-    # Data collator
-    data_collator = (
-        default_data_collator
-        if data_args.pad_to_max_length
-        else DataCollatorForMultipleChoice(tokenizer=tokenizer, pad_to_multiple_of=8 if training_args.fp16 else None)
-    )
 
     # Metric
     def compute_metrics(eval_predictions):
@@ -533,7 +519,7 @@ def main():
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
-        data_collator=data_collator,
+        data_collator=default_data_collator,
         compute_metrics=compute_metrics,
     )
 
@@ -562,7 +548,7 @@ def main():
         quantizer = INCQuantizer.from_pretrained(model)
         if optim_args.quantization_approach == "static":
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
-            train_dataset.select(range(num_calibration_samples))
+            train_dataset = train_dataset.select(range(num_calibration_samples))
             quantization_config.calibration_sampling_size = num_calibration_samples
 
         quantizer.quantize(
@@ -573,16 +559,26 @@ def main():
             # save_onnx_model=True,
         )
         trainer.model = quantizer._quantized_model
-        if optim_args.apply_quantization and optim_args.verify_loading:
-            loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(training_args.output_dir)
-            tokens = tokenizer("This is a sample input", return_tensors="pt")
-            with torch.no_grad():
-                original_model_outputs = quantizer._quantized_model(**tokens)
-                quantized_model_outputs = loaded_model(**tokens)
-                if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
-                    logger.info("The quantized model was successfully loaded.")
-                else:
-                    logger.warning("The quantized model was not successfully loaded.")
+    if optim_args.apply_quantization and optim_args.verify_loading:
+        loaded_model = INCQuantizedModelForMultipleChoice.from_pretrained(training_args.output_dir)
+        num_choices = 4
+        first_sentence = ["The sky is blue due to the shorter wavelength of blue light."] * num_choices
+        start = "The color of the sky is"
+        second_sentence = [start + "blue", start + "green", start + "red", start + "yellow"]
+        inputs = tokenizer(first_sentence, second_sentence, truncation=True, padding=True)
+
+        # Unflatten the tokenized inputs values expanding it to the shape [batch_size, num_choices, seq_length]
+        for k, v in inputs.items():
+            inputs[k] = [v[i : i + num_choices] for i in range(0, len(v), num_choices)]
+        inputs = dict(inputs.convert_to_tensors(tensor_type="pt"))
+
+        with torch.no_grad():
+            original_model_outputs = trainer.model(**inputs)
+            quantized_model_outputs = loaded_model(**inputs)
+            if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
+                logger.info("The quantized model was successfully loaded.")
+            else:
+                logger.warning("The quantized model was not successfully loaded.")
 
     # Evaluation
     if training_args.do_eval:
