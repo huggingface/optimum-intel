@@ -307,7 +307,7 @@ class INCQuantizer(OptimumQuantizer):
         data_collator = data_collator if data_collator is not None else default_data_collator
         if remove_unused_columns:
             calibration_dataset = self._remove_unused_columns(calibration_dataset)
-        self.input_names = calibration_dataset.column_names
+        self.input_names = getattr(calibration_dataset, "column_names", None)
         generator = torch.Generator()
         generator.manual_seed(self.seed)
         sampler = RandomSampler(calibration_dataset, generator=generator)

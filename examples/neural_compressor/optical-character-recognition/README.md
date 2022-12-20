@@ -35,9 +35,7 @@ python run_ocr.py \
     --model_name_or_path microsoft/trocr-small-handwritten \
     --datasets_dir IAM \
     --apply_quantization \
-    --quantization_approach static \
-    --tolerance_criterion=0.9 \
-    --max_eval_samples 500 \
+    --quantization_approach dynamic \
     --verify_loading \
     --output_dir /tmp/trocr_output
 ```
