@@ -325,6 +325,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         encoder = model.get_encoder()
         # Concatenate the decoder with the language model head for ONNX export
         decoder_with_lm_head = _DecoderWithLMhead(model)
+ 
+        if onnx_config.use_external_data_format(model.num_parameters()) and not use_cache:
+            use_cache = False
 
         # Export the encoder
         export(
