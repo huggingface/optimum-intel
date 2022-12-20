@@ -27,6 +27,7 @@ from typing import Optional
 import datasets
 import nltk  # Here to have a nice missing dependency error message early on
 import numpy as np
+import torch
 import transformers
 from datasets import load_dataset
 from transformers import (
@@ -674,24 +675,20 @@ def main():
         decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
 
         result = metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
-        # Extract a few results from ROUGE
-        result = {key: value.mid.fmeasure * 100 for key, value in result.items()}
-
+        result = {k: round(v * 100, 4) for k, v in result.items()}
         prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
         result["gen_len"] = np.mean(prediction_lens)
-        result = {k: round(v, 4) for k, v in result.items()}
         return result
 
     quantization_config = None
     pruning_config = None
     distillation_config = None
 
-    if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
+    if not optim_args.apply_quantization and not optim_args.apply_pruning:
         raise ValueError("No optimization activated.")
 
     if not training_args.do_train and (
-        optim_args.apply_distillation
-        or optim_args.apply_pruning
+        optim_args.apply_pruning
         or (optim_args.apply_quantization and optim_args.quantization_approach == "aware_training")
     ):
         raise ValueError("`do_train` must be set to True.")
@@ -761,7 +758,7 @@ def main():
         quantizer = INCQuantizer.from_pretrained(model)
         if optim_args.quantization_approach == "static":
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
-            train_dataset.select(range(num_calibration_samples))
+            train_dataset = train_dataset.select(range(num_calibration_samples))
             quantization_config.calibration_sampling_size = num_calibration_samples
 
         quantizer.quantize(
@@ -773,11 +770,15 @@ def main():
         )
         trainer.model = quantizer._quantized_model
         if optim_args.apply_quantization and optim_args.verify_loading:
-            loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(training_args.output_dir)
+            loaded_model = INCQuantizedModelForSeq2SeqLM.from_pretrained(training_args.output_dir)
             tokens = tokenizer("This is a sample input", return_tensors="pt")
+            decoder_start_token_id = (
+                loaded_model.config.decoder_start_token_id if loaded_model.config.model_type != "mbart" else 2
+            )
+            decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
             with torch.no_grad():
-                original_model_outputs = quantizer._quantized_model(**tokens)
-                quantized_model_outputs = loaded_model(**tokens)
+                original_model_outputs = quantizer._quantized_model(**tokens, **decoder_inputs)
+                quantized_model_outputs = loaded_model(**tokens, **decoder_inputs)
                 if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
                     logger.info("The quantized model was successfully loaded.")
                 else:

@@ -26,6 +26,7 @@ from typing import Optional
 
 import datasets
 import numpy as np
+import torch
 import transformers
 from datasets import load_dataset
 from transformers import (
@@ -165,16 +166,6 @@ class DataTrainingArguments:
                 "than this will be truncated, sequences shorter will be padded. Will default to `max_target_length`."
                 "This argument is also used to override the ``max_length`` param of ``model.generate``, which is used "
                 "during ``evaluate`` and ``predict``."
-            )
-        },
-    )
-    pad_to_max_length: bool = field(
-        default=False,
-        metadata={
-            "help": (
-                "Whether to pad all samples to model maximum sentence length. "
-                "If False, will pad the samples dynamically when batching to the maximum length in the batch. More "
-                "efficient on GPU but very bad for TPU."
             )
         },
     )
@@ -478,7 +469,7 @@ def main():
 
     # Temporarily set max_target_length for training.
     max_target_length = data_args.max_target_length
-    padding = "max_length" if data_args.pad_to_max_length else False
+    padding = "max_length"
 
     if training_args.label_smoothing_factor > 0 and not hasattr(model, "prepare_decoder_input_ids_from_labels"):
         logger.warning(
@@ -563,18 +554,6 @@ def main():
                 desc="Running tokenizer on prediction dataset",
             )
 
-    # Data collator
-    label_pad_token_id = -100 if data_args.ignore_pad_token_for_loss else tokenizer.pad_token_id
-    if data_args.pad_to_max_length:
-        data_collator = default_data_collator
-    else:
-        data_collator = DataCollatorForSeq2Seq(
-            tokenizer,
-            model=model,
-            label_pad_token_id=label_pad_token_id,
-            pad_to_multiple_of=8 if training_args.fp16 else None,
-        )
-
     # Metric
     metric = evaluate.load("sacrebleu")
 
@@ -609,12 +588,11 @@ def main():
     pruning_config = None
     distillation_config = None
 
-    if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
+    if not optim_args.apply_quantization and not optim_args.apply_pruning:
         raise ValueError("No optimization activated.")
 
     if not training_args.do_train and (
-        optim_args.apply_distillation
-        or optim_args.apply_pruning
+        optim_args.apply_pruning
         or (optim_args.apply_quantization and optim_args.quantization_approach == "aware_training")
     ):
         raise ValueError("`do_train` must be set to True.")
@@ -655,7 +633,7 @@ def main():
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
         tokenizer=tokenizer,
-        data_collator=data_collator,
+        data_collator=default_data_collator,
         compute_metrics=compute_metrics if training_args.predict_with_generate else None,
     )
 
@@ -684,7 +662,7 @@ def main():
         quantizer = INCQuantizer.from_pretrained(model)
         if optim_args.quantization_approach == "static":
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
-            train_dataset.select(range(num_calibration_samples))
+            train_dataset = train_dataset.select(range(num_calibration_samples))
             quantization_config.calibration_sampling_size = num_calibration_samples
 
         quantizer.quantize(
@@ -696,11 +674,15 @@ def main():
         )
         trainer.model = quantizer._quantized_model
         if optim_args.apply_quantization and optim_args.verify_loading:
-            loaded_model = INCQuantizedModelForQuestionAnswering.from_pretrained(training_args.output_dir)
+            loaded_model = INCQuantizedModelForSeq2SeqLM.from_pretrained(training_args.output_dir)
             tokens = tokenizer("This is a sample input", return_tensors="pt")
+            decoder_start_token_id = (
+                loaded_model.config.decoder_start_token_id if loaded_model.config.model_type != "mbart" else 2
+            )
+            decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
             with torch.no_grad():
-                original_model_outputs = quantizer._quantized_model(**tokens)
-                quantized_model_outputs = loaded_model(**tokens)
+                original_model_outputs = quantizer._quantized_model(**tokens, **decoder_inputs)
+                quantized_model_outputs = loaded_model(**tokens, **decoder_inputs)
                 if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
                     logger.info("The quantized model was successfully loaded.")
                 else:

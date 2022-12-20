@@ -55,7 +55,6 @@ python run_summarization.py \
     --max_train_samples 100 \
     --do_train \
     --do_eval \
-    --num_train_epochs 3 \
     --verify_loading \
     --predict_with_generate \
     --per_device_train_batch_size=4 \
