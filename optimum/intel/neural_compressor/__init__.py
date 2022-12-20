@@ -15,6 +15,7 @@
 from .configuration import IncConfig, IncDistillationConfig, IncPruningConfig, IncQuantizationConfig
 from .quantization import (
     INCQuantizationMode,
+    INCQuantizedModel,
     INCQuantizedModelForCausalLM,
     INCQuantizedModelForMaskedLM,
     INCQuantizedModelForMultipleChoice,
@@ -24,7 +25,6 @@ from .quantization import (
     INCQuantizedModelForTokenClassification,
     INCQuantizedModelForVision2Seq,
     INCQuantizer,
-    INCQuantizedModel,
 )
 from .trainer import INCTrainer
 from .trainer_seq2seq import INCSeq2SeqTrainer

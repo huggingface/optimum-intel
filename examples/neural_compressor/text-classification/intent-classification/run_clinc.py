@@ -36,12 +36,12 @@ from tqdm import tqdm
 from transformers import (
     AutoConfig,
     AutoModel,
-    PreTrainedModel,
     AutoTokenizer,
     DataCollatorWithPadding,
     EvalPrediction,
     HfArgumentParser,
     PretrainedConfig,
+    PreTrainedModel,
     TrainingArguments,
     default_data_collator,
     set_seed,
@@ -530,7 +530,7 @@ def main():
         )
 
         teacher_model = SetFitModelTraining(teacher_model, teacher_tokenizer)
-        
+
         teacher_model.to(training_args.device)
 
         teacher_tokenizer = AutoTokenizer.from_pretrained(optim_args.teacher_model_name_or_path, use_fast=True)
@@ -583,7 +583,7 @@ def main():
         # if optim_args.apply_distillation:
         # data_collator = trainer.data_collator
         # trainer.data_collator = sentences_data_collator
-        
+
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         metrics = train_result.metrics
         max_train_samples = (
