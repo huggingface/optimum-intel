@@ -51,7 +51,7 @@ from transformers.utils.versions import require_version
 
 import evaluate
 from filelock import FileLock
-from neural_compressor import PostTrainingQuantConfig, PruningConfig, QuantizationAwareTrainingConfig
+from neural_compressor import PostTrainingQuantConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
 from optimum.intel.neural_compressor import INCQuantizedModelForSeq2SeqLM, INCQuantizer, INCSeq2SeqTrainer
 
 
@@ -713,7 +713,7 @@ def main():
         else:
             end_epoch = min(optim_args.end_epoch, training_args.num_train_epochs - 1)
 
-        pruning_config = PruningConfig(
+        pruning_config = WeightPruningConfig(
             start_epoch=optim_args.start_epoch,
             end_epoch=end_epoch,
             target_sparsity=optim_args.target_sparsity,

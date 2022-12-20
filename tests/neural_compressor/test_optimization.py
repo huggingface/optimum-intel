@@ -37,9 +37,9 @@ from neural_compressor.config import (
     AccuracyCriterion,
     DistillationConfig,
     PostTrainingQuantConfig,
-    PruningConfig,
     QuantizationAwareTrainingConfig,
     TuningCriterion,
+    WeightPruningConfig,
 )
 from optimum.intel.neural_compressor import (
     INCQuantizedModelForQuestionAnswering,
@@ -193,7 +193,7 @@ class PruningTest(unittest.TestCase):
     def test_magnitude_pruning(self):
         model_name = "distilbert-base-uncased"
         target_sparsity = 0.9
-        pruning_config = PruningConfig(start_epoch=0, end_epoch=1, target_sparsity=target_sparsity)
+        pruning_config = WeightPruningConfig(start_epoch=0, end_epoch=1, target_sparsity=target_sparsity)
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
