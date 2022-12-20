@@ -187,7 +187,7 @@ class INCQuantizer(OptimumQuantizer):
         if isinstance(self._original_model.config, PretrainedConfig):
             self._original_model.config.save_pretrained(save_directory)
 
-        self._quantized_model = compressed_model
+        self._quantized_model = compressed_model._model
 
         if save_onnx_model:
             self._set_task()

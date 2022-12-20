@@ -44,8 +44,6 @@ python run_translation.py \
 The following example fine-tunes a T5 model on the wmt16 dataset while applying magnitude pruning and then applies dynamic quantization as a second step.
 
 ```bash
-
-
 python run_translation.py \ 
     --model_name_or_path t5-small \
     --source_lang en \
@@ -61,7 +59,6 @@ python run_translation.py \
     --max_train_samples 100 \
     --do_train \
     --do_eval \
-    --num_train_epochs 3 \
     --verify_loading \
     --predict_with_generate \
     --per_device_train_batch_size=4 \

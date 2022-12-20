@@ -125,11 +125,10 @@ class INCTrainer(Trainer):
         self.quantization_config = quantization_config
         self.pruning_config = pruning_config
         self.distillation_config = distillation_config
-
         self._compression_manager = None
         self.save_onnx_model = save_onnx_model
 
-        # Attach dtype and architectur to the config
+        # Attach dtype and architecture to the config
         self.dtype = "int8" if quantization_config is not None else str(get_parameter_dtype(self.model)).split(".")[1]
         self.model.config.torch_dtype = self.dtype
         self.model.config.framework = "pytorch_fx"
