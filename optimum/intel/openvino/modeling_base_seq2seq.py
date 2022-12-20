@@ -15,20 +15,19 @@
 import logging
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Optional, Union
 
 import transformers
 from transformers import AutoConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, default_cache_path
-from transformers.onnx import FeaturesManager, export
-from transformers.onnx.utils import get_preprocessor
 
 import openvino
 from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from openvino.offline_transformations import compress_model_transformation
-from optimum.onnx.configuration import DecoderOnnxConfig, EncoderOnnxConfig
-from optimum.onnx.modeling_seq2seq import _DecoderWithLMhead
+from optimum.exporters import TasksManager
+from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export
 
 from .modeling_base import OVBaseModel
 from .utils import (
@@ -58,7 +57,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         encoder: openvino.runtime.Model,
         decoder: openvino.runtime.Model,
         decoder_with_past: openvino.runtime.Model = None,
-        config: transformers.PretrainedConfig = None,
+        config: PretrainedConfig = None,
         **kwargs
     ):
         self.config = config
@@ -119,13 +118,17 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
-        use_auth_token: Optional[Union[bool, str, None]] = None,
-        revision: Optional[Union[str, None]] = None,
-        force_download: bool = True,
+        config: PretrainedConfig,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
         cache_dir: Optional[str] = None,
         encoder_file_name: Optional[str] = None,
         decoder_file_name: Optional[str] = None,
         decoder_with_past_file_name: Optional[str] = None,
+        local_files_only: bool = False,
+        use_cache: bool = True,
+        from_onnx: bool = False,
         **kwargs,
     ):
         """
@@ -160,12 +163,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
-        from_onnx = kwargs.pop("from_onnx", False)
-        local_files_only = kwargs.pop("local_files_only", False)
-        use_cache = kwargs.pop("use_cache", True)
-        config = kwargs.pop("config", {})
-        if isinstance(config, dict):
-            config = PretrainedConfig.from_dict(config)
         default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
         default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
         default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
@@ -202,7 +199,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 if use_cache
                 else None
             )
-            kwargs["model_save_dir"] = Path(model_id)
+            model_save_dir = Path(model_id)
 
         # Load model from hub
         else:
@@ -251,7 +248,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     "`openvino_decoder_model.xml` and `openvino_decoder_with_past_model.xml`"
                 )
 
-            kwargs["model_save_dir"] = Path(model_cache_path).parent
+            model_save_dir = Path(model_cache_path).parent
             encoder = cls.load_model(file_names["encoder"], bin_file_name=file_names.pop("encoder_bin", None))
             decoder = cls.load_model(file_names["decoder"], bin_file_name=file_names.pop("decoder_bin", None))
             if use_cache:
@@ -261,15 +258,27 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             else:
                 decoder_with_past = None
 
-        return cls(encoder, decoder, decoder_with_past, config=config, **kwargs)
+        return cls(
+            encoder=encoder,
+            decoder=decoder,
+            decoder_with_past=decoder_with_past,
+            config=config,
+            model_save_dir=model_save_dir,
+            **kwargs,
+        )
 
     @classmethod
     def _from_transformers(
         cls,
         model_id: str,
-        save_dir: Union[str, Path] = default_cache_path,
-        use_auth_token: Optional[Union[bool, str, None]] = None,
-        revision: Optional[Union[str, None]] = None,
+        config: PretrainedConfig,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: Optional[str] = None,
+        local_files_only: bool = False,
+        task: Optional[str] = None,
+        use_cache: bool = True,
         **kwargs,
     ):
         """
@@ -291,58 +300,55 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        # Create a local directory to save the model
-        save_dir = Path(save_dir).joinpath(model_id)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        kwargs["model_save_dir"] = save_dir
-        use_cache = kwargs.get("use_cache", True)
-        preprocessor = get_preprocessor(model_id)
 
-        model = FeaturesManager.get_model_from_feature(cls.export_feature, model_id)
-        _, model_onnx_config = FeaturesManager.check_supported_model_or_raise(model, feature=cls.export_feature)
-        onnx_config = model_onnx_config(model.config)
-        onnx_opset = onnx_config.default_onnx_opset
-        onnx_config_encoder = EncoderOnnxConfig(model.config, task="default")
-        onnx_config_decoder = DecoderOnnxConfig(model.config, task=cls.export_feature, use_past=False)
-        onnx_config_decoder_with_past = DecoderOnnxConfig(model.config, task=cls.export_feature, use_past=True)
+        if task is None:
+            task = cls._AUTOMODELS_TO_TASKS[cls.auto_model_class]
 
-        # Extract the encoder for ONNX export
-        encoder = model.get_encoder()
-        # Concatenate the decoder with the language model head for ONNX export
-        decoder_with_lm_head = _DecoderWithLMhead(model)
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
 
-        # Export the encoder
-        export(
-            preprocessor=preprocessor,
-            model=encoder,
-            config=onnx_config_encoder,
-            opset=onnx_opset,
-            output=save_dir.joinpath(ONNX_ENCODER_NAME),
+        model = TasksManager.get_model_from_task(
+            task,
+            model_id,
+            revision=revision,
+            cache_dir=cache_dir,
+            config=config,
+            use_auth_token=use_auth_token,
+            local_files_only=local_files_only,
+            force_download=force_download,
         )
 
-        # Export the decoder without the past key values
-        export(
-            preprocessor=preprocessor,
-            model=decoder_with_lm_head,
-            config=onnx_config_decoder,
-            opset=onnx_opset,
-            output=save_dir.joinpath(ONNX_DECODER_NAME),
+        model_type = model.config.model_type.replace("_", "-")
+        model_name = getattr(model, "name", None)
+        onnx_config_constructor = TasksManager.get_exporter_config_constructor(
+            model_type, "onnx", task=task, model_name=model_name
+        )
+        onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
+        output_names = [ONNX_ENCODER_NAME, ONNX_DECODER_NAME]
+        if use_cache is True:
+            output_names.append(ONNX_DECODER_WITH_PAST_NAME)
+
+        models_and_onnx_configs = get_encoder_decoder_models_for_export(model, onnx_config)
+
+        export_models(
+            models_and_onnx_configs=models_and_onnx_configs,
+            opset=onnx_config.DEFAULT_ONNX_OPSET,
+            output_dir=save_dir_path,
+            output_names=output_names,
         )
 
-        # Export the decoder with the past key values
-        if use_cache:
-            export(
-                preprocessor=preprocessor,
-                model=decoder_with_lm_head,
-                config=onnx_config_decoder_with_past,
-                opset=onnx_opset,
-                output=save_dir.joinpath(ONNX_DECODER_WITH_PAST_NAME),
-            )
-
-        kwargs["config"] = model.config.__dict__
-        kwargs["from_onnx"] = True
-
-        return cls._from_pretrained(save_dir, **kwargs)
+        return cls._from_pretrained(
+            model_id=save_dir_path,
+            config=config,
+            use_cache=use_cache,
+            from_onnx=True,
+            use_auth_token=use_auth_token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            **kwargs,
+        )
 
     def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}

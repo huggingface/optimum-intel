@@ -144,7 +144,9 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         config: transformers.PretrainedConfig = None,
         **kwargs
     ):
-        super().__init__(encoder, decoder, decoder_with_past, config, **kwargs)
+        super().__init__(
+            encoder=encoder, decoder=decoder, decoder_with_past=decoder_with_past, config=config, **kwargs
+        )
         self.device = torch.device("cpu")
         self.main_input_name = "input_ids"
         self.decoder_with_past = None
