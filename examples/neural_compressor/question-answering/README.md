@@ -139,11 +139,4 @@ python run_qa.py \
     --output_dir /tmp/squad_output_stage2
 ```
 
-The configuration file containing all the information related to the model quantization, distillation and pruning objectives can be 
-specified using respectively `quantization_config`, `distillation_config` and `pruning_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/quantization.yml),
-[distillation](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/distillation.yml),
-and [pruning](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/prune.yml) 
-configuration files will be used.
-
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
