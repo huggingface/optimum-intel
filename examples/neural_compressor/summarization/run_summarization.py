@@ -769,20 +769,20 @@ def main():
             # save_onnx_model=True,
         )
         trainer.model = quantizer._quantized_model
-        if optim_args.apply_quantization and optim_args.verify_loading:
-            loaded_model = INCQuantizedModelForSeq2SeqLM.from_pretrained(training_args.output_dir)
-            tokens = tokenizer("This is a sample input", return_tensors="pt")
-            decoder_start_token_id = (
-                loaded_model.config.decoder_start_token_id if loaded_model.config.model_type != "mbart" else 2
-            )
-            decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
-            with torch.no_grad():
-                original_model_outputs = quantizer._quantized_model(**tokens, **decoder_inputs)
-                quantized_model_outputs = loaded_model(**tokens, **decoder_inputs)
-                if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
-                    logger.info("The quantized model was successfully loaded.")
-                else:
-                    logger.warning("The quantized model was not successfully loaded.")
+    if optim_args.apply_quantization and optim_args.verify_loading:
+        loaded_model = INCQuantizedModelForSeq2SeqLM.from_pretrained(training_args.output_dir)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        decoder_start_token_id = (
+            loaded_model.config.decoder_start_token_id if loaded_model.config.model_type != "mbart" else 2
+        )
+        decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
+        with torch.no_grad():
+            original_model_outputs = trainer.model(**tokens, **decoder_inputs)
+            quantized_model_outputs = loaded_model(**tokens, **decoder_inputs)
+            if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
+                logger.info("The quantized model was successfully loaded.")
+            else:
+                logger.warning("The quantized model was not successfully loaded.")
 
     # Evaluation
     results = {}

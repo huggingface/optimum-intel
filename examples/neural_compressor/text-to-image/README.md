@@ -76,7 +76,7 @@ python run_diffusion.py \
     --input_text "a drawing of a gray and black dragon" \
     --benchmark
 ```
-The model of quantized UNet
+The model with a quantized U-Net component
 ```bash
 python run_diffusion.py \
     --model_name_or_path sd-pokemon-diffusers \

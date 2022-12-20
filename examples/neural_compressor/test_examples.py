@@ -65,7 +65,6 @@ class TestExamples(unittest.TestCase):
                 --task_name sst2
                 --apply_quantization
                 --quantization_approach {quantization_approach}
-                --metric eval_accuracy
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
@@ -95,7 +94,6 @@ class TestExamples(unittest.TestCase):
                 --dataset_name squad
                 --apply_quantization
                 --quantization_approach {quantization_approach}
-                --metric eval_f1
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
@@ -159,7 +157,6 @@ class TestExamples(unittest.TestCase):
                 --dataset_name conll2003
                 --apply_quantization
                 --quantization_approach {quantization_approach}
-                --metric eval_f1
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
@@ -171,7 +168,6 @@ class TestExamples(unittest.TestCase):
                 --num_train_epoch 2
                 --learning_rate 1e-10
                 --verify_loading
-                --pad_to_max_length
                 --output_dir {tmp_dir}
                 """.split()
 
@@ -192,7 +188,6 @@ class TestExamples(unittest.TestCase):
                 --model_name_or_path ehdwns1516/bert-base-uncased_SWAG
                 --apply_quantization
                 --quantization_approach {quantization_approach}
-                --metric eval_accuracy
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
@@ -204,7 +199,6 @@ class TestExamples(unittest.TestCase):
                 --num_train_epoch 2
                 --learning_rate 1e-10
                 --verify_loading
-                --pad_to_max_length
                 --output_dir {tmp_dir}
                 """.split()
 
@@ -226,7 +220,6 @@ class TestExamples(unittest.TestCase):
                 --quantization_approach {quantization_approach}
                 --apply_pruning
                 --target_sparsity 0.02
-                --metric eval_loss
                 --do_eval
                 --do_train
                 --per_device_eval_batch_size 1
@@ -257,7 +250,6 @@ class TestExamples(unittest.TestCase):
                 --quantization_approach {quantization_approach}
                 --apply_pruning
                 --target_sparsity 0.02
-                --metric eval_loss
                 --do_eval
                 --do_train
                 --per_device_eval_batch_size 1
