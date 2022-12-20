@@ -51,7 +51,7 @@ from neural_compressor import (
     QuantizationAwareTrainingConfig,
     WeightPruningConfig,
 )
-from optimum.intel.neural_compressor import INCQuantizedModelForMultipleChoice, INCQuantizer, INCTrainer
+from optimum.intel.neural_compressor import INCModelForMultipleChoice, INCQuantizer, INCTrainer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -560,7 +560,7 @@ def main():
         )
         trainer.model = quantizer._quantized_model
     if optim_args.apply_quantization and optim_args.verify_loading:
-        loaded_model = INCQuantizedModelForMultipleChoice.from_pretrained(training_args.output_dir)
+        loaded_model = INCModelForMultipleChoice.from_pretrained(training_args.output_dir)
         num_choices = 4
         first_sentence = ["The sky is blue due to the shorter wavelength of blue light."] * num_choices
         start = "The color of the sky is"

@@ -77,10 +77,10 @@ output_dir = "quantized_model"
 To load a quantized model hosted locally or on the 🤗 hub, you must instantiate you model using our [`IncQuantizedModelForXxx`](https://huggingface.co/docs/optimum/intel_optimization#optimum.intel.neural_compressor.quantization.IncQuantizedModel) classes.
 
 ```python
-from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification
+from optimum.intel.neural_compressor import INCModelForSequenceClassification
 
 model_name = "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
-model = INCQuantizedModelForSequenceClassification.from_pretrained(model_name)
+model = INCModelForSequenceClassification.from_pretrained(model_name)
 ```
 
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
