@@ -50,8 +50,8 @@ import evaluate
 from neural_compressor import (
     DistillationConfig,
     PostTrainingQuantConfig,
-    PruningConfig,
     QuantizationAwareTrainingConfig,
+    WeightPruningConfig,
 )
 from optimum.intel.neural_compressor import INCQuantizedModelForSequenceClassification, INCQuantizer, INCTrainer
 
@@ -547,7 +547,7 @@ def main():
         else:
             end_epoch = min(optim_args.end_epoch, training_args.num_train_epochs - 1)
 
-        pruning_config = PruningConfig(
+        pruning_config = WeightPruningConfig(
             start_epoch=optim_args.start_epoch,
             end_epoch=end_epoch,
             target_sparsity=optim_args.target_sparsity,
