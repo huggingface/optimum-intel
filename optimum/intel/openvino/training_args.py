@@ -13,8 +13,15 @@ class OVTrainingArguments(TrainingArguments):
         default=None, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
     distillation_weight: float = field(
-        default=0.5, metadata={"help": "weightage of distillation loss, value between 0 to 1"}
+        default=0.5, metadata={"help": "weightage of distillation loss, value between 0.0 to 1.0"}
     )
     distillation_temperature: float = field(
         default=2.0, metadata={"help": "temperature of distillation."}
     )
+
+    def __post_init__(self):
+        if self.distillation_weight < 0.0 or self.distillation_weight > 1.0:
+            raise ValueError("distillation_weight must be between 0.0 and 1.0")
+
+        if self.distillation_temperature < 1:
+            raise ValueError("distillation_temperature must be >= 1.0")
