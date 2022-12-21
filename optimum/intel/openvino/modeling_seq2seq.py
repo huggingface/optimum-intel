@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import numpy as np
 import torch
 import transformers
 from transformers import AutoConfig, AutoModelForSeq2SeqLM
@@ -124,6 +125,10 @@ TRANSLATION_EXAMPLE = r"""
     >>> outputs = pipe(text)
     ```
 """
+
+
+def _contiguous_helper(tensor: np.ndarray) -> np.ndarray:
+    return tensor if tensor.flags["C_CONTIGUOUS"] else np.ascontiguousarray(tensor)
 
 
 @add_start_docstrings(
@@ -320,14 +325,17 @@ class OVEncoder:
 
         self._create_inference_request()
 
-        # TODO: check if inputs are c-like, if not - convert them.
+        # Check if inputs are c-like, if not - convert them.
+        input_ids = _contiguous_helper(input_ids.numpy())
 
         inputs = {
-            "input_ids": Tensor(input_ids.numpy()),
+            "input_ids": Tensor(input_ids, shared_memory=True),
         }
+
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
-            inputs["attention_mask"] = Tensor(attention_mask.numpy(), shared_memory=True)
+            attention_mask = _contiguous_helper(attention_mask.numpy())
+            inputs["attention_mask"] = Tensor(attention_mask, shared_memory=True)
 
         # Run inference
         self.request.start_async(inputs)
@@ -378,27 +386,32 @@ class OVDecoder:
 
         self._create_inference_request()
 
-        # TODO: check if inputs are c-like, if not - convert them.
-
-        inputs = {
-            "input_ids": Tensor(input_ids.numpy()),
-            "encoder_attention_mask": Tensor(encoder_attention_mask.numpy(), shared_memory=True),
-        }
-
-        # Add the encoder_hidden_states inputs when needed
-        if "encoder_hidden_states" in self.input_names:
-            inputs["encoder_hidden_states"] = Tensor(encoder_hidden_states.numpy(), shared_memory=True)
+        inputs = {}
 
         if past_key_values is not None:
             # Flatten the past_key_values
             past_key_values = [
-                Tensor(past_key_value.numpy(), shared_memory=True)
+                _contiguous_helper(past_key_value.numpy())
                 for pkv_per_layer in past_key_values
                 for past_key_value in pkv_per_layer
             ]
             # Add the past_key_values to the decoder inputs
-            for input_name, past_key_value in zip(self.key_value_input_names, past_key_values):
-                inputs[input_name] = past_key_value
+            inputs = {
+                input_name: Tensor(past_key_value, shared_memory=True)
+                for input_name, past_key_value in zip(self.key_value_input_names, past_key_values)
+            }
+
+        # Check if inputs are c-like, if not - convert them.
+        input_ids = _contiguous_helper(input_ids.numpy())
+        encoder_attention_mask = _contiguous_helper(encoder_attention_mask.numpy())
+
+        inputs["input_ids"] = Tensor(input_ids, shared_memory=True)
+        inputs["encoder_attention_mask"] = Tensor(encoder_attention_mask, shared_memory=True)
+
+        # Add the encoder_hidden_states inputs when needed
+        if "encoder_hidden_states" in self.input_names:
+            encoder_hidden_states = _contiguous_helper(encoder_hidden_states.numpy())
+            inputs["encoder_hidden_states"] = Tensor(encoder_hidden_states, shared_memory=True)
 
         # Run inference
         self.request.start_async(inputs)
