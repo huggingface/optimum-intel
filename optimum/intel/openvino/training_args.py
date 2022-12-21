@@ -20,6 +20,7 @@ class OVTrainingArguments(TrainingArguments):
     )
 
     def __post_init__(self):
+        super().__post_init__()
         if self.distillation_weight < 0.0 or self.distillation_weight > 1.0:
             raise ValueError("distillation_weight must be between 0.0 and 1.0")
 
