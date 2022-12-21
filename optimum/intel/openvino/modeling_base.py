@@ -26,7 +26,7 @@ from transformers.onnx.utils import get_preprocessor
 import openvino
 from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
-from openvino.offline_transformations import compress_model_transformation
+from openvino.offline_transformations import apply_moc_transformations, compress_model_transformation
 from openvino.runtime import Core
 from optimum.modeling_base import OptimizedModel
 
@@ -322,6 +322,7 @@ class OVBaseModel(OptimizedModel):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
+        apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)
         self.request = None
         return self
