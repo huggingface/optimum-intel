@@ -71,7 +71,8 @@ python run_glue.py \
     --do_train \
     --do_eval \
     --verify_loading \
-    --output_dir /tmp/sst2_output
+    --output_dir /tmp/sst2_output \
+    --overwrite_output_dir
 ```
 
 In order to apply dynamic, static or aware-training quantization, `quantization_approach` must be set to 
