@@ -193,7 +193,15 @@ class PruningTest(unittest.TestCase):
     def test_magnitude_pruning(self):
         model_name = "distilbert-base-uncased"
         target_sparsity = 0.9
-        pruning_config = WeightPruningConfig(start_epoch=0, end_epoch=1, target_sparsity=target_sparsity)
+        # end_step should be training_args.num_train_epochs * (len(train_dataset) // training_args.per_device_train_batch_size)
+        pruning_config = WeightPruningConfig(
+            pruning_type="magnitude",
+            start_step=0,
+            end_step=15,
+            excluded_op_names=["classifier"],
+            target_sparsity=target_sparsity,
+            pruning_scope="local",
+        )
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
@@ -229,7 +237,7 @@ class PruningTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
             self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
             sparsity = trainer.get_model_sparsity()
-            self.assertGreaterEqual(sparsity, target_sparsity * 100)
+            self.assertGreaterEqual(sparsity, target_sparsity * 100 / 2)
 
 
 class DistillationTest(unittest.TestCase):

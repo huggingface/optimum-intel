@@ -157,17 +157,19 @@ class OptimizationArguments:
         default=0.1,
         metadata={"help": "Targeted sparsity when pruning the model."},
     )
-    start_epoch: int = field(
+    start_step: int = field(
         default=0,
-        metadata={"help": "Epoch for which the pruning process will start."},
+        metadata={"help": "step for which the pruning process will start."},
     )
-    end_epoch: Optional[int] = field(
+    end_step: Optional[int] = field(
         default=None,
-        metadata={"help": "Epoch for which the pruning process will end."},
+        metadata={"help": "step for which the pruning process will end."},
     )
     pruning_approach: str = field(
-        default="basic_magnitude",
-        metadata={"help": "Pruning approach. Supported approach is basic_magnitude."},
+        default="snip_momentum",
+        metadata={
+            "help": "Pruning approach. Supported approach is 'magnitude'," "'gradient', 'snip_momentum', and 'snip'."
+        },
     )
     apply_distillation: bool = field(
         default=False,
@@ -591,16 +593,22 @@ def main():
 
     if optim_args.apply_pruning:
 
-        if optim_args.end_epoch is None:
-            end_epoch = training_args.num_train_epochs
+        if optim_args.end_step is None:
+            end_step = training_args.num_train_epochs * (
+                len(train_dataset) // training_args.per_device_train_batch_size
+            )
         else:
-            end_epoch = min(optim_args.end_epoch, training_args.num_train_epochs - 1)
+            end_step = min(
+                optim_args.end_step,
+                training_args.num_train_epochs * (len(train_dataset) // training_args.per_device_train_batch_size),
+            )
 
         pruning_config = WeightPruningConfig(
-            start_epoch=optim_args.start_epoch,
-            end_epoch=end_epoch,
+            start_step=optim_args.start_step,
+            end_step=end_step,
+            excluded_op_names=["classifier"],
             target_sparsity=optim_args.target_sparsity,
-            prune_type=optim_args.pruning_approach,
+            pruning_type=optim_args.pruning_approach,
         )
 
     if optim_args.apply_distillation:
