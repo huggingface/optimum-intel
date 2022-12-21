@@ -70,7 +70,7 @@ MODEL_NAMES = {
 SEED = 42
 
 
-class ORTModelIntegrationTest(unittest.TestCase):
+class OVModelIntegrationTest(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
