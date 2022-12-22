@@ -23,6 +23,8 @@ allows us to apply different quantization approaches (such as dynamic, static an
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for 
 sequence classification tasks such as the ones from the [GLUE benchmark](https://gluebenchmark.com/).
 
+For pruning, we support 'magnitude', 'gradient', 'snip_momentum', 'snip' and 'pattern_lock'. You can refer to [the pruning details](https://github.com/intel/neural-compressor/blob/master/docs/source/pruning.md).
+
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the sst-2 task.
 
 ```bash

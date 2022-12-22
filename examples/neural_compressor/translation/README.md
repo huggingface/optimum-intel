@@ -20,6 +20,8 @@ The script [`run_translation.py`](https://github.com/huggingface/optimum-intel/b
 allows us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning 
 using the [Intel Neural Compressor (INC)](https://github.com/intel/neural-compressor) library for translation tasks.
 
+For pruning, we support 'magnitude', 'gradient', 'snip_momentum', 'snip' and 'pattern_lock'. You can refer to [the pruning details](https://github.com/intel/neural-compressor/blob/master/docs/source/pruning.md).
+
 The following example applies post-training static quantization on a T5 model.
 
 ```bash

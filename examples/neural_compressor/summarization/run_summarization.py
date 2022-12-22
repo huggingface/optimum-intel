@@ -723,7 +723,6 @@ def main():
         pruning_config = WeightPruningConfig(
             start_step=optim_args.start_step,
             end_step=end_step,
-            excluded_op_names=["classifier"],
             target_sparsity=optim_args.target_sparsity,
             pruning_type=optim_args.pruning_approach,
         )
