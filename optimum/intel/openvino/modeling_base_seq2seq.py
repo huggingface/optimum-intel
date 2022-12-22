@@ -26,7 +26,7 @@ from transformers.onnx.utils import get_preprocessor
 import openvino
 from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
-from openvino.offline_transformations import compress_model_transformation
+from openvino._offline_transformations import compress_model_transformation
 from optimum.onnx.configuration import DecoderOnnxConfig, EncoderOnnxConfig
 from optimum.onnx.modeling_seq2seq import _DecoderWithLMhead
 

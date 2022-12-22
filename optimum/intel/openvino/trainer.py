@@ -58,7 +58,7 @@ from nncf.common.utils.logger import set_log_level
 from nncf.config.structures import BNAdaptationInitArgs, QuantizationRangeInitArgs
 from nncf.torch import create_compressed_model
 from nncf.torch.nncf_network import NNCFNetwork
-from openvino.offline_transformations import compress_quantize_weights_transformation
+from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
 from optimum.utils import logging
 
