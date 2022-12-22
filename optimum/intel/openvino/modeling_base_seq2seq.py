@@ -166,6 +166,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
+        logger.warning(
+            "The `use_cache` argument is changed to `False`, its support will be enabled in the next release."
+        )
+        use_cache = False
         default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
         default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
         default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
@@ -304,7 +308,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 kwargs will be passed to the model during initialization
         """
         logger.warning(
-            "The `use_cache` argument is changed to `False`, its support will be enabled for large models in the next release."
+            "The `use_cache` argument is changed to `False`, its support will be enabled in the next release."
         )
         use_cache = False
 
