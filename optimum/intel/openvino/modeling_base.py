@@ -58,7 +58,7 @@ _SUPPORTED_DEVICES = {
 )
 class OVBaseModel(OptimizedModel):
 
-    _AUTOMODELS_TO_TASKS = {cls_: task for task, cls_ in TasksManager._TASKS_TO_AUTOMODELS.items()}
+    _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
     auto_model_class = None
     export_feature = None
 
@@ -252,7 +252,7 @@ class OVBaseModel(OptimizedModel):
                 kwargs will be passed to the model during initialization
         """
         if task is None:
-            task = cls._AUTOMODELS_TO_TASKS[cls.auto_model_class]
+            task = cls._auto_model_to_task(cls.auto_model_class)
 
         model = TasksManager.get_model_from_task(task, model_id)
         model_type = model.config.model_type.replace("_", "-")
@@ -343,3 +343,10 @@ class OVBaseModel(OptimizedModel):
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
+
+    @classmethod
+    def _auto_model_to_task(cls, auto_model_class):
+        """
+        Get the task corresponding to a class (for example AutoModelForXXX in transformers).
+        """
+        return cls._AUTOMODELS_TO_TASKS[auto_model_class.__name__]
