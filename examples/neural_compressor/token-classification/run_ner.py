@@ -226,7 +226,7 @@ class OptimizationArguments:
     pruning_approach: str = field(
         default="snip_momentum",
         metadata={
-            "help": "Pruning approach. Supported approach is 'magnitude'," "'gradient', 'snip_momentum', and 'snip'."
+            "help": "Pruning approach. Supported approach is 'magnitude', 'gradient', 'snip_momentum', 'snip' and 'pattern_lock'."
         },
     )
     apply_distillation: bool = field(
@@ -595,7 +595,6 @@ def main():
         pruning_config = WeightPruningConfig(
             start_step=optim_args.start_step,
             end_step=end_step,
-            excluded_op_names=["classifier"],
             target_sparsity=optim_args.target_sparsity,
             pruning_type=optim_args.pruning_approach,
         )

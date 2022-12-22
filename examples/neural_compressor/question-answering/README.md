@@ -22,6 +22,8 @@ allows us to apply different quantization approaches (such as dynamic, static an
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for
 question answering tasks.
 
+For pruning, we support 'magnitude', 'gradient', 'snip_momentum', 'snip' and 'pattern_lock'. You can refer to [the pruning details](https://github.com/intel/neural-compressor/blob/master/docs/source/pruning.md).
+
 Note that if your dataset contains samples with no possible answers (like SQuAD version 2), you need to pass along 
 the flag `--version_2_with_negative`.
 

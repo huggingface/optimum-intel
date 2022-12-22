@@ -72,6 +72,10 @@ output_dir = "quantized_model"
 +trainer.save_model(save_onnx_model=True)
 ```
 
+For pruning, we support 'magnitude', 'gradient', 'snip_momentum', 'snip' and 'pattern_lock'. You can refer to [the pruning details](https://github.com/intel/neural-compressor/blob/master/docs/source/pruning.md)
+
+For distillation, we support knowledge distillation, intermediate layer knowledge distillation and self distillation. You can refer to [the distillation details](https://github.com/intel/neural-compressor/blob/master/docs/source/distillation.md)
+
 ## Loading a quantized model
 
 To load a quantized model hosted locally or on the 🤗 hub, you must instantiate you model using our [`IncQuantizedModelForXxx`](https://huggingface.co/docs/optimum/intel_optimization#optimum.intel.neural_compressor.quantization.IncQuantizedModel) classes.
