@@ -21,7 +21,7 @@ The script [`run_ner.py`](https://github.com/huggingface/optimum-intel/blob/main
 allows us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for token classification tasks.
 
-For pruning, we support 'magnitude', 'gradient', 'snip_momentum', 'snip' and 'pattern_lock'. You can refer to [the pruning details](https://github.com/intel/neural-compressor/blob/master/docs/source/pruning.md).
+For pruning, we support snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock. You can refer to [the pruning details](https://github.com/intel/neural-compressor/tree/master/neural_compressor/pruner#pruning-types).
 
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the CoNLL-2003 task.
 

@@ -253,7 +253,7 @@ class OptimizationArguments:
     pruning_approach: str = field(
         default="snip_momentum",
         metadata={
-            "help": "Pruning approach. Supported approach is 'magnitude', 'gradient', 'snip_momentum', 'snip'  and 'pattern_lock'."
+            "help": "Pruning approach. Supported approaches are snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock."
         },
     )
     apply_distillation: bool = field(

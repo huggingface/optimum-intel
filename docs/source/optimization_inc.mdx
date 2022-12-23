@@ -72,7 +72,7 @@ output_dir = "quantized_model"
 +trainer.save_model(save_onnx_model=True)
 ```
 
-For pruning, we support 'magnitude', 'gradient', 'snip_momentum', 'snip' and 'pattern_lock'. You can refer to [the pruning details](https://github.com/intel/neural-compressor/blob/master/docs/source/pruning.md)
+For pruning, we support snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock. You can refer to [the pruning details](https://github.com/intel/neural-compressor/tree/master/neural_compressor/pruner#pruning-types)
 
 For distillation, we support knowledge distillation, intermediate layer knowledge distillation and self distillation. You can refer to [the distillation details](https://github.com/intel/neural-compressor/blob/master/docs/source/distillation.md)
 
