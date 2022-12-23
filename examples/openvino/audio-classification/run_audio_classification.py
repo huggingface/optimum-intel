@@ -183,22 +183,6 @@ class ModelArguments:
                 "Only make use of `--freeze_feature_encoder`."
             )
 
-
-class OVTrainerForAudioClassification(OVTrainer):
-
-    def compute_distillation_loss(self, inputs, student_outputs):
-        # TODO(yujie): rename function argument
-        with torch.no_grad():
-            teacher_outputs = self.teacher(**inputs).logits
-        teacher_logits = teacher_outputs
-        student_logits = student_outputs.logits
-        return F.kl_div(
-            input=F.log_softmax(student_logits / self.temperature, dim=-1),
-            target=F.softmax(teacher_logits / self.temperature, dim=-1),
-            reduction="batchmean"
-        ) * (self.temperature ** 2)
-
-
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -397,7 +381,7 @@ def main():
     ov_config.log_dir = training_args.output_dir
 
     # Initialize our trainer
-    trainer = OVTrainerForAudioClassification(
+    trainer = OVTrainer(
         model=model,
         teacher_model=teacher_model,
         ov_config=ov_config,

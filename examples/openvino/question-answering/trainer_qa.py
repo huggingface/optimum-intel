@@ -101,22 +101,22 @@ class QuestionAnsweringOVTrainer(OVTrainer):
         return PredictionOutput(predictions=predictions.predictions, label_ids=predictions.label_ids, metrics=metrics)
 
 
-    def compute_distillation_loss(self, inputs, student_logits):
+    def compute_distillation_loss(self, inputs, student_outputs):
         with torch.no_grad():
-            teacher_logits = self.teacher(**inputs)
+            teacher_outputs = self.teacher(**inputs)
 
         distilliation_loss_start = (
                 F.kl_div(
-                    input=F.log_softmax(student_logits.start_logits / self.temperature, dim=-1),
-                    target=F.softmax(teacher_logits.start_logits / self.temperature, dim=-1),
+                    input=F.log_softmax(student_outputs.start_logits / self.temperature, dim=-1),
+                    target=F.softmax(teacher_outputs.start_logits / self.temperature, dim=-1),
                     reduction="batchmean",
                 )
                 * (self.temperature ** 2)
             )
         distilliation_loss_end = (
                 F.kl_div(
-                    input=F.log_softmax(student_logits.end_logits / self.temperature, dim=-1),
-                    target=F.softmax(teacher_logits.end_logits  / self.temperature, dim=-1),
+                    input=F.log_softmax(student_outputs.end_logits / self.temperature, dim=-1),
+                    target=F.softmax(teacher_outputs.end_logits  / self.temperature, dim=-1),
                     reduction="batchmean",
                 )
                 * (self.temperature ** 2)

@@ -15,6 +15,9 @@
 import tempfile
 import unittest
 from functools import partial
+import copy
+import torch
+from pathlib import Path
 
 import numpy as np
 from datasets import load_dataset
@@ -25,9 +28,11 @@ from transformers import (
     TrainingArguments,
     default_data_collator,
 )
+from transformers.utils import WEIGHTS_NAME
 
 import evaluate
-from optimum.intel.openvino.configuration import OVConfig
+from optimum.intel.openvino.configuration import OVConfig, DEFAULT_QUANTIZATION_CONFIG
+from optimum.intel.openvino import OVTrainingArguments
 from optimum.intel.openvino.modeling import OVModelForQuestionAnswering, OVModelForSequenceClassification
 from optimum.intel.openvino.quantization import OVQuantizer
 from optimum.intel.openvino.trainer import OVTrainer
@@ -116,6 +121,24 @@ class OVQuantizerQATest(unittest.TestCase):
                 self.fail("Loading BERT QA model a second time failed")
 
 
+MOVEMENT_SPARSITY_CONFIG_FOR_BERT = {
+    "algorithm": "movement_sparsity",
+    "params": {
+        "warmup_start_epoch": 1,
+        "warmup_end_epoch": 2,
+        "importance_regularization_factor": 1.0,
+        "enable_structured_masking": True
+    },
+    "sparse_structure_by_scopes": [
+        {"mode": "block", "sparse_factors": [32, 32], "target_scopes": "{re}.*BertAttention*"},
+        {"mode": "per_dim", "axis": 0, "target_scopes": "{re}.*BertIntermediate.*"},
+        {"mode": "per_dim", "axis": 1, "target_scopes": "{re}.*BertOutput.*"}
+    ],
+    "ignored_scopes": ["{re}.*NNCFEmbedding", "{re}.*qa_outputs*", "{re}.*LayerNorm.*",
+                       "{re}.*pooler.*", "{re}.*classifier.*"]
+}
+
+
 class OVTrainerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-uncased", 50, 38),)
 
@@ -164,4 +187,190 @@ class OVTrainerTest(unittest.TestCase):
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
+            self.assertTrue("logits" in outputs)
+
+    def build_glue_sst_trainer(
+        self,
+        output_dir,
+        tokenizer,
+        model,
+        teacher_model=None,
+        ov_config=OVConfig(),
+        **training_args
+    ):
+        dataset = load_dataset("glue", "sst2")
+        dataset = dataset.map(
+            lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128),
+            batched=True
+        )
+        train_dataset = dataset["train"].select(range(16))
+        eval_dataset = dataset["validation"].select(range(16))
+        metric = evaluate.load("glue", "sst2")
+
+        def compute_metrics(p): return metric.compute(
+            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
+        )
+
+        trainer = OVTrainer(
+            model=model,
+            teacher_model=teacher_model,
+            ov_config=ov_config,
+            feature="sequence-classification",
+            args=OVTrainingArguments(
+                output_dir,
+                num_train_epochs=3.0,
+                do_train=True,
+                do_eval=True,
+                **training_args
+            ),
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            compute_metrics=compute_metrics,
+            tokenizer=tokenizer,
+            data_collator=default_data_collator,
+        )
+        return trainer
+
+    def count_quantization_op_number(self, ovmodel):
+        num_fake_quantize = 0
+        num_int8 = 0
+        for elem in ovmodel.model.get_ops():
+            if "FakeQuantize" in elem.name:
+                num_fake_quantize += 1
+            if "8" in elem.get_element_type().get_type_name():
+                num_int8 += 1
+        return num_fake_quantize, num_int8
+
+    def test_training_quantization_distillation(self):
+        model_name = 'hf-internal-testing/tiny-bert'
+        teacher_model_name = 'hf-internal-testing/tiny-bert'
+        expected_fake_quantize = 19
+        expected_int8 = 14
+
+        ov_config = OVConfig()
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_name)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ov_config.log_dir = tmp_dir
+            trainer = self.build_glue_sst_trainer(
+                tmp_dir,
+                tokenizer=tokenizer,
+                model=model,
+                teacher_model=teacher_model,
+                ov_config=ov_config,
+            )
+            train_results = trainer.train()
+            trainer.save_model()
+            self.assertIn('distillation_loss', train_results.metrics)
+
+            ovmodel = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            num_fake_quantize, num_int8 = self.count_quantization_op_number(ovmodel)
+            self.assertEqual(expected_fake_quantize, num_fake_quantize)
+            self.assertEqual(expected_int8, num_int8)
+
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            outputs = ovmodel(**tokens)
+            self.assertTrue("logits" in outputs)
+
+    def test_training_movement_sparsity(self):
+        model_name = 'hf-internal-testing/tiny-bert'
+        expected_binary_masks = 24
+        ov_config = OVConfig(compression=MOVEMENT_SPARSITY_CONFIG_FOR_BERT)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ov_config.log_dir = tmp_dir
+            trainer = self.build_glue_sst_trainer(
+                tmp_dir,
+                tokenizer=tokenizer,
+                model=model,
+                ov_config=ov_config,
+            )
+            trainer.train()
+            trainer.save_model()
+
+            state_dict = torch.load(Path(tmp_dir, WEIGHTS_NAME), map_location='cpu')
+            num_binary_masks = sum(key.endswith('_binary_mask') for key in state_dict)
+            self.assertEqual(expected_binary_masks, num_binary_masks)
+
+            ovmodel = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            outputs = ovmodel(**tokens)
+            self.assertTrue("logits" in outputs)
+
+    def test_training_movement_sparsity_quantization(self):
+        model_name = 'hf-internal-testing/tiny-bert'
+        expected_binary_masks = 24
+        expected_fake_quantize = 19
+        expected_int8 = 14
+
+        ov_config = OVConfig(compression=[MOVEMENT_SPARSITY_CONFIG_FOR_BERT, DEFAULT_QUANTIZATION_CONFIG])
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ov_config.log_dir = tmp_dir
+            trainer = self.build_glue_sst_trainer(
+                tmp_dir,
+                tokenizer=tokenizer,
+                model=model,
+                ov_config=ov_config,
+            )
+            train_results = trainer.train()
+            trainer.save_model()
+            self.assertIn('compression_loss', train_results.metrics)
+
+            state_dict = torch.load(Path(tmp_dir, WEIGHTS_NAME), map_location='cpu')
+            num_binary_masks = sum(key.endswith('_binary_mask') for key in state_dict)
+            self.assertEqual(expected_binary_masks, num_binary_masks)
+
+            ovmodel = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            num_fake_quantize, num_int8 = self.count_quantization_op_number(ovmodel)
+            self.assertEqual(expected_fake_quantize, num_fake_quantize)
+            self.assertEqual(expected_int8, num_int8)
+
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            outputs = ovmodel(**tokens)
+            self.assertTrue("logits" in outputs)
+
+    def test_training_movement_sparsity_quantization_distillation(self):
+        model_name = 'hf-internal-testing/tiny-bert'
+        teacher_model_name = 'hf-internal-testing/tiny-bert'
+        expected_binary_masks = 24
+        expected_fake_quantize = 19
+        expected_int8 = 14
+
+        ov_config = OVConfig(compression=[MOVEMENT_SPARSITY_CONFIG_FOR_BERT, DEFAULT_QUANTIZATION_CONFIG])
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_name)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ov_config.log_dir = tmp_dir
+            trainer = self.build_glue_sst_trainer(
+                tmp_dir,
+                tokenizer=tokenizer,
+                model=model,
+                teacher_model=teacher_model,
+                ov_config=ov_config,
+            )
+            train_results = trainer.train()
+            trainer.save_model()
+            self.assertIn('distillation_loss', train_results.metrics)
+            self.assertIn('compression_loss', train_results.metrics)
+
+            state_dict = torch.load(Path(tmp_dir, WEIGHTS_NAME), map_location='cpu')
+            num_binary_masks = sum(key.endswith('_binary_mask') for key in state_dict)
+            self.assertEqual(expected_binary_masks, num_binary_masks)
+
+            ovmodel = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            num_fake_quantize, num_int8 = self.count_quantization_op_number(ovmodel)
+            self.assertEqual(expected_fake_quantize, num_fake_quantize)
+            self.assertEqual(expected_int8, num_int8)
+
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            outputs = ovmodel(**tokens)
             self.assertTrue("logits" in outputs)

@@ -142,7 +142,7 @@ class OVTrainer(Trainer):
             self.teacher = teacher_model.to(args.device)
             self.teacher.eval()
             self.distillation_weight = args.distillation_weight
-            self.temperature = args.distillation_temperature
+            self.temperature = args.distillation_temperature 
         self.compression_controller = None
         self.loss_counter = 0
         self.metrics = defaultdict(float)
@@ -363,7 +363,7 @@ class OVTrainer(Trainer):
         for epoch in range(epochs_trained, num_train_epochs):
             if self.compression_controller is not None:
                 self.compression_controller.scheduler.epoch_step()
-                # print(self.compression_controller.statistics().to_str())
+                print(self.compression_controller.statistics().to_str())
             if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
                 train_dataloader.sampler.set_epoch(epoch)
             elif hasattr(train_dataloader, "dataset") and isinstance(train_dataloader.dataset, IterableDatasetShard):
@@ -403,7 +403,7 @@ class OVTrainer(Trainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-                    # TODO: this was the original adaptation for nncf scheduler stepping.
+                    # TODO: this was the original adaptation for nncf scheduler stepping. 
                     # To review if this is the right place or at line 439
                     # if self.compression_controller is not None:
                     #     # Must be called at the beginning of each training step to prepare the compression method
@@ -536,9 +536,11 @@ class OVTrainer(Trainer):
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
 
-    def compute_distillation_loss(self, inputs, student_logits):
+    def compute_distillation_loss(self, inputs, student_outputs):
         with torch.no_grad():
-            teacher_logits = self.teacher(**inputs)
+            teacher_outputs = self.teacher(**inputs)
+        teacher_logits = teacher_outputs.logits
+        student_logits = student_outputs.logits
         return F.kl_div(
             input=F.log_softmax(student_logits / self.temperature, dim=-1),
             target=F.softmax(teacher_logits / self.temperature, dim=-1),
@@ -559,7 +561,7 @@ class OVTrainer(Trainer):
             distillation_loss = self.compute_distillation_loss(inputs, outputs)
             loss = ((1 - self.distillation_weight) * task_loss) + (self.distillation_weight * distillation_loss)
 
-            self.metrics["task_loss"] = task_loss.item()
+            self.metrics["task_loss"] = task_loss.detach().mean().item() # task_loss may not be a one-item tensor
             self.metrics["distillation_loss"] = distillation_loss.item()
 
         if self.compression_controller is not None:
