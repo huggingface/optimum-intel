@@ -28,59 +28,6 @@ pip install git+https://github.com/huggingface/optimum-intel.git
 
 # Quick tour
 
-## Neural Compressor
-
-#### Dynamic quantization:
-
-Here is an example on how to apply dynamic quantization on a DistilBERT fine-tuned on the SQuAD1.0 dataset.
-Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in this example.
-
-```python
-from datasets import load_dataset
-from transformers import AutoModelForQuestionAnswering, AutoTokenizer, pipeline
-from evaluate import evaluator
-from optimum.intel.neural_compressor import IncOptimizer, IncQuantizationConfig, IncQuantizer
-
-model_id = "distilbert-base-cased-distilled-squad"
-max_eval_samples = 100
-model = AutoModelForQuestionAnswering.from_pretrained(model_id)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-eval_dataset = load_dataset("squad", split="validation").select(range(max_eval_samples))
-eval = evaluator("question-answering")
-qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
-
-def eval_func(model):
-    qa_pipeline.model = model
-    metrics = eval.compute(model_or_pipeline=qa_pipeline, data=eval_dataset, metric="squad")
-    return metrics["f1"]
-
-# Load the quantization configuration detailing the quantization we wish to apply
-config_path = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
-quantization_config = IncQuantizationConfig.from_pretrained(config_path)
-
-# Instantiate our IncQuantizer using the desired configuration and the evaluation function used
-# for the INC accuracy-driven tuning strategy
-quantizer = IncQuantizer(quantization_config, eval_func=eval_func)
-optimizer = IncOptimizer(model, quantizer=quantizer)
-
-# Apply dynamic quantization
-quantized_model = optimizer.fit()
-
-# Save the resulting model and its corresponding configuration in the given directory
-optimizer.save_pretrained("./quantized_model")
-```
-
-To load a quantized model hosted locally or on the 🤗 hub, you can do as follows :
-```python
-from optimum.intel.neural_compressor.quantization import IncQuantizedModelForSequenceClassification
-
-loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrained(
-    "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
-)
-```
-
-You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
-
 ## OpenVINO
 
 Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework to accelerate inference.
@@ -143,8 +90,9 @@ optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 Quantization aware training (QAT) is applied in order to simulate the effects of quantization during training, to alleviate its effects on the model’s accuracy. Here is an example on how to fine-tune a DistilBERT model on the sst-2 task while applying quantization aware training (QAT).
 
 ```diff
+import evaluate
 import numpy as np
-from datasets import load_dataset, load_metric
+from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
 -from transformers import Trainer
 +from optimum.intel.openvino import OVConfig, OVModelForSequenceClassification, OVTrainer
@@ -156,7 +104,7 @@ dataset = load_dataset("glue", "sst2")
 dataset = dataset.map(
     lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
 )
-metric = load_metric("accuracy")
+metric = evaluate.load("glue", "sst2")
 compute_metrics = lambda p: metric.compute(
     predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
 )
@@ -185,6 +133,59 @@ trainer.save_model()
 
 +optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
+
+## Neural Compressor
+
+#### Dynamic quantization:
+
+Here is an example on how to apply dynamic quantization on a DistilBERT fine-tuned on the SQuAD1.0 dataset.
+Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in this example.
+
+```python
+from datasets import load_dataset
+from transformers import AutoModelForQuestionAnswering, AutoTokenizer, pipeline
+from evaluate import evaluator
+from optimum.intel.neural_compressor import IncOptimizer, IncQuantizationConfig, IncQuantizer
+
+model_id = "distilbert-base-cased-distilled-squad"
+max_eval_samples = 100
+model = AutoModelForQuestionAnswering.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+eval_dataset = load_dataset("squad", split="validation").select(range(max_eval_samples))
+task_evaluator = evaluator("question-answering")
+qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
+
+def eval_func(model):
+    qa_pipeline.model = model
+    metrics = task_evaluator.compute(model_or_pipeline=qa_pipeline, data=eval_dataset, metric="squad")
+    return metrics["f1"]
+
+# Load the quantization configuration detailing the quantization we wish to apply
+config_path = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
+quantization_config = IncQuantizationConfig.from_pretrained(config_path)
+
+# Instantiate our IncQuantizer using the desired configuration and the evaluation function used
+# for the INC accuracy-driven tuning strategy
+quantizer = IncQuantizer(quantization_config, eval_func=eval_func)
+optimizer = IncOptimizer(model, quantizer=quantizer)
+
+# Apply dynamic quantization
+quantized_model = optimizer.fit()
+
+# Save the resulting model and its corresponding configuration in the given directory
+optimizer.save_pretrained("./quantized_model")
+```
+
+To load a quantized model hosted locally or on the 🤗 hub, you can do as follows :
+```python
+from optimum.intel.neural_compressor.quantization import IncQuantizedModelForSequenceClassification
+
+loaded_model_from_hub = IncQuantizedModelForSequenceClassification.from_pretrained(
+    "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
+)
+```
+
+You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
 You can find more examples in the [documentation](https://huggingface.co/docs/optimum/intel/index).
 

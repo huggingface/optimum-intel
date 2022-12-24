@@ -67,8 +67,9 @@ Quantization aware training (QAT) can also be applied in order to simulate the e
 Here is an example on how to fine-tune a DistilBERT on the sst-2 task while applying quantization aware training (QAT).
 
 ```python
+import evaluate
 import numpy as np
-from datasets import load_dataset, load_metric
+from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
@@ -80,7 +81,7 @@ dataset = load_dataset("glue", "sst2")
 dataset = dataset.map(
     lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
 )
-metric = load_metric("accuracy")
+metric = evaluate.load("glue", "sst2")
 compute_metrics = lambda p: metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
 ```
 

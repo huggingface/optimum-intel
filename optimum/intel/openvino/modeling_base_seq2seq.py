@@ -391,9 +391,12 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
+        apply_moc_transformations(self.encoder_model)
+        apply_moc_transformations(self.decoder_model)
         compress_model_transformation(self.encoder_model)
         compress_model_transformation(self.decoder_model)
         if self.use_cache:
+            apply_moc_transformations(self.decoder_with_past_model)
             compress_model_transformation(self.decoder_with_past_model)
         return self
 
