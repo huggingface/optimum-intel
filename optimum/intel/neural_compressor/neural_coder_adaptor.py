@@ -1,8 +1,8 @@
-class APIAdapter():
-	"""API design adaption for Neural Coder"""
+class APIAdaptor():
+    """API design adaption for Neural Coder"""
     
     default_quant_dynamic = \
-f"""
+f"""\
 def eval_func(model):
     EVAL_FUNC_LINES
 from optimum.intel.neural_compressor import IncOptimizer
@@ -16,7 +16,7 @@ MODEL_NAME.eval()
 """
 
     default_quant_static = \
-f"""
+f"""\
 def eval_func(model):
     EVAL_FUNC_LINES
 from optimum.intel.neural_compressor import IncOptimizer
