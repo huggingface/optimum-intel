@@ -1,4 +1,4 @@
-class APIAdaptor():
+class NeuralCoderAdaptor():
     """API design adaption for Neural Coder"""
     
     default_quant_dynamic = \
