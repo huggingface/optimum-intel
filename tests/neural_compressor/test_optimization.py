@@ -198,7 +198,6 @@ class PruningTest(unittest.TestCase):
             pruning_type="magnitude",
             start_step=0,
             end_step=15,
-            excluded_op_names=["classifier"],
             target_sparsity=target_sparsity,
             pruning_scope="local",
         )
