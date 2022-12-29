@@ -21,6 +21,10 @@ and [`run_mlm.py`](https://github.com/huggingface/optimum-intel/blob/main/exampl
 allow us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning 
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for language modeling tasks.
 
+For pruning, we support snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock. You can refer to [the pruning details](https://github.com/intel/neural-compressor/tree/master/neural_compressor/pruner#pruning-types).
+
+> **_Note:_** At present, neural_compressor only support to prune linear and conv ops. So if we set a target sparsity is 0.9, it means that the pruning op's sparsity will be 0.9, not the whole model's sparsity is 0.9. For example: the embedding ops will not be pruned in the model.
+
 
 GPT and GPT-2 are trained or fine-tuned using a causal language modeling (CLM) loss. ALBERT, BERT, DistilBERT and 
 RoBERTa are trained or fine-tuned using a masked language modeling (MLM) loss, more information about the differences 
@@ -29,7 +33,7 @@ between those objectives can be found in our [model summary](https://huggingface
 
 ### GPT-2/GPT and causal language modeling
 
-The following example fine-tunes GPT-Neo on WikiText-2 while first applying magnitude pruning and then quantization aware training.
+The following example fine-tunes GPT-Neo on WikiText-2 while first applying snip_momentum pruning and then quantization aware training.
 We're using the raw WikiText-2 (no tokens were replaced before the tokenization). The loss here is that of causal language modeling (CLM). 
 
 ```bash
@@ -51,7 +55,7 @@ python run_clm.py \
 
 ### RoBERTa/BERT/DistilBERT and masked language modeling
 
-The following example fine-tunes RoBERTa on WikiText-2 while applying quantization aware training and magnitude pruning. We're using the raw 
+The following example fine-tunes RoBERTa on WikiText-2 while applying quantization aware training and snip_momentum pruning. We're using the raw 
 WikiText-2. The loss is different as BERT/RoBERTa have a bidirectional mechanism, we are therefore using the same loss 
 that was used during their pre-training: masked language modeling (MLM) loss. 
 

@@ -12,31 +12,27 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import collections
 import copy
 import math
 import os
 import sys
 import time
-import warnings
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import datasets
 import torch
 import torch.distributed as dist
-from packaging.version import Version
 
 # from packaging import version
 from torch import nn
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, RandomSampler
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 from transformers import Trainer
-from transformers.configuration_utils import PretrainedConfig
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 from transformers.deepspeed import deepspeed_init
-from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
+from transformers.file_utils import WEIGHTS_NAME
 
 # Integrations must be imported before ML frameworks:
 from transformers.integrations import hp_params
@@ -49,9 +45,7 @@ from transformers.trainer_pt_utils import IterableDatasetShard
 from transformers.trainer_utils import HPSearchBackend, ShardedDDPOption, TrainOutput, has_length, speed_metrics
 from transformers.utils import is_sagemaker_mp_enabled, logging
 
-from neural_compressor.experimental import Component
-
-from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME, is_torch_less_than_1_13
+from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 
 
 if TYPE_CHECKING:
@@ -65,8 +59,7 @@ logger = logging.get_logger(__name__)
 
 
 from itertools import chain
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.data.data_collator import DataCollator
 from transformers.modeling_utils import PreTrainedModel
@@ -315,10 +308,7 @@ class INCTrainer(Trainer):
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
         if self._compression_manager is not None:
-            if is_torch_less_than_1_13:
-                self._compression_manager.callbacks.on_train_begin()
-            else:
-                self._compression_manager.callbacks.on_train_begin(self.get_train_dataloader())
+            self._compression_manager.callbacks.on_train_begin()
 
         # Skip the first epochs_trained epochs to get the random state of the dataloader at the right point.
         if not args.ignore_data_skip:
@@ -446,6 +436,9 @@ class INCTrainer(Trainer):
                         optimizer_was_run = scale_before <= scale_after
                     else:
                         self.optimizer.step()
+
+                    if self._compression_manager is not None:
+                        self._compression_manager.callbacks.on_after_optimizer_step()
 
                     if optimizer_was_run and not self.deepspeed:
                         self.lr_scheduler.step()
@@ -692,7 +685,6 @@ class INCTrainer(Trainer):
                 teacher_outputs = self._get_logits(teacher_outputs)
 
             if teacher_outputs is not None:
-                self._compression_manager.callbacks.callbacks.create_criterion()
                 distillation_loss = self.compute_distillation_loss(student_outputs, teacher_outputs)
                 loss *= self._compression_manager.callbacks.callbacks.criterion.loss_weights[0]
                 loss += distillation_loss * self._compression_manager.callbacks.callbacks.criterion.loss_weights[1]
