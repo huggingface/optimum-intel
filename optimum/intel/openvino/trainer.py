@@ -144,8 +144,6 @@ class OVTrainer(Trainer):
             self.distillation_weight = args.distillation_weight
             self.temperature = args.distillation_temperature 
         self.compression_controller = None
-        self.loss_counter = 0
-        self.metrics = defaultdict(float)
 
         if self.ov_config is not None and self.args.do_train:
             self._set_task()
@@ -255,7 +253,6 @@ class OVTrainer(Trainer):
         if args.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
-        # TODO: verify NNCF-wrapped distributed training
         if self.args.local_rank != -1:
             if self.compression_controller is not None:
                 self.compression_controller.distributed()
@@ -361,9 +358,6 @@ class OVTrainer(Trainer):
                     _ = list(train_dataloader.sampler)
 
         for epoch in range(epochs_trained, num_train_epochs):
-            if self.compression_controller is not None:
-                self.compression_controller.scheduler.epoch_step()
-                print(self.compression_controller.statistics().to_str())
             if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
                 train_dataloader.sampler.set_epoch(epoch)
             elif hasattr(train_dataloader, "dataset") and isinstance(train_dataloader.dataset, IterableDatasetShard):
@@ -379,6 +373,9 @@ class OVTrainer(Trainer):
                 else args.max_steps * args.gradient_accumulation_steps
             )
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
+            if self.compression_controller is not None:
+                self.compression_controller.scheduler.epoch_step()
+                print(self.compression_controller.statistics().to_str())
 
             if self.compression_controller is not None:
                 # Must be called at the beginning of each training epoch to prepare the compression method
@@ -403,11 +400,11 @@ class OVTrainer(Trainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-                    # TODO: this was the original adaptation for nncf scheduler stepping. 
-                    # To review if this is the right place or at line 439
-                    # if self.compression_controller is not None:
-                    #     # Must be called at the beginning of each training step to prepare the compression method
-                    #     self.compression_controller.scheduler.step()
+                    if self.teacher is not None or self.compression_controller is not None:
+                        self.compression_metrics=defaultdict(float)
+                    if self.compression_controller is not None:
+                        # Must be called at the beginning of each training step to prepare the compression method
+                        self.compression_controller.scheduler.step()
 
                 if (
                     ((step + 1) % args.gradient_accumulation_steps != 0)
@@ -460,8 +457,6 @@ class OVTrainer(Trainer):
                             )
 
                     # Optimizer step
-                    if self.compression_controller is not None:
-                        self.compression_controller.scheduler.step()
                     optimizer_was_run = True
                     if self.deepspeed:
                         pass  # called outside the loop
@@ -480,7 +475,6 @@ class OVTrainer(Trainer):
                     model.zero_grad()
                     self.state.global_step += 1
                     self.state.epoch = epoch + (step + 1) / steps_in_epoch
-                    self.state.curr_loss = tr_loss_step.cpu().detach().item()
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
@@ -548,7 +542,6 @@ class OVTrainer(Trainer):
         ) * (self.temperature ** 2)
 
     def compute_loss(self, model, inputs, return_outputs=False):
-        self.loss_counter += 1
         if self.teacher is None:
             retval = super().compute_loss(model, inputs, return_outputs)
 
@@ -558,28 +551,21 @@ class OVTrainer(Trainer):
                 loss = retval
         else:
             task_loss, outputs = super().compute_loss(model, inputs, return_outputs=True)
+            if self.args.n_gpu > 1:
+                task_loss = task_loss.mean()
             distillation_loss = self.compute_distillation_loss(inputs, outputs)
             loss = ((1 - self.distillation_weight) * task_loss) + (self.distillation_weight * distillation_loss)
 
-            self.metrics["task_loss"] = task_loss.detach().mean().item() # task_loss may not be a one-item tensor
-            self.metrics["distillation_loss"] = distillation_loss.item()
+            self.compression_metrics["task_loss"] = task_loss.item()
+            self.compression_metrics["distillation_loss"] = distillation_loss.item()
 
         if self.compression_controller is not None:
             compression_loss = self.compression_controller.loss()
             loss += compression_loss
-            self.metrics["compression_loss"] = compression_loss.item()
+            self.compression_metrics["compression_loss"] = compression_loss.item()
 
         return (loss, outputs) if return_outputs else loss
 
-    def log(self, logs):
-        if self.loss_counter != 0:
-            for k, v in self.metrics.items():
-                logs[k] = float(v) / self.loss_counter
-
-            self.loss_counter = 0
-            self.metrics = defaultdict(float)
-
-        return super().log(logs)
 
     def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
         if self.control.should_log:
@@ -598,10 +584,12 @@ class OVTrainer(Trainer):
             logs["learning_rate"] = self._get_learning_rate()
 
             if self.compression_controller is not None:
-                logs["compression_loss"] = self.compression_controller.loss().item()
+                for key, value in self.compression_metrics.items():
+                    logs[key] = value
+
                 compression_stats = self.compression_controller.statistics()
                 for key, value in prepare_for_tensorboard(compression_stats).items():
-                    logs["compression/statistics/{0}".format(key)] = value
+                    logs["compression/{0}".format(key)] = value
 
             self._total_loss_scalar += tr_loss_scalar
             self._globalstep_last_logged = self.state.global_step
