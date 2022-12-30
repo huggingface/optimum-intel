@@ -32,8 +32,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install optimum[onnxruntime]
         pip install .[tests]
-        pip install git+https://github.com/intel/neural-compressor
-        pip freeze
     - name: Test with Pytest
       run: |
         pytest tests/neural_compressor/

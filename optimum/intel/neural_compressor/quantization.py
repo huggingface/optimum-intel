@@ -75,8 +75,7 @@ logger = logging.getLogger(__name__)
 
 _neural_compressor_version = version.parse(version.parse(neural_compressor.__version__).base_version)
 
-# TODO : Replace required version to 2.0.0
-NEURAL_COMPRESSOR_REQUIRED_VERSION = version.parse("1.14.2")
+NEURAL_COMPRESSOR_REQUIRED_VERSION = version.parse("2.0.0")
 
 if _neural_compressor_version < NEURAL_COMPRESSOR_REQUIRED_VERSION:
     raise ImportError(
