@@ -560,10 +560,10 @@ class INCTrainer(Trainer):
             self._set_task()
             model_type = self.config.model_type.replace("_", "-")
             model_name = getattr(_model, "name", None)
-            onnx_config_constructor = TasksManager.get_exporter_config_constructor(
-                model_type, "onnx", task=self.task, model_name=model_name
+            onnx_config_class = TasksManager.get_exporter_config_constructor(
+                exporter="onnx", model=self.model, task=self.task, model_type=model_type, model_name=model_name
             )
-            onnx_config = onnx_config_constructor(self.config)
+            onnx_config = onnx_config_class(self.config)
             output_onnx_path = os.path.join(output_dir, ONNX_WEIGHTS_NAME)
 
             signature_columns = copy.deepcopy(self._signature_columns)

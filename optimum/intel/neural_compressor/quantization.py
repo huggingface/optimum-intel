@@ -196,10 +196,14 @@ class INCQuantizer(OptimumQuantizer):
             self._set_task()
             model_type = self._original_model.config.model_type.replace("_", "-")
             model_name = getattr(self._original_model, "name", None)
-            onnx_config_constructor = TasksManager.get_exporter_config_constructor(
-                model_type, "onnx", task=self.task, model_name=model_name
+            onnx_config_class = TasksManager.get_exporter_config_constructor(
+                exporter="onnx",
+                model=self._original_model,
+                task=self.task,
+                model_type=model_type,
+                model_name=model_name,
             )
-            onnx_config = onnx_config_constructor(self._original_model.config)
+            onnx_config = onnx_config_class(self._original_model.config)
             compressed_model.eval()
             output_onnx_path = save_directory.joinpath(ONNX_WEIGHTS_NAME)
             # Export the compressed model to the ONNX format
