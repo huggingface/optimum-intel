@@ -114,6 +114,39 @@ class TestExamples(unittest.TestCase):
                 self.assertGreaterEqual(results["eval_f1"], 70)
                 self.assertGreaterEqual(results["eval_exact_match"], 70)
 
+    def test_run_qa_ipex(self):
+        quantization_approach = "static"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            test_args = f"""
+                run_qa.py
+                --model_name_or_path bert-large-uncased-whole-word-masking-finetuned-squad
+                --dataset_name squad
+                --apply_quantization
+                --quantization_approach {quantization_approach}
+                --metric eval_f1
+                --tolerance_criterion 0.1
+                --apply_pruning
+                --target_sparsity 0.02
+                --do_eval
+                --do_train
+                --per_device_eval_batch_size 1
+                --per_device_train_batch_size 1
+                --max_eval_samples 50
+                --max_train_samples 4
+                --num_train_epoch 2
+                --learning_rate 1e-10
+                --verify_loading
+                --output_dir {tmp_dir}
+                --use_ipex
+                """.split()
+
+            with patch.object(sys, "argv", test_args):
+                run_qa.main()
+                results = get_results(tmp_dir)
+                self.assertGreaterEqual(results["eval_f1"], 70)
+                self.assertGreaterEqual(results["eval_exact_match"], 70)
+
     def test_run_ner(self):
         quantization_approach = "static"
 

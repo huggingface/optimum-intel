@@ -26,7 +26,7 @@ from transformers.onnx.utils import get_preprocessor
 import openvino
 from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
-from openvino.offline_transformations import compress_model_transformation
+from openvino._offline_transformations import compress_model_transformation
 from optimum.onnx.configuration import DecoderOnnxConfig, EncoderOnnxConfig
 from optimum.onnx.modeling_seq2seq import _DecoderWithLMhead
 
@@ -66,7 +66,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.model_save_dir = kwargs.get("model_save_dir")
         self._device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
-        self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        self.ov_config = {}
         if "GPU" in self._device:
             raise ValueError("Support of dynamic shapes for GPU devices is not yet available.")
         if self.is_dynamic:
@@ -379,9 +379,12 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
+        apply_moc_transformations(self.encoder_model)
+        apply_moc_transformations(self.decoder_model)
         compress_model_transformation(self.encoder_model)
         compress_model_transformation(self.decoder_model)
         if self.use_cache:
+            apply_moc_transformations(self.decoder_with_past_model)
             compress_model_transformation(self.decoder_with_past_model)
         return self
 
