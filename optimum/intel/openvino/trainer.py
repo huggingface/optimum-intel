@@ -17,6 +17,7 @@ import io
 import math
 import os
 import sys
+import subprocess
 import time
 import warnings
 from collections import defaultdict
@@ -61,6 +62,8 @@ from nncf.config.structures import BNAdaptationInitArgs, QuantizationRangeInitAr
 from nncf.torch import create_compressed_model
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
+from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
+from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
 from openvino.runtime import Core
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
@@ -159,6 +162,7 @@ class OVTrainer(Trainer):
                     BNAdaptationInitArgs(OVDataLoader(train_dataloader)),
                 ]
             )
+            nncf_config['log_dir'] = args.output_dir
             self.compression_controller, self.model = create_compressed_model(self.model, nncf_config)
             self.model_wrapped = self.model
 
@@ -664,27 +668,65 @@ class OVTrainer(Trainer):
                 onnx_config = onnx_config_cls(self.model.config)
             else:
                 onnx_config = self.onnx_config
-            use_external_data_format = (
-                onnx_config.use_external_data_format(self.model.num_parameters()) or self.ov_config.save_onnx_model
+
+            if isinstance(self.compression_controller, PTCompositeCompressionAlgorithmController):
+                # Note: 
+                # OpenVINO provides automated Structured Pruning in generation of IR
+                # However it requires static axes, current export utilizes nncf exporter
+                # which generates static-shaped IR.
+
+                f = os.path.join(output_dir, "model.onnx")
+                self.compression_controller.export_model(f, 
+                    input_names=list(onnx_config.inputs.keys()),
+                    output_names=list(onnx_config.outputs.keys()))
+                self._generate_openvino_ir(f)
+            else:
+                use_external_data_format = (
+                    onnx_config.use_external_data_format(self.model.num_parameters()) or self.ov_config.save_onnx_model
+                )
+                f = io.BytesIO() if not use_external_data_format else os.path.join(output_dir, "model.onnx")
+                self._onnx_export(self.model, onnx_config, self.ov_config, f)
+
+                # Load and save the compressed model
+                model = core.read_model(f) if use_external_data_format else core.read_model(f.getvalue(), b"")
+                compress_quantize_weights_transformation(model)
+                openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
+
+
+    def _generate_openvino_ir(self, onnx_model):
+        if self.compression_controller is None:
+            return
+        
+        prune_ir = False
+        if isinstance(self.compression_controller, PTCompositeCompressionAlgorithmController):
+            for child_controller in self.compression_controller.child_ctrls:
+                if isinstance(child_controller, MovementSparsityController):
+                    prune_ir = True
+        elif isinstance(self.compression_controller, MovementSparsityController):
+            prune_ir = True
+
+        cmd = [
+                "mo", 
+                "--input_model", onnx_model, 
+                "--model_name", os.path.splitext(OV_XML_FILE_NAME)[0],
+                "--output_dir", os.path.dirname(onnx_model)
+              ]
+
+        if prune_ir:
+            cmd += ["--transform", "Pruning"]
+
+        subprocess.run(cmd, check=True)
+
+
+    def _set_feature(self):
+        if self.feature is None:
+            raise ValueError(
+                "The model feature defining the model topology needs to be specified for the ONNX export."
             )
-            onnx_config = onnx_config_class(self.model.config)
-            num_parameters = self.model.num_parameters()
-            save_as_external_data = use_external_data_format(num_parameters) or self.ov_config.save_onnx_model
-            f = io.BytesIO() if not save_as_external_data else os.path.join(output_dir, ONNX_WEIGHTS_NAME)
-            self._onnx_export(self.model, onnx_config, self.ov_config, f)
-
-            # Load and save the compressed model
-            model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
-            compress_quantize_weights_transformation(model)
-            openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
-
-    def _set_task(self):
-        if self.task is None:
-            raise ValueError("The model task defining the model topology needs to be specified for the ONNX export.")
-        elif self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-            self.task = "sequence-classification"
-        elif self.task in ["feature-extraction", "fill-mask"]:
-            self.task = "default"
+        elif self.feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+            self.feature = "sequence-classification"
+        elif self.feature in ["feature-extraction", "fill-mask"]:
+            self.feature = "default"
 
     def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, ov_config: OVConfig, f: Union[str, io.BytesIO]):
         opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
