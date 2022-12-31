@@ -47,9 +47,9 @@ python run_qa.py \
 ```
 
 ### Joint Pruning, Quantization and Distillation (JPQD) for BERT on SQuAD1.0
-`OVTrainer` also provides an advanced optimization worflow through the NNCF when Transformer model can be structuly pruned along with 8-bit quantization and distillation. Below is an example which demonstrates how to jointly prune, quantize BERT-base for SQuAD 1.0 using NNCF config `--nncf_compression_config` and distill from BERT-large teacher. This example closely resembles the movement sparsification work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf). The output model of this example attains about 40% structured sparsity (denominated by linear layers only). The joint pruned and quantized OpenVINO IR provides >60% more throughput over quantize-only model on AWS EC2 instance (c6i.32xlarge). Attributed to large teacher distillation, the F1 score is improved to >89%.
+`OVTrainer` also provides an advanced optimization worflow through the NNCF when Transformer model can be structurally pruned along with 8-bit quantization and distillation. Below is an example which demonstrates how to jointly prune, quantize BERT-base for SQuAD 1.0 using NNCF config `--nncf_compression_config` and distill from BERT-large teacher. This example closely resembles the movement sparsification work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf). The output model of this example attains about 40% structured sparsity (denominated by linear layers only). The joint pruned and quantized OpenVINO IR provides >60% more throughput over quantize-only model on AWS EC2 instance (c6i.32xlarge). Attributed to large teacher distillation, the F1 score is improved to >89%.
 
-More on how to configure movement sparsity. See NNCF documentation [here](https://github.com/vuiseng9/nncf/blob/p4-jpqd-dev/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
+More on how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 ```bash
 python run_qa.py \
     --model_name_or_path bert-base-uncased \

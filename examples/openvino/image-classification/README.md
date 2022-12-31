@@ -41,7 +41,8 @@ python run_image_classification.py \
     --output_dir /tmp/beans_outputs/
 ```
 
-### Joint Pruning, Quantization and Distillation (JPQD) Swin on food101
+### Structured Pruning on Swin for food101
+Following is an example to prune Swin-base model structurally while fine-tuning for food101. More on how to configure the pruning algorithm, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 ```bash
 python run_image_classification.py \
     --model_name_or_path microsoft/swin-base-patch4-window7-224 \

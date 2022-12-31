@@ -44,7 +44,7 @@ from wav2vec2_onnx_config import Wav2Vec2OnnxConfig
 logger = logging.getLogger(__name__)
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.25.0")
+check_min_version("4.22.0")
 
 require_version("datasets>=1.14.0", "To fix: pip install -r examples/pytorch/audio-classification/requirements.txt")
 

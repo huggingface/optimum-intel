@@ -64,6 +64,7 @@ from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
 from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
+from nncf.experimental.torch.sparsity.movement.scheduler import MovementSchedulerStage
 from openvino.runtime import Core
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
@@ -669,9 +670,9 @@ class OVTrainer(Trainer):
             else:
                 onnx_config = self.onnx_config
 
-            if isinstance(self.compression_controller, PTCompositeCompressionAlgorithmController):
+            if self._is_pruning_controller_exists():
                 # Note: 
-                # OpenVINO provides automated Structured Pruning in generation of IR
+                # OpenVINO provides automated structured pruning of sparse structure in IR.
                 # However it requires static axes, current export utilizes nncf exporter
                 # which generates static-shaped IR.
 
@@ -693,17 +694,21 @@ class OVTrainer(Trainer):
                 openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
 
 
-    def _generate_openvino_ir(self, onnx_model):
+    def _is_pruning_controller_exists(self):
         if self.compression_controller is None:
-            return
-        
-        prune_ir = False
+            return False
         if isinstance(self.compression_controller, PTCompositeCompressionAlgorithmController):
             for child_controller in self.compression_controller.child_ctrls:
                 if isinstance(child_controller, MovementSparsityController):
-                    prune_ir = True
+                    return True
         elif isinstance(self.compression_controller, MovementSparsityController):
-            prune_ir = True
+            return True
+        return False
+
+
+    def _generate_openvino_ir(self, onnx_model):
+        if self.compression_controller is None:
+            return
 
         cmd = [
                 "mo", 
@@ -712,8 +717,18 @@ class OVTrainer(Trainer):
                 "--output_dir", os.path.dirname(onnx_model)
               ]
 
-        if prune_ir:
-            cmd += ["--transform", "Pruning"]
+        if self._is_pruning_controller_exists():
+            pruning_controller = None
+            if isinstance(self.compression_controller, PTCompositeCompressionAlgorithmController):
+                for child_controller in self.compression_controller.child_ctrls:
+                    if isinstance(child_controller, MovementSparsityController):
+                        pruning_controller = child_controller
+            elif isinstance(self.compression_controller, MovementSparsityController):
+                pruning_controller = self.compression_controller
+
+            if pruning_controller is not None:
+                if pruning_controller.scheduler.current_stage == MovementSchedulerStage.POST_WARMUP:
+                    cmd += ["--transform", "Pruning"]
 
         subprocess.run(cmd, check=True)
 

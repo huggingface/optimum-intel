@@ -65,7 +65,9 @@ On a single V100 GPU (16GB), this script should run in ~14 minutes and yield acc
 
 > If your model classification head dimensions do not fit the number of labels in the dataset, you can specify `--ignore_mismatched_sizes` to adapt it.
 
-### Joint Pruning, Quantization and Distillation (JPQD) for Wav2Vec2 on Keyword Spotting
+### Joint Pruning, Quantization and Distillation (JPQD) of Wav2Vec2 for Keyword Spotting
+`OVTrainer` also provides an advanced optimization worflow through the NNCF when Transformer model can be structurally pruned along with 8-bit quantization and distillation. Following is an example to jointly prune, quantize, distill a Wav2Vec2 model tuned for keywork spotting task. Do take note of additional NNCF config `--nncf_compression_config`.
+More on how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
 ```bash
 python run_audio_classification.py \
