@@ -30,21 +30,15 @@ In this case, we used FID metric to evaluate the model, so we should download [t
 python run_diffusion.py \
     --model_name_or_path lambdalabs/sd-pokemon-diffusers \
     --apply_quantization \
-    --quantization_approach static \
-    --tolerance_criterion 0.02 \
+    --quantization_approach dynamic \
     --verify_loading \
-    --output_dir /tmp/diffusion_output \
-    --base_images base_images \   # The path of the ground truth pictures
+    --base_images base_images \ # The path of the ground truth pictures
     --input_text "a drawing of a gray and black dragon" \
-    --calib_text "a drawing of a green pokemon with red eyes" # The prompt to calibrate for static quantization
+    --calibration_text "a drawing of a green pokemon with red eyes" \ # The prompt to calibrate for static quantization
+    --output_dir /tmp/diffusion_output
 ```
 
 In order to apply dynamic or static, `quantization_approach` must be set to respectively `dynamic` or `static`.
-
-The configuration file containing all the information related to the model quantization can be 
-specified using respectively `quantization_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/text-to-image/quantization.yml),
-configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
 
@@ -76,7 +70,7 @@ python run_diffusion.py \
     --input_text "a drawing of a gray and black dragon" \
     --benchmark
 ```
-The model of quantized UNet
+The model with a quantized U-Net component
 ```bash
 python run_diffusion.py \
     --model_name_or_path sd-pokemon-diffusers \

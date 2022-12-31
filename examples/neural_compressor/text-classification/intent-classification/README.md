@@ -20,7 +20,7 @@ limitations under the License.
 
 The script [`run_clinc.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/text-classification/intent-classification/run_clinc.py)
 allows us to apply static quantization approach as well as distillation 
-using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for 
+using the Intel [Neural Compressor](https://github.com/intel/neural-compressor) library for 
 sequence classification task.
 
 The following example applies post-training static quantization on a distilled MiniLM [model](https://huggingface.co/SetFit/MiniLM_L3_clinc_oos_plus_distilled) fine-tuned on the [CLINC150](https://huggingface.co/datasets/clinc_oos) dataset.
@@ -31,33 +31,24 @@ python run_clinc.py \
     --dataset_name clinc_oos \
     --apply_quantization \
     --quantization_approach static \
-    --do_train \
+    --num_calibration_samples 50 \
     --do_eval \
     --verify_loading \
     --output_dir /tmp/clinc_output
 ```
 
-The following example fine-tunes a MiniLM [model](https://huggingface.co/SetFit/MiniLM_L3_clinc_oos_plus_distilled)  on the [CLINC150](https://huggingface.co/datasets/clinc_oos) dataset while applying knowledge distillation and then applies post-training static quantization on the resulting model.
+The following example applies dynamic quantization on a distilled MiniLM [model](https://huggingface.co/SetFit/MiniLM_L3_clinc_oos_plus_distilled) fine-tuned on the [CLINC150](https://huggingface.co/datasets/clinc_oos) dataset.
 
 ```bash
 python run_clinc.py \
-    --model_name_or_path sentence-transformers/paraphrase-MiniLM-L3-v2 \
+    --model_name_or_path SetFit/MiniLM_L3_clinc_oos_plus_distilled \
     --dataset_name clinc_oos \
-    --apply_distillation \
-    --distillation_config distillation.yml \
-    --teacher_model_name_or_path sentence-transformers/paraphrase-mpnet-base-v2 \
     --apply_quantization \
-    --quantization_approach static \
-    --do_train \
+    --quantization_approach dynamic \
     --do_eval \
     --verify_loading \
     --output_dir /tmp/clinc_output
 ```
 
-The configuration file containing all the information related to the model quantization, distillation and pruning objectives can be 
-specified using respectively `quantization_config` and `distillation_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/quantization.yml) and 
-[distillation](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/distillation.yml) 
-configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.

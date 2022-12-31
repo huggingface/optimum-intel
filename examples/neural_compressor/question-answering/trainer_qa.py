@@ -19,13 +19,13 @@ A subclass of `IncTrainer` specific to Question-Answering tasks
 from transformers.trainer_utils import PredictionOutput
 from transformers.utils import logging
 
-from optimum.intel.neural_compressor.trainer import IncTrainer
+from optimum.intel.neural_compressor.trainer import INCTrainer
 
 
 logger = logging.get_logger(__name__)
 
 
-class QuestionAnsweringIncTrainer(IncTrainer):
+class QuestionAnsweringINCTrainer(INCTrainer):
     def __init__(self, *args, eval_examples=None, post_process_function=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.eval_examples = eval_examples
@@ -41,9 +41,7 @@ class QuestionAnsweringIncTrainer(IncTrainer):
                     f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
                 )
                 self.use_cpu_amp = False
-        if hasattr(self.model, "config") and getattr(self.model.config, "framework", None) == "pytorch_ipex":
-            self.args.use_ipex = False
-            self.args.bf16 = False
+
         # Temporarily disable metric computation, we will do it in the loop here.
         compute_metrics = self.compute_metrics
         self.compute_metrics = None

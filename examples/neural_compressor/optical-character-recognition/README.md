@@ -35,17 +35,11 @@ python run_ocr.py \
     --model_name_or_path microsoft/trocr-small-handwritten \
     --datasets_dir IAM \
     --apply_quantization \
-    --quantization_approach static \
-    --tolerance_criterion=0.9 \
-    --max_eval_samples 500 \
+    --quantization_approach dynamic \
     --verify_loading \
     --output_dir /tmp/trocr_output
 ```
 
-In order to apply dynamic and static quantization, `quantization_approach` must be set to 
-respectively `dynamic` or `static`.
-
-The configuration file containing all the information related to the model quantization objectives can be specified using respectively `quantization_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/quantization.yml) configuration files will be used.
+In order to apply dynamic and static quantization, `quantization_approach` must be set to respectively `dynamic` or `static`.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.

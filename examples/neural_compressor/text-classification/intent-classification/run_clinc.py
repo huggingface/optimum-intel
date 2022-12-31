@@ -41,6 +41,7 @@ from transformers import (
     EvalPrediction,
     HfArgumentParser,
     PretrainedConfig,
+    PreTrainedModel,
     TrainingArguments,
     default_data_collator,
     set_seed,
@@ -49,27 +50,25 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from optimum.intel.neural_compressor import (
-    IncDistillationConfig,
-    IncDistiller,
-    IncOptimizer,
-    IncPruner,
-    IncPruningConfig,
-    IncQuantizationConfig,
-    IncQuantizationMode,
-    IncQuantizer,
-    IncTrainer,
+from neural_compressor import (
+    DistillationConfig,
+    PostTrainingQuantConfig,
+    QuantizationAwareTrainingConfig,
+    WeightPruningConfig,
 )
-from optimum.intel.neural_compressor.quantization import IncQuantizedModel
+from optimum.intel.neural_compressor import INCModel, INCQuantizer, INCTrainer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["WANDB_DISABLED"] = "true"
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.15.0")
+check_min_version("4.20.0")
 
-require_version("datasets>=1.8.0", "To fix: pip install -r examples/text-classification/requirements.txt")
+require_version(
+    "datasets>=1.8.0",
+    "To fix: pip install -r examples/neural_compressor/text-classification/intent-classification/requirements.txt",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -195,31 +194,46 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
     )
-    quantization_approach: Optional[str] = field(
-        default=None,
+    quantization_approach: str = field(
+        default="dynamic",
         metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
+    )
+    num_calibration_samples: int = field(
+        default=50,
+        metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
+    )
+    apply_pruning: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to apply pruning."},
+    )
+    target_sparsity: float = field(
+        default=0.1,
+        metadata={"help": "Targeted sparsity when pruning the model."},
+    )
+    start_epoch: int = field(
+        default=0,
+        metadata={"help": "Epoch for which the pruning process will start."},
+    )
+    end_epoch: Optional[int] = field(
+        default=None,
+        metadata={"help": "Epoch for which the pruning process will end."},
+    )
+    pruning_approach: str = field(
+        default="basic_magnitude",
+        metadata={"help": "Pruning approach. Supported approach is basic_magnitude."},
     )
     apply_distillation: bool = field(
         default=False,
         metadata={"help": "Whether or not to apply distillation."},
     )
-    teacher_model_name_or_path: str = field(
+    teacher_model_name_or_path: Optional[str] = field(
         default=False, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
-    quantization_config: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Path to the directory containing the YAML configuration file used to control the quantization and"
-            "tuning behavior."
-        },
+    verify_loading: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to verify the loading of the quantized model."},
     )
-    distillation_config: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Path to the directory containing the YAML configuration file used to control the distillation"
-            "behavior."
-        },
-    )
+    # TODO : remove
     metric: Optional[str] = field(
         default=None,
         metadata={"help": "Metric used for the tuning strategy."},
@@ -266,20 +280,27 @@ class SetFitModel(torch.nn.Module):
         return sentence_embeddings
 
 
-class CalibrationDataset:
-    def __init__(self, dataset):
-        self.dataset = dataset
+class SetFitModelTraining(torch.nn.Module):
+    def __init__(self, model, tokenizer):
+        super().__init__()
+        self.model = SetFitModel(model)
+        self.tokenizer = tokenizer
+        if hasattr(model, "config"):
+            self.config = model.config
 
-    def __getitem__(self, idx):
-        data = self.dataset[idx]
-        return (
-            torch.tensor(data["input_ids"]),
-            torch.tensor(data["attention_mask"]),
-            torch.tensor(data["token_type_ids"]),
+    def forward(self, sentences=None, *args, **kwargs):
+        if not (isinstance(sentences, (tuple, list)) and len(sentences) == 2):
+            raise ValueError("sentences should be a tuple or a list with 2 sentences string.")
+        inputs = self.tokenizer(
+            sentences[0] + sentences[1],
+            padding=padding,
+            max_length=max_seq_length,
+            truncation=True,
+            return_tensors="pt",
         )
-
-    def __len__(self):
-        return len(self.dataset)
+        embeddings = self.model(**inputs)
+        length = len(embeddings) // 2
+        return {"logits": torch.cosine_similarity(embeddings[:length], embeddings[length:]), "loss": 0}
 
 
 def main():
@@ -423,7 +444,7 @@ def main():
         )
         preprocessed_datasets = preprocessed_datasets.remove_columns(["text", "intent"])
 
-    if training_args.do_train:
+    if training_args.do_train or (optim_args.apply_quantization and optim_args.quantization_approach == "static"):
         if "train" not in preprocessed_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = preprocessed_datasets["train"]
@@ -455,104 +476,68 @@ def main():
     else:
         data_collator = None
 
-    # Initialize our Trainer
-    trainer = IncTrainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
-        compute_metrics=compute_metrics,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-    )
+    quantization_config = None
+    pruning_config = None
+    distillation_config = None
 
-    resume_from_checkpoint = training_args.resume_from_checkpoint
-    metric_name = "accuracy"
-
-    def eval_func(model):
-        setfit_model = SetFitModel(model)
-
-        def get_data(model, dataloader):
-            embeddings = []
-            labels = []
-            for model_input in tqdm(dataloader):
-                labels.append(model_input.pop("labels").numpy())
-                embedding = model(**model_input)
-                embeddings.append(embedding.detach().cpu().numpy())
-            return np.concatenate(embeddings, axis=0), np.concatenate(labels, axis=0)
-
-        # train logistic regressor
-        embeddings, labels = get_data(setfit_model, trainer.get_train_dataloader())
-        sgd = LogisticRegression(max_iter=200)
-        sgd.fit(embeddings, labels)
-
-        # evaluate
-        embeddings, labels = get_data(setfit_model, trainer.get_eval_dataloader())
-        y_pred_test_sgd = sgd.predict(embeddings)
-
-        return compute_metrics(y_pred_test_sgd, labels)[metric_name]
-
-    quantizer = None
-    distiller = None
-    train_func = None
-
-    if not optim_args.apply_quantization and not optim_args.apply_distillation:
+    if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
         raise ValueError("No optimization activated.")
 
-    result_baseline_model = eval_func(model)
+    if not training_args.do_train and (
+        optim_args.apply_distillation
+        or optim_args.apply_pruning
+        or (optim_args.apply_quantization and optim_args.quantization_approach == "aware_training")
+    ):
+        raise ValueError("`do_train` must be set to True.")
+    if optim_args.apply_quantization:
 
-    default_config = os.path.join(
-        os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir, os.path.pardir)), "config"
-    )
+        supported_approach = {"static", "dynamic", "aware_training"}
+        if optim_args.quantization_approach not in supported_approach:
+            raise ValueError(
+                f"Unknown quantization approach. Supported approach are {supported_approach}."
+                f"{optim_args.quantization_approach} was given."
+            )
+        if optim_args.quantization_approach == "aware_training":
+            quantization_config = QuantizationAwareTrainingConfig()
+        else:
+            quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
+
+    if optim_args.apply_pruning:
+
+        if optim_args.end_epoch is None:
+            end_epoch = training_args.num_train_epochs
+        else:
+            end_epoch = min(optim_args.end_epoch, training_args.num_train_epochs - 1)
+
+        pruning_config = WeightPruningConfig(
+            start_epoch=optim_args.start_epoch,
+            end_epoch=end_epoch,
+            target_sparsity=optim_args.target_sparsity,
+            prune_type=optim_args.pruning_approach,
+        )
 
     if optim_args.apply_distillation:
-
-        class SetFitModelTraining(torch.nn.Module):
-            def __init__(self, model, tokenizer):
-                super().__init__()
-                self.model = SetFitModel(model)
-                self.tokenizer = tokenizer
-                if hasattr(model, "config"):
-                    self.config = model.config
-
-            def forward(self, sentences=None, *args, **kwargs):
-                if not (isinstance(sentences, (tuple, list)) and len(sentences) == 2):
-                    raise ValueError("sentences should be a tuple or a list with 2 sentences string.")
-                inputs = self.tokenizer(
-                    sentences[0] + sentences[1],
-                    padding=padding,
-                    max_length=max_seq_length,
-                    truncation=True,
-                    return_tensors="pt",
-                )
-                embeddings = self.model(**inputs)
-                length = len(embeddings) // 2
-                return {"logits": torch.cosine_similarity(embeddings[:length], embeddings[length:]), "loss": 0}
 
         if optim_args.teacher_model_name_or_path is None:
             raise ValueError("A teacher model is needed to apply distillation.")
 
-        if not training_args.do_train:
-            raise ValueError("do_train must be set to True for distillation.")
-
-        teacher_config = AutoConfig.from_pretrained(optim_args.teacher_model_name_or_path)
-        teacher_tokenizer = AutoTokenizer.from_pretrained(
-            optim_args.teacher_model_name_or_path,
-            use_fast=model_args.use_fast_tokenizer,
-        )
         teacher_model = AutoModel.from_pretrained(
             optim_args.teacher_model_name_or_path,
-            from_tf=bool(".ckpt" in model_args.model_name_or_path),
-            config=teacher_config,
+            from_tf=bool(".ckpt" in optim_args.teacher_model_name_or_path),
+            cache_dir=model_args.cache_dir,
+            revision=model_args.model_revision,
+            use_auth_token=True if model_args.use_auth_token else None,
         )
+
         teacher_model = SetFitModelTraining(teacher_model, teacher_tokenizer)
 
         teacher_model.to(training_args.device)
 
-        distillation_config = IncDistillationConfig.from_pretrained(
-            optim_args.distillation_config if optim_args.distillation_config is not None else default_config,
-            cache_dir=model_args.cache_dir,
-        )
+        teacher_tokenizer = AutoTokenizer.from_pretrained(optim_args.teacher_model_name_or_path, use_fast=True)
+        if teacher_tokenizer.vocab != tokenizer.vocab:
+            raise ValueError("Teacher model and student model should have same tokenizer.")
+
+        distillation_config = DistillationConfig(teacher_model=teacher_model)
 
         examples = raw_datasets["train"]["text"]
         if data_args.max_train_samples is not None:
@@ -571,103 +556,76 @@ def main():
         def sentences_data_collator(sentences_pairs):
             return {"sentences": [[sp[i] for sp in sentences_pairs] for i in range(len(sentences_pairs[0]))]}
 
-        def train_func(model):
-            model = SetFitModelTraining(model, tokenizer)
-            trainer.model_wrapped = model
-            trainer.model = model
-            trainer.train_dataset = distillation_dataset
-            data_collator = trainer.data_collator
-            trainer.data_collator = sentences_data_collator
-            checkpoint = None
-            if resume_from_checkpoint is not None:
-                checkpoint = resume_from_checkpoint
-            elif last_checkpoint is not None:
-                checkpoint = last_checkpoint
-            train_result = trainer.train(distiller.distillation, resume_from_checkpoint=checkpoint)
-            metrics = train_result.metrics
-            trainer.save_model()  # Saves the tokenizer too for easy upload
-            trainer.log_metrics("train", metrics)
-            trainer.save_metrics("train", metrics)
-            trainer.save_state()
-            trainer.data_collator = data_collator
-            trainer.train_dataset = train_dataset
-            return trainer.model.model.model
+        train_dataset = distillation_dataset
 
-        # Creation Distillation object used for IncTrainer training loop
-        distiller = IncDistiller(
-            teacher_model=teacher_model, config=distillation_config, eval_func=lambda x: 1, train_func=train_func
-        )
-
-    if optim_args.apply_quantization:
-
-        if not training_args.do_eval:
-            raise ValueError("do_eval must be set to True for quantization.")
-
-        q8_config = IncQuantizationConfig.from_pretrained(
-            optim_args.quantization_config if optim_args.quantization_config is not None else default_config,
-            cache_dir=model_args.cache_dir,
-        )
-
-        # Set metric tolerance if specified
-        if optim_args.tolerance_criterion is not None:
-            q8_config.set_tolerance(optim_args.tolerance_criterion)
-
-        # Set quantization approach if specified
-        if optim_args.quantization_approach is not None:
-            supported_approach = {"static", "dynamic", "aware_training"}
-            if optim_args.quantization_approach not in supported_approach:
-                raise ValueError(
-                    "Unknown quantization approach. Supported approach are " + ", ".join(supported_approach)
-                )
-            quant_approach = getattr(IncQuantizationMode, optim_args.quantization_approach.upper()).value
-            q8_config.set_config("quantization.approach", quant_approach)
-
-        quant_approach = IncQuantizationMode(q8_config.get_config("quantization.approach"))
-        # torch FX used for post-training quantization and quantization aware training
-        # dynamic quantization will be added when torch FX is more mature
-        if quant_approach != IncQuantizationMode.DYNAMIC:
-            if not training_args.do_train:
-                raise ValueError("do_train must be set to True for static and aware training quantization.")
-
-            q8_config.set_config("model.framework", "pytorch_fx")
-
-        calib_dataloader = (
-            DataLoader(CalibrationDataset(train_dataset), 1) if quant_approach == IncQuantizationMode.STATIC else None
-        )
-        quantizer = IncQuantizer(
-            q8_config, eval_func=eval_func, train_func=train_func, calib_dataloader=calib_dataloader
-        )
-
-    optimizer = IncOptimizer(
-        model,
-        quantizer=quantizer,
-        distiller=distiller,
-        eval_func=eval_func,
-        train_func=train_func,
+    # Initialize our Trainer
+    trainer = INCTrainer(
+        model=model,
+        task="default",
+        quantization_config=quantization_config if optim_args.quantization_approach == "aware_training" else None,
+        pruning_config=pruning_config,
+        distillation_config=distillation_config,
+        args=training_args,
+        train_dataset=train_dataset if training_args.do_train else None,
+        eval_dataset=eval_dataset if training_args.do_eval else None,
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+        compute_metrics=compute_metrics,
     )
 
-    optimized_model = optimizer.fit()
-    result_optimized_model = eval_func(optimized_model)
+    # Training
+    if training_args.do_train:
+        checkpoint = None
+        if training_args.resume_from_checkpoint is not None:
+            checkpoint = training_args.resume_from_checkpoint
+        elif last_checkpoint is not None:
+            checkpoint = last_checkpoint
+        # if optim_args.apply_distillation:
+        # data_collator = trainer.data_collator
+        # trainer.data_collator = sentences_data_collator
 
-    # Save the resulting model and its corresponding configuration in the given directory
-    optimizer.save_pretrained(training_args.output_dir)
+        train_result = trainer.train(resume_from_checkpoint=checkpoint)
+        metrics = train_result.metrics
+        max_train_samples = (
+            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+        )
+        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
 
-    logger.info(
-        f"Optimized model with {metric_name} of {result_optimized_model} "
-        f"saved to: {training_args.output_dir}. Original model had an {metric_name} of {result_baseline_model}."
-    )
+        trainer.save_model()
+
+        trainer.log_metrics("train", metrics)
+        trainer.save_metrics("train", metrics)
+        trainer.save_state()
+
+        # if optim_args.apply_distillation:
+        # trainer.data_collator = data_collator
+
+    if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic"}:
+        model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
+        quantizer = INCQuantizer.from_pretrained(model)
+        if optim_args.quantization_approach == "static":
+            num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
+            train_dataset = train_dataset.select(range(num_calibration_samples))
+            quantization_config.calibration_sampling_size = num_calibration_samples
+
+        quantizer.quantize(
+            quantization_config=quantization_config,
+            save_directory=training_args.output_dir,
+            calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
+            batch_size=training_args.per_device_train_batch_size,
+            # save_onnx_model=True,
+        )
 
     if optim_args.apply_quantization and optim_args.verify_loading:
-
-        # Load the model obtained after Intel Neural Compressor quantization
-        loaded_model = IncQuantizedModel.from_pretrained(training_args.output_dir)
-        loaded_model.eval()
-        result_loaded_model = eval_func(loaded_model)
-
-        if result_loaded_model != result_optimized_model:
-            logger.error("The quantized model was not successfully loaded.")
-        else:
-            logger.info(f"The quantized model was successfully loaded.")
+        loaded_model = INCModel.from_pretrained(training_args.output_dir)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        with torch.no_grad():
+            original_model_outputs = quantizer._quantized_model(**tokens)
+            quantized_model_outputs = loaded_model(**tokens)
+            if torch.allclose(original_model_outputs.pooler_output, quantized_model_outputs.pooler_output, atol=1e-4):
+                logger.info("The quantized model was successfully loaded.")
+            else:
+                logger.warning("The quantized model was not successfully loaded.")
 
 
 def _mp_fn(index):
