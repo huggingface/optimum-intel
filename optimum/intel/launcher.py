@@ -1,5 +1,7 @@
 from neural_coder.launcher import Launcher
+
 from .neural_compressor.neural_coder_adaptor import NeuralCoderAdaptor
+
 
 args = Launcher.parse_args()
 
