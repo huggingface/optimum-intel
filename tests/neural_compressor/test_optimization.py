@@ -75,8 +75,7 @@ class QuantizationTest(unittest.TestCase):
             self.assertTrue("logits" in onnx_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
-            # TODO: Enable
-            # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
     def test_dynamic_accuracy_strategy_quantization(self):
         model_name = "distilbert-base-cased-distilled-squad"
@@ -145,8 +144,7 @@ class QuantizationTest(unittest.TestCase):
             self.assertTrue("logits" in onnx_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
-            # TODO: Enable
-            # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
     def test_aware_training_quantization(self):
         model_name = "distilbert-base-uncased"
@@ -185,8 +183,55 @@ class QuantizationTest(unittest.TestCase):
             self.assertTrue("logits" in onnx_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
-            # TODO: Enable
-            # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+    def test_aware_training_quantization_pruning(self):
+        model_name = "distilbert-base-uncased"
+        target_sparsity = 0.9
+        pruning_config = WeightPruningConfig(
+            pruning_type="magnitude",
+            start_step=0,
+            end_step=15,
+            target_sparsity=target_sparsity,
+            pruning_scope="local",
+        )
+        quantization_config = QuantizationAwareTrainingConfig()
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        metric = evaluate.load("accuracy")
+        dataset = load_dataset("glue", "sst2")
+        dataset = dataset.map(
+            lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
+        )
+
+        def compute_metrics(p: EvalPrediction):
+            return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = INCTrainer(
+                model=model,
+                quantization_config=quantization_config,
+                pruning_config=pruning_config,
+                task="sequence-classification",
+                args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
+                train_dataset=dataset["train"].select(range(64)),
+                eval_dataset=dataset["validation"].select(range(64)),
+                compute_metrics=compute_metrics,
+                tokenizer=tokenizer,
+                data_collator=default_data_collator,
+            )
+            train_result = trainer.train()
+            metrics = trainer.evaluate()
+            trainer.save_model(save_onnx_model=True)
+
+            transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
+            onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
+            onnx_outputs = onnx_model(**tokens)
+            self.assertTrue("logits" in onnx_outputs)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
+            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
 
 class PruningTest(unittest.TestCase):
