@@ -183,6 +183,7 @@ class ModelArguments:
                 "Only make use of `--freeze_feature_encoder`."
             )
 
+
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -385,13 +386,13 @@ def main():
         model=model,
         teacher_model=teacher_model,
         ov_config=ov_config,
-        feature='audio-classification',
+        feature="audio-classification",
         args=training_args,
         train_dataset=raw_datasets["train"] if training_args.do_train else None,
         eval_dataset=raw_datasets["eval"] if training_args.do_eval else None,
         compute_metrics=compute_metrics,
         tokenizer=feature_extractor,
-        onnx_config=Wav2Vec2OnnxConfig(model.config)
+        onnx_config=Wav2Vec2OnnxConfig(model.config),
     )
 
     # Training

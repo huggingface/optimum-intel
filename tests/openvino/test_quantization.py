@@ -40,14 +40,16 @@ from parameterized import parameterized
 
 from nncf.torch.dynamic_graph.graph_tracer import create_mock_tensor
 
-def generate_mock_tokens(input_infos):   
+
+def generate_mock_tokens(input_infos):
     mock_tokens = dict()
     for info in input_infos:
         single_batch_info = copy.copy(info)
         input_shape = tuple([1] + list(info.shape)[1:])
         single_batch_info.shape = input_shape
-        mock_tokens[info.keyword] = create_mock_tensor(single_batch_info, 'cpu')
+        mock_tokens[info.keyword] = create_mock_tensor(single_batch_info, "cpu")
     return mock_tokens
+
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
@@ -137,15 +139,14 @@ MOVEMENT_SPARSITY_CONFIG_FOR_BERT = {
         "warmup_start_epoch": 1,
         "warmup_end_epoch": 2,
         "importance_regularization_factor": 1.0,
-        "enable_structured_masking": True
+        "enable_structured_masking": True,
     },
     "sparse_structure_by_scopes": [
         {"mode": "block", "sparse_factors": [32, 32], "target_scopes": "{re}.*BertAttention.*"},
         {"mode": "per_dim", "axis": 0, "target_scopes": "{re}.*BertIntermediate.*"},
-        {"mode": "per_dim", "axis": 1, "target_scopes": "{re}.*BertOutput.*"}
+        {"mode": "per_dim", "axis": 1, "target_scopes": "{re}.*BertOutput.*"},
     ],
-    "ignored_scopes": ["{re}.*NNCFEmbedding", "{re}.*LayerNorm.*",
-                       "{re}.*pooler.*", "{re}.*classifier.*"]
+    "ignored_scopes": ["{re}.*NNCFEmbedding", "{re}.*LayerNorm.*", "{re}.*pooler.*", "{re}.*classifier.*"],
 }
 
 
@@ -195,28 +196,19 @@ class OVTrainerTest(unittest.TestCase):
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
             self.assertEqual(expected_int8, num_int8)
 
-
     def build_glue_sst_trainer(
-        self,
-        output_dir,
-        tokenizer,
-        model,
-        teacher_model=None,
-        ov_config=OVConfig(),
-        **training_args
+        self, output_dir, tokenizer, model, teacher_model=None, ov_config=OVConfig(), **training_args
     ):
         dataset = load_dataset("glue", "sst2")
         dataset = dataset.map(
-            lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128),
-            batched=True
+            lambda examples: tokenizer(examples["sentence"], padding="max_length", max_length=128), batched=True
         )
         train_dataset = dataset["train"].select(range(16))
         eval_dataset = dataset["validation"].select(range(16))
         metric = evaluate.load("glue", "sst2")
 
-        def compute_metrics(p): return metric.compute(
-            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
-        )
+        def compute_metrics(p):
+            return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
 
         trainer = OVTrainer(
             model=model,
@@ -224,12 +216,7 @@ class OVTrainerTest(unittest.TestCase):
             ov_config=ov_config,
             feature="sequence-classification",
             args=OVTrainingArguments(
-                output_dir,
-                num_train_epochs=3.0,
-                do_train=True,
-                do_eval=True,
-                logging_steps=1,
-                **training_args
+                output_dir, num_train_epochs=3.0, do_train=True, do_eval=True, logging_steps=1, **training_args
             ),
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -250,8 +237,8 @@ class OVTrainerTest(unittest.TestCase):
         return num_fake_quantize, num_int8
 
     def test_training_quantization_distillation(self):
-        model_name = 'hf-internal-testing/tiny-bert'
-        teacher_model_name = 'hf-internal-testing/tiny-bert'
+        model_name = "hf-internal-testing/tiny-bert"
+        teacher_model_name = "hf-internal-testing/tiny-bert"
         expected_fake_quantize = 19
         expected_int8 = 14
 
@@ -271,7 +258,7 @@ class OVTrainerTest(unittest.TestCase):
             )
             trainer.train()
             trainer.save_model()
-            self.assertIn('distillation_loss', trainer.compression_metrics)
+            self.assertIn("distillation_loss", trainer.compression_metrics)
 
             ovmodel = OVModelForSequenceClassification.from_pretrained(tmp_dir)
             num_fake_quantize, num_int8 = self.count_quantization_op_number(ovmodel)
@@ -283,7 +270,7 @@ class OVTrainerTest(unittest.TestCase):
             self.assertTrue("logits" in outputs)
 
     def test_training_movement_sparsity(self):
-        model_name = 'hf-internal-testing/tiny-bert'
+        model_name = "hf-internal-testing/tiny-bert"
         expected_binary_masks = 24
         ov_config = OVConfig(compression=MOVEMENT_SPARSITY_CONFIG_FOR_BERT)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -300,8 +287,8 @@ class OVTrainerTest(unittest.TestCase):
             trainer.train()
             trainer.save_model()
 
-            state_dict = torch.load(Path(tmp_dir, WEIGHTS_NAME), map_location='cpu')
-            num_binary_masks = sum(key.endswith('_binary_mask') for key in state_dict)
+            state_dict = torch.load(Path(tmp_dir, WEIGHTS_NAME), map_location="cpu")
+            num_binary_masks = sum(key.endswith("_binary_mask") for key in state_dict)
             self.assertEqual(expected_binary_masks, num_binary_masks)
 
             ovmodel = OVModelForSequenceClassification.from_pretrained(tmp_dir)
@@ -310,7 +297,7 @@ class OVTrainerTest(unittest.TestCase):
             self.assertTrue("logits" in outputs)
 
     def test_training_movement_sparsity_quantization(self):
-        model_name = 'hf-internal-testing/tiny-bert'
+        model_name = "hf-internal-testing/tiny-bert"
         expected_binary_masks = 24
         expected_fake_quantize = 19
         expected_int8 = 14
@@ -329,10 +316,10 @@ class OVTrainerTest(unittest.TestCase):
             )
             trainer.train()
             trainer.save_model()
-            self.assertIn('compression_loss', trainer.compression_metrics)
+            self.assertIn("compression_loss", trainer.compression_metrics)
 
-            state_dict = torch.load(Path(tmp_dir, WEIGHTS_NAME), map_location='cpu')
-            num_binary_masks = sum(key.endswith('_binary_mask') for key in state_dict)
+            state_dict = torch.load(Path(tmp_dir, WEIGHTS_NAME), map_location="cpu")
+            num_binary_masks = sum(key.endswith("_binary_mask") for key in state_dict)
             self.assertEqual(expected_binary_masks, num_binary_masks)
 
             ovmodel = OVModelForSequenceClassification.from_pretrained(tmp_dir)
@@ -345,8 +332,8 @@ class OVTrainerTest(unittest.TestCase):
             self.assertTrue("logits" in outputs)
 
     def test_training_movement_sparsity_quantization_distillation(self):
-        model_name = 'hf-internal-testing/tiny-bert'
-        teacher_model_name = 'hf-internal-testing/tiny-bert'
+        model_name = "hf-internal-testing/tiny-bert"
+        teacher_model_name = "hf-internal-testing/tiny-bert"
         expected_binary_masks = 24
         expected_fake_quantize = 19
         expected_int8 = 14
@@ -367,11 +354,11 @@ class OVTrainerTest(unittest.TestCase):
             )
             trainer.train()
             trainer.save_model()
-            self.assertIn('distillation_loss', trainer.compression_metrics)
-            self.assertIn('compression_loss', trainer.compression_metrics)
+            self.assertIn("distillation_loss", trainer.compression_metrics)
+            self.assertIn("compression_loss", trainer.compression_metrics)
 
-            state_dict = torch.load(Path(tmp_dir, WEIGHTS_NAME), map_location='cpu')
-            num_binary_masks = sum(key.endswith('_binary_mask') for key in state_dict)
+            state_dict = torch.load(Path(tmp_dir, WEIGHTS_NAME), map_location="cpu")
+            num_binary_masks = sum(key.endswith("_binary_mask") for key in state_dict)
             self.assertEqual(expected_binary_masks, num_binary_masks)
 
             ovmodel = OVModelForSequenceClassification.from_pretrained(tmp_dir)

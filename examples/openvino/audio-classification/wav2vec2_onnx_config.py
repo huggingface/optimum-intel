@@ -14,9 +14,11 @@ class Wav2Vec2OnnxConfig(OnnxConfig):
     @property
     def inputs(self):
         dynamic_axis = {0: "batch", 1: "sequence"}
-        return dict([
-            ("input_values", dynamic_axis),
-        ])
+        return dict(
+            [
+                ("input_values", dynamic_axis),
+            ]
+        )
 
     def generate_dummy_inputs(
         self,

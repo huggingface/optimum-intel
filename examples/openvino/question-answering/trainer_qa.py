@@ -100,34 +100,26 @@ class QuestionAnsweringOVTrainer(OVTrainer):
 
         return PredictionOutput(predictions=predictions.predictions, label_ids=predictions.label_ids, metrics=metrics)
 
-
     def compute_distillation_loss(self, inputs, student_outputs):
         with torch.no_grad():
             teacher_outputs = self.teacher(**inputs)
 
-        distilliation_loss_start = (
-                F.kl_div(
-                    input=F.log_softmax(student_outputs.start_logits / self.temperature, dim=-1),
-                    target=F.softmax(teacher_outputs.start_logits / self.temperature, dim=-1),
-                    reduction="batchmean",
-                )
-                * (self.temperature ** 2)
-            )
-        distilliation_loss_end = (
-                F.kl_div(
-                    input=F.log_softmax(student_outputs.end_logits / self.temperature, dim=-1),
-                    target=F.softmax(teacher_outputs.end_logits  / self.temperature, dim=-1),
-                    reduction="batchmean",
-                )
-                * (self.temperature ** 2)
-            )
+        distilliation_loss_start = F.kl_div(
+            input=F.log_softmax(student_outputs.start_logits / self.temperature, dim=-1),
+            target=F.softmax(teacher_outputs.start_logits / self.temperature, dim=-1),
+            reduction="batchmean",
+        ) * (self.temperature**2)
+        distilliation_loss_end = F.kl_div(
+            input=F.log_softmax(student_outputs.end_logits / self.temperature, dim=-1),
+            target=F.softmax(teacher_outputs.end_logits / self.temperature, dim=-1),
+            reduction="batchmean",
+        ) * (self.temperature**2)
         return (distilliation_loss_start + distilliation_loss_end) / 2.0
-
 
     def compute_loss(self, model, inputs, return_outputs=False):
         if self.teacher is None:
             retval = super().compute_loss(model, inputs, return_outputs)
-        
+
             if return_outputs is True:
                 loss, outputs = retval
             else:
@@ -136,7 +128,7 @@ class QuestionAnsweringOVTrainer(OVTrainer):
             # compute_loss is not used as QA distillation requires custom handling for outputs
             # Using compute_loss incurs excessive computational footprint
             outputs = self.model(**inputs)
-            
+
             task_loss_start = self.criterion(outputs.start_logits, inputs["start_positions"])
             task_loss_end = self.criterion(outputs.end_logits, inputs["end_positions"])
             task_loss = (task_loss_start + task_loss_end) / 2.0

@@ -52,7 +52,14 @@ from transformers.trainer_utils import (
     has_length,
     speed_metrics,
 )
-from transformers.utils import WEIGHTS_NAME, TensorType, is_apex_available, is_sagemaker_mp_enabled, is_torch_tpu_available, logging
+from transformers.utils import (
+    WEIGHTS_NAME,
+    TensorType,
+    is_apex_available,
+    is_sagemaker_mp_enabled,
+    is_torch_tpu_available,
+    logging,
+)
 
 import openvino
 from nncf import NNCFConfig
@@ -146,7 +153,7 @@ class OVTrainer(Trainer):
             self.teacher = teacher_model.to(args.device)
             self.teacher.eval()
             self.distillation_weight = args.distillation_weight
-            self.temperature = args.distillation_temperature 
+            self.temperature = args.distillation_temperature
         self.compression_controller = None
 
         if self.ov_config is not None and self.args.do_train:
@@ -163,7 +170,7 @@ class OVTrainer(Trainer):
                     BNAdaptationInitArgs(OVDataLoader(train_dataloader)),
                 ]
             )
-            nncf_config['log_dir'] = args.output_dir
+            nncf_config["log_dir"] = args.output_dir
             self.compression_controller, self.model = create_compressed_model(self.model, nncf_config)
             self.model_wrapped = self.model
 
@@ -406,7 +413,7 @@ class OVTrainer(Trainer):
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
                     if self.teacher is not None or self.compression_controller is not None:
-                        self.compression_metrics=defaultdict(float)
+                        self.compression_metrics = defaultdict(float)
                     if self.compression_controller is not None:
                         # Must be called at the beginning of each training step to prepare the compression method
                         self.compression_controller.scheduler.step()
@@ -543,8 +550,8 @@ class OVTrainer(Trainer):
         return F.kl_div(
             input=F.log_softmax(student_logits / self.temperature, dim=-1),
             target=F.softmax(teacher_logits / self.temperature, dim=-1),
-            reduction="batchmean"
-        ) * (self.temperature ** 2)
+            reduction="batchmean",
+        ) * (self.temperature**2)
 
     def compute_loss(self, model, inputs, return_outputs=False):
         if self.teacher is None:
@@ -570,7 +577,6 @@ class OVTrainer(Trainer):
             self.compression_metrics["compression_loss"] = compression_loss.item()
 
         return (loss, outputs) if return_outputs else loss
-
 
     def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
         if self.control.should_log:
@@ -671,15 +677,15 @@ class OVTrainer(Trainer):
                 onnx_config = self.onnx_config
 
             if self._is_pruning_controller_exists():
-                # Note: 
+                # Note:
                 # OpenVINO provides automated structured pruning of sparse structure in IR.
                 # However it requires static axes, current export utilizes nncf exporter
                 # which generates static-shaped IR.
 
                 f = os.path.join(output_dir, "model.onnx")
-                self.compression_controller.export_model(f, 
-                    input_names=list(onnx_config.inputs.keys()),
-                    output_names=list(onnx_config.outputs.keys()))
+                self.compression_controller.export_model(
+                    f, input_names=list(onnx_config.inputs.keys()), output_names=list(onnx_config.outputs.keys())
+                )
                 self._generate_openvino_ir(f)
             else:
                 use_external_data_format = (
@@ -693,7 +699,6 @@ class OVTrainer(Trainer):
                 compress_quantize_weights_transformation(model)
                 openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
 
-
     def _is_pruning_controller_exists(self):
         if self.compression_controller is None:
             return False
@@ -705,17 +710,19 @@ class OVTrainer(Trainer):
             return True
         return False
 
-
     def _generate_openvino_ir(self, onnx_model):
         if self.compression_controller is None:
             return
 
         cmd = [
-                "mo", 
-                "--input_model", onnx_model, 
-                "--model_name", os.path.splitext(OV_XML_FILE_NAME)[0],
-                "--output_dir", os.path.dirname(onnx_model)
-              ]
+            "mo",
+            "--input_model",
+            onnx_model,
+            "--model_name",
+            os.path.splitext(OV_XML_FILE_NAME)[0],
+            "--output_dir",
+            os.path.dirname(onnx_model),
+        ]
 
         if self._is_pruning_controller_exists():
             pruning_controller = None
@@ -731,7 +738,6 @@ class OVTrainer(Trainer):
                     cmd += ["--transform", "Pruning"]
 
         subprocess.run(cmd, check=True)
-
 
     def _set_feature(self):
         if self.feature is None:
