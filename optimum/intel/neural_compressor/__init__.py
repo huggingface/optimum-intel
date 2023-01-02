@@ -24,6 +24,16 @@ from .quantization import (
     INCModelForTokenClassification,
     INCModelForVision2Seq,
     INCQuantizationMode,
+    IncQuantizedModel,
+    IncQuantizedModelForCausalLM,
+    IncQuantizedModelForMaskedLM,
+    IncQuantizedModelForMultipleChoice,
+    IncQuantizedModelForQuestionAnswering,
+    IncQuantizedModelForSeq2SeqLM,
+    IncQuantizedModelForSequenceClassification,
+    IncQuantizedModelForTokenClassification,
+    IncQuantizedModelForVision2Seq,
+    IncQuantizedModelForXLNetLM,
     INCQuantizer,
 )
 from .trainer import INCTrainer

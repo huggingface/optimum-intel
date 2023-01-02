@@ -441,9 +441,8 @@ class INCModel:
                 The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a
                 git-based system for storing models and other artifacts on huggingface.co, so ``revision`` can be any
                 identifier allowed by git.
-            state_dict (`Dict[str, torch.Tensor]`, *optional*):
-                State dictionary of the quantized model, if not specified q_model_name will be used to load the
-                state dictionary.
+            state_dict_path (`str`, *optional*):
+                The path to the state dictionary of the quantized model.
         Returns:
             q_model: Quantized model.
         """
@@ -454,7 +453,7 @@ class INCModel:
             ("revision", None),
         ]
         download_kwargs = {name: kwargs.get(name, default_value) for (name, default_value) in download_kwarg_default}
-        state_dict = kwargs.get("state_dict", None)
+        state_dict_path = kwargs.get("state_dict_path", None)
 
         config = AutoConfig.from_pretrained(model_name_or_path)
         model_class = _get_model_class(config, cls.TRANSFORMERS_AUTO_CLASS._model_mapping)
@@ -490,7 +489,7 @@ class INCModel:
         model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
         model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
 
-        if state_dict is None:
+        if state_dict_path is None:
             q_model_name = q_model_name if q_model_name is not None else WEIGHTS_NAME
             revision = download_kwargs.pop("revision", None)
             if os.path.isdir(model_name_or_path):
@@ -533,6 +532,11 @@ class INCModel:
 
         if getattr(config, "framework", None) == "pytorch_ipex":
             raise ValueError("INC IPEX is currently not supported")
+
+        # Load the the state dictionary of the model ti verify whether the model is quantized with INC
+        state_dict = torch.load(state_dict_path)
+        if "best_configure" not in state_dict:
+            return model
 
         return load(state_dict_path, model)
 
@@ -578,5 +582,60 @@ class INCModelForXLNetLM(INCModel):
 
 
 class INCModelForVision2Seq(INCModel):
+
+    TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq
+
+
+class IncQuantizedModel(INCModel):
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        warnings.warn(
+            f"The class `{cls.__name__}` has been depreciated and will be removed in optimum-intel v1.7, please use "
+            f"`{cls.__name__.replace('IncQuantized', 'INC')}` instead."
+        )
+        return super().from_pretrained(*args, **kwargs)
+
+
+class IncQuantizedModelForQuestionAnswering(IncQuantizedModel):
+
+    TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
+
+
+class IncQuantizedModelForSequenceClassification(IncQuantizedModel):
+
+    TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
+
+
+class IncQuantizedModelForTokenClassification(IncQuantizedModel):
+
+    TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
+
+
+class IncQuantizedModelForMultipleChoice(IncQuantizedModel):
+
+    TRANSFORMERS_AUTO_CLASS = AutoModelForMultipleChoice
+
+
+class IncQuantizedModelForSeq2SeqLM(IncQuantizedModel):
+
+    TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
+
+
+class IncQuantizedModelForCausalLM(IncQuantizedModel):
+
+    TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
+
+
+class IncQuantizedModelForMaskedLM(IncQuantizedModel):
+
+    TRANSFORMERS_AUTO_CLASS = AutoModelForMaskedLM
+
+
+class IncQuantizedModelForXLNetLM(IncQuantizedModel):
+
+    TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel
+
+
+class IncQuantizedModelForVision2Seq(IncQuantizedModel):
 
     TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq
