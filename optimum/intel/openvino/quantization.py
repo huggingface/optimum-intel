@@ -35,7 +35,7 @@ from nncf.torch import create_compressed_model, register_default_init_args
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
-from openvino.offline_transformations import compress_quantize_weights_transformation
+from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
 from optimum.quantization_base import OptimumQuantizer
 

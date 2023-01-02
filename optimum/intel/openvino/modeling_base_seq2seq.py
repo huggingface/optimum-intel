@@ -27,7 +27,7 @@ from transformers.onnx.utils import get_preprocessor
 import openvino
 from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
-from openvino.offline_transformations import compress_model_transformation
+from openvino._offline_transformations import compress_model_transformation
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export
 
@@ -68,7 +68,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self._device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.preprocessors = kwargs.get("preprocessors", [])
-        self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        self.ov_config = {}
         if "GPU" in self._device:
             raise ValueError("Support of dynamic shapes for GPU devices is not yet available.")
         if self.is_dynamic:

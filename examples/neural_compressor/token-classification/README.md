@@ -21,6 +21,10 @@ The script [`run_ner.py`](https://github.com/huggingface/optimum-intel/blob/main
 allows us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for token classification tasks.
 
+For pruning, we support snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock. You can refer to [the pruning details](https://github.com/intel/neural-compressor/tree/master/neural_compressor/pruner#pruning-types).
+
+> **_Note:_** At present, neural_compressor only support to prune linear and conv ops. So if we set a target sparsity is 0.9, it means that the pruning op's sparsity will be 0.9, not the whole model's sparsity is 0.9. For example: the embedding ops will not be pruned in the model.
+
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the CoNLL-2003 task.
 
 ```bash
@@ -29,6 +33,7 @@ python run_ner.py \
     --dataset_name conll2003 \
     --apply_quantization \
     --quantization_approach static \
+    --num_calibration_samples 50 \
     --do_eval \
     --verify_loading \
     --output_dir /tmp/conll03_output
@@ -44,6 +49,8 @@ python run_ner.py \
     --teacher_model_name_or_path elastic/distilbert-base-uncased-finetuned-conll03-english \
     --apply_quantization \
     --quantization_approach aware_training \
+    --num_train_epochs 1 \
+    --max_train_samples 100 \
     --do_train \
     --do_eval \
     --verify_loading \
@@ -61,6 +68,8 @@ python run_ner.py \
     --quantization_approach dynamic \
     --apply_pruning \
     --target_sparsity 0.1 \
+    --num_train_epochs 4 \
+    --max_train_samples 100 \
     --do_train \
     --do_eval \
     --verify_loading \
@@ -70,11 +79,5 @@ python run_ner.py \
 In order to apply dynamic, static or aware-training quantization, `quantization_approach` must be set to respectively 
 `dynamic`, `static` or `aware_training`.
 
-The configuration file containing all the information related to the model quantization, distillation and pruning objectives can be 
-specified using respectively `quantization_config`, `distillation_config` and `pruning_config`. If not specified, the default
-[quantization](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/quantization.yml),
-[distillation](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/distillation.yml),
-and [pruning](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/config/prune.yml) 
-configuration files will be used.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.

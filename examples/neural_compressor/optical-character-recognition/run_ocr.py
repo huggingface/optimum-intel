@@ -8,20 +8,20 @@ from typing import Optional
 import pandas as pd
 import torch
 import transformers
-from datasets import load_metric
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from transformers import HfArgumentParser, TrainingArguments, TrOCRProcessor, VisionEncoderDecoderModel
 from transformers.utils import check_min_version
 
-from optimum.intel.neural_compressor import IncOptimizer, IncQuantizationConfig, IncQuantizationMode, IncQuantizer
-from optimum.intel.neural_compressor.quantization import IncQuantizedModelForVision2Seq
+import evaluate
+from neural_compressor import PostTrainingQuantConfig
+from optimum.intel.neural_compressor import INCModelForVision2Seq, INCQuantizer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.17.0")
+check_min_version("4.20.0")
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +73,8 @@ class DataTrainingArguments:
             )
         },
     )
-    max_calibration_samples: Optional[int] = field(
-        default=100, metadata={"help": ("The Number of samples to calibration quantization sacle and zero point.")}
-    )
-    max_eval_samples: Optional[int] = field(
-        default=None,
+    max_eval_samples: int = field(
+        default=50,
         metadata={"help": ("Number of samples to evaluation.")},
     )
 
@@ -98,20 +95,13 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
     )
-    quantization_approach: Optional[str] = field(
-        default=None,
-        metadata={"help": "Quantization approach. Supported approach are static and dynamic."},
+    quantization_approach: str = field(
+        default="dynamic",
+        metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
     )
-    quantization_config: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Path to the directory containing the YAML configuration file used to control the quantization and "
-            "tuning behavior."
-        },
-    )
-    tolerance_criterion: Optional[float] = field(
-        default=None,
-        metadata={"help": "Performance tolerance when optimizing the model."},
+    num_calibration_samples: int = field(
+        default=50,
+        metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
     )
     verify_loading: bool = field(
         default=False,
@@ -190,7 +180,9 @@ def main():
 
     processor = TrOCRProcessor.from_pretrained(model_args.model_name_or_path)
     test_dataset = IAMDataset(
-        root_dir=data_args.datasets_dir, processor=processor, max_samples=data_args.max_eval_samples
+        root_dir=data_args.datasets_dir,
+        processor=processor,
+        max_samples=data_args.max_eval_samples,
     )
     test_dataloader = DataLoader(test_dataset, batch_size=training_args.per_device_eval_batch_size)
 
@@ -207,7 +199,7 @@ def main():
     model.config.encoder.num_beams = data_args.num_beams
     model.to(device)
 
-    cer = load_metric("cer")
+    metric = evaluate.load("cer")
 
     class AverageMeter(object):
         """Computes and stores the average and current value"""
@@ -255,10 +247,10 @@ def main():
             label_str = processor.batch_decode(labels, skip_special_tokens=True)
 
             # add batch to metric
-            cer.add_batch(predictions=pred_str, references=label_str)
+            metric.add_batch(predictions=pred_str, references=label_str)
             if iters is not None and i >= iters:
                 break
-        score = cer.compute()
+        score = metric.compute()
         print("Batch size = %d" % training_args.per_device_eval_batch_size)
         if training_args.per_device_eval_batch_size == 1:
             print("Latency: %.3f ms" % (batch_time.avg * 1000))
@@ -273,54 +265,26 @@ def main():
         return score
 
     if optim_args.apply_quantization:
-        default_config = os.path.join(
-            os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir)), "config"
+        quantization_config = PostTrainingQuantConfig(
+            approach=optim_args.quantization_approach,
+            calibration_sampling_size=data_args.max_eval_samples,
         )
-        q8_config = IncQuantizationConfig.from_pretrained(
-            optim_args.quantization_config if optim_args.quantization_config is not None else default_config,
-            config_file_name="quantization.yml",
-            cache_dir=model_args.cache_dir,
+        quantizer = INCQuantizer.from_pretrained(model)
+        quantizer.quantize(
+            quantization_config=quantization_config,
+            save_directory=training_args.output_dir,
+            calibration_dataset=test_dataset if optim_args.quantization_approach == "static" else None,
+            batch_size=training_args.per_device_eval_batch_size,
+            remove_unused_columns=False,
         )
-        # Set metric tolerance if specified
-        if optim_args.tolerance_criterion is not None:
-            q8_config.set_tolerance(optim_args.tolerance_criterion)
-        # Set quantization approach if specified
-        if optim_args.quantization_approach is not None:
-            supported_approach = {"static", "dynamic"}
-            if optim_args.quantization_approach not in supported_approach:
-                raise ValueError(
-                    "Unknown quantization approach. Supported approach are " + ", ".join(supported_approach)
-                )
-            quant_approach = getattr(IncQuantizationMode, optim_args.quantization_approach.upper()).value
-            q8_config.set_config("quantization.approach", quant_approach)
-        quant_approach = IncQuantizationMode(q8_config.get_config("quantization.approach"))
-        # torch FX used for post-training quantization and quantization aware training
-        # dynamic quantization will be added when torch FX is more mature
-        if quant_approach != IncQuantizationMode.DYNAMIC:
-            q8_config.set_config("model.framework", "pytorch_fx")
-        if quant_approach == IncQuantizationMode.STATIC:
-            q8_config.set_config("quantization.calibration.sampling_size", [data_args.max_calibration_samples])
-        q8_config.set_config("tuning.accuracy_criterion.higher_is_better", False)
-        quantizer = IncQuantizer(q8_config, eval_func=eval_func, calib_dataloader=test_dataloader)
-        optimizer = IncOptimizer(model, quantizer=quantizer)
-        q_model = optimizer.fit()
-        result_optimized_model = eval_func(q_model, 20)
-
-        # Save the resulting model and its corresponding configuration in the given directory
-        optimizer.save_pretrained(training_args.output_dir)
-
-    if optim_args.apply_quantization and optim_args.verify_loading:
-        print("loading int8 model...")
-        loaded_model = IncQuantizedModelForVision2Seq.from_pretrained(training_args.output_dir)
-        loaded_model.eval()
-
-        print("Running evaluation on reloaded model...")
-        result_loaded_model = eval_func(loaded_model, 20)
-        print("Character error rate on test set:", result_loaded_model)
-        if result_loaded_model != result_optimized_model:
-            logger.error("The quantized model was not successfully loaded.")
-        else:
-            logger.info(f"The quantized model was successfully loaded.")
+        if optim_args.verify_loading:
+            loaded_model = INCModelForVision2Seq.from_pretrained(training_args.output_dir)
+            result_loaded_model = eval_func(loaded_model, iters=20)
+            result_optimized_model = eval_func(quantizer._quantized_model, iters=20)
+            if result_loaded_model != result_optimized_model:
+                logger.error("The quantized model was not successfully loaded.")
+            else:
+                logger.info(f"The quantized model was successfully loaded.")
 
 
 def _mp_fn(index):

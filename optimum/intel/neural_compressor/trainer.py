@@ -12,35 +12,32 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import collections
 import copy
 import math
 import os
 import sys
 import time
-import warnings
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import datasets
 import torch
 import torch.distributed as dist
-from packaging.version import Version
 
 # from packaging import version
 from torch import nn
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, RandomSampler
 from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 from transformers import Trainer
-from transformers.configuration_utils import PretrainedConfig
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 from transformers.deepspeed import deepspeed_init
-from transformers.file_utils import CONFIG_NAME, WEIGHTS_NAME
+from transformers.file_utils import WEIGHTS_NAME
 
 # Integrations must be imported before ML frameworks:
 from transformers.integrations import hp_params
-from transformers.modeling_utils import get_parameter_dtype
+from transformers.modeling_utils import get_parameter_dtype, unwrap_model
+from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
 from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_callback import TrainerState
@@ -48,9 +45,7 @@ from transformers.trainer_pt_utils import IterableDatasetShard
 from transformers.trainer_utils import HPSearchBackend, ShardedDDPOption, TrainOutput, has_length, speed_metrics
 from transformers.utils import is_sagemaker_mp_enabled, logging
 
-from neural_compressor.experimental import Component
-
-from .utils import TRAINING_ARGS_NAME, is_torch_less_than_1_13
+from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 
 
 if TYPE_CHECKING:
@@ -59,40 +54,91 @@ if TYPE_CHECKING:
 
 __version__ = "4.22.2"
 
+
 logger = logging.get_logger(__name__)
 
 
-class IncTrainer(Trainer):
-    def train(
+from itertools import chain
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
+
+from transformers.data.data_collator import DataCollator
+from transformers.modeling_utils import PreTrainedModel
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
+from transformers.trainer_callback import TrainerCallback
+from transformers.trainer_utils import EvalPrediction
+from transformers.training_args import TrainingArguments
+
+from neural_compressor import training
+from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
+from neural_compressor.model.torch_model import PyTorchModel
+from optimum.exporters import TasksManager
+
+
+class INCTrainer(Trainer):
+    """
+    INCTrainer enables Intel Neural Compression quantization aware training, pruning and distillation.
+    """
+
+    def __init__(
         self,
-        agent: Optional[Component] = None,
-        resume_from_checkpoint: Optional[Union[str, bool]] = None,
-        trial: Union["optuna.Trial", Dict[str, Any]] = None,
-        ignore_keys_for_eval: Optional[List[str]] = None,
-        **kwargs,
+        model: Union[PreTrainedModel, torch.nn.Module] = None,
+        args: TrainingArguments = None,
+        data_collator: Optional[DataCollator] = None,
+        train_dataset: Optional[Dataset] = None,
+        eval_dataset: Optional[Dataset] = None,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        model_init: Callable[[], PreTrainedModel] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        callbacks: Optional[List[TrainerCallback]] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
+        quantization_config: Optional[_BaseQuantizationConfig] = None,
+        pruning_config: Optional[_BaseQuantizationConfig] = None,
+        distillation_config: Optional[_BaseQuantizationConfig] = None,
+        task: Optional[str] = None,
+        save_onnx_model: bool = False,
     ):
 
-        """
-        Main training entry point.
-        Args:
-            agent (:obj:`Component`, *optional*):
-                Component object containing the compression objects to apply during the training process.
-            resume_from_checkpoint (`str` or `bool`, *optional*):
-                If a `str`, local path to a saved checkpoint as saved by a previous instance of [`IncTrainer`]. If a
-                `bool` and equals `True`, load the last checkpoint in *args.output_dir* as saved by a previous instance
-                of [`IncTrainer`]. If present, training will resume from the model/optimizer/scheduler states loaded here.
-            trial (`optuna.Trial` or `Dict[str, Any]`, *optional*):
-                The trial run or the hyperparameter dictionary for hyperparameter search.
-            ignore_keys_for_eval (`List[str]`, *optional*):
-                A list of keys in the output of your model (if it is a dictionary) that should be ignored when
-                gathering predictions for evaluation during the training.
-            kwargs:
-                Additional keyword arguments used to hide deprecated arguments
-        """
-        self.agent = agent
-        self.args.use_ipex = False
+        super().__init__(
+            model,
+            args,
+            data_collator,
+            train_dataset,
+            eval_dataset,
+            tokenizer,
+            model_init,
+            compute_metrics,
+            callbacks,
+            optimizers,
+            preprocess_logits_for_metrics,
+        )
 
-        return super().train(resume_from_checkpoint, trial, ignore_keys_for_eval)
+        inc_config = []
+        self.task = task
+        self.quantization_config = quantization_config
+        self.pruning_config = pruning_config
+        self.distillation_config = distillation_config
+        self._compression_manager = None
+        self.save_onnx_model = save_onnx_model
+
+        # Attach dtype and architecture to the config
+        self.dtype = "int8" if quantization_config is not None else str(get_parameter_dtype(self.model)).split(".")[1]
+        self.model.config.torch_dtype = self.dtype
+        self.model.config.framework = "pytorch_fx"
+        self.model.config.architectures = [self.model.__class__.__name__]
+        self.config = getattr(self.model, "config", None)
+
+        self._set_signature_columns_if_needed()
+
+        for config in [quantization_config, pruning_config, distillation_config]:
+            if config is not None:
+                inc_config.append(config)
+
+        if len(inc_config) >= 1 and self.args.do_train:
+            inc_config = inc_config if len(inc_config) > 1 else inc_config.pop()
+            self._compression_manager = training.prepare_compression(self.model, confs=inc_config)
+            self.model = self._compression_manager.model
+            self.model_wrapped = self.model
 
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
@@ -261,11 +307,8 @@ class IncTrainer(Trainer):
 
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
 
-        if isinstance(self.agent, Component):
-            if is_torch_less_than_1_13:
-                self.agent.on_train_begin()
-            else:
-                self.agent.on_train_begin(self.get_train_dataloader())
+        if self._compression_manager is not None:
+            self._compression_manager.callbacks.on_train_begin()
 
         # Skip the first epochs_trained epochs to get the random state of the dataloader at the right point.
         if not args.ignore_data_skip:
@@ -302,15 +345,14 @@ class IncTrainer(Trainer):
             )
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
 
-            if isinstance(self.agent, Component):
-                self.agent.on_epoch_begin(epoch)
+            if self._compression_manager is not None:
+                self._compression_manager.callbacks.on_epoch_begin(epoch)
 
             if epoch == epochs_trained and resume_from_checkpoint is not None and steps_trained_in_current_epoch == 0:
                 self._load_rng_state(resume_from_checkpoint)
 
             step = -1
             for step, inputs in enumerate(epoch_iterator):
-
                 # Skip past any already trained steps if resuming training
                 if steps_trained_in_current_epoch > 0:
                     steps_trained_in_current_epoch -= 1
@@ -325,8 +367,8 @@ class IncTrainer(Trainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-                    if isinstance(self.agent, Component):
-                        self.agent.on_step_begin(step)
+                    if self._compression_manager is not None:
+                        self._compression_manager.callbacks.on_step_begin(step)
 
                 if (
                     ((step + 1) % args.gradient_accumulation_steps != 0)
@@ -379,8 +421,8 @@ class IncTrainer(Trainer):
                                 args.max_grad_norm,
                             )
 
-                    if isinstance(self.agent, Component):
-                        self.agent.on_before_optimizer_step()
+                    if self._compression_manager is not None:
+                        self._compression_manager.callbacks.on_before_optimizer_step()
 
                     # Optimizer step
                     optimizer_was_run = True
@@ -395,6 +437,9 @@ class IncTrainer(Trainer):
                     else:
                         self.optimizer.step()
 
+                    if self._compression_manager is not None:
+                        self._compression_manager.callbacks.on_after_optimizer_step()
+
                     if optimizer_was_run and not self.deepspeed:
                         self.lr_scheduler.step()
 
@@ -402,8 +447,8 @@ class IncTrainer(Trainer):
                     self.state.global_step += 1
                     self.state.epoch = epoch + (step + 1) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
-                    if isinstance(self.agent, Component):
-                        self.agent.on_step_end()
+                    if self._compression_manager is not None:
+                        self._compression_manager.callbacks.on_step_end()
 
                     self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
                 else:
@@ -420,15 +465,13 @@ class IncTrainer(Trainer):
                 self.control.should_training_stop = True
 
             self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
-            if isinstance(self.agent, Component):
-                self.agent.on_epoch_end()
+            if self._compression_manager is not None:
+                self._compression_manager.callbacks.on_epoch_end()
+
             self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
 
             if self.control.should_training_stop:
                 break
-
-        if isinstance(self.agent, Component):
-            self.agent.post_epoch_end()
 
         if args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of training
@@ -461,22 +504,25 @@ class IncTrainer(Trainer):
         self.log(metrics)
 
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
+        if self._compression_manager is not None:
+            self._compression_manager.callbacks.on_train_end()
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
 
-    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False, save_onnx_model=None):
         """
         Will save the model, so you can reload it using `from_pretrained()`.
         Will only save from the main process.
         """
+        save_onnx_model = save_onnx_model if save_onnx_model is not None else self.save_onnx_model
 
         if output_dir is None:
             output_dir = self.args.output_dir
 
         if self.args.should_save:
-            self._save(output_dir)
+            self._save(output_dir=output_dir, save_onnx_model=save_onnx_model)
 
-    def _save(self, output_dir: Optional[str] = None, state_dict=None):
+    def _save(self, output_dir: Optional[str] = None, state_dict=None, save_onnx_model=False):
         # If we are executing this function, we are the process zero, so we don't check for that.
         output_dir = output_dir if output_dir is not None else self.args.output_dir
 
@@ -487,32 +533,90 @@ class IncTrainer(Trainer):
         os.makedirs(output_dir, exist_ok=True)
         logger.info(f"Saving model checkpoint to {output_dir}")
 
-        # Save the string version of dtype to the config, e.g. convert torch.float32 => "float32"
-        dtype = get_parameter_dtype(self.model)
-        self.model.config.torch_dtype = str(dtype).split(".")[1]
-
-        # Attach architecture to the config
-        self.model.config.architectures = [self.model.__class__.__name__]
-
-        # Save the config
-        self.model.config.save_pretrained(output_dir)
-
-        # Save the model
-        if state_dict is None:
-            state_dict = self.model.state_dict()
-
         # If we save using the predefined names, we can load using `from_pretrained`
         output_model_file = os.path.join(output_dir, WEIGHTS_NAME)
 
-        torch.save(state_dict, output_model_file)
-
-        logger.info(f"Model weights saved in {output_model_file}")
+        # Save the config
+        if self.config is not None:
+            self.config.save_pretrained(output_dir)
 
         if self.tokenizer is not None:
             self.tokenizer.save_pretrained(output_dir)
 
         # Good practice: save your training arguments together with the trained model
         torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
+
+        _model = getattr(self.model, "_model", self.model)
+
+        # Save the model
+        if state_dict is None:
+            state_dict = _model.state_dict()
+            if hasattr(self.model, "q_config"):
+                state_dict["best_configure"] = self.model.q_config
+        torch.save(state_dict, output_model_file)
+
+        # Export the compressed model to the ONNX format
+        if save_onnx_model and isinstance(self.model, PyTorchModel):
+            self._set_task()
+            model_type = self.config.model_type.replace("_", "-")
+            model_name = getattr(_model, "name", None)
+            onnx_config_class = TasksManager.get_exporter_config_constructor(
+                exporter="onnx", model=self.model, task=self.task, model_type=model_type, model_name=model_name
+            )
+            onnx_config = onnx_config_class(self.config)
+            output_onnx_path = os.path.join(output_dir, ONNX_WEIGHTS_NAME)
+
+            signature_columns = copy.deepcopy(self._signature_columns)
+            self._signature_columns = list(
+                set(self._signature_columns) - set(["label", "label_ids"] + self.label_names)
+            )
+            calibration_dataloader = self.get_train_dataloader()
+            self._signature_columns = signature_columns
+
+            self.model.eval()
+            self._onnx_export(self.model, onnx_config, output_onnx_path, calibration_dataloader)
+
+        logger.info(f"Model weights saved in {output_model_file}")
+
+    def _set_task(self):
+        if self.task is None:
+            raise ValueError("The model task defining the model topology needs to be specified for the ONNX export.")
+        elif self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+            self.task = "sequence-classification"
+        elif self.task in ["feature-extraction", "fill-mask"]:
+            self.task = "default"
+
+    def _onnx_export(
+        self,
+        model: "PyTorchModel",
+        config: "OnnxConfig",
+        output_path: str,
+        calibration_dataloader: "INCDataLoader" = None,
+    ):
+        opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
+        dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
+        inputs = config.generate_dummy_inputs(framework="pt")
+
+        if self.dtype == "int8":
+            model.export_to_int8_onnx(
+                save_path=output_path,
+                example_inputs=inputs,
+                input_names=list(config.inputs.keys()),
+                output_names=list(config.outputs.keys()),
+                dynamic_axes=dynamic_axes,
+                opset_version=opset,
+                fp32_model=self._compression_manager.fp32_model,
+                calib_dataloader=calibration_dataloader,
+            )
+        else:
+            model.export_to_fp32_onnx(
+                save_path=output_path,
+                example_inputs=inputs,
+                input_names=list(config.inputs.keys()),
+                output_names=list(config.outputs.keys()),
+                dynamic_axes=dynamic_axes,
+                opset_version=opset,
+            )
 
     def _remove_unused_columns(self, dataset: "datasets.Dataset", description: Optional[str] = None):
         if not self.args.remove_unused_columns:
@@ -533,24 +637,22 @@ class IncTrainer(Trainer):
 
         columns = [k for k in signature_columns if k in dataset.column_names]
 
-        if Version(datasets.__version__).release < Version("1.4.0").release:
-            dataset.set_format(
-                type=dataset.format["type"], columns=columns, format_kwargs=dataset.format["format_kwargs"]
-            )
-            return dataset
-        else:
-            return dataset.remove_columns(ignored_columns)
+        return dataset.remove_columns(ignored_columns)
+
+    @staticmethod
+    def _get_logits(model_outputs):
+        output_names = ["logits", "start_logits", "end_logits"]
+        return tuple(model_outputs.get(name) for name in output_names if name in model_outputs)
 
     def compute_loss(self, model, inputs, return_outputs=False):
         """
-        How the loss is computed. By default, all models return the loss in the first element.
+        How the loss is computed by Trainer. By default, all models return the loss in the first element.
         """
         if self.label_smoother is not None and "labels" in inputs:
             labels = inputs.pop("labels")
         else:
             labels = None
-
-        teacher_logits = inputs.pop("teacher_logits", None)
+        teacher_outputs = inputs.pop("teacher_logits", None)
         outputs = model(**inputs)
 
         # Save past state if it exists
@@ -558,41 +660,40 @@ class IncTrainer(Trainer):
             self._past = outputs[self.args.past_index]
 
         if labels is not None:
-            loss = self.label_smoother(outputs, labels)
+            model_name = unwrap_model(getattr(model, "_model", model))._get_name()
+            if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+                loss = self.label_smoother(outputs, labels, shift_labels=True)
+            else:
+                loss = self.label_smoother(outputs, labels)
         else:
+            if isinstance(outputs, dict) and "loss" not in outputs:
+                raise ValueError(
+                    "The model did not return a loss from the inputs, only the following keys: "
+                    f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
+                )
             # We don't use .loss here since the model may return tuples instead of ModelOutput.
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
-        if (
-            self.is_in_train
-            and hasattr(self, "agent")
-            and hasattr(self.agent, "criterion")
-            and self.agent.criterion is not None
-        ):
-            logits = self._get_logits(outputs)
-            if teacher_logits is not None:
-                if len(teacher_logits.shape) == 3 and teacher_logits.shape[1] == 2:
-                    teacher_logits = tuple(teacher_logits.transpose(1, 0))
+        if self.distillation_config is not None:
+            student_outputs = self._get_logits(outputs)
+            if teacher_outputs is not None:
+                if len(teacher_outputs.shape) == 3 and teacher_outputs.shape[1] == 2:
+                    teacher_outputs = tuple(teacher_outputs.transpose(1, 0))
             else:
-                if hasattr(self.agent, "on_after_compute_loss"):
-                    teacher_outputs = self.agent.criterion.teacher_model_forward(inputs)
-                    if teacher_outputs is not None:
-                        teacher_logits = self._get_logits(teacher_outputs)
-                elif hasattr(self.agent, "on_post_forward"):
-                    self.agent.on_post_forward(inputs, teacher_output=teacher_logits)
-                    teacher_logits = self._get_logits(self.agent.criterion.teacher_outputs)
-                else:
-                    raise ValueError("Unable to compute the teacher outputs")
-            if teacher_logits is not None:
-                distillation_loss = self.compute_distillation_loss(logits, teacher_logits)
-                loss *= self.agent.criterion.loss_weights[0]
-                loss += distillation_loss * self.agent.criterion.loss_weights[1]
-                loss /= self.agent.criterion.loss_weights[0] + self.agent.criterion.loss_weights[1]
+                self.distillation_config.teacher_model.eval()
+                teacher_outputs = self.distillation_config.teacher_model(**inputs)
+                teacher_outputs = self._get_logits(teacher_outputs)
 
-            if isinstance(outputs, dict):
-                outputs["loss"] = loss
-            else:
-                outputs[0] = loss
+            if teacher_outputs is not None:
+                distillation_loss = self.compute_distillation_loss(student_outputs, teacher_outputs)
+                loss *= self._compression_manager.callbacks.callbacks.criterion.loss_weights[0]
+                loss += distillation_loss * self._compression_manager.callbacks.callbacks.criterion.loss_weights[1]
+                loss /= sum(self._compression_manager.callbacks.callbacks.criterion.loss_weights)
+
+                if isinstance(outputs, dict):
+                    outputs["loss"] = loss
+                else:
+                    outputs[0] = loss
 
         return (loss, outputs) if return_outputs else loss
 
@@ -606,12 +707,15 @@ class IncTrainer(Trainer):
         How the distillation loss is computed given the student and teacher outputs.
         """
         distillation_loss = None
+        temperature = self._compression_manager.callbacks.callbacks.criterion.temperature
         for student_output, teacher_output in zip(student_outputs, teacher_outputs):
-            student_output = student_output / self.agent.criterion.temperature
-            teacher_output = teacher_output / self.agent.criterion.temperature
-            loss = self.agent.criterion.teacher_student_loss_cal(student_output, teacher_output)
+            student_output = student_output / temperature
+            teacher_output = teacher_output / temperature
+            loss = self._compression_manager.callbacks.callbacks.criterion.teacher_student_loss_cal(
+                student_output, teacher_output
+            )
             distillation_loss = loss if distillation_loss is None else distillation_loss + loss
-        distillation_loss *= self.agent.criterion.temperature**2
+        distillation_loss *= temperature**2
         return distillation_loss
 
     def evaluate(
@@ -621,10 +725,16 @@ class IncTrainer(Trainer):
         metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
         self.args.use_ipex = False
-        if hasattr(self.model, "config") and getattr(self.model.config, "torch_dtype", None) == "int8":
-            if self.model.config.framework in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
+        if self.config is not None and getattr(self.config, "torch_dtype", None) == "int8":
+            if getattr(self.config, "framework", None) in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
                 logger.warn(
-                    f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
+                    f"{self.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
                 )
                 self.use_cpu_amp = False
         return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+
+    def get_model_sparsity(self):
+        sparsity = 0.0
+        if isinstance(self.model, PyTorchModel):
+            sparsity = self.model.report_sparsity()[-1]
+        return sparsity

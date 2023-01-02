@@ -30,7 +30,8 @@ from torch.utils.data import DataLoader, Dataset
 
 from accelerate.utils import set_seed
 from diffusers import StableDiffusionPipeline
-from optimum.intel.neural_compressor import IncOptimizer, IncQuantizationConfig, IncQuantizationMode, IncQuantizer
+from neural_compressor import PostTrainingQuantConfig
+from optimum.intel.neural_compressor import INCQuantizer
 from optimum.intel.neural_compressor.utils import load_quantized_model
 from pytorch_fid import fid_score
 
@@ -57,7 +58,7 @@ def parse_args():
         help="The input of the model, like: 'a photo of an astronaut riding a horse on mars'.",
     )
     parser.add_argument(
-        "--calib_text",
+        "--calibration_text",
         type=str,
         default="Womens Princess Little Deer Native American Costume",
         help="The calibration data of the model, like: 'Womens Princess Little Deer Native American Costume'.",
@@ -138,7 +139,7 @@ def image_grid(imgs, rows, cols):
     return grid
 
 
-def benchmark(pipe, generator):
+def benchmark(pipeline, generator):
     warmup = 2
     total = 5
     total_time = 0
@@ -146,7 +147,7 @@ def benchmark(pipe, generator):
         for i in range(total):
             prompt = "a photo of an astronaut riding a horse on mars"
             start2 = time.time()
-            images = pipe(prompt, guidance_scale=7.5, num_inference_steps=50, generator=generator).images
+            images = pipeline(prompt, guidance_scale=7.5, num_inference_steps=50, generator=generator).images
             end2 = time.time()
             if i >= warmup:
                 total_time += end2 - start2
@@ -184,13 +185,13 @@ def main():
     #
     # In distributed training, the .from_pretrained methods guarantee that only one local process can concurrently
     # download model & vocab.
-    pipe = StableDiffusionPipeline.from_pretrained(args.model_name_or_path)
+    pipeline = StableDiffusionPipeline.from_pretrained(args.model_name_or_path)
 
     if args.benchmark:
         if not args.int8:
             print("====fp32 inference====")
             generator = torch.Generator("cpu").manual_seed(args.seed)
-            benchmark(pipe, generator)
+            benchmark(pipeline, generator)
     else:
         _rows = int(math.sqrt(args.num_images_per_prompt))
         tmp_fp32_images = "tmp_fp32_images"
@@ -198,113 +199,86 @@ def main():
         os.makedirs(tmp_fp32_images, exist_ok=True)
         os.makedirs(tmp_int8_images, exist_ok=True)
         generator = torch.Generator("cpu").manual_seed(args.seed)
-        fp32_images = pipe(
+        outputs = pipeline(
             args.input_text,
             guidance_scale=7.5,
             num_inference_steps=50,
             generator=generator,
             num_images_per_prompt=args.num_images_per_prompt,
-        ).images
+        )
+        fp32_images = outputs.images
         grid = image_grid(fp32_images, rows=_rows, cols=args.num_images_per_prompt // _rows)
         grid.save(os.path.join(tmp_fp32_images, "fp32.png"))
 
-        attr_list = ["unet"]
-        for name in attr_list:
-            model = getattr(pipe, name)
+    name = "unet"
 
-            def calibration_func(model):
-                calib_num = 5
-                setattr(pipe, name, model)
-                with torch.no_grad():
-                    for i in range(calib_num):
-                        pipe(
-                            args.calib_text,
-                            guidance_scale=7.5,
-                            num_inference_steps=50,
-                            generator=generator,
-                            num_images_per_prompt=args.num_images_per_prompt,
-                        )
-
-            def eval_func(model):
-                setattr(pipe, name, model)
-                generator = torch.Generator("cpu").manual_seed(args.seed)
-                with torch.no_grad():
-                    new_images = pipe(
-                        args.input_text,
-                        guidance_scale=7.5,
-                        num_inference_steps=50,
-                        generator=generator,
-                        num_images_per_prompt=args.num_images_per_prompt,
-                    ).images
-                    if os.path.isfile(os.path.join(tmp_int8_images, "int8.png")):
-                        os.remove(os.path.join(tmp_int8_images, "int8.png"))
-                    grid = image_grid(new_images, rows=_rows, cols=args.num_images_per_prompt // _rows)
-                    grid.save(os.path.join(tmp_int8_images, "int8.png"))
-                    fid = fid_score.calculate_fid_given_paths((args.base_images, tmp_int8_images), 1, "cpu", 2048, 8)
-                    return fid
-
-            quantizer = None
-
-            if not args.apply_quantization:
-                raise ValueError("No optimization activated.")
-
-            default_config = os.path.dirname(__file__)
-
-            if args.apply_quantization:
-                q8_config = IncQuantizationConfig.from_pretrained(default_config)
-
-                # Set metric tolerance if specified
-                if args.tolerance_criterion is not None:
-                    q8_config.set_tolerance(args.tolerance_criterion)
-
-                # Set quantization approach if specified
-                if args.quantization_approach is not None:
-                    supported_approach = {"static", "dynamic"}
-                    if args.quantization_approach not in supported_approach:
-                        raise ValueError(
-                            "Unknown quantization approach. Supported approach are " + ", ".join(supported_approach)
-                        )
-                    quant_approach = getattr(IncQuantizationMode, args.quantization_approach.upper()).value
-                    q8_config.set_config("quantization.approach", quant_approach)
-
-                quant_approach = IncQuantizationMode(q8_config.get_config("quantization.approach"))
-                if quant_approach != IncQuantizationMode.DYNAMIC:
-                    q8_config.set_config("model.framework", "pytorch_fx")
-                q8_config.set_config("tuning.accuracy_criterion.higher_is_better", False)
-
-                quantizer = IncQuantizer(
-                    q8_config,
-                    eval_func=eval_func,
-                    calib_dataloader=DataLoader(CalibDataset(), batch_size=1),
-                    calib_func=calibration_func,
+    def calibration_func(model):
+        calib_num = 5
+        setattr(pipeline, name, model)
+        with torch.no_grad():
+            for i in range(calib_num):
+                pipeline(
+                    args.calibration_text,
+                    guidance_scale=7.5,
+                    num_inference_steps=50,
+                    generator=generator,
+                    num_images_per_prompt=args.num_images_per_prompt,
                 )
 
-                optimizer = IncOptimizer(model, quantizer=quantizer)
-                optimized_model = optimizer.fit()
-                result_optimized_model = eval_func(optimized_model)
-                setattr(pipe, name, optimized_model)
+    def eval_func(model):
+        setattr(pipeline, name, model)
+        generator = torch.Generator("cpu").manual_seed(args.seed)
+        with torch.no_grad():
+            new_images = pipeline(
+                args.input_text,
+                guidance_scale=7.5,
+                num_inference_steps=50,
+                generator=generator,
+                num_images_per_prompt=args.num_images_per_prompt,
+            ).images
+            if os.path.isfile(os.path.join(tmp_int8_images, "int8.png")):
+                os.remove(os.path.join(tmp_int8_images, "int8.png"))
+            grid = image_grid(new_images, rows=_rows, cols=args.num_images_per_prompt // _rows)
+            grid.save(os.path.join(tmp_int8_images, "int8.png"))
+            fid = fid_score.calculate_fid_given_paths((args.base_images, tmp_int8_images), 1, "cpu", 2048, 8)
+            return fid
 
-                # Save the resulting model and its corresponding configuration in the given directory
-                optimizer.save_pretrained(args.output_dir)
+    if not args.apply_quantization:
+        raise ValueError("No optimization activated.")
 
-                logger.info(f"Optimized model {name} saved to: {args.output_dir}.")
-        if args.apply_quantization and args.verify_loading:
-            # Load the model obtained after Intel Neural Compressor quantization
-            loaded_model = load_quantized_model(args.output_dir, model=getattr(pipe, "unet"))
-            loaded_model.eval()
-            result_loaded_model = eval_func(loaded_model)
+    supported_approach = {"static", "dynamic"}
+    if args.quantization_approach not in supported_approach:
+        raise ValueError(
+            f"Unknown quantization approach. Supported approach are {supported_approach}."
+            f"{args.quantization_approach} was given."
+        )
 
-            if result_loaded_model != result_optimized_model:
-                logger.error("The quantized model was not successfully loaded.")
-            else:
-                logger.info(f"The quantized model was successfully loaded.")
+    quantization_config = PostTrainingQuantConfig(approach=args.quantization_approach)
+    quantizer = INCQuantizer.from_pretrained(pipeline.unet, calibration_fn=calibration_func)
+
+    quantizer.quantize(
+        quantization_config=quantization_config,
+        save_directory=args.output_dir,
+        calibration_dataset=CalibDataset() if args.quantization_approach == "static" else None,
+        remove_unused_columns=False,
+    )
+
+    if args.apply_quantization and args.verify_loading:
+        loaded_model = load_quantized_model(args.output_dir, model=getattr(pipeline, "unet"))
+        result_optimized_model = eval_func(quantizer._quantized_model)
+        result_loaded_model = eval_func(loaded_model)
+        if result_loaded_model != result_optimized_model:
+            logger.error("The quantized model was not successfully loaded.")
+        else:
+            logger.info(f"The quantized model was successfully loaded.")
+
     if args.benchmark and args.int8:
         print("====int8 inference====")
-        loaded_model = load_quantized_model(args.output_dir, model=getattr(pipe, "unet"))
+        loaded_model = load_quantized_model(args.output_dir, model=getattr(pipeline, "unet"))
         loaded_model.eval()
-        setattr(pipe, "unet", loaded_model)
+        setattr(pipeline, "unet", loaded_model)
         generator = torch.Generator("cpu").manual_seed(args.seed)
-        benchmark(pipe, generator)
+        benchmark(pipeline, generator)
 
 
 def _mp_fn(index):
