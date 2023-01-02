@@ -29,7 +29,8 @@ from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from openvino._offline_transformations import compress_model_transformation
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export
+from optimum.onnx.configuration import DecoderOnnxConfig, EncoderOnnxConfig
+from optimum.onnx.modeling_seq2seq import _DecoderWithLMhead
 
 from .modeling_base import OVBaseModel
 from .utils import (
@@ -166,10 +167,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
-        logger.warning(
-            "The `use_cache` argument is changed to `False`, its support will be enabled in the next release."
-        )
-        use_cache = False
         default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
         default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
         default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
@@ -188,7 +185,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     "will be soon deprecated. Make sure to rename your file to respectively `openvino_encoder_model.xml`, "
                     "`openvino_decoder_model.xml` and `openvino_decoder_with_past_model.xml`"
                 )
-
             encoder_bin_file_name = (
                 os.path.join(model_id, encoder_file_name.replace(".xml", ".bin")) if not from_onnx else None
             )
@@ -307,11 +303,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        logger.warning(
-            "The `use_cache` argument is changed to `False`, its support will be enabled in the next release."
-        )
-        use_cache = False
-
         if task is None:
             task = cls._auto_model_to_task(cls.auto_model_class)
 
@@ -329,19 +320,46 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             force_download=force_download,
         )
 
+        preprocessor = get_preprocessor(model_id)
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
+        onnx_config = onnx_config_constructor(model.config)
+        onnx_opset = onnx_config.DEFAULT_ONNX_OPSET
+        onnx_config_encoder = EncoderOnnxConfig(model.config, task="default")
+        onnx_config_decoder = DecoderOnnxConfig(model.config, task=cls.export_feature, use_past=False)
+        onnx_config_decoder_with_past = DecoderOnnxConfig(model.config, task=cls.export_feature, use_past=True)
 
-        output_names = [ONNX_ENCODER_NAME, ONNX_DECODER_NAME]
-        if use_cache is True:
-            output_names.append(ONNX_DECODER_WITH_PAST_NAME)
-        models_and_onnx_configs = get_encoder_decoder_models_for_export(model, onnx_config)
-        export_models(
-            models_and_onnx_configs=models_and_onnx_configs,
-            opset=onnx_config.DEFAULT_ONNX_OPSET,
-            output_dir=save_dir_path,
-            output_names=output_names,
+        # Extract the encoder for ONNX export
+        encoder = model.get_encoder()
+        # Concatenate the decoder with the language model head for ONNX export
+        decoder_with_lm_head = _DecoderWithLMhead(model)
+
+        # Export the encoder
+        export(
+            preprocessor=preprocessor,
+            model=encoder,
+            config=onnx_config_encoder,
+            opset=onnx_opset,
+            output=save_dir_path / ONNX_ENCODER_NAME,
         )
+
+        # Export the decoder without the past key values
+        export(
+            preprocessor=preprocessor,
+            model=decoder_with_lm_head,
+            config=onnx_config_decoder,
+            opset=onnx_opset,
+            output=save_dir_path / ONNX_DECODER_NAME,
+        )
+
+        # Export the decoder with the past key values
+        if use_cache:
+            export(
+                preprocessor=preprocessor,
+                model=decoder_with_lm_head,
+                config=onnx_config_decoder_with_past,
+                opset=onnx_opset,
+                output=save_dir_path / ONNX_DECODER_WITH_PAST_NAME,
+            )
 
         return cls._from_pretrained(
             model_id=save_dir_path,
