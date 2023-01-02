@@ -257,8 +257,9 @@ class OVBaseModel(OptimizedModel):
         model = TasksManager.get_model_from_task(task, model_id)
         model_type = model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
-            model_type, "onnx", task=task, model_name=model_id
+            exporter="onnx", model=model, task=task, model_name=model_id, model_type=model_type,
         )
+
         onnx_config = onnx_config_class(model.config)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
