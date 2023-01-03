@@ -15,12 +15,12 @@
 import logging
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Optional, Union
 
 import transformers
 from transformers import AutoConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, default_cache_path
-from transformers.onnx import FeaturesManager, export
 from transformers.onnx.utils import get_preprocessor
 
 import openvino
@@ -28,6 +28,8 @@ from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from openvino.runtime import Core
+from optimum.exporters import TasksManager
+from optimum.exporters.onnx import export
 from optimum.modeling_base import OptimizedModel
 
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
@@ -56,14 +58,23 @@ _SUPPORTED_DEVICES = {
 )
 class OVBaseModel(OptimizedModel):
 
+    _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
+    auto_model_class = None
     export_feature = None
 
-    def __init__(self, model: openvino.runtime.Model, config: transformers.PretrainedConfig = None, **kwargs):
+    def __init__(
+        self,
+        model: openvino.runtime.Model,
+        config: PretrainedConfig = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        **kwargs
+    ):
         self.config = config
-        self.model_save_dir = kwargs.get("model_save_dir")
+        self.model_save_dir = model_save_dir
         self._device = kwargs.get("device", "CPU")
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
         cache_dir = Path(self.model_save_dir).joinpath("model_cache")
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -115,11 +126,14 @@ class OVBaseModel(OptimizedModel):
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
+        config: PretrainedConfig,
         use_auth_token: Optional[Union[bool, str, None]] = None,
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
         cache_dir: Optional[str] = None,
         file_name: Optional[str] = None,
+        from_onnx: bool = False,
+        local_files_only: bool = False,
         **kwargs,
     ):
         """
@@ -148,11 +162,7 @@ class OVBaseModel(OptimizedModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
-        from_onnx = kwargs.pop("from_onnx", False)
-        local_files_only = kwargs.pop("local_files_only", False)
-        config = kwargs.pop("config", {})
-        if isinstance(config, dict):
-            config = PretrainedConfig.from_dict(config)
+
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
 
@@ -167,7 +177,7 @@ class OVBaseModel(OptimizedModel):
                 )
             bin_file_name = file_name.replace(".xml", ".bin") if not from_onnx else None
             model = cls.load_model(file_name, bin_file_name)
-            kwargs["model_save_dir"] = model_id
+            model_save_dir = model_id
         # Download the model from the hub
         else:
             model_file_names = [file_name]
@@ -205,19 +215,22 @@ class OVBaseModel(OptimizedModel):
                     "The file names `ov_model.xml` and `ov_model.bin` will be soon deprecated."
                     "Make sure to rename your file to respectively `openvino_model.xml` and `openvino_model.bin`"
                 )
-
-            kwargs["model_save_dir"] = Path(model_cache_path).parent
+            model_save_dir = Path(model_cache_path).parent
             bin_file_name = file_names[1] if not from_onnx else None
             model = cls.load_model(file_names[0], bin_file_name=bin_file_name)
-        return cls(model, config=config, **kwargs)
+        return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
 
     @classmethod
     def _from_transformers(
         cls,
         model_id: str,
-        save_dir: Union[str, Path] = default_cache_path,
-        use_auth_token: Optional[Union[bool, str, None]] = None,
-        revision: Optional[Union[str, None]] = None,
+        config: PretrainedConfig,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: Optional[str] = None,
+        local_files_only: bool = False,
+        task: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -238,40 +251,42 @@ class OVBaseModel(OptimizedModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        # Create a local directory to save the model
-        save_dir = Path(save_dir).joinpath(model_id)
-        save_dir.mkdir(parents=True, exist_ok=True)
-        kwargs["model_save_dir"] = save_dir
+        if task is None:
+            task = cls._auto_model_to_task(cls.auto_model_class)
 
-        # Get the task to load and export the model with the right topology if available else extract it from the hub
-        if cls.export_feature is not None:
-            task = cls.export_feature
-        else:
-            task = HfApi().model_info(model_id, revision=revision).pipeline_tag
-            if task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-                task = "sequence-classification"
-            elif task in ["feature-extraction", "fill-mask"]:
-                task = "default"
+        model = TasksManager.get_model_from_task(task, model_id)
+        model_type = model.config.model_type.replace("_", "-")
+        onnx_config_class = TasksManager.get_exporter_config_constructor(
+            exporter="onnx",
+            model=model,
+            task=task,
+            model_name=model_id,
+            model_type=model_type,
+        )
 
-        # TODO: support private models
-        preprocessor = get_preprocessor(model_id)
-        # TODO: Add framework ["pt", "tf"]
-        model = FeaturesManager.get_model_from_feature(task, model_id)
-        _, model_onnx_config = FeaturesManager.check_supported_model_or_raise(model, feature=task)
-        onnx_config = model_onnx_config(model.config)
+        onnx_config = onnx_config_class(model.config)
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
 
         # Export the model to the ONNX format
         export(
-            preprocessor=preprocessor,
             model=model,
             config=onnx_config,
-            opset=onnx_config.default_onnx_opset,
-            output=save_dir.joinpath(ONNX_WEIGHTS_NAME),
+            opset=onnx_config.DEFAULT_ONNX_OPSET,
+            output=save_dir_path / ONNX_WEIGHTS_NAME,
         )
-        kwargs["config"] = model.config.__dict__
-        kwargs["from_onnx"] = True
 
-        return cls._from_pretrained(save_dir, **kwargs)
+        return cls._from_pretrained(
+            model_id=save_dir_path,
+            config=config,
+            from_onnx=True,
+            use_auth_token=use_auth_token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            **kwargs,
+        )
 
     def compile(self):
         if self.request is None:
@@ -334,3 +349,10 @@ class OVBaseModel(OptimizedModel):
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
+
+    @classmethod
+    def _auto_model_to_task(cls, auto_model_class):
+        """
+        Get the task corresponding to a class (for example AutoModelForXXX in transformers).
+        """
+        return cls._AUTOMODELS_TO_TASKS[auto_model_class.__name__]
