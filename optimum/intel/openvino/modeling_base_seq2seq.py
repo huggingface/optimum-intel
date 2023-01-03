@@ -302,6 +302,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
+        encoder_file_name = os.path.join("encoder", ONNX_ENCODER_NAME)
+        decoder_file_name = os.path.join("decoder", ONNX_DECODER_NAME)
+        decoder_with_past_file_name = os.path.join("decoder_with_past", ONNX_DECODER_WITH_PAST_NAME)
+
         if task is None:
             task = cls._auto_model_to_task(cls.auto_model_class)
 
@@ -320,12 +324,13 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         )
 
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
-        output_names = [ONNX_ENCODER_NAME, ONNX_DECODER_NAME]
-        if use_cache is True:
-            output_names.append(ONNX_DECODER_WITH_PAST_NAME)
         models_and_onnx_configs = get_encoder_decoder_models_for_export(model, onnx_config)
+
+        output_names = [encoder_file_name, decoder_file_name]
+        if use_cache is True:
+            output_names.append(decoder_with_past_file_name)
+
         export_models(
             models_and_onnx_configs=models_and_onnx_configs,
             opset=onnx_config.DEFAULT_ONNX_OPSET,
@@ -342,6 +347,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             revision=revision,
             force_download=force_download,
             cache_dir=cache_dir,
+            encoder_file_name=encoder_file_name,
+            decoder_file_name=decoder_file_name,
+            decoder_with_past_file_name=decoder_with_past_file_name,
             local_files_only=local_files_only,
             **kwargs,
         )
