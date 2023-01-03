@@ -39,6 +39,9 @@ from transformers import (
 import requests
 from evaluate import evaluator
 from optimum.intel.openvino import (
+    OV_DECODER_NAME,
+    OV_DECODER_WITH_PAST_NAME,
+    OV_ENCODER_NAME,
     OV_XML_FILE_NAME,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
@@ -74,15 +77,42 @@ class OVModelIntegrationTest(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
+        self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
 
-    def test_load_model_from_hub(self):
+    def test_load_from_hub_and_save_model(self):
+        tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        loaded_model_outputs = loaded_model(**tokens)
+
         with tempfile.TemporaryDirectory() as tmpdirname:
-            model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID)
-            self.assertIsInstance(model.config, PretrainedConfig)
-            model.save_pretrained(tmpdirname)
+            loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
+            model = OVModelForSequenceClassification.from_pretrained(tmpdirname)
+
+        outputs = model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+
+    def test_load_from_hub_and_save_seq2seq_model(self):
+        tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        loaded_model = OVModelForSeq2SeqLM.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        loaded_model_outputs = loaded_model.generate(**tokens)
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertTrue(OV_ENCODER_NAME in folder_contents)
+            self.assertTrue(OV_DECODER_NAME in folder_contents)
+            self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
+            model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname)
+
+        outputs = model.generate(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs, outputs))
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):

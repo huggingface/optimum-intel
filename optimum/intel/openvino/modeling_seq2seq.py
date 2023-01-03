@@ -192,7 +192,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         + TRANSLATION_EXAMPLE.format(
             processor_class=_TOKENIZER_FOR_DOC,
             model_class="OVModelForSeq2SeqLM",
-            checkpoint="Helsinki-NLP/opus-mt-en-fr",
+            checkpoint="t5-small",
         )
     )
     def forward(

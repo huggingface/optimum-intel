@@ -108,7 +108,7 @@ Here is an example on how you can run inference for a translation task using an 
 from transformers import AutoTokenizer, pipeline
 from optimum.intel.openvino import OVModelForSeq2SeqLM
 
-model_id = "Helsinki-NLP/opus-mt-en-fr"
+model_id = "t5-small"
 model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 translation_pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
