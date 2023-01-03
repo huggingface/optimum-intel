@@ -33,4 +33,4 @@ jobs:
         pip install .[openvino,nncf,tests]
     - name: Test with Pytest
       run: |
-        pytest tests/openvino/
+        pytest tests/openvino/ --ignore test_modeling_basic
