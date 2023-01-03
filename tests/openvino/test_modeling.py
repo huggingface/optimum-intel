@@ -60,6 +60,7 @@ MODEL_NAMES = {
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
+    "mbart_large": "facebook/mbart-large-50-many-to-many-mmt",
     "m2m_100": "valhalla/m2m100_tiny_random",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "t5": "hf-internal-testing/tiny-random-t5",
@@ -382,7 +383,11 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         "t5",
     )
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    LARGE_ARCHITECTURES = (
+        "mbart_large",
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES + LARGE_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
