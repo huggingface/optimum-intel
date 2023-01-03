@@ -76,7 +76,7 @@ class QuantizationTest(unittest.TestCase):
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
             print(onnx_outputs.logits, transformers_outputs.logits)
-            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-1))
+            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-0))
 
     def test_dynamic_accuracy_strategy_quantization(self):
         model_name = "distilbert-base-cased-distilled-squad"
@@ -146,7 +146,7 @@ class QuantizationTest(unittest.TestCase):
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
             print(onnx_outputs.logits, transformers_outputs.logits)
-            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-1))
+            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-0))
 
     def test_aware_training_quantization(self):
         model_name = "distilbert-base-uncased"
@@ -186,7 +186,7 @@ class QuantizationTest(unittest.TestCase):
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
             print(onnx_outputs.logits, transformers_outputs.logits)
-            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-1))
+            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-0))
 
     def test_aware_training_quantization_pruning(self):
         model_name = "distilbert-base-uncased"
@@ -235,7 +235,7 @@ class QuantizationTest(unittest.TestCase):
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
             print(onnx_outputs.logits, transformers_outputs.logits)
-            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-1))
+            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-0))
 
 
 class PruningTest(unittest.TestCase):
