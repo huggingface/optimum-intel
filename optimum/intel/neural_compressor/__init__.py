@@ -35,6 +35,7 @@ from .quantization import (
     IncQuantizedModelForVision2Seq,
     IncQuantizedModelForXLNetLM,
     INCQuantizer,
+    IncQuantizer,
 )
-from .trainer import INCTrainer
+from .trainer import INCTrainer, IncTrainer
 from .trainer_seq2seq import INCSeq2SeqTrainer
