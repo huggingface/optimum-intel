@@ -425,7 +425,9 @@ class OVDecoder:
 
         # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
         # self-attention layer and 2 to the cross-attention layer)
-        past_key_values = tuple(torch.from_numpy(outputs[key]).to(self.device) for key in outputs if "key_values" in key)
+        past_key_values = tuple(
+            torch.from_numpy(outputs[key]).to(self.device) for key in outputs if "key_values" in key
+        )
 
         # Tuple of tuple of length `n_layers`, with each tuple of length equal to the number of self-attention and
         # cross-attention per decoder layer
