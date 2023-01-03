@@ -47,17 +47,13 @@ save_dir = "quantized_model"
 # Load the quantization configuration detailing the quantization we wish to apply
 quantization_config = PostTrainingQuantConfig(approach="dynamic")
 quantizer = INCQuantizer.from_pretrained(model)
-# Apply dynamic quantization and save the resulting model in the ONNX format
-quantizer.quantize(quantization_config=quantization_config, save_directory=save_dir, save_onnx_model=True)
+# Apply dynamic quantization and save the resulting model
+quantizer.quantize(quantization_config=quantization_config, save_directory=save_dir)
 ```
 
 To load a quantized model hosted locally or on the 🤗 hub, you can do as follows :
 ```python
 from optimum.intel.neural_compressor import INCModelForSequenceClassification
-from optimum.onnxruntime import ORTModelForSequenceClassification
-
-# Load the ONNX model hosted locally
-onnx_model = ORTModelForSequenceClassification.from_pretrained(save_dir)
 
 # Load the PyTorch model hosted on the hub
 loaded_model_from_hub = INCModelForSequenceClassification.from_pretrained(

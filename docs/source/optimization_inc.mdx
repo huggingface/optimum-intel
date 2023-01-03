@@ -33,8 +33,8 @@ save_dir = "quantized_model"
 # Load the quantization configuration detailing the quantization we wish to apply
 quantization_config = PostTrainingQuantConfig(approach="dynamic")
 quantizer = INCQuantizer.from_pretrained(model)
-# Apply dynamic quantization and save the resulting model in the ONNX format
-quantizer.quantize(quantization_config=quantization_config, save_directory=save_dir, save_onnx_model=True)
+# Apply dynamic quantization and save the resulting model
+quantizer.quantize(quantization_config=quantization_config, save_directory=save_dir)
 ```
 
 
@@ -59,7 +59,6 @@ output_dir = "quantized_model"
 +trainer = INCTrainer(
     model=model,
 +   quantization_config=quantization_config,
-+   task="sequence-classification", # optional : only needed to export the model to the ONNX format
     args=TrainingArguments(output_dir, num_train_epochs=3.0),
     train_dataset=train_dataset,
     eval_dataset=eval_dataset,
@@ -68,8 +67,8 @@ output_dir = "quantized_model"
     data_collator=default_data_collator,
 )
 
-# Save the PyTorch checkpoint, alongside with the ONNX model as `save_onnx_model` is set to True
-+trainer.save_model(save_onnx_model=True)
+# Save the PyTorch checkpoint
++trainer.save_model()
 ```
 
 For pruning, we support snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock. You can refer to [the pruning details](https://github.com/intel/neural-compressor/tree/master/neural_compressor/pruner#pruning-types).

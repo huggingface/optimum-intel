@@ -668,7 +668,6 @@ def main():
             save_directory=training_args.output_dir,
             calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
             batch_size=training_args.per_device_train_batch_size,
-            # save_onnx_model=True,
         )
         trainer.model = quantizer._quantized_model
 
