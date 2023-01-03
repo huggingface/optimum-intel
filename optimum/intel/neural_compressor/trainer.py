@@ -17,6 +17,7 @@ import math
 import os
 import sys
 import time
+import warnings
 from typing import TYPE_CHECKING, Dict, List, Optional, Union
 
 import datasets
@@ -738,3 +739,11 @@ class INCTrainer(Trainer):
         if isinstance(self.model, PyTorchModel):
             sparsity = self.model.report_sparsity()[-1]
         return sparsity
+
+
+class IncTrainer(INCTrainer):
+    # Warning at import time
+    warnings.warn(
+        "The class `IncTrainer` has been depreciated and will be removed in optimum-intel v1.7, please use "
+        "`INCTrainer` instead.",
+    )
