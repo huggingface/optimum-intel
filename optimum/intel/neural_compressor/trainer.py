@@ -45,6 +45,8 @@ from transformers.trainer_pt_utils import IterableDatasetShard
 from transformers.trainer_utils import HPSearchBackend, ShardedDDPOption, TrainOutput, has_length, speed_metrics
 from transformers.utils import is_sagemaker_mp_enabled, logging
 
+from neural_compressor.experimental.export import torch_to_fp32_onnx, torch_to_int8_onnx
+
 from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 
 
@@ -598,24 +600,27 @@ class INCTrainer(Trainer):
         inputs = config.generate_dummy_inputs(framework="pt")
 
         if self.dtype == "int8":
-            model.export_to_int8_onnx(
+            torch_to_int8_onnx(
+                fp32_model=self._compression_manager.fp32_model,
+                int8_model=model,
+                q_config=model.q_config,
                 save_path=output_path,
                 example_inputs=inputs,
+                opset_version=opset,
+                dynamic_axes=dynamic_axes,
                 input_names=list(config.inputs.keys()),
                 output_names=list(config.outputs.keys()),
-                dynamic_axes=dynamic_axes,
-                opset_version=opset,
-                fp32_model=self._compression_manager.fp32_model,
-                calib_dataloader=calibration_dataloader,
             )
         else:
-            model.export_to_fp32_onnx(
+            torch_to_fp32_onnx(
+                fp32_model=model,
                 save_path=output_path,
                 example_inputs=inputs,
+                opset_version=opset,
+                dynamic_axes=dynamic_axes,
                 input_names=list(config.inputs.keys()),
                 output_names=list(config.outputs.keys()),
-                dynamic_axes=dynamic_axes,
-                opset_version=opset,
+                do_constant_folding=True,
             )
 
     def _remove_unused_columns(self, dataset: "datasets.Dataset", description: Optional[str] = None):
