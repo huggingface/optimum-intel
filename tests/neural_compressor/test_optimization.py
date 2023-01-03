@@ -75,6 +75,7 @@ class QuantizationTest(unittest.TestCase):
             self.assertTrue("logits" in onnx_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
+            print(onnx_outputs.logits, transformers_outputs.logits)
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
     def test_dynamic_accuracy_strategy_quantization(self):
@@ -144,6 +145,7 @@ class QuantizationTest(unittest.TestCase):
             self.assertTrue("logits" in onnx_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
+            print(onnx_outputs.logits, transformers_outputs.logits)
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
     def test_aware_training_quantization(self):
@@ -183,6 +185,7 @@ class QuantizationTest(unittest.TestCase):
             self.assertTrue("logits" in onnx_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
+            print(onnx_outputs.logits, transformers_outputs.logits)
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
     def test_aware_training_quantization_pruning(self):
@@ -231,6 +234,7 @@ class QuantizationTest(unittest.TestCase):
             self.assertTrue("logits" in onnx_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
+            print(onnx_outputs.logits, transformers_outputs.logits)
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
 
