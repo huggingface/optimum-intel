@@ -32,8 +32,14 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
 from optimum.modeling_base import OptimizedModel
 
+from ..utils.import_utils import is_transformers_version
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
+
+if is_transformers_version("<", "4.25.0"):
+    from transformers.generation_utils import GenerationMixin
+else:
+    from transformers.generation import GenerationMixin
 
 core = Core()
 
@@ -92,6 +98,13 @@ class OVBaseModel(OptimizedModel):
         self.request = None
         if enable_compilation:
             self.compile()
+
+        if is_transformers_version("<", "4.25.0"):
+            self.generation_config = None
+        else:
+            from transformers import GenerationConfig
+
+            self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
     @staticmethod
     def load_model(file_name: Union[str, Path], bin_file_name: Optional[Union[str, Path]] = None):
@@ -356,3 +369,11 @@ class OVBaseModel(OptimizedModel):
         Get the task corresponding to a class (for example AutoModelForXXX in transformers).
         """
         return cls._AUTOMODELS_TO_TASKS[auto_model_class.__name__]
+
+    def can_generate(self) -> bool:
+        """
+        Returns whether this model can generate sequences with `.generate()`.
+        """
+        if isinstance(self, GenerationMixin):
+            return True
+        return False
