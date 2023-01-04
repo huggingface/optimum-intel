@@ -729,14 +729,19 @@ class OVTrainer(Trainer):
                 if pruning_controller.scheduler.current_stage == MovementSchedulerStage.POST_WARMUP:
                     ir_pruning = True
 
-        if ir_pruning:
-            ov_model = convert_model(onnx_model, transform="Pruning")
+        try:
+            if ir_pruning:
+                ov_model = convert_model(onnx_model, transform="Pruning")
+            else:
+                ov_model = convert_model(onnx_model)
+        except:
+            logger.warning(
+                "Error encountered during IR generation. Run continues, please check compression config and model.onnx"
+            )
         else:
-            ov_model = convert_model(onnx_model)
-
-        xml_pth = os.path.join(os.path.dirname(onnx_model), OV_XML_FILE_NAME)
-        bin_pth = xml_pth.replace(".xml", ".bin")
-        openvino.runtime.serialize(ov_model, xml_pth, bin_pth)
+            xml_pth = os.path.join(os.path.dirname(onnx_model), OV_XML_FILE_NAME)
+            bin_pth = xml_pth.replace(".xml", ".bin")
+            openvino.runtime.serialize(ov_model, xml_pth, bin_pth)
 
     def _set_feature(self):
         if self.feature is None:
