@@ -14,32 +14,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass, field
 import logging
 import os
+import sys
+import warnings
+from dataclasses import dataclass, field
 from pathlib import Path
 from random import randint
-import sys
 from typing import Optional
-import warnings
-
-import jstyleson as json
-from nncf.common.utils.os import safe_open
-import numpy as np
-from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
-import torch
-import torch.nn.functional as F
 
 import datasets
-from datasets import DatasetDict, load_dataset
-import evaluate
+import numpy as np
+import torch
+import torch.nn.functional as F
 import transformers
+from datasets import DatasetDict, load_dataset
 from transformers import AutoConfig, AutoFeatureExtractor, AutoModelForAudioClassification, HfArgumentParser, set_seed
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
+import evaluate
+import jstyleson as json
+from nncf.common.utils.os import safe_open
+from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
 from wav2vec2_onnx_config import Wav2Vec2OnnxConfig
+
 
 logger = logging.getLogger(__name__)
 

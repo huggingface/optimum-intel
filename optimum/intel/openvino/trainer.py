@@ -38,7 +38,7 @@ from transformers.deepspeed import deepspeed_init
 from transformers.integrations import hp_params
 from transformers.modeling_utils import PreTrainedModel, unwrap_model
 from transformers.onnx import FeaturesManager, OnnxConfig
-from transformers.pytorch_utils import is_torch_less_than_1_11, ALL_LAYERNORM_LAYERS
+from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS, is_torch_less_than_1_11
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer import TRAINER_STATE_NAME, TRAINING_ARGS_NAME
 from transformers.trainer_callback import TrainerCallback, TrainerState
@@ -65,14 +65,14 @@ from nncf import NNCFConfig
 from nncf.common.logging.logger import set_log_level
 from nncf.common.utils.tensorboard import prepare_for_tensorboard
 from nncf.config.structures import BNAdaptationInitArgs, QuantizationRangeInitArgs
-from nncf.torch import create_compressed_model
-from nncf.torch.nncf_network import NNCFNetwork
-from openvino._offline_transformations import compress_quantize_weights_transformation
-from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
 from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
 from nncf.experimental.torch.sparsity.movement.scheduler import MovementSchedulerStage
-from openvino.tools.mo import convert_model
+from nncf.torch import create_compressed_model
+from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
+from nncf.torch.nncf_network import NNCFNetwork
+from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
+from openvino.tools.mo import convert_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.utils import logging
@@ -88,6 +88,7 @@ from .utils import (
     use_external_data_format,
 )
 from .training_args import OVTrainingArguments
+
 
 if is_apex_available():
     from apex import amp

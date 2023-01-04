@@ -12,14 +12,14 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import tempfile
 import unittest
 from functools import partial
-import copy
-import torch
 from pathlib import Path
 
 import numpy as np
+import torch
 from datasets import load_dataset
 from transformers import (
     AutoModelForQuestionAnswering,
@@ -31,14 +31,13 @@ from transformers import (
 from transformers.utils import WEIGHTS_NAME
 
 import evaluate
-from optimum.intel.openvino.configuration import OVConfig, DEFAULT_QUANTIZATION_CONFIG
+from nncf.torch.dynamic_graph.graph_tracer import create_mock_tensor
 from optimum.intel.openvino import OVTrainingArguments
+from optimum.intel.openvino.configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
 from optimum.intel.openvino.modeling import OVModelForQuestionAnswering, OVModelForSequenceClassification
 from optimum.intel.openvino.quantization import OVQuantizer
 from optimum.intel.openvino.trainer import OVTrainer
 from parameterized import parameterized
-
-from nncf.torch.dynamic_graph.graph_tracer import create_mock_tensor
 
 
 def generate_mock_tokens(input_infos):

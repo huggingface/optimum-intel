@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -50,11 +51,10 @@ from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
 import evaluate
+import jstyleson as json
+from nncf.common.utils.os import safe_open
 from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
 
-import jstyleson as json
-from pathlib import Path
-from nncf.common.utils.os import safe_open
 
 logger = logging.getLogger(__name__)
 

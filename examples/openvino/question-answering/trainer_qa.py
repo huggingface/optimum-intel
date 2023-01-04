@@ -18,7 +18,6 @@ A subclass of `OVTrainer` specific to Question-Answering tasks
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from transformers.trainer_utils import PredictionOutput
 
 from optimum.intel.openvino.trainer import OVTrainer

@@ -23,6 +23,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import datasets
@@ -44,13 +45,12 @@ from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
 import evaluate
+import jstyleson as json
+from nncf.common.utils.os import safe_open
 from optimum.intel.openvino import OVConfig, OVTrainingArguments
 from trainer_qa import QuestionAnsweringOVTrainer
 from utils_qa import postprocess_qa_predictions
 
-import jstyleson as json
-from pathlib import Path
-from nncf.common.utils.os import safe_open
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.22.0")
