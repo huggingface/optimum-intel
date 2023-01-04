@@ -238,7 +238,6 @@ class INCQuantizer(OptimumQuantizer):
             save_path=str(output_path),
             example_inputs=inputs,
             opset_version=opset,
-            dtype="U8S8",
             dynamic_axes=dynamic_axes,
             input_names=list(config.inputs.keys()),
             output_names=list(config.outputs.keys()),
