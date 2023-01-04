@@ -71,7 +71,7 @@ from nncf.torch import create_compressed_model
 from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core
+from openvino.runtime import Core, PartialShape
 from openvino.tools.mo import convert_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
@@ -739,6 +739,12 @@ class OVTrainer(Trainer):
                 "Error encountered during IR generation. Run continues, please check compression config and model.onnx"
             )
         else:
+            # Configure IR model to accept dynamic-shaped input(s)
+            dynamic_iport_cfg = dict()
+            for iport in ov_model.inputs:
+                dynamic_iport_cfg[iport.any_name] = PartialShape([-1] * len(iport.shape))
+            ov_model.reshape(dynamic_iport_cfg)
+
             xml_pth = os.path.join(os.path.dirname(onnx_model), OV_XML_FILE_NAME)
             bin_pth = xml_pth.replace(".xml", ".bin")
             openvino.runtime.serialize(ov_model, xml_pth, bin_pth)
