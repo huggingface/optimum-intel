@@ -22,6 +22,8 @@ allows us to apply different quantization approaches (such as dynamic, static an
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for
 question answering tasks.
 
+For quantization, INC has integrated the [IPEX (Intel Extension for PyTorch)](https://github.com/intel/intel-extension-for-pytorch) post training static quantization. The flag `--use_ipex` can be passed along to use INC IPEX backend and `--bf16 --no_cuda` will enable mixed precision.
+
 For pruning, we support snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock. You can refer to [the pruning details](https://github.com/intel/neural-compressor/tree/master/neural_compressor/pruner#pruning-types).
 
 > **_Note:_** At present, neural_compressor only support to prune linear and conv ops. So if we set a target sparsity is 0.9, it means that the pruning op's sparsity will be 0.9, not the whole model's sparsity is 0.9. For example: the embedding ops will not be pruned in the model.

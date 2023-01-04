@@ -46,14 +46,16 @@ from transformers import (
     XLNetLMHeadModel,
     default_data_collator,
 )
+from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
+from transformers.utils.generic import ContextManagers
 
 import neural_compressor
 from huggingface_hub import HfApi, hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig, get_torch_version
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
-from neural_compressor.model.torch_model import PyTorchModel
+from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
 from neural_compressor.utils.pytorch import load
 from optimum.exporters import TasksManager
@@ -179,6 +181,9 @@ class INCQuantizer(OptimumQuantizer):
                 data_collator=data_collator,
             )
 
+        if isinstance(self._original_model.config, PretrainedConfig):
+            self._original_model.config.framework = quantization_config.backend
+
         compressed_model = fit(
             self._original_model,
             conf=quantization_config,
@@ -214,7 +219,11 @@ class INCQuantizer(OptimumQuantizer):
         # TODO : Save quantization_config
 
     @staticmethod
-    def _save_pretrained(model: PyTorchModel, output_path: str):
+    def _save_pretrained(model: PyTorchModel or IPEXModel, output_path: str):
+        if isinstance(model, IPEXModel):
+            model._model.save(output_path)
+            logger.info(f"Model weights saved to {output_path}")
+            return
         state_dict = model._model.state_dict()
         if hasattr(model, "q_config"):
             state_dict["best_configure"] = model.q_config
@@ -485,7 +494,11 @@ class INCModel:
         else:
             model_class._keys_to_ignore_on_load_missing.extend(missing_keys_to_ignore_on_load)
 
-        model = model_class.from_pretrained(model_name_or_path, **kwargs)
+        # init model with no weights
+        init_contexts = [no_init_weights(_enable=True)]
+        with ContextManagers(init_contexts):
+            model = model_class(config, **kwargs)
+
         model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
         model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
 
@@ -530,10 +543,9 @@ class INCModel:
 
                     raise EnvironmentError(msg)
 
-        if getattr(config, "framework", None) == "pytorch_ipex":
-            raise ValueError("INC IPEX is currently not supported")
-
         # Load the the state dictionary of the model ti verify whether the model is quantized with INC
+        if config.framework == "ipex":
+            return load(state_dict_path)
         state_dict = torch.load(state_dict_path)
         if "best_configure" not in state_dict:
             return model
