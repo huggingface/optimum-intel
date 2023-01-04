@@ -17,7 +17,6 @@ import io
 import math
 import os
 import sys
-import subprocess
 import time
 import warnings
 from collections import defaultdict
@@ -72,6 +71,7 @@ from openvino._offline_transformations import compress_quantize_weights_transfor
 from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
 from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
 from nncf.experimental.torch.sparsity.movement.scheduler import MovementSchedulerStage
+from openvino.tools.mo import convert_model
 from openvino.runtime import Core
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
@@ -714,16 +714,7 @@ class OVTrainer(Trainer):
         if self.compression_controller is None:
             return
 
-        cmd = [
-            "mo",
-            "--input_model",
-            onnx_model,
-            "--model_name",
-            os.path.splitext(OV_XML_FILE_NAME)[0],
-            "--output_dir",
-            os.path.dirname(onnx_model),
-        ]
-
+        ir_pruning = False
         if self._is_pruning_controller_exists():
             pruning_controller = None
             if isinstance(self.compression_controller, PTCompositeCompressionAlgorithmController):
@@ -735,9 +726,16 @@ class OVTrainer(Trainer):
 
             if pruning_controller is not None:
                 if pruning_controller.scheduler.current_stage == MovementSchedulerStage.POST_WARMUP:
-                    cmd += ["--transform", "Pruning"]
+                    ir_pruning = True
 
-        subprocess.run(cmd, check=True)
+        if ir_pruning:
+            ov_model = convert_model(onnx_model, transform="Pruning")
+        else:
+            ov_model = convert_model(onnx_model)
+
+        xml_pth = os.path.join(os.path.dirname(onnx_model), OV_XML_FILE_NAME)
+        bin_pth = xml_pth.replace(".xml", ".bin")
+        openvino.runtime.serialize(ov_model, xml_pth, bin_pth)
 
     def _set_feature(self):
         if self.feature is None:
