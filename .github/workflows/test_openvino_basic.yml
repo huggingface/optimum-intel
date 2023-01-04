@@ -4,6 +4,14 @@ on:
   workflow_dispatch:
   schedule:
     - cron:  '41 1 * * *'  # run every day at 1:41
+  push:
+    paths:
+    - 'tests/openvino/test_modeling_basic.py'
+    - '.github/workflows/test_openvino_basic.yml'
+  pull_request:
+    paths:
+    - 'tests/openvino/test_modeling_basic.py'
+    - '.github/workflows/test_openvino_basic.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -26,7 +34,7 @@ jobs:
       uses: actions/setup-python@v2
       with:
         python-version: ${{ matrix.python-version }}
-    
+
     - name: Install dependencies
       run: |
         # Install openvino manually to prevent dependency conflicts when .[openvino] pins
