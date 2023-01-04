@@ -238,6 +238,7 @@ class INCQuantizer(OptimumQuantizer):
             output_names=list(config.outputs.keys()),
             dynamic_axes=dynamic_axes,
             opset_version=opset,
+            dtype="U8S8",
             fp32_model=self._original_model,
             calib_dataloader=calibration_dataloader,
         )
