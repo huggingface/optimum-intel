@@ -99,7 +99,7 @@ class OVBaseModel(OptimizedModel):
         if enable_compilation:
             self.compile()
 
-        if is_transformers_version("<", "4.25.0"):
+        if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
         else:
             from transformers import GenerationConfig

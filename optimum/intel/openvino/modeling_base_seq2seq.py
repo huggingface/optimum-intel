@@ -82,7 +82,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.encoder_request = None
         self.decoder_request = None
         self.decoder_with_past_request = None
-        if is_transformers_version("<", "4.25.0"):
+        if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
         else:
             from transformers import GenerationConfig
