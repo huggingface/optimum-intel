@@ -182,7 +182,7 @@ class INCQuantizer(OptimumQuantizer):
             )
 
         if isinstance(self._original_model.config, PretrainedConfig):
-            self._original_model.config.framework = quantization_config.backend
+            self._original_model.config.inc_backend = quantization_config.backend
 
         compressed_model = fit(
             self._original_model,

@@ -40,13 +40,13 @@ class QuestionAnsweringINCTrainer(INCTrainer):
         if (
             hasattr(self.model, "model")
             and hasattr(self.model.model, "config")
-            and getattr(self.model.model.config, "framework", None) == "ipex"
+            and getattr(self.model.model.config, "inc_backend", None) == "ipex"
         ):
             self.args.use_ipex = False
             self.args.bf16 = False
             self.use_cpu_amp = False
         if hasattr(self.model, "config") and getattr(self.model.config, "torch_dtype", None) == "int8":
-            if self.model.config.framework in ["pt"] and self.use_cpu_amp:
+            if self.model.config.framework in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
                 logger.warn(
                     f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
                 )
