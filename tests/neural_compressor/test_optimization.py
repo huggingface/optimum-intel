@@ -41,6 +41,7 @@ from neural_compressor.config import (
     TuningCriterion,
     WeightPruningConfig,
 )
+from onnx import load as onnx_load
 from optimum.intel.neural_compressor import (
     INCModelForQuestionAnswering,
     INCModelForSequenceClassification,
@@ -57,25 +58,32 @@ set_seed(1009)
 class QuantizationTest(unittest.TestCase):
     def test_dynamic_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+        expected_quantized_matmuls = 36
         quantization_config = PostTrainingQuantConfig(approach="dynamic")
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
+        quantizer = INCQuantizer.from_pretrained(model)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer = INCQuantizer.from_pretrained(model)
             quantizer.quantize(
                 quantization_config=quantization_config,
                 save_directory=tmp_dir,
                 save_onnx_model=True,
             )
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_outputs = onnx_model(**tokens)
-            self.assertTrue("logits" in onnx_outputs)
-            with torch.no_grad():
-                transformers_outputs = transformers_model(**tokens)
-            # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
+            onnx_model = onnx_load(os.path.join(tmp_dir, "model.onnx"))
+        ort_outputs = ort_model(**tokens)
+        self.assertTrue("logits" in ort_outputs)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        # self.assertTrue(torch.allclose(ort_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        num_quantized_matmul = 0
+        for initializer in onnx_model.graph.initializer:
+            if "MatMul" in initializer.name and "quantized" in initializer.name:
+                num_quantized_matmul += 1
+        self.assertEqual(expected_quantized_matmuls, num_quantized_matmul)
 
     def test_dynamic_accuracy_strategy_quantization(self):
         model_name = "distilbert-base-cased-distilled-squad"
@@ -107,12 +115,13 @@ class QuantizationTest(unittest.TestCase):
                 save_onnx_model=True,
             )
             loaded_model = INCModelForQuestionAnswering.from_pretrained(tmp_dir)
-            quantized_model_metric = eval_fn(loaded_model)
-            # Verification accuracy loss is under 5%
-            self.assertGreaterEqual(quantized_model_metric, original_model_metric * (1 - tolerance_criterion))
+        quantized_model_metric = eval_fn(loaded_model)
+        # Verification accuracy loss is under 5%
+        self.assertGreaterEqual(quantized_model_metric, original_model_metric * (1 - tolerance_criterion))
 
     def test_static_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+        expected_quantized_matmuls = 36
         quantization_config = PostTrainingQuantConfig(approach="static")
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -129,9 +138,9 @@ class QuantizationTest(unittest.TestCase):
             num_samples=300,
             dataset_split="train",
         )
+        quantizer = INCQuantizer.from_pretrained(model)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer = INCQuantizer.from_pretrained(model)
             quantizer.quantize(
                 quantization_config=quantization_config,
                 calibration_dataset=calibration_dataset,
@@ -139,15 +148,22 @@ class QuantizationTest(unittest.TestCase):
                 save_onnx_model=True,
             )
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_outputs = onnx_model(**tokens)
-            self.assertTrue("logits" in onnx_outputs)
-            with torch.no_grad():
-                transformers_outputs = transformers_model(**tokens)
-            # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
+            onnx_model = onnx_load(os.path.join(tmp_dir, "model.onnx"))
+        ort_outputs = ort_model(**tokens)
+        self.assertTrue("logits" in ort_outputs)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        # self.assertTrue(torch.allclose(ort_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        num_quantized_matmul = 0
+        for initializer in onnx_model.graph.initializer:
+            if "MatMul" in initializer.name and "quantized" in initializer.name:
+                num_quantized_matmul += 1
+        self.assertEqual(expected_quantized_matmuls, num_quantized_matmul)
 
     def test_aware_training_quantization(self):
         model_name = "distilbert-base-uncased"
+        expected_quantized_matmuls = 36
         quantization_config = QuantizationAwareTrainingConfig()
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -176,14 +192,19 @@ class QuantizationTest(unittest.TestCase):
             train_result = trainer.train()
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
-
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_outputs = onnx_model(**tokens)
-            self.assertTrue("logits" in onnx_outputs)
-            with torch.no_grad():
-                transformers_outputs = transformers_model(**tokens)
-            # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
+            onnx_model = onnx_load(os.path.join(tmp_dir, "model.onnx"))
+        ort_outputs = ort_model(**tokens)
+        self.assertTrue("logits" in ort_outputs)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        # self.assertTrue(torch.allclose(ort_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        num_quantized_matmul = 0
+        for initializer in onnx_model.graph.initializer:
+            if "MatMul" in initializer.name and "quantized" in initializer.name:
+                num_quantized_matmul += 1
+        self.assertEqual(expected_quantized_matmuls, num_quantized_matmul)
 
     def test_aware_training_quantization_pruning(self):
         model_name = "distilbert-base-uncased"
@@ -226,12 +247,12 @@ class QuantizationTest(unittest.TestCase):
             trainer.save_model(save_onnx_model=True)
 
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_outputs = onnx_model(**tokens)
-            self.assertTrue("logits" in onnx_outputs)
+            ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
+            ort_outputs = ort_model(**tokens)
+            self.assertTrue("logits" in ort_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
-            # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            # self.assertTrue(torch.allclose(ort_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
 
 class PruningTest(unittest.TestCase):
@@ -274,12 +295,12 @@ class PruningTest(unittest.TestCase):
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
             transformers_model = AutoModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_outputs = onnx_model(**tokens)
-            self.assertTrue("logits" in onnx_outputs)
+            ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
+            ort_outputs = ort_model(**tokens)
+            self.assertTrue("logits" in ort_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
-            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(torch.allclose(ort_outputs.logits, transformers_outputs.logits, atol=1e-4))
             sparsity = trainer.get_model_sparsity()
             self.assertGreaterEqual(sparsity, target_sparsity * 100 / 2)
 
@@ -316,9 +337,9 @@ class DistillationTest(unittest.TestCase):
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
             transformers_model = AutoModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
-            onnx_outputs = onnx_model(**tokens)
-            self.assertTrue("logits" in onnx_outputs)
+            ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
+            ort_outputs = ort_model(**tokens)
+            self.assertTrue("logits" in ort_outputs)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
-            self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(torch.allclose(ort_outputs.logits, transformers_outputs.logits, atol=1e-4))
