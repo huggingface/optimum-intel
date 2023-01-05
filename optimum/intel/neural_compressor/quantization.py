@@ -233,7 +233,7 @@ class INCQuantizer(OptimumQuantizer):
         inputs = config.generate_dummy_inputs(framework="pt")
         torch_to_int8_onnx(
             fp32_model=self._original_model,
-            int8_model=model,
+            int8_model=model.model,
             q_config=model.q_config,
             save_path=str(output_path),
             example_inputs=inputs,
