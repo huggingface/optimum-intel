@@ -55,7 +55,7 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         if model_class_str == "OVModelForQuestionAnswering":
             input_text *= 2
         elif model_class_str == "OVModelForMaskedLM":
-            input_text[0] = f"{input_text} {tokenizer.mask_token}"
+            input_text[0] = f"{input_text[0]} {tokenizer.mask_token}"
 
         if model_class_str in TASKS:
             task = TASKS[model_class_str]
