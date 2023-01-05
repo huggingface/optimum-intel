@@ -126,7 +126,7 @@ class INCTrainer(Trainer):
         self.dtype = "int8" if quantization_config is not None else str(get_parameter_dtype(self.model)).split(".")[1]
         self.model.config.torch_dtype = self.dtype
         self.model.config.framework = "pytorch_fx"
-        self.model.config.inc_backend = "default"
+        self.model.config.backend = "default"
         self.model.config.architectures = [self.model.__class__.__name__]
         self.config = getattr(self.model, "config", None)
 
@@ -729,7 +729,7 @@ class INCTrainer(Trainer):
         if (
             hasattr(self.model, "model")
             and hasattr(self.model.model, "config")
-            and getattr(self.model.model.config, "inc_backend", None) == "ipex"
+            and getattr(self.model.model.config, "backend", None) == "ipex"
         ):
             self.args.use_ipex = False
             self.args.bf16 = False

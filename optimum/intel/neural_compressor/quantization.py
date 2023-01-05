@@ -182,7 +182,7 @@ class INCQuantizer(OptimumQuantizer):
             )
 
         if isinstance(self._original_model.config, PretrainedConfig):
-            self._original_model.config.inc_backend = quantization_config.backend
+            self._original_model.config.backend = quantization_config.backend
 
         compressed_model = fit(
             self._original_model,
@@ -544,7 +544,7 @@ class INCModel:
                     raise EnvironmentError(msg)
 
         # Load the the state dictionary of the model ti verify whether the model is quantized with INC
-        if config.inc_backend == "ipex":
+        if config.backend == "ipex":
             return load(state_dict_path)
         state_dict = torch.load(state_dict_path)
         if "best_configure" not in state_dict:

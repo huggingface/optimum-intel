@@ -40,7 +40,7 @@ class QuestionAnsweringINCTrainer(INCTrainer):
         if (
             hasattr(self.model, "model")
             and hasattr(self.model.model, "config")
-            and getattr(self.model.model.config, "inc_backend", None) == "ipex"
+            and getattr(self.model.model.config, "backend", None) == "ipex"
         ):
             self.args.use_ipex = False
             self.args.bf16 = False
