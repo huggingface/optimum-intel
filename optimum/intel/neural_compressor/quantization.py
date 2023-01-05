@@ -544,7 +544,7 @@ class INCModel:
                     raise EnvironmentError(msg)
 
         # Load the the state dictionary of the model ti verify whether the model is quantized with INC
-        if config.framework == "ipex":
+        if config.inc_backend == "ipex":
             return load(state_dict_path)
         state_dict = torch.load(state_dict_path)
         if "best_configure" not in state_dict:
