@@ -34,7 +34,7 @@ TASKS = {
     "OVModelForSequenceClassification": "text-classification",
     "OVModelForQuestionAnswering": "question-answering",
     "OVModelForCausalLM": "text-generation",
-    "OVModelForSeq2SeqLM": "text-generation",
+    "OVModelForSeq2SeqLM": "text2text-generation",
 }
 
 
