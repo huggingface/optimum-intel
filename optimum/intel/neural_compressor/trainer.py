@@ -139,7 +139,7 @@ class INCTrainer(Trainer):
         if len(inc_config) >= 1 and self.args.do_train:
             inc_config = inc_config if len(inc_config) > 1 else inc_config.pop()
             self._compression_manager = training.prepare_compression(self.model, confs=inc_config)
-            self.model = self._compression_manager.model
+            self.model = self._compression_manager.model.model
             self.model_wrapped = self.model
 
     def _inner_training_loop(
@@ -548,20 +548,18 @@ class INCTrainer(Trainer):
         # Good practice: save your training arguments together with the trained model
         torch.save(self.args, os.path.join(output_dir, TRAINING_ARGS_NAME))
 
-        _model = getattr(self.model, "_model", self.model)
-
         # Save the model
         if state_dict is None:
-            state_dict = _model.state_dict()
-            if hasattr(self.model, "q_config"):
-                state_dict["best_configure"] = self.model.q_config
+            state_dict = self.model.state_dict()
+            if self._compression_manager is not None and hasattr(self._compression_manager.model, "q_config"):
+                state_dict["best_configure"] = self._compression_manager.model.q_config
         torch.save(state_dict, output_model_file)
 
         # Export the compressed model to the ONNX format
-        if save_onnx_model and isinstance(self.model, PyTorchModel):
+        if save_onnx_model:
             self._set_task()
             model_type = self.config.model_type.replace("_", "-")
-            model_name = getattr(_model, "name", None)
+            model_name = getattr(self.model, "name", None)
             onnx_config_class = TasksManager.get_exporter_config_constructor(
                 exporter="onnx", model=self.model, task=self.task, model_type=model_type, model_name=model_name
             )
@@ -590,7 +588,7 @@ class INCTrainer(Trainer):
 
     def _onnx_export(
         self,
-        model: "PyTorchModel",
+        model: nn.Module,
         config: "OnnxConfig",
         output_path: str,
         calibration_dataloader: "INCDataLoader" = None,
@@ -602,8 +600,8 @@ class INCTrainer(Trainer):
         if self.dtype == "int8":
             torch_to_int8_onnx(
                 fp32_model=self._compression_manager.fp32_model.model,
-                int8_model=model.model,
-                q_config=model.q_config,
+                int8_model=model,
+                q_config=self._compression_manager.model.q_config,
                 save_path=output_path,
                 example_inputs=inputs,
                 opset_version=opset,
@@ -665,8 +663,7 @@ class INCTrainer(Trainer):
             self._past = outputs[self.args.past_index]
 
         if labels is not None:
-            model_name = unwrap_model(getattr(model, "_model", model))._get_name()
-            if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+            if unwrap_model(model)._get_name() in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
                 loss = self.label_smoother(outputs, labels, shift_labels=True)
             else:
                 loss = self.label_smoother(outputs, labels)
@@ -740,6 +737,6 @@ class INCTrainer(Trainer):
 
     def get_model_sparsity(self):
         sparsity = 0.0
-        if isinstance(self.model, PyTorchModel):
-            sparsity = self.model.report_sparsity()[-1]
+        if self._compression_manager is not None:
+            sparsity = self._compression_manager.model.report_sparsity()[-1]
         return sparsity
