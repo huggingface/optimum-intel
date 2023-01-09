@@ -146,6 +146,41 @@ class QuantizationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
             # self.assertTrue(torch.allclose(onnx_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
+    def test_ipex_static_quantization(self):
+        model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+        quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex")
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+
+        def preprocess_function(examples, tokenizer):
+            return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
+
+        quantizer = INCQuantizer.from_pretrained(model)
+        calibration_dataset = quantizer.get_calibration_dataset(
+            "glue",
+            dataset_config_name="sst2",
+            preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
+            num_samples=300,
+            dataset_split="train",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer = INCQuantizer.from_pretrained(model)
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                calibration_dataset=calibration_dataset,
+                save_directory=tmp_dir,
+                save_onnx_model=False,
+            )
+            transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
+
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
+                model_outputs = quantizer._quantized_model(**tokens)
+            import pdb;pdb.set_trace();
+            self.assertTrue(torch.allclose(model_outputs["logits"], transformers_outputs["logits"], atol=1e-4))
+
     def test_aware_training_quantization(self):
         model_name = "distilbert-base-uncased"
         quantization_config = QuantizationAwareTrainingConfig()

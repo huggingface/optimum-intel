@@ -837,15 +837,15 @@ def main():
         if optim_args.quantization_approach == "static":
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
             if training_args.use_ipex:
-                train_dataset = eval_dataset.select(range(num_calibration_samples))
+                calib_dataset = eval_dataset.select(range(num_calibration_samples))
             else:
-                train_dataset = train_dataset.select(range(num_calibration_samples))
+                calib_dataset = train_dataset.select(range(num_calibration_samples))
             quantization_config.calibration_sampling_size = num_calibration_samples
 
         quantizer.quantize(
             quantization_config=quantization_config,
             save_directory=training_args.output_dir,
-            calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
+            calibration_dataset=calib_dataset if optim_args.quantization_approach == "static" else None,
             batch_size=training_args.per_device_train_batch_size,
         )
         trainer.model = quantizer._quantized_model
