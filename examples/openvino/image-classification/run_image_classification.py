@@ -43,7 +43,6 @@ from transformers import (
     AutoFeatureExtractor,
     AutoModelForImageClassification,
     HfArgumentParser,
-    TrainingArguments,
     set_seed,
 )
 from transformers.trainer_utils import get_last_checkpoint
@@ -287,6 +286,15 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
         ignore_mismatched_sizes=model_args.ignore_mismatched_sizes,
     )
+
+    teacher_model = None
+    if training_args.teacher_model_or_path is not None:
+        teacher_model = AutoModelForImageClassification.from_pretrained(
+            training_args.teacher_model_or_path,
+            from_tf=bool(".ckpt" in training_args.teacher_model_or_path),
+            cache_dir=model_args.cache_dir,
+        )
+
     feature_extractor = AutoFeatureExtractor.from_pretrained(
         model_args.feature_extractor_name or model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
@@ -356,6 +364,7 @@ def main():
     # Initalize our trainer
     trainer = OVTrainer(
         model=model,
+        teacher_model=teacher_model,
         ov_config=ov_config,
         task="image-classification",
         args=training_args,
