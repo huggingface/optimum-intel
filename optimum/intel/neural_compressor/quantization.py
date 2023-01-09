@@ -219,7 +219,7 @@ class INCQuantizer(OptimumQuantizer):
         # TODO : Save quantization_config
 
     @staticmethod
-    def _save_pretrained(model: PyTorchModel or IPEXModel, output_path: str):
+    def _save_pretrained(model: Union[PyTorchModel, IPEXModel], output_path: str):
         if isinstance(model, IPEXModel):
             model._model.save(output_path)
             logger.info(f"Model weights saved to {output_path}")
