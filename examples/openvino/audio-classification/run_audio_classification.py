@@ -277,7 +277,7 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
-    print(feature_extractor)
+    logger.info(feature_extractor)
 
     # `datasets` takes care of automatically loading and resampling the audio,
     # so we just need to set the correct target sampling rate.
@@ -351,6 +351,12 @@ def main():
             from_tf=bool(".ckpt" in training_args.teacher_model_or_path),
             cache_dir=model_args.cache_dir,
         )
+
+    if training_args.do_train:
+        if training_args.gradient_checkpointing:
+            model.gradient_checkpointing_enable()
+        else:
+            model.gradient_checkpointing_disable()
 
     # freeze the convolutional waveform encoder
     if model_args.freeze_feature_encoder:
