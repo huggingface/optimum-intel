@@ -2,9 +2,9 @@
     {
         "algorithm": "movement_sparsity",
         "params": {
-            "warmup_start_epoch": 1,
+            "warmup_start_epoch": 3,
             "warmup_end_epoch": 8,
-            "importance_regularization_factor": 0.15,
+            "importance_regularization_factor": 0.050,
             "enable_structured_masking": true
         },
         "sparse_structure_by_scopes": [
@@ -35,6 +35,7 @@
     {
         "algorithm": "quantization",
         "quantize_inputs": false,
+        "preset": "mixed",
         "overflow_fix": "disable",
         "initializer": {
             "range": {
@@ -49,14 +50,7 @@
                 "num_bn_adaptation_samples": 256
             }
         },
-        "activations": {
-            "mode": "symmetric"
-        },
-        "weights": {
-            "mode": "symmetric",
-            "signed": true,
-            "per_channel": false
-        },
+        "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
         "ignored_scopes": ["{re}.*feature_extractor.*"]
     }
 ]
