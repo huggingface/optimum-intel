@@ -31,6 +31,7 @@ from openvino._offline_transformations import compress_model_transformation
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export
 
+from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_DECODER_NAME,
@@ -81,6 +82,12 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.encoder_request = None
         self.decoder_request = None
         self.decoder_with_past_request = None
+        if is_transformers_version("<=", "4.25.1"):
+            self.generation_config = None
+        else:
+            from transformers import GenerationConfig
+
+            self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
     def _save_pretrained(
         self,
