@@ -53,7 +53,7 @@ class OVConfig(BaseConfig):
         self.compression = compression or DEFAULT_QUANTIZATION_CONFIG
         self.input_info = input_info
         self.save_onnx_model = save_onnx_model
-        self._set_standard_onnx_export_option()
+        self._enable_standard_onnx_export_option()
         self.optimum_version = kwargs.pop("optimum_version", None)
 
     def add_input_info(self, model_inputs: Dict):
@@ -66,14 +66,8 @@ class OVConfig(BaseConfig):
             for name, value in model_inputs.items()
         ]
 
-    def _set_standard_onnx_export_option(self):
-        # This method depends on self.save_onnx_model.
-        # save_onnx_model is defaulted to false so that the final model output is
-        # in OpenVINO IR to realize performance benefit in OpenVINO runtime.
-        # True value of save_onnx_model will save a model in onnx format.
-        # Quantized performance of onnx model in onnxruntime will require OpenVINO backend.
-        # Otherwise, default onnxruntime backend gives a full-precision performance instead of low-precision's.
-        if isinstance(self.compression, dict) and self.compression["algorithm"] == "quantization":
+    def _enable_standard_onnx_export_option(self):
+        if isinstance(self.compression, dict):
             self.compression["export_to_onnx_standard_ops"] = self.save_onnx_model
         elif isinstance(self.compression, list):
             for i, algo_config in enumerate(self.compression):
