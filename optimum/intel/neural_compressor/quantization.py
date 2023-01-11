@@ -55,8 +55,8 @@ import neural_compressor
 from huggingface_hub import HfApi, hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig, get_torch_version
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
-from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.experimental.export import torch_to_int8_onnx
+from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
 from neural_compressor.utils.pytorch import load
 from optimum.exporters import TasksManager
@@ -546,7 +546,7 @@ class INCModel:
 
         if config.backend == "ipex":
             return load(state_dict_path)
-        
+
         # Load the state dictionary of the model to verify whether the model is quantized or not
         state_dict = torch.load(state_dict_path)
         if "best_configure" not in state_dict:
