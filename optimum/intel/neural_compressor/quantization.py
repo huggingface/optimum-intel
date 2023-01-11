@@ -56,6 +56,7 @@ from huggingface_hub import HfApi, hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig, get_torch_version
 from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
+from neural_compressor.experimental.export import torch_to_int8_onnx
 from neural_compressor.quantization import fit
 from neural_compressor.utils.pytorch import load
 from optimum.exporters import TasksManager
@@ -212,7 +213,7 @@ class INCQuantizer(OptimumQuantizer):
             compressed_model.eval()
             output_onnx_path = save_directory.joinpath(ONNX_WEIGHTS_NAME)
             # Export the compressed model to the ONNX format
-            self._onnx_export(compressed_model, onnx_config, output_onnx_path, calibration_dataloader)
+            self._onnx_export(compressed_model, onnx_config, output_onnx_path)
 
         # Save the quantized model
         self._save_pretrained(compressed_model, output_path)
@@ -235,20 +236,20 @@ class INCQuantizer(OptimumQuantizer):
         model: PyTorchModel,
         config: OnnxConfig,
         output_path: Union[str, Path],
-        calibration_dataloader: INCDataLoader = None,
     ):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
         dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
         inputs = config.generate_dummy_inputs(framework="pt")
-        model.export_to_int8_onnx(
+        torch_to_int8_onnx(
+            fp32_model=self._original_model,
+            int8_model=model.model,
+            q_config=model.q_config,
             save_path=str(output_path),
             example_inputs=inputs,
+            opset_version=opset,
+            dynamic_axes=dynamic_axes,
             input_names=list(config.inputs.keys()),
             output_names=list(config.outputs.keys()),
-            dynamic_axes=dynamic_axes,
-            opset_version=opset,
-            fp32_model=self._original_model,
-            calib_dataloader=calibration_dataloader,
         )
 
     def _set_task(self):
@@ -543,9 +544,10 @@ class INCModel:
 
                     raise EnvironmentError(msg)
 
-        # Load the the state dictionary of the model ti verify whether the model is quantized with INC
         if config.backend == "ipex":
             return load(state_dict_path)
+        
+        # Load the state dictionary of the model to verify whether the model is quantized or not
         state_dict = torch.load(state_dict_path)
         if "best_configure" not in state_dict:
             return model
