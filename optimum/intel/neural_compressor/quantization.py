@@ -414,6 +414,7 @@ class INCModel:
         model_name_or_path: str,
         inc_config: Union[IncOptimizedConfig, str] = None,
         q_model_name: Optional[str] = None,
+        cpu_flag: bool = False,
         **kwargs
     ) -> torch.nn.Module:
         """
@@ -535,7 +536,11 @@ class INCModel:
             raise ValueError("INC IPEX is currently not supported")
 
         # Load the state dictionary of the model to verify whether the model is quantized or not
-        state_dict = torch.load(state_dict_path)
+        if not cpu_flag: 
+            state_dict = torch.load(state_dict_path)
+        elif cpu_flag:
+            state_dict = torch.load(state_dict_path,map_location='cpu')
+        
         if "best_configure" not in state_dict:
             return model
 
