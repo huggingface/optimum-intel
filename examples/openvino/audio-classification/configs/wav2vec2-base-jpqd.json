@@ -4,7 +4,7 @@
         "params": {
             "warmup_start_epoch": 3,
             "warmup_end_epoch": 8,
-            "importance_regularization_factor": 0.050,
+            "importance_regularization_factor": 0.100,
             "enable_structured_masking": true
         },
         "sparse_structure_by_scopes": [

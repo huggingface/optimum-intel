@@ -33,7 +33,8 @@ python run_audio_classification.py \
     --model_name_or_path facebook/wav2vec2-base \
     --dataset_name superb \
     --dataset_config_name ks \
-    --output_dir wav2vec2-base-ft-keyword-spotting \
+    --output_dir /tmp/qat-wav2vec2-base-ft-keyword-spotting \
+    --nncf_compression_config configs/wav2vec2-base-qat.json \
     --overwrite_output_dir \
     --remove_unused_columns False \
     --do_train \
@@ -46,7 +47,7 @@ python run_audio_classification.py \
     --num_train_epochs 5 \
     --per_device_train_batch_size 32 \
     --gradient_accumulation_steps 4 \
-    --per_device_eval_batch_size 32 \
+    --per_device_eval_batch_size 64 \
     --dataloader_num_workers 4 \
     --logging_strategy steps \
     --logging_steps 10 \
@@ -59,19 +60,15 @@ python run_audio_classification.py \
     --push_to_hub
 ```
 
-On a single V100 GPU (16GB), this script should run in ~14 minutes and yield accuracy of **98.26%**.
-
-👀 See the results here: [anton-l/wav2vec2-base-ft-keyword-spotting](https://huggingface.co/anton-l/wav2vec2-base-ft-keyword-spotting)
-
-> If your model classification head dimensions do not fit the number of labels in the dataset, you can specify `--ignore_mismatched_sizes` to adapt it.
+On a single V100 GPU, this script should run in ~45 minutes and yield quantized model with accuracy of **98.1%**.
 
 ### Joint Pruning, Quantization and Distillation (JPQD) of Wav2Vec2 for Keyword Spotting
-`OVTrainer` also provides an advanced optimization worflow through the NNCF when Transformer model can be structurally pruned along with 8-bit quantization and distillation. Following is an example to jointly prune, quantize, distill a Wav2Vec2 model tuned for keywork spotting task. Do take note of additional NNCF config `--nncf_compression_config`.
+Above example results in a quantized model through `OVTrainer`. `OVTrainer` also provides an advanced optimization workflow through the NNCF which can structurally prune transformer along with 8-bit quantization and distillation. Following is an example to jointly prune, quantize, distill a Wav2Vec2 model for keyword spotting task. Do take note of additional NNCF config `--nncf_compression_config`.
 More on how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
 ```bash
 python run_audio_classification.py \
-    --model_name_or_path anton-l/wav2vec2-base-ft-keyword-spotting \
+    --model_name_or_path facebook/wav2vec2-base \
     --teacher_model_or_path anton-l/wav2vec2-base-ft-keyword-spotting \
     --nncf_compression_config configs/wav2vec2-base-jpqd.json \
     --distillation_weight 0.9 \
@@ -102,3 +99,4 @@ python run_audio_classification.py \
     --save_total_limit 3 \
     --seed 42 
 ```
+This script should take about 3hrs on a single V100 GPU and produce a 80% quantized wav2vec2 with ~80% structured sparsity in its linear layers. The model accuracy should converge to about 97.5%. Its IR gives an additional ~50% throughput over quantize-only IR on AWS EC2 instance (c6i.32xlarge). 
