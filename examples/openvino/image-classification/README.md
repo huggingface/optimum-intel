@@ -41,11 +41,13 @@ python run_image_classification.py \
     --output_dir /tmp/beans_outputs/
 ```
 
-### Structured Pruning on Swin for food101
-Following is an example to prune Swin-base model structurally while fine-tuning for food101. More on how to configure the pruning algorithm, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
+### Joint Pruning, Quantization and Distillation on Swin for food101
+Following is an example to prune Swin-base model structurally, quantize while distilling from a swin-base model fine-tuned on food101. More on how to configure the pruning algorithm, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 ```bash
 python run_image_classification.py \
     --model_name_or_path microsoft/swin-base-patch4-window7-224 \
+    --teacher_model_or_path skylord/swin-finetuned-food101 \
+    --distillation_weight 0.9 \
     --ignore_mismatched_sizes \
     --dataset_name food101 \
     --remove_unused_columns False \
@@ -55,7 +57,7 @@ python run_image_classification.py \
     --gradient_accumulation_steps 4 \
     --learning_rate 5e-5 \
     --warmup_ratio 0.1 \
-    --num_train_epochs 8 \
+    --num_train_epochs 10 \
     --logging_steps 1 \
     --do_eval \
     --per_device_eval_batch_size 128 \
@@ -67,3 +69,4 @@ python run_image_classification.py \
     --output_dir /tmp/food101_outputs/ \
     --nncf_compression_config configs/swin-base-movement-sparsity.json
 ```
+This example results in a quantized swin-base model with ~40% sparsity in the transformer blocks, giving 90.84% accuracy on food101 and taking about 12.5hours on a single V100 GPU.

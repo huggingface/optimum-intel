@@ -48,7 +48,7 @@ On a single V100 GPU, this script should run in ~40 minutes and yield accuracy o
 
 ### Joint Pruning, Quantization and Distillation (JPQD) of BERT on GLUE
 
-`OVTrainer` also provides an advanced optimization worflow through the NNCF when Transformer model can be structurally pruned along with 8-bit quantization and distillation. Following is an example to jointly prune, quantize, distill a BERT-base model tuned for glue task with a BERT-large teacher. Do take note of additional NNCF config `--nncf_compression_config`.
+`OVTrainer` also provides advanced optimization workflow via NNCF to structurally prune, quantize and distillation. Following is an example to optimize a sparse-quantized BERT-base model for SST2, distilling from a BERT-large teacher. Do take note of additional NNCF config `--nncf_compression_config`.
 More on how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
 ```bash
@@ -76,4 +76,4 @@ python run_glue.py \
     --seed 42
 ```
 
-On a single V100 GPU, this script should run in ~1.8 hours, and yield accuracy of **92.2%** with ~41% pruned weights in Transformer blocks.
+On a single V100 GPU, this script should run in ~1.8 hours, and yield accuracy of **92.2%** with ~40% pruned weights in the Transformer blocks. on On AWS EC2 instance (c6i.32xlarge), the sparse-quantized IR with OpenVINO runtime provides 2.5X throughput of model optimized with quantization alone. 
