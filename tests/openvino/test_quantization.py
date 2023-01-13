@@ -365,6 +365,6 @@ class OVTrainerTest(unittest.TestCase):
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
             self.assertEqual(expected_int8, num_int8)
 
-            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            tokens = generate_mock_tokens(trainer.model.input_infos)
             outputs = ovmodel(**tokens)
             self.assertTrue("logits" in outputs)
