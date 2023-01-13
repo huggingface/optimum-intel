@@ -82,13 +82,11 @@ class OVBaseModel(OptimizedModel):
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
         self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
-        cache_dir = Path(self.model_save_dir).joinpath("model_cache")
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        self.ov_config["CACHE_DIR"] = str(cache_dir)
         if "GPU" in self._device and self.is_dynamic:
             raise ValueError(
                 "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
             )
+
         if self.is_dynamic:
             height = -1 if self.export_feature == "image-classification" else None
             width = -1 if self.export_feature == "image-classification" else None
@@ -304,7 +302,12 @@ class OVBaseModel(OptimizedModel):
     def compile(self):
         if self.request is None:
             logger.info("Compiling the model and creating the inference request ...")
-            compiled_model = core.compile_model(self.model, self._device, self.ov_config)
+            # Only enable CACHE_DIR for GPU because CACHE_DIR fails with some INT8 models on CPU with 2022.3
+            ov_config = self.ov_config.copy()
+            if self._device == "GPU":
+                cache_dir = Path(self.model_save_dir).joinpath("model_cache")
+                ov_config["CACHE_DIR"] = str(cache_dir)
+            compiled_model = core.compile_model(self.model, self._device, ov_config)
             self.request = compiled_model.create_infer_request()
 
     def _reshape(

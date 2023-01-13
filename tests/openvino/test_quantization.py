@@ -18,11 +18,17 @@ from functools import partial
 
 import numpy as np
 from datasets import load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
+from transformers import (
+    AutoModelForQuestionAnswering,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    TrainingArguments,
+    default_data_collator,
+)
 
 import evaluate
 from optimum.intel.openvino.configuration import OVConfig
-from optimum.intel.openvino.modeling import OVModelForSequenceClassification
+from optimum.intel.openvino.modeling import OVModelForQuestionAnswering, OVModelForSequenceClassification
 from optimum.intel.openvino.quantization import OVQuantizer
 from optimum.intel.openvino.trainer import OVTrainer
 from parameterized import parameterized
@@ -52,6 +58,7 @@ class OVQuantizerTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
 
             model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+
             num_int8 = 0
             num_fake_quantize = 0
             for elem in model.model.get_ops():
@@ -70,6 +77,43 @@ class OVQuantizerTest(unittest.TestCase):
             expected_config = OVConfig()
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(expected_config.to_dict()["compression"], loaded_config.to_dict()["compression"])
+
+
+class OVQuantizerQATest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = (("hf-internal-testing/tiny-random-BertForQuestionAnswering",),)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_static_quantization(self, model_name):
+        def preprocess_function(examples, tokenizer):
+            return tokenizer(
+                examples["question"], examples["context"], padding="max_length", max_length=64, truncation=True
+            )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_name)
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            quantizer = OVQuantizer.from_pretrained(transformers_model)
+            calibration_dataset = quantizer.get_calibration_dataset(
+                "squadshifts",
+                dataset_config_name="new_wiki",
+                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
+                num_samples=10,
+                dataset_split="test",
+            )
+            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
+
+            # Test that inference on quantized model works
+            model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
+            tokens = tokenizer.encode_plus(
+                "This is a sample question", "This is a sample context", add_special_tokens=True, return_tensors="pt"
+            )
+            outputs = model(**tokens, return_dict=True)
+
+            # Test loading model a second time to catch issues with caching
+            try:
+                model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
+            except RuntimeError:
+                self.fail("Loading BERT QA model a second time failed")
 
 
 class OVTrainerTest(unittest.TestCase):
