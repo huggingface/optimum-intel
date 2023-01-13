@@ -100,6 +100,7 @@ core = Core()
 
 set_log_level(logging.ERROR)
 logger = logging.get_logger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class OVTrainer(Trainer):
@@ -388,7 +389,7 @@ class OVTrainer(Trainer):
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
             if self.compression_controller is not None:
                 self.compression_controller.scheduler.epoch_step()
-                print(self.compression_controller.statistics().to_str())
+                logger.info(self.compression_controller.statistics().to_str())
 
             if self.compression_controller is not None:
                 # Must be called at the beginning of each training epoch to prepare the compression method
