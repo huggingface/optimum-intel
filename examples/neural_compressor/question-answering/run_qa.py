@@ -839,7 +839,8 @@ def main():
             train_dataset = train_dataset.select(range(num_calibration_samples))
             quantization_config.calibration_sampling_size = num_calibration_samples
             if training_args.use_ipex:
-                train_dataset = train_dataset.remove_columns(["start_positions", "end_positions"])
+                if set(["start_positions", "end_positions"]) < set(train_dataset.column_names):
+                    train_dataset = train_dataset.remove_columns(["start_positions", "end_positions"])
         quantizer.quantize(
             quantization_config=quantization_config,
             save_directory=training_args.output_dir,
