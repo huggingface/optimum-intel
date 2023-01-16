@@ -844,7 +844,7 @@ def main():
                 for column in unused_column_names:
                     if column in train_dataset.column_names:
                         column_to_remove.append(column)
-                train_dataset = train_dataset.remove_columns(["start_positions", "end_positions"])
+                train_dataset = train_dataset.remove_columns(column_to_remove)
         quantizer.quantize(
             quantization_config=quantization_config,
             save_directory=training_args.output_dir,
