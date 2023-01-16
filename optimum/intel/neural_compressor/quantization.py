@@ -545,7 +545,11 @@ class INCModel:
                     raise EnvironmentError(msg)
 
         if config.backend == "ipex":
-            return load(state_dict_path)
+            # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.
+            # return load(state_dict_path)
+            load_model = torch.jit.load(state_dict_path)
+            load_model = torch.jit.freeze(load_model.eval())
+            return load_model
 
         # Load the state dictionary of the model to verify whether the model is quantized or not
         state_dict = torch.load(state_dict_path)
