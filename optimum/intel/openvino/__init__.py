@@ -28,6 +28,7 @@ if is_nncf_available():
     from .trainer import OVTrainer
 
 from .modeling import (
+    OVModelForAudioClassification,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
