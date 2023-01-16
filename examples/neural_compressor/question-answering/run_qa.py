@@ -836,16 +836,14 @@ def main():
         quantizer = INCQuantizer.from_pretrained(model, eval_fn=eval_func)
         if optim_args.quantization_approach == "static":
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
-            if training_args.use_ipex:
-                calib_dataset = eval_dataset.select(range(num_calibration_samples))
-            else:
-                calib_dataset = train_dataset.select(range(num_calibration_samples))
+            train_dataset = train_dataset.select(range(num_calibration_samples))
             quantization_config.calibration_sampling_size = num_calibration_samples
-
+            if training_args.use_ipex:
+                train_dataset = train_dataset.remove_columns(["start_positions", "end_positions"])
         quantizer.quantize(
             quantization_config=quantization_config,
             save_directory=training_args.output_dir,
-            calibration_dataset=calib_dataset if optim_args.quantization_approach == "static" else None,
+            calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
             batch_size=training_args.per_device_train_batch_size,
         )
         trainer.model = quantizer._quantized_model
