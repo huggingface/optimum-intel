@@ -734,6 +734,10 @@ def main():
             quantization_config = QuantizationAwareTrainingConfig()
         else:
             quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
+            if training_args.use_ipex:
+                quantization_config.backend = "ipex"
+                if not training_args.bf16:
+                    quantization_config.use_bf16 = False
 
     if optim_args.apply_pruning:
 
@@ -793,6 +797,20 @@ def main():
         compute_metrics=compute_metrics,
     )
 
+    # Define evaluate function
+    metric_name = "eval_f1"
+
+    def take_eval_steps(model, trainer, metric_name, save_metrics=False):
+        trainer.model = model
+        metrics = trainer.evaluate()
+        if save_metrics:
+            trainer.save_metrics("eval", metrics)
+        logger.info("{}: {}".format(metric_name, metrics.get(metric_name)))
+        return metrics[metric_name]
+
+    def eval_func(model):
+        return take_eval_steps(model, trainer, metric_name)
+
     # Training
     if training_args.do_train:
         checkpoint = None
@@ -815,12 +833,18 @@ def main():
 
     if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic"}:
         model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
-        quantizer = INCQuantizer.from_pretrained(model)
+        quantizer = INCQuantizer.from_pretrained(model, eval_fn=eval_func)
         if optim_args.quantization_approach == "static":
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
             train_dataset = train_dataset.select(range(num_calibration_samples))
             quantization_config.calibration_sampling_size = num_calibration_samples
-
+            if training_args.use_ipex:
+                unused_column_names = ["start_positions", "end_positions"]
+                column_to_remove = []
+                for column in unused_column_names:
+                    if column in train_dataset.column_names:
+                        column_to_remove.append(column)
+                train_dataset = train_dataset.remove_columns(column_to_remove)
         quantizer.quantize(
             quantization_config=quantization_config,
             save_directory=training_args.output_dir,
@@ -834,7 +858,8 @@ def main():
         with torch.no_grad():
             original_model_outputs = trainer.model(**tokens)
             quantized_model_outputs = loaded_model(**tokens)
-            if torch.allclose(original_model_outputs.end_logits, quantized_model_outputs.end_logits, atol=1e-4):
+
+            if torch.allclose(original_model_outputs["end_logits"], quantized_model_outputs["end_logits"], atol=1e-4):
                 logger.info("The quantized model was successfully loaded.")
             else:
                 logger.warning("The quantized model was not successfully loaded.")

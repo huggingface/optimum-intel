@@ -128,6 +128,7 @@ class INCTrainer(Trainer):
         self.dtype = "int8" if quantization_config is not None else str(get_parameter_dtype(self.model)).split(".")[1]
         self.model.config.torch_dtype = self.dtype
         self.model.config.framework = "pytorch_fx"
+        self.model.config.backend = "default"
         self.model.config.architectures = [self.model.__class__.__name__]
         self.config = getattr(self.model, "config", None)
 
@@ -727,7 +728,15 @@ class INCTrainer(Trainer):
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
-        self.args.use_ipex = False
+        if (
+            hasattr(self.model, "model")
+            and hasattr(self.model.model, "config")
+            and getattr(self.model.model.config, "backend", None) == "ipex"
+        ):
+            self.args.use_ipex = False
+            self.args.bf16 = False
+            self.use_cpu_amp = False
+
         if self.config is not None and getattr(self.config, "torch_dtype", None) == "int8":
             if getattr(self.config, "framework", None) in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
                 logger.warn(
