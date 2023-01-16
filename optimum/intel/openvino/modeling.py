@@ -589,8 +589,7 @@ AUDIO_CLASSIFICATION_EXAMPLE = r"""
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
     >>> pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
-    >>> audio = ""
-    >>> outputs = pipe(audio)
+    >>> outputs = pipe(audio_file)
     ```
 """
 
