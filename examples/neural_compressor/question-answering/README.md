@@ -22,7 +22,7 @@ allows us to apply different quantization approaches (such as dynamic, static an
 using the [Intel® Neural Compressor](https://github.com/intel/neural-compressor) library for
 question answering tasks.
 
-For quantization, Intel® Neural Compressor has integrated the [IPEX (Intel Extension for PyTorch)](https://github.com/intel/intel-extension-for-pytorch) post training static quantization. The flag `--use_ipex` can be passed along to use IPEX backend and `--bf16 --no_cuda` will enable mixed precision.
+For quantization, Intel® Neural Compressor has integrated the [IPEX (Intel Extension for PyTorch)](https://github.com/intel/intel-extension-for-pytorch) post-training static quantization. The flag `--use_ipex` can be passed along to use IPEX backend and `--bf16 --no_cuda` will enable mixed precision.
 
 For pruning, we support snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock. You can refer to [the pruning details](https://github.com/intel/neural-compressor/tree/master/neural_compressor/pruner#pruning-types).
 
