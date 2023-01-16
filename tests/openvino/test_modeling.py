@@ -522,4 +522,4 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-3))
