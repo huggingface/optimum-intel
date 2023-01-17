@@ -86,7 +86,7 @@ class QuantizationTest(unittest.TestCase):
         with torch.no_grad():
             model_outputs = quantizer._quantized_model(**tokens)
             loaded_model_outputs = loaded_model(**tokens)
-        self.assertTrue(torch.allclose(model_outputs.logits, loaded_model_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.equal(model_outputs.logits, loaded_model_outputs.logits))
         # self.assertTrue(torch.allclose(ort_outputs.logits, loaded_model_outputs.logits, atol=1e-4))
 
     def test_dynamic_accuracy_strategy_quantization(self):
@@ -166,7 +166,7 @@ class QuantizationTest(unittest.TestCase):
         with torch.no_grad():
             model_outputs = quantizer._quantized_model(**tokens)
             loaded_model_outputs = loaded_model(**tokens)
-        self.assertTrue(torch.allclose(model_outputs.logits, loaded_model_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.equal(model_outputs.logits, loaded_model_outputs.logits))
         # self.assertTrue(torch.allclose(ort_outputs.logits, loaded_model_outputs.logits, atol=1e-4))
 
     def test_ipex_static_quantization(self):
