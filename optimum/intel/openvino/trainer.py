@@ -62,7 +62,7 @@ from transformers.utils import (
 
 import openvino
 from nncf import NNCFConfig
-from nncf.common.logging.logger import set_log_level
+from nncf.common.logging.logger import nncf_logger, set_log_level
 from nncf.common.utils.tensorboard import prepare_for_tensorboard
 from nncf.config.structures import BNAdaptationInitArgs, QuantizationRangeInitArgs
 from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
@@ -98,9 +98,12 @@ if is_sagemaker_mp_enabled():
 
 core = Core()
 
-set_log_level(logging.ERROR)
 logger = logging.get_logger(__name__)
 logger.setLevel(logging.INFO)
+
+# NNCF Error to be shown on stdout
+# set_log_level(logging.ERROR)
+NNCF_LOG_FILE_NAME = "nncf_output.log"
 
 
 class OVTrainer(Trainer):
@@ -172,7 +175,18 @@ class OVTrainer(Trainer):
                     BNAdaptationInitArgs(OVDataLoader(train_dataloader)),
                 ]
             )
+
+            # Configure NNCF logging
+            # Disable nncf logging to stdout except error
+            # but to file nncf_output.log
             nncf_config["log_dir"] = args.output_dir
+            nncf_log_file_handler = logging.logging.FileHandler(os.path.join(args.output_dir, NNCF_LOG_FILE_NAME))
+            nncf_log_file_handler.setFormatter(logging.logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+            nncf_logger.addHandler(nncf_log_file_handler)
+            set_log_level(logging.ERROR)
+            nncf_logger.setLevel(logging.INFO)
+            nncf_log_file_handler.setLevel(logging.INFO)
+
             self.compression_controller, self.model = create_compressed_model(self.model, nncf_config)
             self.model_wrapped = self.model
 
@@ -389,7 +403,9 @@ class OVTrainer(Trainer):
             self.control = self.callback_handler.on_epoch_begin(args, self.state, self.control)
             if self.compression_controller is not None:
                 self.compression_controller.scheduler.epoch_step()
-                logger.info(self.compression_controller.statistics().to_str())
+                nncf_logger.info(
+                    "\nEpoch {} |".format(epoch).join(self.compression_controller.statistics().to_str().split("\n"))
+                )
 
             if self.compression_controller is not None:
                 # Must be called at the beginning of each training epoch to prepare the compression method
