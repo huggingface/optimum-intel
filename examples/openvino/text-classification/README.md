@@ -72,6 +72,7 @@ python run_glue.py \
     --evaluation_strategy steps \
     --eval_steps 250 \
     --save_strategy epoch \
+    --save_total_limit 3 \
     --fp16 \
     --seed 42
 ```

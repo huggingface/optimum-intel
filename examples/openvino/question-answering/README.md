@@ -69,6 +69,7 @@ python run_qa.py \
     --evaluation_strategy steps \
     --eval_steps 250 \
     --save_steps 500 \
+    --save_total_limit 5 \
     --output_dir /tmp/jpqd_bert_squad/ \
     --overwrite_output_dir \
     --nncf_compression_config configs/bert-base-jpqd.json

@@ -64,6 +64,7 @@ python run_image_classification.py \
     --evaluation_strategy steps \
     --eval_steps 500 \
     --save_steps 1000 \
+    --save_total_limit 5 \
     --seed 42 \
     --overwrite_output_dir \
     --output_dir /tmp/food101_outputs/ \

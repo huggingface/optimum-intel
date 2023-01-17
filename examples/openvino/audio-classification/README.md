@@ -96,7 +96,7 @@ python run_audio_classification.py \
     --save_strategy epoch \
     --load_best_model_at_end False \
     --metric_for_best_model accuracy \
-    --save_total_limit 3 \
+    --save_total_limit 5 \
     --seed 42 
 ```
 This script should take about 3hrs on a single V100 GPU and produce a 80% quantized wav2vec2 with ~80% structured sparsity in its linear layers. The model accuracy should converge to about 97.5%. Its IR gives an additional ~50% throughput over quantize-only IR on AWS EC2 instance (c6i.32xlarge). 
