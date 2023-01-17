@@ -113,7 +113,9 @@ trainer.save_model()
 ```
 
 ## Distillation
+
 Distillation is an effective method to improve model performance by learning from the knowledge of, usually, larger model. `OVTrainer` also provides the capability to perform distillation during training. Users are required to load the teacher and feed the loaded model to `OVTrainer` as follows. Subclassed from `TrainingArguments`, `OVTrainingArguments` is provided to ease users to specify distillation hyperparameters (such as teacher model path, distillation weightage and temperature), as well as to expose the hyperparameters as commandline arguments to the training script.
+
 ```diff
 -from optimum.intel.openvino.trainer import OVConfig, OVTrainer
 +from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
@@ -135,9 +137,11 @@ trainer = OVTrainer(
     feature="sequence-classification",
 )
 ```
+
 ## Advanced Compression with NNCF
 
 `OVTrainer` integrates NNCF as backend of model optimization. It exposes most of the model compression algorithms in NNCF, variants of quantization, pruning to name a few. Users only need to provide a config dictionary to apply the selected NNCF algorithm(s). For example, NNCF provides structured pruning capability which closely resembles the work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf), following is the config dictionary to apply the algorithm.
+
 ```python
 compression_config = {
     "compression":
@@ -158,11 +162,13 @@ compression_config = {
     }
 }
 ```
+
 More on the description and how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
 More on the available algorithms in NNCF, see documentation [here](https://github.com/openvinotoolkit/nncf/tree/develop/docs/compression_algorithms).
 
 To enable the algorithm above in `OVTrainer`, the config must be supplied to `OVConfig` and subsequently to `OVTrainer`. Following snippet shows an example for setting up `OVTrainer` with pruning, as well as distillation. As you can see, it is simple to apply joint compression with `OVTrainer`. A good example of this usage will be jointly prune, quantize and distill a model for high inference performance. Please refer to examples provided [here](https://github.com/huggingface/optimum-intel/tree/main/examples/openvino). 
+
 ```diff
 -ov_config = OVConfig()
 +ov_config = OVConfig(compression=compression_config)
@@ -180,7 +186,6 @@ trainer = OVTrainer(
     feature="sequence-classification",
 )
 ```
-
 
 ## Inference with Transformers pipeline
 
