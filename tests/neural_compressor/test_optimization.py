@@ -247,11 +247,13 @@ class QuantizationTest(unittest.TestCase):
 
         ort_outputs = ort_model(**tokens)
         self.assertTrue("logits" in ort_outputs)
+        trainer.model.eval()
+        loaded_model.eval()
         with torch.no_grad():
             model_outputs = trainer.model(**tokens)
             loaded_model_outputs = loaded_model(**tokens)
-        self.assertTrue(torch.allclose(model_outputs.logits, loaded_model_outputs.logits, atol=1e-4))
         # self.assertTrue(torch.allclose(ort_outputs.logits, loaded_model_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.equal(model_outputs.logits, loaded_model_outputs.logits))
 
     def test_aware_training_quantization_pruning(self):
         model_name = "distilbert-base-uncased"
