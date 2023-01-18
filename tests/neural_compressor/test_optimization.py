@@ -202,7 +202,7 @@ class QuantizationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
                 model_outputs = quantizer._quantized_model(**tokens)
 
-            self.assertTrue(torch.allclose(model_outputs.logits, transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(torch.equal(model_outputs["logits"], transformers_outputs["logits"]))
 
     def test_aware_training_quantization(self):
         model_name = "distilbert-base-uncased"
