@@ -473,6 +473,35 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
             # Ensure attention mask is on the same device as the input IDs
             return torch.ones(inputs.shape[:2], dtype=torch.long, device=inputs.device)
 
+    def _reshape(
+        self,
+        model: openvino.runtime.Model,
+        batch_size: int,
+        sequence_length: int,
+        height: int = None,
+        width: int = None,
+    ):
+        if batch_size != -1:
+            logger.warning(
+                f"The batch size was set to {batch_size} during reshape which is not supported for causal language model."
+                "This value is set to -1."
+            )
+            batch_size = -1
+        if sequence_length != -1:
+            logger.warning(
+                f"The sequence length was set to {sequence_length} during reshape, this dimension needs to be dynamic for causal language model."
+                "This value is set to -1."
+            )
+            sequence_length = -1
+
+        return super()._reshape(
+            model=model,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            height=height,
+            width=width,
+        )
+
 
 @add_start_docstrings(
     """
