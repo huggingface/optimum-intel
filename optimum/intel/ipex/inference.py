@@ -48,9 +48,15 @@ class _ModelFallbackWrapper:
     """,
 )
 class inference_mode:
-    __slots__ = ("_model", "_dtype", "_graph_mode", "_verbose", "_original")
+    __slots__ = ("_model", "_dtype", "_graph_mode", "_verbose", "_original", "_jit")
 
-    def __init__(self, model: Union[nn.Module, Pipeline], dtype: torch.dtype = torch.float32, verbose: bool = False):
+    def __init__(
+        self,
+        model: Union[nn.Module, Pipeline],
+        dtype: torch.dtype = torch.float32,
+        verbose: bool = False,
+        jit: bool = False,
+    ):
         """
         Args:
             model (`torch.nn.Module` or `transformers.Pipeline`):
@@ -71,6 +77,7 @@ class inference_mode:
         self._dtype = dtype
         self._graph_mode = False  # Let's keep for future use when it doesn't hang anymore
         self._original = None
+        self._jit = jit
 
     def __enter__(self):
         if self._model.framework == "pt":
@@ -91,7 +98,7 @@ class inference_mode:
 
                             # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
                             with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)), torch.no_grad():
-                                if self._model.tokenizer is not None:
+                                if self._model.tokenizer is not None and self._jit:
                                     try:
                                         jit_inputs = []
                                         dummy_input = self._model.tokenizer("")
