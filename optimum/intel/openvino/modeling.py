@@ -481,17 +481,9 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
         height: int = None,
         width: int = None,
     ):
-        if batch_size != -1:
-            logger.warning(
-                f"The batch size was set to {batch_size} during reshape which is not supported for causal language model."
-                "This value is set to -1."
-            )
+        if batch_size != -1 or sequence_length != -1:
+            logger.warning("Static shapes are not supported for causal language model.")
             batch_size = -1
-        if sequence_length != -1:
-            logger.warning(
-                f"The sequence length was set to {sequence_length} during reshape, this dimension needs to be dynamic for causal language model."
-                "This value is set to -1."
-            )
             sequence_length = -1
 
         return super()._reshape(
