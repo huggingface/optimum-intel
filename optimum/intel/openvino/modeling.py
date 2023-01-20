@@ -473,6 +473,27 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
             # Ensure attention mask is on the same device as the input IDs
             return torch.ones(inputs.shape[:2], dtype=torch.long, device=inputs.device)
 
+    def _reshape(
+        self,
+        model: openvino.runtime.Model,
+        batch_size: int,
+        sequence_length: int,
+        height: int = None,
+        width: int = None,
+    ):
+        if batch_size != -1 or sequence_length != -1:
+            logger.warning("Static shapes are not supported for causal language model.")
+            batch_size = -1
+            sequence_length = -1
+
+        return super()._reshape(
+            model=model,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            height=height,
+            width=width,
+        )
+
 
 @add_start_docstrings(
     """
