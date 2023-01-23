@@ -193,6 +193,11 @@ class INCQuantizer(OptimumQuantizer):
             calib_func=self.calibration_fn,
         )
 
+        if not hasattr(compressed_model, "_model") or compressed_model._model is None:
+            raise RuntimeError(
+                "The maximum number of trials specified has been reached and no quantized model meeting the specified"
+                " accuracy tolerance has been found. Either the tolerance or the number of trials need to be increased."
+            )
         if isinstance(self._original_model.config, PretrainedConfig):
             self._original_model.config.save_pretrained(save_directory)
 

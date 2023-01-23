@@ -18,6 +18,9 @@ Optimum Intel can be used to apply popular compression techniques such as quanti
 
 Post-training compression techniques such as dynamic and static quantization can be easily applied on your model using our [`IncQuantizer`](https://huggingface.co/docs/optimum/intel_optimization#optimum.intel.neural_compressor.IncQuantizer).
 Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in the following examples.
+
+### Dynamic quantization
+
 To apply dynamic quantization on a fine-tuned DistilBERT, we first need to create the corresponding configuration describing the quantization details as well as the quantizer object used to later apply quantization:
 
 ```python
@@ -25,11 +28,11 @@ from transformers import AutoModelForQuestionAnswering
 from neural_compressor.config import PostTrainingQuantConfig
 from optimum.intel.neural_compressor import INCQuantizer
 
-
 model_name = "distilbert-base-cased-distilled-squad"
 model = AutoModelForQuestionAnswering.from_pretrained(model_name)
 # The directory where the quantized model will be saved
-save_dir = "quantized_model"
+save_dir = "dynamic_quantization"
+
 # Load the quantization configuration detailing the quantization we wish to apply
 quantization_config = PostTrainingQuantConfig(approach="dynamic")
 quantizer = INCQuantizer.from_pretrained(model)
@@ -37,6 +40,73 @@ quantizer = INCQuantizer.from_pretrained(model)
 quantizer.quantize(quantization_config=quantization_config, save_directory=save_dir)
 ```
 
+The accuracy tolerance along with an adapted evaluation function can also be specified in order to find a quantized model meeting the specified accuracy tolerance.
+
+```python
+import evaluate
+from datasets import load_dataset
+from transformers import AutoTokenizer, pipeline
+from neural_compressor.config import AccuracyCriterion, TuningCriterion
+
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+eval_dataset = load_dataset("squad", split="validation").select(range(64))
+task_evaluator = evaluate.evaluator("question-answering")
+qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
+
+def eval_fn(model):
+    qa_pipeline.model = model
+    metrics = task_evaluator.compute(model_or_pipeline=qa_pipeline, data=eval_dataset, metric="squad")
+    return metrics["f1"]
+
+# Set the accepted accuracy loss to 5%
+accuracy_criterion = AccuracyCriterion(tolerable_loss=0.05)
+# Set the maximum number of trials to 10
+tuning_criterion = TuningCriterion(max_trials=10)
+quantization_config = PostTrainingQuantConfig(
+    approach="dynamic", accuracy_criterion=accuracy_criterion, tuning_criterion=tuning_criterion
+)
+quantizer = INCQuantizer.from_pretrained(model, eval_fn=eval_fn)
+quantizer.quantize(quantization_config=quantization_config, save_directory=save_dir)
+```
+
+### Static quantization
+
+In the same maneer we can apply static quantization, for which we also need to generate the calibration dataset in order to perform the calibration step.
+
+```python
+from functools import partial
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from neural_compressor.config import PostTrainingQuantConfig
+from optimum.intel.neural_compressor import INCQuantizer
+
+model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+model = AutoModelForSequenceClassification.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+# The directory where the quantized model will be saved
+save_dir = "static_quantization"
+
+def preprocess_function(examples, tokenizer):
+    return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
+
+# Load the quantization configuration detailing the quantization we wish to apply
+quantization_config = PostTrainingQuantConfig(approach="static")
+quantizer = INCQuantizer.from_pretrained(model)
+# Generate the calibration dataset needed for the calibration step
+calibration_dataset = quantizer.get_calibration_dataset(
+    "glue",
+    dataset_config_name="sst2",
+    preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
+    num_samples=100,
+    dataset_split="train",
+)
+quantizer = INCQuantizer.from_pretrained(model)
+# Apply static quantization and save the resulting model
+quantizer.quantize(
+    quantization_config=quantization_config,
+    calibration_dataset=calibration_dataset,
+    save_directory=save_dir,
+)
+```
 
 ## While training optimization
 
