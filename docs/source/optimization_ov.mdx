@@ -158,7 +158,7 @@ compression_config = {
         {"mode":  "per_dim", "axis":  0,                 "target_scopes": "{re}.*BertIntermediate.*"},
         {"mode":  "per_dim", "axis":  1,                 "target_scopes": "{re}.*BertOutput.*"},
     ],
-    "ignored_scopes": ["{re}.*NNCFEmbedding", "{re}.*qa_outputs*", "{re}.*LayerNorm.*"]
+    "ignored_scopes": ["{re}.*NNCFEmbedding", "{re}.*pooler.*", "{re}.*LayerNorm.*"]
     }
 }
 ```
