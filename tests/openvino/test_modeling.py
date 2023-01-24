@@ -71,7 +71,7 @@ MODEL_NAMES = {
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "t5": "hf-internal-testing/tiny-random-t5",
     "vit": "hf-internal-testing/tiny-random-vit",
-    "wav2vec2": "facebook/wav2vec2-base",
+    "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
 }
 
 SEED = 42
