@@ -542,10 +542,10 @@ class INCModel:
         # Load the state dictionary of the model to verify whether the model is quantized or not
         state_dict = torch.load(state_dict_path)
 
-        if state_dict.get("best_configure", None) is None:
-            return model
+        if "best_configure" in state_dict and state_dict["best_configure"] is not None:
+            model = load(state_dict_path, model)
 
-        return load(state_dict_path, model)
+        return model
 
 
 class INCModelForQuestionAnswering(INCModel):
