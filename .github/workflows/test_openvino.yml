@@ -30,6 +30,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install git+https://github.com/huggingface/optimum
         pip install .[openvino,nncf,tests]
     - name: Test with Pytest
       run: |
