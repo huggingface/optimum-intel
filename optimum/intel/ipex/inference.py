@@ -1,3 +1,4 @@
+import logging
 from typing import Union
 
 import torch
@@ -6,6 +7,8 @@ from transformers import add_start_docstrings
 from transformers.pipelines import Pipeline
 from transformers.utils import is_ipex_available
 
+
+logger = logging.getLogger(__name__)
 
 IPEX_NOT_AVAILABLE_ERROR_MSG = (
     "Intel PyTorch Extensions was not found."
@@ -45,9 +48,15 @@ class _ModelFallbackWrapper:
     """,
 )
 class inference_mode:
-    __slots__ = ("_model", "_dtype", "_graph_mode", "_verbose", "_original")
+    __slots__ = ("_model", "_dtype", "_graph_mode", "_verbose", "_original", "_jit")
 
-    def __init__(self, model: Union[nn.Module, Pipeline], dtype: torch.dtype = torch.float32, verbose: bool = False):
+    def __init__(
+        self,
+        model: Union[nn.Module, Pipeline],
+        dtype: torch.dtype = torch.float32,
+        verbose: bool = False,
+        jit: bool = False,
+    ):
         """
         Args:
             model (`torch.nn.Module` or `transformers.Pipeline`):
@@ -68,6 +77,7 @@ class inference_mode:
         self._dtype = dtype
         self._graph_mode = False  # Let's keep for future use when it doesn't hang anymore
         self._original = None
+        self._jit = jit
 
     def __enter__(self):
         if self._model.framework == "pt":
@@ -87,7 +97,19 @@ class inference_mode:
                             )
 
                             # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
-                            with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)):
+                            with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)), torch.no_grad():
+                                if self._model.tokenizer is not None and self._jit:
+                                    try:
+                                        jit_inputs = []
+                                        dummy_input = self._model.tokenizer("")
+                                        for key in dummy_input:
+                                            jit_inputs.append(torch.ones((1, len(dummy_input[key])), dtype=torch.long))
+                                        model = torch.jit.trace(model, jit_inputs, strict=False)
+                                        model = torch.jit.freeze(model)
+                                        model(*jit_inputs)
+                                        model(*jit_inputs)
+                                    except Exception as e:
+                                        logger.warning(f"failed to use PyTorch jit mode due to: {e}.")
                                 # Patching model with the new one
                                 self._model.model = _ModelFallbackWrapper(model, self._original)
                                 return self._model
