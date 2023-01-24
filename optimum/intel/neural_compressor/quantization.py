@@ -426,7 +426,6 @@ class INCModel:
     def from_pretrained(
         cls,
         model_name_or_path: str,
-        inc_config: Union[IncOptimizedConfig, str] = None,
         q_model_name: Optional[str] = None,
         **kwargs
     ) -> torch.nn.Module:
@@ -435,11 +434,6 @@ class INCModel:
         Arguments:
             model_name_or_path (`str`):
                 Repository name in the Hugging Face Hub or path to a local directory hosting the model.
-            inc_config (`Union[IncOptimizedConfig, str]`, *optional*):
-                Configuration file containing all the information related to the model quantization.
-                Can be either:
-                    - an instance of the class :class:`IncOptimizedConfig`,
-                    - a string valid as input to :func:`IncOptimizedConfig.from_pretrained`.
             q_model_name (`str`, *optional*):
                 Name of the state dictionary located in model_name_or_path used to load the quantized model. If
                 state_dict is specified, the latter will not be used.
@@ -558,7 +552,8 @@ class INCModel:
 
         # Load the state dictionary of the model to verify whether the model is quantized or not
         state_dict = torch.load(state_dict_path)
-        if "best_configure" not in state_dict:
+
+        if state_dict.get("best_configure", None) is None:
             return model
 
         return load(state_dict_path, model)
