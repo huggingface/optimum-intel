@@ -172,12 +172,12 @@ At the moment, pruning is applied on both the linear and the convolutional layer
 
 # The configuration detailing the pruning process
 +pruning_config = WeightPruningConfig(
-    pruning_type="magnitude",
-    start_step=0,
-    end_step=15,
-    target_sparsity=0.2,
-    pruning_scope="local",
-)
++    pruning_type="magnitude",
++    start_step=0,
++    end_step=15,
++    target_sparsity=0.2,
++    pruning_scope="local",
++)
 
 -trainer = Trainer(
 +trainer = INCTrainer(
