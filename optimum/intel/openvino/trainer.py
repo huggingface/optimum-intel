@@ -700,7 +700,7 @@ class OVTrainer(Trainer):
                 # However it requires static axes, current export utilizes nncf exporter
                 # which generates static-shaped IR.
 
-                f = os.path.join(output_dir, "model.onnx")
+                f = os.path.join(output_dir, ONNX_WEIGHTS_NAME)
                 self.compression_controller.export_model(
                     f, input_names=list(onnx_config.inputs.keys()), output_names=list(onnx_config.outputs.keys())
                 )
