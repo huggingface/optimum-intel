@@ -423,12 +423,7 @@ class INCModel:
         )
 
     @classmethod
-    def from_pretrained(
-        cls,
-        model_name_or_path: str,
-        q_model_name: Optional[str] = None,
-        **kwargs
-    ) -> torch.nn.Module:
+    def from_pretrained(cls, model_name_or_path: str, q_model_name: Optional[str] = None, **kwargs) -> torch.nn.Module:
         """
         Instantiate a quantized pytorch model from a given Intel Neural Compressor configuration file.
         Arguments:
