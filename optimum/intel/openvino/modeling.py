@@ -583,12 +583,15 @@ class OVModelForImageClassification(OVModel):
 AUDIO_CLASSIFICATION_EXAMPLE = r"""
     Example of audio classification using `transformers.pipelines`:
     ```python
+    >>> from datasets import load_dataset
     >>> from transformers import {processor_class}, pipeline
     >>> from optimum.intel.openvino import {model_class}
 
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
     >>> pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
+    >>> dataset = load_dataset("superb", "ks", split="test")
+    >>> audio_file = dataset[3]["audio"]["array"]
     >>> outputs = pipe(audio_file)
     ```
 """
@@ -613,7 +616,7 @@ class OVModelForAudioClassification(OVModel):
         + AUDIO_CLASSIFICATION_EXAMPLE.format(
             processor_class=_FEATURE_EXTRACTOR_FOR_DOC,
             model_class="OVModelForAudioClassification",
-            checkpoint="facebook/wav2vec2-base",
+            checkpoint="superb/hubert-base-superb-er",
         )
     )
     def forward(
