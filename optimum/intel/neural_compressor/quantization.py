@@ -46,8 +46,10 @@ from transformers import (
     XLNetLMHeadModel,
     default_data_collator,
 )
+from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
+from transformers.utils.generic import ContextManagers
 
 import neural_compressor
 from huggingface_hub import HfApi, hf_hub_download
@@ -486,7 +488,12 @@ class INCModel:
         else:
             model_class._keys_to_ignore_on_load_missing.extend(missing_keys_to_ignore_on_load)
 
-        model = model_class.from_pretrained(model_name_or_path, **kwargs)
+        try:
+            model = model_class.from_pretrained(model_name_or_path, **kwargs)
+        except AttributeError:
+            init_contexts = [no_init_weights(_enable=True)]
+            with ContextManagers(init_contexts):
+                model = model_class(config, **kwargs)
 
         model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
         model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
