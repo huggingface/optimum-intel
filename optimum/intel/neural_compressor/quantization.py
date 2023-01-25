@@ -20,7 +20,7 @@ import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
-from typing import Callable, ClassVar, Dict, List, Optional, Tuple, Union
+from typing import Callable, ClassVar, Dict, Optional, Union
 
 import torch
 import transformers
@@ -53,8 +53,7 @@ from transformers.utils.generic import ContextManagers
 
 import neural_compressor
 from huggingface_hub import HfApi, hf_hub_download
-from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig, get_torch_version
-from neural_compressor.adaptor.torch_utils.util import get_embedding_contiguous
+from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
@@ -423,23 +422,12 @@ class INCModel:
         )
 
     @classmethod
-    def from_pretrained(
-        cls,
-        model_name_or_path: str,
-        inc_config: Union[IncOptimizedConfig, str] = None,
-        q_model_name: Optional[str] = None,
-        **kwargs
-    ) -> torch.nn.Module:
+    def from_pretrained(cls, model_name_or_path: str, q_model_name: Optional[str] = None, **kwargs) -> torch.nn.Module:
         """
         Instantiate a quantized pytorch model from a given Intel Neural Compressor configuration file.
         Arguments:
             model_name_or_path (`str`):
                 Repository name in the Hugging Face Hub or path to a local directory hosting the model.
-            inc_config (`Union[IncOptimizedConfig, str]`, *optional*):
-                Configuration file containing all the information related to the model quantization.
-                Can be either:
-                    - an instance of the class :class:`IncOptimizedConfig`,
-                    - a string valid as input to :func:`IncOptimizedConfig.from_pretrained`.
             q_model_name (`str`, *optional*):
                 Name of the state dictionary located in model_name_or_path used to load the quantized model. If
                 state_dict is specified, the latter will not be used.
@@ -500,10 +488,12 @@ class INCModel:
         else:
             model_class._keys_to_ignore_on_load_missing.extend(missing_keys_to_ignore_on_load)
 
-        # init model with no weights
-        init_contexts = [no_init_weights(_enable=True)]
-        with ContextManagers(init_contexts):
-            model = model_class(config, **kwargs)
+        try:
+            model = model_class.from_pretrained(model_name_or_path, **kwargs)
+        except AttributeError:
+            init_contexts = [no_init_weights(_enable=True)]
+            with ContextManagers(init_contexts):
+                model = model_class(config, **kwargs)
 
         model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
         model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
@@ -558,10 +548,11 @@ class INCModel:
 
         # Load the state dictionary of the model to verify whether the model is quantized or not
         state_dict = torch.load(state_dict_path)
-        if "best_configure" not in state_dict:
-            return model
 
-        return load(state_dict_path, model)
+        if "best_configure" in state_dict and state_dict["best_configure"] is not None:
+            model = load(state_dict_path, model)
+
+        return model
 
 
 class INCModelForQuestionAnswering(INCModel):

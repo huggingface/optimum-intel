@@ -225,7 +225,7 @@ class QuantizationTest(unittest.TestCase):
                 model=model,
                 quantization_config=quantization_config,
                 task="sequence-classification",
-                args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
+                args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
                 train_dataset=dataset["train"].select(range(64)),
                 eval_dataset=dataset["validation"].select(range(64)),
                 compute_metrics=compute_metrics,
@@ -284,7 +284,7 @@ class QuantizationTest(unittest.TestCase):
                 quantization_config=quantization_config,
                 pruning_config=pruning_config,
                 task="sequence-classification",
-                args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
+                args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
                 train_dataset=dataset["train"].select(range(64)),
                 eval_dataset=dataset["validation"].select(range(64)),
                 compute_metrics=compute_metrics,
@@ -333,7 +333,7 @@ class PruningTest(unittest.TestCase):
                 model=model,
                 pruning_config=pruning_config,
                 task="sequence-classification",
-                args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=True),
+                args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=False),
                 train_dataset=dataset["train"].select(range(64)),
                 eval_dataset=dataset["validation"].select(range(64)),
                 compute_metrics=compute_metrics,
@@ -343,7 +343,7 @@ class PruningTest(unittest.TestCase):
             train_result = trainer.train()
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
-            transformers_model = AutoModelForSequenceClassification.from_pretrained(tmp_dir)
+            transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_outputs = ort_model(**tokens)
             self.assertTrue("logits" in ort_outputs)
@@ -375,7 +375,7 @@ class DistillationTest(unittest.TestCase):
                 model=model,
                 distillation_config=distillation_config,
                 task="sequence-classification",
-                args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=True),
+                args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=False),
                 train_dataset=dataset["train"].select(range(64)),
                 eval_dataset=dataset["validation"].select(range(64)),
                 compute_metrics=compute_metrics,
@@ -385,7 +385,7 @@ class DistillationTest(unittest.TestCase):
             train_result = trainer.train()
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
-            transformers_model = AutoModelForSequenceClassification.from_pretrained(tmp_dir)
+            transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_outputs = ort_model(**tokens)
             self.assertTrue("logits" in ort_outputs)
