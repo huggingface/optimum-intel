@@ -26,7 +26,6 @@ from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
-from transformers.onnx import OnnxConfig
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 import openvino
@@ -38,7 +37,8 @@ from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
-from optimum.exporters.tasks import TasksManager
+from optimum.exporters import TasksManager
+from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.import_utils import _openvino_version
