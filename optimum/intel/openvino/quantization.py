@@ -167,14 +167,14 @@ class OVQuantizer(OptimumQuantizer):
         onnx_config = onnx_config_class(self.model.config)
         compressed_model.eval()
         num_parameters = compressed_model.num_parameters()
-        use_external_data_format = use_external_data_format(num_parameters) or quantization_config.save_onnx_model
-        f = io.BytesIO() if not use_external_data_format else save_directory / ONNX_WEIGHTS_NAME
+        save_as_external_data = use_external_data_format(num_parameters) or quantization_config.save_onnx_model
+        f = io.BytesIO() if not save_as_external_data else save_directory / ONNX_WEIGHTS_NAME
 
         # Export the compressed model to the ONNX format
         self._onnx_export(compressed_model, onnx_config, model_inputs, quantization_config, f)
 
         # Load and save the compressed model
-        model = core.read_model(f) if use_external_data_format else core.read_model(f.getvalue(), b"")
+        model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
         self._save_pretrained(model, output_path)
         quantization_config.save_pretrained(save_directory)
 
