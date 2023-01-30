@@ -26,7 +26,6 @@ from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
-from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 import openvino
 from huggingface_hub import HfApi
@@ -50,23 +49,12 @@ from .utils import (
     MIN_ONNX_QDQ_OPSET,
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
+    use_external_data_format,
 )
 
 
 core = Core()
 logger = logging.getLogger(__name__)
-
-
-def use_external_data_format(num_parameters: int) -> bool:
-    """
-    Returns whether or not the model requires using external data format for the ONNX export
-    Args:
-        num_parameters: Number of parameter on the model
-    Returns:
-        True if model.num_parameters() * size_of(float32) >= 2Gb False otherwise
-    """
-
-    return compute_serialized_parameters_size(num_parameters, ParameterFormat.Float) >= EXTERNAL_DATA_FORMAT_SIZE_LIMIT
 
 
 class OVDataLoader(PTInitializingDataLoader):

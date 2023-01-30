@@ -13,6 +13,9 @@
 #  limitations under the License.
 
 
+from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
+
+
 OV_XML_FILE_NAME = "openvino_model.xml"
 OV_ENCODER_NAME = "openvino_encoder_model.xml"
 OV_DECODER_NAME = "openvino_decoder_model.xml"
@@ -28,3 +31,15 @@ MAX_ONNX_OPSET = 13
 MIN_ONNX_QDQ_OPSET = 13
 
 EXTERNAL_DATA_FORMAT_SIZE_LIMIT = 2 * 1024 * 1024 * 1024
+
+
+def use_external_data_format(num_parameters: int) -> bool:
+    """
+    Returns whether or not the model requires using external data format for the ONNX export
+    Args:
+        num_parameters: Number of parameter on the model
+    Returns:
+        True if model.num_parameters() * size_of(float32) >= 2Gb False otherwise
+    """
+
+    return compute_serialized_parameters_size(num_parameters, ParameterFormat.Float) >= EXTERNAL_DATA_FORMAT_SIZE_LIMIT
