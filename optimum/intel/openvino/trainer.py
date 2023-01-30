@@ -59,14 +59,20 @@ from nncf.torch import create_compressed_model
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
+from optimum.exporters import TasksManager
+from optimum.exporters.onnx import OnnxConfig
 from optimum.utils import logging
 
 from ..utils.import_utils import _openvino_version
 from .configuration import OVConfig
 from .quantization import OVDataLoader
-from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, MIN_ONNX_QDQ_OPSET, OV_XML_FILE_NAME, use_external_data_format
-from optimum.exporters.onnx import OnnxConfig
-from optimum.exporters import TasksManager
+from .utils import (
+    MAX_ONNX_OPSET,
+    MAX_ONNX_OPSET_2022_2_0,
+    MIN_ONNX_QDQ_OPSET,
+    OV_XML_FILE_NAME,
+    use_external_data_format,
+)
 
 
 if is_apex_available():
