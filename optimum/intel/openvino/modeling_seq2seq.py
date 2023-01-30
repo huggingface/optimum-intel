@@ -405,13 +405,15 @@ class OVDecoder:
 
         # Check if inputs are c-like, if not - convert them.
         input_ids = _contiguous_helper(input_ids.numpy())
-        encoder_attention_mask = _contiguous_helper(encoder_attention_mask.numpy())
-
         inputs["input_ids"] = Tensor(input_ids, shared_memory=True)
-        inputs["encoder_attention_mask"] = Tensor(encoder_attention_mask, shared_memory=True)
+
+        # Add the encoder_attention_mask inputs when needed
+        if "encoder_attention_mask" in self.input_names and encoder_attention_mask is not None:
+            encoder_attention_mask = _contiguous_helper(encoder_attention_mask.numpy())
+            inputs["encoder_attention_mask"] = Tensor(encoder_attention_mask, shared_memory=True)
 
         # Add the encoder_hidden_states inputs when needed
-        if "encoder_hidden_states" in self.input_names:
+        if "encoder_hidden_states" in self.input_names and encoder_hidden_states is not None:
             encoder_hidden_states = _contiguous_helper(encoder_hidden_states.numpy())
             inputs["encoder_hidden_states"] = Tensor(encoder_hidden_states, shared_memory=True)
 
