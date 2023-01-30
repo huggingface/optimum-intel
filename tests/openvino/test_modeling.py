@@ -17,12 +17,14 @@ import os
 import tempfile
 import unittest
 
+import numpy as np
 import torch
 from datasets import load_dataset
 from PIL import Image
 from transformers import (
     AutoFeatureExtractor,
     AutoModel,
+    AutoModelForAudioClassification,
     AutoModelForCausalLM,
     AutoModelForImageClassification,
     AutoModelForMaskedLM,
@@ -43,6 +45,7 @@ from optimum.intel.openvino import (
     OV_DECODER_WITH_PAST_NAME,
     OV_ENCODER_NAME,
     OV_XML_FILE_NAME,
+    OVModelForAudioClassification,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
@@ -61,13 +64,14 @@ MODEL_NAMES = {
     "bert": "hf-internal-testing/tiny-random-bert",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
+    "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "m2m_100": "valhalla/m2m100_tiny_random",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "t5": "hf-internal-testing/tiny-random-t5",
     "vit": "hf-internal-testing/tiny-random-vit",
-    "gpt2": "hf-internal-testing/tiny-random-gpt2",
+    "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
 }
 
 SEED = 42
@@ -499,3 +503,23 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
         outputs_model_without_pkv = model_without_pkv.generate(**tokens)
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
+
+
+class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("wav2vec2",)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForAudioClassification.from_pretrained(model_id, from_transformers=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        transformers_model = AutoModelForAudioClassification.from_pretrained(model_id)
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        inputs = preprocessor([np.random.random(16000)], sampling_rate=preprocessor.sampling_rate, return_tensors="pt")
+        ov_outputs = ov_model(**inputs)
+        self.assertTrue("logits" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-3))
