@@ -591,11 +591,13 @@ class INCTrainer(Trainer):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
         dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
         inputs = config.generate_dummy_inputs(framework="pt")
+        device = model.device
+        inputs = dict((k, v.to(device)) for k, v in inputs.items())
 
         if self.dtype == "int8":
             torch_to_int8_onnx(
-                fp32_model=self._compression_manager.fp32_model.model.to("cpu"),
-                int8_model=model.to("cpu"),
+                fp32_model=self._compression_manager.fp32_model.model.to(device),
+                int8_model=model,
                 q_config=self._compression_manager.model.q_config,
                 save_path=output_path,
                 example_inputs=inputs,
