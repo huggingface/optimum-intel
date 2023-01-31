@@ -35,7 +35,6 @@ from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 from transformers.deepspeed import deepspeed_init
 from transformers.integrations import hp_params
 from transformers.modeling_utils import PreTrainedModel, unwrap_model
-from transformers.onnx import FeaturesManager, OnnxConfig
 from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer import TRAINER_STATE_NAME, TRAINING_ARGS_NAME
@@ -60,12 +59,20 @@ from nncf.torch import create_compressed_model
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
+from optimum.exporters import TasksManager
+from optimum.exporters.onnx import OnnxConfig
 from optimum.utils import logging
 
 from ..utils.import_utils import _openvino_version
 from .configuration import OVConfig
 from .quantization import OVDataLoader
-from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, MIN_ONNX_QDQ_OPSET, OV_XML_FILE_NAME
+from .utils import (
+    MAX_ONNX_OPSET,
+    MAX_ONNX_OPSET_2022_2_0,
+    MIN_ONNX_QDQ_OPSET,
+    OV_XML_FILE_NAME,
+    use_external_data_format,
+)
 
 
 if is_apex_available():
@@ -536,16 +543,20 @@ class OVTrainer(Trainer):
             output_path = os.path.join(output_dir, OV_XML_FILE_NAME)
             self.compression_controller.prepare_for_export()
             model_type = self.model.config.model_type.replace("_", "-")
-            onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][self.feature]
-            onnx_config = onnx_config_cls(self.model.config)
-            use_external_data_format = (
-                onnx_config.use_external_data_format(self.model.num_parameters()) or self.ov_config.save_onnx_model
+            onnx_config_class = TasksManager.get_exporter_config_constructor(
+                exporter="onnx",
+                model=self.model,
+                task=self.feature,
+                model_type=model_type,
             )
-            f = io.BytesIO() if not use_external_data_format else os.path.join(output_dir, "model.onnx")
+            onnx_config = onnx_config_class(self.model.config)
+            num_parameters = self.model.num_parameters()
+            save_as_external_data = use_external_data_format(num_parameters) or self.ov_config.save_onnx_model
+            f = io.BytesIO() if not save_as_external_data else os.path.join(output_dir, ONNX_WEIGHTS_NAME)
             self._onnx_export(self.model, onnx_config, self.ov_config, f)
 
             # Load and save the compressed model
-            model = core.read_model(f) if use_external_data_format else core.read_model(f.getvalue(), b"")
+            model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
             compress_quantize_weights_transformation(model)
             openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
 
@@ -564,10 +575,10 @@ class OVTrainer(Trainer):
         is_openvino_version_greater_2022_2_0 = openvino_version > version.Version("2022.2.0")
 
         if not is_openvino_version_greater_2022_2_0:
-            if config.default_onnx_opset > MAX_ONNX_OPSET_2022_2_0 + 1:
+            if config.DEFAULT_ONNX_OPSET > MAX_ONNX_OPSET_2022_2_0 + 1:
                 if not ov_config.save_onnx_model:
                     logger.warning(
-                        f"The minimal ONNX opset for the given model architecture is {config.default_onnx_opset}. Currently, "
+                        f"The minimal ONNX opset for the given model architecture is {config.DEFAULT_ONNX_OPSET}. Currently, "
                         f"some models may not work with the installed version of OpenVINO. You can update OpenVINO "
                         f"to 2022.3.* version or use ONNX opset version {MAX_ONNX_OPSET_2022_2_0} to resolve the issue."
                     )
@@ -577,11 +588,10 @@ class OVTrainer(Trainer):
                         f"may not work with the installed version of OpenVINO in this opset. You can update OpenVINO "
                         f"to 2022.3.* version or set `save_onnx_model` to `False`."
                     )
-        max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
+        max_onnx_opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = max_onnx_opset if is_openvino_version_greater_2022_2_0 else MAX_ONNX_OPSET_2022_2_0
         opset = opset if not ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
-
-        model_inputs = config.generate_dummy_inputs(self.tokenizer, framework=TensorType.PYTORCH)
+        model_inputs = config.generate_dummy_inputs(framework="pt")
         device = model.device
         model_inputs = dict((k, v.to(device)) for k, v in model_inputs.items())
 

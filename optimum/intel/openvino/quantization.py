@@ -26,7 +26,6 @@ from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
-from transformers.onnx import FeaturesManager, OnnxConfig
 
 import openvino
 from huggingface_hub import HfApi
@@ -37,11 +36,21 @@ from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
+from optimum.exporters import TasksManager
+from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.import_utils import _openvino_version
 from .configuration import OVConfig
-from .utils import MAX_ONNX_OPSET, MAX_ONNX_OPSET_2022_2_0, MIN_ONNX_QDQ_OPSET, ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
+from .utils import (
+    EXTERNAL_DATA_FORMAT_SIZE_LIMIT,
+    MAX_ONNX_OPSET,
+    MAX_ONNX_OPSET_2022_2_0,
+    MIN_ONNX_QDQ_OPSET,
+    ONNX_WEIGHTS_NAME,
+    OV_XML_FILE_NAME,
+    use_external_data_format,
+)
 
 
 core = Core()
@@ -137,20 +146,23 @@ class OVQuantizer(OptimumQuantizer):
 
         self.model.config.save_pretrained(save_directory)
         model_type = self.model.config.model_type.replace("_", "-")
-        onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][self.feature]
-        onnx_config = onnx_config_cls(self.model.config)
-        compressed_model.eval()
-        use_external_data_format = (
-            onnx_config.use_external_data_format(compressed_model.num_parameters())
-            or quantization_config.save_onnx_model
+        onnx_config_class = TasksManager.get_exporter_config_constructor(
+            exporter="onnx",
+            model=self.model,
+            task=self.feature,
+            model_type=model_type,
         )
-        f = io.BytesIO() if not use_external_data_format else save_directory / "model.onnx"
+        onnx_config = onnx_config_class(self.model.config)
+        compressed_model.eval()
+        num_parameters = compressed_model.num_parameters()
+        save_as_external_data = use_external_data_format(num_parameters) or quantization_config.save_onnx_model
+        f = io.BytesIO() if not save_as_external_data else save_directory / ONNX_WEIGHTS_NAME
 
         # Export the compressed model to the ONNX format
         self._onnx_export(compressed_model, onnx_config, model_inputs, quantization_config, f)
 
         # Load and save the compressed model
-        model = core.read_model(f) if use_external_data_format else core.read_model(f.getvalue(), b"")
+        model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
         self._save_pretrained(model, output_path)
         quantization_config.save_pretrained(save_directory)
 
@@ -167,10 +179,10 @@ class OVQuantizer(OptimumQuantizer):
         is_openvino_version_greater_2022_2_0 = openvino_version > version.Version("2022.2.0")
 
         if not is_openvino_version_greater_2022_2_0:
-            if config.default_onnx_opset > MAX_ONNX_OPSET_2022_2_0 + 1:
+            if config.DEFAULT_ONNX_OPSET > MAX_ONNX_OPSET_2022_2_0 + 1:
                 if not ov_config.save_onnx_model:
                     logger.warning(
-                        f"The minimal ONNX opset for the given model architecture is {config.default_onnx_opset}. Currently, "
+                        f"The minimal ONNX opset for the given model architecture is {config.DEFAULT_ONNX_OPSET}. Currently, "
                         f"some models may not work with the installed version of OpenVINO. You can update OpenVINO "
                         f"to 2022.3.* version or use ONNX opset version {MAX_ONNX_OPSET_2022_2_0} to resolve the issue."
                     )
@@ -180,7 +192,7 @@ class OVQuantizer(OptimumQuantizer):
                         f"may not work with the installed version of OpenVINO in this opset. You can update OpenVINO "
                         f"to 2022.3.* version or set `save_onnx_model` to `False`."
                     )
-        max_onnx_opset = min(config.default_onnx_opset, MAX_ONNX_OPSET)
+        max_onnx_opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = max_onnx_opset if is_openvino_version_greater_2022_2_0 else MAX_ONNX_OPSET_2022_2_0
         opset = opset if ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
         with torch.no_grad():
@@ -205,6 +217,11 @@ class OVQuantizer(OptimumQuantizer):
                 self.feature = "sequence-classification"
             elif self.feature in ["feature-extraction", "fill-mask"]:
                 self.feature = "default"
+            elif self.feature == "text-generation":
+                # self.feature = "causal-lm"
+                raise ValueError(
+                    f"Causal language models are currently not supported for post-training static quantization."
+                )
             elif self.feature is None:
                 raise ValueError("The feature could not be extracted and needs to be specified for the ONNX export.")
         if self.feature in ["seq2seq-lm", "translation", "summarization"]:
