@@ -195,14 +195,18 @@ class OVQuantizer(OptimumQuantizer):
         max_onnx_opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = max_onnx_opset if is_openvino_version_greater_2022_2_0 else MAX_ONNX_OPSET_2022_2_0
         opset = opset if ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
+        model_inputs = dict((k, v.to(model.device)) for k, v in model_inputs.items())
+        input_names = list(config.inputs.keys())
+        first_input = model_inputs.pop(input_names[0])
+
         with torch.no_grad():
             # Disable node additions to be exported in the graph
             model.disable_dynamic_graph_building()
             onnx_export(
                 model,
-                tuple(model_inputs[input_name] for input_name in config.inputs.keys()),
+                (first_input, model_inputs),
                 f=f,
-                input_names=list(config.inputs.keys()),
+                input_names=input_names,
                 output_names=list(config.outputs.keys()),
                 dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
                 do_constant_folding=True,
