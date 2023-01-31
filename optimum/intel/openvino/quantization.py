@@ -218,10 +218,7 @@ class OVQuantizer(OptimumQuantizer):
             elif self.feature in ["feature-extraction", "fill-mask"]:
                 self.feature = "default"
             elif self.feature == "text-generation":
-                # self.feature = "causal-lm"
-                raise ValueError(
-                    f"Causal language models are currently not supported for post-training static quantization."
-                )
+                self.feature = "causal-lm"
             elif self.feature is None:
                 raise ValueError("The feature could not be extracted and needs to be specified for the ONNX export.")
         if self.feature in ["seq2seq-lm", "translation", "summarization"]:

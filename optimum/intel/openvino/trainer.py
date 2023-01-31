@@ -594,6 +594,8 @@ class OVTrainer(Trainer):
         model_inputs = config.generate_dummy_inputs(framework="pt")
         device = model.device
         model_inputs = dict((k, v.to(device)) for k, v in model_inputs.items())
+        input_names = list(config.inputs.keys())
+        first_input = model_inputs.pop(input_names[0])
 
         with torch.no_grad():
             model.eval()
@@ -601,9 +603,9 @@ class OVTrainer(Trainer):
             model.disable_dynamic_graph_building()
             onnx_export(
                 model,
-                tuple(model_inputs[input_name] for input_name in config.inputs.keys()),
+                (first_input, model_inputs),
                 f=f,
-                input_names=list(config.inputs.keys()),
+                input_names=input_names,
                 output_names=list(config.outputs.keys()),
                 dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
                 do_constant_folding=True,
