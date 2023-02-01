@@ -550,7 +550,7 @@ class INCModel:
         if "best_configure" in state_dict and state_dict["best_configure"] is not None:
             model = load(state_dict_path, model)
 
-        return model
+        return model.eval()
 
 
 class INCModelForQuestionAnswering(INCModel):
