@@ -21,7 +21,6 @@ if is_ipex_available():
 
 
 class _ModelFallbackWrapper:
-
     __slots__ = ("_optimized", "_default")
 
     def __init__(self, optimized, default):

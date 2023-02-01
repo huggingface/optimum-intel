@@ -63,7 +63,6 @@ _SUPPORTED_DEVICES = {
     """,
 )
 class OVBaseModel(OptimizedModel):
-
     _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
     auto_model_class = None
     export_feature = None

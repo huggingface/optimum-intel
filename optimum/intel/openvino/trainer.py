@@ -108,7 +108,6 @@ class OVTrainer(Trainer):
         ov_config: Optional[OVConfig] = None,
         feature: Optional[str] = None,
     ):
-
         super().__init__(
             model,
             args,
@@ -337,7 +336,6 @@ class OVTrainer(Trainer):
                     _ = list(train_dataloader.sampler)
 
         for epoch in range(epochs_trained, num_train_epochs):
-
             if isinstance(train_dataloader, DataLoader) and isinstance(train_dataloader.sampler, DistributedSampler):
                 train_dataloader.sampler.set_epoch(epoch)
             elif hasattr(train_dataloader, "dataset") and isinstance(train_dataloader.dataset, IterableDatasetShard):

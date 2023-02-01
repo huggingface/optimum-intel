@@ -88,7 +88,6 @@ if _neural_compressor_version < NEURAL_COMPRESSOR_REQUIRED_VERSION:
 
 
 class INCQuantizationMode(Enum):
-
     DYNAMIC = "post_training_dynamic_quant"
     STATIC = "post_training_static_quant"
     AWARE_TRAINING = "quant_aware_training"
@@ -412,7 +411,6 @@ def _apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> t
 
 
 class INCModel:
-
     TRANSFORMERS_AUTO_CLASS: ClassVar = AutoModel
 
     def __init__(self, *args, **kwargs):
@@ -556,47 +554,38 @@ class INCModel:
 
 
 class INCModelForQuestionAnswering(INCModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
 
 
 class INCModelForSequenceClassification(INCModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
 
 
 class INCModelForTokenClassification(INCModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
 
 
 class INCModelForMultipleChoice(INCModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForMultipleChoice
 
 
 class INCModelForSeq2SeqLM(INCModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
 
 
 class INCModelForCausalLM(INCModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
 
 
 class INCModelForMaskedLM(INCModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForMaskedLM
 
 
 class INCModelForXLNetLM(INCModel):
-
     TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel
 
 
 class INCModelForVision2Seq(INCModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq
 
 
@@ -611,47 +600,38 @@ class IncQuantizedModel(INCModel):
 
 
 class IncQuantizedModelForQuestionAnswering(IncQuantizedModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
 
 
 class IncQuantizedModelForSequenceClassification(IncQuantizedModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
 
 
 class IncQuantizedModelForTokenClassification(IncQuantizedModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
 
 
 class IncQuantizedModelForMultipleChoice(IncQuantizedModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForMultipleChoice
 
 
 class IncQuantizedModelForSeq2SeqLM(IncQuantizedModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
 
 
 class IncQuantizedModelForCausalLM(IncQuantizedModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
 
 
 class IncQuantizedModelForMaskedLM(IncQuantizedModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForMaskedLM
 
 
 class IncQuantizedModelForXLNetLM(IncQuantizedModel):
-
     TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel
 
 
 class IncQuantizedModelForVision2Seq(IncQuantizedModel):
-
     TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq
 
 

@@ -52,7 +52,6 @@ logger = logging.getLogger(__name__)
     """,
 )
 class OVBaseModelForSeq2SeqLM(OVBaseModel):
-
     export_feature = "seq2seq-lm"
 
     def __init__(

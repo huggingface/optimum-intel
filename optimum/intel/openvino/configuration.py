@@ -39,7 +39,6 @@ DEFAULT_QUANTIZATION_CONFIG = {
 
 
 class OVConfig(BaseConfig):
-
     CONFIG_NAME = "openvino_config.json"
     FULL_CONFIGURATION_FILE = "openvino_config.json"
 
@@ -58,7 +57,6 @@ class OVConfig(BaseConfig):
         self.optimum_version = kwargs.pop("optimum_version", None)
 
     def add_input_info(self, model_inputs: Dict):
-
         self.input_info = [
             {
                 "sample_size": list(value.shape),
