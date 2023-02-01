@@ -27,7 +27,7 @@ In this case, we used FID metric to evaluate the model, so we should download [t
 
 ## Quantization
 ```bash
-python run_diffusion.py \
+python run_diffusion_post_training_optimization.py \
     --model_name_or_path lambdalabs/sd-pokemon-diffusers \
     --apply_quantization \
     --quantization_approach dynamic \
