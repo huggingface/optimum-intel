@@ -138,7 +138,6 @@ def _contiguous_helper(tensor: np.ndarray) -> np.ndarray:
     INPUTS_DOCSTRING,
 )
 class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
-
     auto_model_class = AutoModelForSeq2SeqLM
 
     def __init__(
@@ -204,7 +203,6 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         **kwargs,
     ) -> Seq2SeqLMOutput:
-
         # Encode if needed : first prediction pass
         if encoder_outputs is None:
             encoder_outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
@@ -238,7 +236,6 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         encoder_outputs=None,
         **kwargs
     ) -> Dict:
-
         return {
             "decoder_input_ids": input_ids,
             "past_key_values": past,
@@ -324,7 +321,6 @@ class OVEncoder:
         attention_mask: torch.LongTensor = None,
         **kwargs,
     ) -> BaseModelOutput:
-
         self._create_inference_request()
 
         # Check if inputs are c-like, if not - convert them.
@@ -385,7 +381,6 @@ class OVDecoder:
         encoder_attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
     ) -> Seq2SeqLMOutput:
-
         self._create_inference_request()
 
         inputs = {}

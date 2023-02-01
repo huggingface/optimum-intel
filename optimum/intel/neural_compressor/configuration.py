@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 
 class IncConfig:
-
     CONFIG_NAME = "best_configure.yml"
 
     def __init__(self, config_path: str):
@@ -169,7 +168,6 @@ class IncOptimizedConfig(IncConfig):
 
 
 class IncQuantizationConfig(IncConfig):
-
     CONFIG_NAME = "quantization.yml"
 
     def __init__(self, config_path: str):
@@ -187,7 +185,6 @@ class IncQuantizationConfig(IncConfig):
 
 
 class IncPruningConfig(IncConfig):
-
     CONFIG_NAME = "prune.yml"
 
     def __init__(self, config_path: str):
@@ -205,7 +202,6 @@ class IncPruningConfig(IncConfig):
 
 
 class IncDistillationConfig(IncConfig):
-
     CONFIG_NAME = "distillation.yml"
 
     def __init__(self, config_path: str):

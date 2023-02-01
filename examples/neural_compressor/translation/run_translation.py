@@ -599,7 +599,6 @@ def main():
         raise ValueError("`do_train` must be set to True.")
 
     if optim_args.apply_quantization:
-
         supported_approach = {"static", "dynamic", "aware_training"}
         if optim_args.quantization_approach not in supported_approach:
             raise ValueError(
@@ -612,7 +611,6 @@ def main():
             quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
 
     if optim_args.apply_pruning:
-
         if optim_args.end_step is None:
             end_step = training_args.num_train_epochs * (
                 len(train_dataset) // training_args.per_device_train_batch_size

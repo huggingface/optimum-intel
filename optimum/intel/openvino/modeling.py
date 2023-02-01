@@ -93,7 +93,6 @@ IMAGE_INPUTS_DOCSTRING = r"""
 
 
 class OVModel(OVBaseModel):
-
     base_model_prefix = "openvino_model"
     auto_model_class = AutoModel
 
@@ -134,7 +133,6 @@ SEQUENCE_CLASSIFICATION_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForSequenceClassification(OVModel):
-
     export_feature = "sequence-classification"
     auto_model_class = AutoModelForSequenceClassification
 
@@ -196,7 +194,6 @@ QUESTION_ANSWERING_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForQuestionAnswering(OVModel):
-
     export_feature = "question-answering"
     auto_model_class = AutoModelForQuestionAnswering
 
@@ -258,7 +255,6 @@ TOKEN_CLASSIFICATION_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForTokenClassification(OVModel):
-
     export_feature = "token-classification"
     auto_model_class = AutoModelForTokenClassification
 
@@ -313,7 +309,6 @@ FEATURE_EXTRACTION_EXAMPLE = r"""
 
 
 class OVModelForFeatureExtraction(OVModel):
-
     export_feature = "default"
     auto_model_class = AutoModel
 
@@ -503,7 +498,6 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
     MODEL_START_DOCSTRING,
 )
 class OVModelForMaskedLM(OVModel):
-
     export_feature = "masked-lm"
     auto_model_class = AutoModelForMaskedLM
 
@@ -567,7 +561,6 @@ IMAGE_CLASSIFICATION_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForImageClassification(OVModel):
-
     export_feature = "image-classification"
     auto_model_class = AutoModelForImageClassification
 
@@ -625,7 +618,6 @@ AUDIO_CLASSIFICATION_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForAudioClassification(OVModel):
-
     export_feature = "audio-classification"
     auto_model_class = AutoModelForAudioClassification
 

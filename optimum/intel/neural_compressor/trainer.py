@@ -101,7 +101,6 @@ class INCTrainer(Trainer):
         task: Optional[str] = None,
         save_onnx_model: bool = False,
     ):
-
         super().__init__(
             model,
             args,
@@ -147,7 +146,6 @@ class INCTrainer(Trainer):
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
     ):
-
         self._train_batch_size = batch_size
         # Data loader and number of training steps
         train_dataloader = self.get_train_dataloader()
@@ -572,11 +570,10 @@ class INCTrainer(Trainer):
             self._signature_columns = list(
                 set(self._signature_columns) - set(["label", "label_ids"] + self.label_names)
             )
-            calibration_dataloader = self.get_train_dataloader()
             self._signature_columns = signature_columns
 
             self.model.eval()
-            self._onnx_export(self.model, onnx_config, output_onnx_path, calibration_dataloader)
+            self._onnx_export(self.model, onnx_config, output_onnx_path)
 
         logger.info(f"Model weights saved in {output_model_file}")
 
@@ -588,20 +585,16 @@ class INCTrainer(Trainer):
         elif self.task in ["feature-extraction", "fill-mask"]:
             self.task = "default"
 
-    def _onnx_export(
-        self,
-        model: nn.Module,
-        config: "OnnxConfig",
-        output_path: str,
-        calibration_dataloader: "INCDataLoader" = None,
-    ):
+    def _onnx_export(self, model: nn.Module, config: "OnnxConfig", output_path: str):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
         dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
         inputs = config.generate_dummy_inputs(framework="pt")
+        device = model.device
+        inputs = dict((k, v.to(device)) for k, v in inputs.items())
 
         if self.dtype == "int8":
             torch_to_int8_onnx(
-                fp32_model=self._compression_manager.fp32_model.model,
+                fp32_model=self._compression_manager.fp32_model.model.to(device),
                 int8_model=model,
                 q_config=self._compression_manager.model.q_config,
                 save_path=output_path,
