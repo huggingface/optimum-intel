@@ -19,12 +19,22 @@ To install the latest release of 🤗 Optimum Intel with the corresponding requi
 | [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum[neural-compressor]`                  |
 | [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino,nncf]`                      |
 
+We recommend creating a [virtual environment](https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/#creating-a-virtual-environment) and upgrading
+pip with `python -m pip install --upgrade pip`.
 
-Optimum Intel is a fast-moving project, and you may want to install from source.
+Optimum Intel is a fast-moving project, and you may want to install from source with the following command:
 
 ```bash
-pip install git+https://github.com/huggingface/optimum-intel.git
+python -m pip install git+https://github.com/huggingface/optimum-intel.git
 ```
+
+or to install from source including dependencies:
+
+```bash
+python -m pip install git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[extras]
+```
+
+where `extras` can be one or more of `neural-compressor`, `openvino`, `nncf`.
 
 # Quick tour
 
