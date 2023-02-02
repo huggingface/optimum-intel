@@ -11,7 +11,7 @@ try:
 except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
-INSTALL_REQUIRES = [
+INSTALL_REQUIRE = [
     "optimum>=1.6.1",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
@@ -22,11 +22,7 @@ INSTALL_REQUIRES = [
 
 TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate"]
 
-QUALITY_REQUIRES = [
-    "black",
-    "isort",
-    "hf-doc-builder @ git+https://github.com/huggingface/doc-builder.git",
-]
+QUALITY_REQUIRE = ["black==22.3", "isort>=5.5.4"]
 
 EXTRAS_REQUIRE = {
     "neural-compressor": ["neural-compressor>=2.0.0", "onnx", "onnxruntime"],
@@ -34,7 +30,7 @@ EXTRAS_REQUIRE = {
     "nncf": ["nncf"],
     "ipex": ["intel_extension_for_pytorch"],
     "diffusers": ["diffusers"],
-    "quality": QUALITY_REQUIRES,
+    "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
 }
 
@@ -64,7 +60,7 @@ setup(
     author_email="hardware@huggingface.co",
     license="Apache",
     packages=find_namespace_packages(include=["optimum*"]),
-    install_requires=INSTALL_REQUIRES,
+    install_requires=INSTALL_REQUIRE,
     extras_require=EXTRAS_REQUIRE,
     include_package_data=True,
     zip_safe=False,
