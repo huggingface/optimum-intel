@@ -203,41 +203,6 @@ class OptimizationArguments:
         default=50,
         metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
     )
-    apply_pruning: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to apply pruning."},
-    )
-    target_sparsity: float = field(
-        default=0.1,
-        metadata={"help": "Targeted sparsity when pruning the model."},
-    )
-    start_step: int = field(
-        default=0,
-        metadata={"help": "step for which the pruning process will start."},
-    )
-    end_step: Optional[int] = field(
-        default=None,
-        metadata={"help": "step for which the pruning process will end."},
-    )
-    pruning_approach: str = field(
-        default="snip_momentum",
-        metadata={
-            "help": "Pruning approach. Supported approaches are snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock."
-        },
-    )
-    apply_distillation: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to apply distillation."},
-    )
-    generate_teacher_logits: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to compute and save the teacher's outputs to accelerate training when applying distillation."
-        },
-    )
-    teacher_model_name_or_path: Optional[str] = field(
-        default=False, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
-    )
     verify_loading: bool = field(
         default=False,
         metadata={"help": "Whether or not to verify the loading of the quantized model."},
@@ -548,6 +513,7 @@ def main():
         calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
         batch_size=training_args.per_device_train_batch_size,
     )
+    tokenizer.save_pretrained(training_args.output_dir)
     model = quantizer._quantized_model.eval()
 
     if optim_args.verify_loading:
@@ -587,7 +553,7 @@ def main():
             preds, refs = get_labels(predictions_gathered, labels_gathered)
             metric.add_batch(predictions=preds, references=refs)
         eval_metric = compute_metrics()
-        logger.info(f"Eval : {eval_metric}")
+        logger.info(f"Evaluation metrics: {eval_metric}")
 
 
 def _mp_fn(index):

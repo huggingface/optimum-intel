@@ -462,6 +462,7 @@ def main():
         calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
         batch_size=training_args.per_device_train_batch_size,
     )
+    tokenizer.save_pretrained(training_args.output_dir)
     model = quantizer._quantized_model.eval()
 
     if optim_args.verify_loading:
@@ -494,7 +495,7 @@ def main():
             )
 
         eval_metric = metric.compute()
-        logger.info(f"Eval : {eval_metric}")
+        logger.info(f"Evaluation metrics: {eval_metric}")
 
 
 def _mp_fn(index):

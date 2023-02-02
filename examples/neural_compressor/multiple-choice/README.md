@@ -28,7 +28,7 @@ For pruning, we support snip_momentum(default), snip_momentum_progressive, magni
 The following example applies post-training static quantization on a BERT fine-tuned on the SWAG datasets.
 
 ```bash
-python run_swag.py \
+python run_swag_post_training.py \
     --model_name_or_path ehdwns1516/bert-base-uncased_SWAG \
     --apply_quantization \
     --quantization_approach static \
