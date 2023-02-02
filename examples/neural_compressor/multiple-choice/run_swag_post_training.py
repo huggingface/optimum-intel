@@ -24,14 +24,12 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
-from torch.utils.data import DataLoader
-from accelerate import Accelerator
-
 import datasets
 import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
+from torch.utils.data import DataLoader
 from transformers import (
     AutoConfig,
     AutoModelForMultipleChoice,
@@ -46,7 +44,9 @@ from transformers.file_utils import PaddingStrategy
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
+
 import evaluate
+from accelerate import Accelerator
 from neural_compressor import PostTrainingQuantConfig
 from optimum.intel.neural_compressor import INCModelForMultipleChoice, INCQuantizer
 
@@ -437,7 +437,9 @@ def main():
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
         accelerator = Accelerator()
-        eval_dataloader = DataLoader(eval_dataset, collate_fn=default_data_collator, batch_size=training_args.per_device_eval_batch_size)
+        eval_dataloader = DataLoader(
+            eval_dataset, collate_fn=default_data_collator, batch_size=training_args.per_device_eval_batch_size
+        )
         metric = evaluate.load("accuracy")
 
         for step, batch in enumerate(eval_dataloader):

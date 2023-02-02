@@ -46,8 +46,8 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
-
 from optimum.intel.neural_compressor import INCModelForMultipleChoice, INCTrainer
+
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.20.0")
@@ -440,7 +440,9 @@ def main():
     if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
         raise ValueError("No optimization activated.")
 
-    if not training_args.do_train and (optim_args.apply_distillation or optim_args.apply_pruning or optim_args.apply_quantization):
+    if not training_args.do_train and (
+        optim_args.apply_distillation or optim_args.apply_pruning or optim_args.apply_quantization
+    ):
         raise ValueError("`do_train` must be set to True.")
 
     if optim_args.apply_quantization:
