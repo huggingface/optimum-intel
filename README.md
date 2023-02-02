@@ -184,7 +184,7 @@ You can find more examples in the [documentation](https://huggingface.co/docs/op
 
 ## Running the examples
 
-Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory to see how 🤗 Optimum Intel can be used to accelerate inference.
+Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory to see how 🤗 Optimum Intel can be used to optimize models and accelerate inference.
 
 Do not forget to install requirements for every example:
 
