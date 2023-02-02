@@ -436,6 +436,7 @@ def main():
     # Evaluation
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
+        model.eval()
         accelerator = Accelerator()
         eval_dataloader = DataLoader(
             eval_dataset, collate_fn=default_data_collator, batch_size=training_args.per_device_eval_batch_size

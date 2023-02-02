@@ -24,8 +24,11 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
+from accelerate import Accelerator
+
+from torch.utils.data import DataLoader
+
 import datasets
-import nltk  # Here to have a nice missing dependency error message early on
 import numpy as np
 import torch
 import transformers
@@ -36,43 +39,36 @@ from transformers import (
     AutoTokenizer,
     DataCollatorForSeq2Seq,
     HfArgumentParser,
+    M2M100Tokenizer,
     MBart50Tokenizer,
     MBart50TokenizerFast,
     MBartTokenizer,
     MBartTokenizerFast,
     PreTrainedModel,
     Seq2SeqTrainingArguments,
+    default_data_collator,
     set_seed,
 )
-from transformers.trainer_utils import get_last_checkpoint
-from transformers.utils import check_min_version, is_offline_mode
+from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 import evaluate
-from filelock import FileLock
-from neural_compressor import QuantizationAwareTrainingConfig, WeightPruningConfig
-from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCSeq2SeqTrainer
+from neural_compressor import PostTrainingQuantConfig
+from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCQuantizer
+
+
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.20.0")
 
-require_version("datasets>=1.8.0", "To fix: pip install -r examples/neural_compressor/summarization/requirements.txt")
+require_version("datasets>=1.8.0", "To fix: pip install -r examples/neural_compressor/translation/requirements.txt")
 
 logger = logging.getLogger(__name__)
 
-try:
-    nltk.data.find("tokenizers/punkt")
-except (LookupError, OSError):
-    if is_offline_mode():
-        raise LookupError(
-            "Offline mode: run this script without TRANSFORMERS_OFFLINE first to download nltk data files"
-        )
-    with FileLock(".lock") as lock:
-        nltk.download("punkt", quiet=True)
-
-# A list of all multilingual tokenizer which require lang attribute.
-MULTILINGUAL_TOKENIZERS = [MBartTokenizer, MBartTokenizerFast, MBart50Tokenizer, MBart50TokenizerFast]
+# A list of all multilingual tokenizer which require src_lang and tgt_lang attributes.
+MULTILINGUAL_TOKENIZERS = [MBartTokenizer, MBartTokenizerFast, MBart50Tokenizer, MBart50TokenizerFast, M2M100Tokenizer]
 
 
 @dataclass
@@ -111,15 +107,6 @@ class ModelArguments:
             )
         },
     )
-    resize_position_embeddings: Optional[bool] = field(
-        default=None,
-        metadata={
-            "help": (
-                "Whether to automatically resize the position embeddings if `max_source_length` exceeds "
-                "the model's position embeddings."
-            )
-        },
-    )
 
 
 @dataclass
@@ -128,7 +115,8 @@ class DataTrainingArguments:
     Arguments pertaining to what data we are going to input our model for training and eval.
     """
 
-    lang: Optional[str] = field(default=None, metadata={"help": "Language id for summarization."})
+    source_lang: str = field(default=None, metadata={"help": "Source language id for translation."})
+    target_lang: str = field(default=None, metadata={"help": "Target language id for translation."})
 
     dataset_name: Optional[str] = field(
         default=None, metadata={"help": "The name of the dataset to use (via the datasets library)."}
@@ -136,30 +124,16 @@ class DataTrainingArguments:
     dataset_config_name: Optional[str] = field(
         default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
     )
-    text_column: Optional[str] = field(
-        default=None,
-        metadata={"help": "The name of the column in the datasets containing the full texts (for summarization)."},
-    )
-    summary_column: Optional[str] = field(
-        default=None,
-        metadata={"help": "The name of the column in the datasets containing the summaries (for summarization)."},
-    )
-    train_file: Optional[str] = field(
-        default=None, metadata={"help": "The input training data file (a jsonlines or csv file)."}
-    )
+    train_file: Optional[str] = field(default=None, metadata={"help": "The input training data file (a jsonlines)."})
     validation_file: Optional[str] = field(
         default=None,
         metadata={
-            "help": (
-                "An optional input evaluation data file to evaluate the metrics (rouge) on (a jsonlines or csv file)."
-            )
+            "help": "An optional input evaluation data file to evaluate the metrics (sacreblue) on a jsonlines file."
         },
     )
     test_file: Optional[str] = field(
         default=None,
-        metadata={
-            "help": "An optional input test data file to evaluate the metrics (rouge) on (a jsonlines or csv file)."
-        },
+        metadata={"help": "An optional input test data file to evaluate the metrics (sacreblue) on a jsonlines file."},
     )
     overwrite_cache: bool = field(
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
@@ -194,16 +168,6 @@ class DataTrainingArguments:
                 "than this will be truncated, sequences shorter will be padded. Will default to `max_target_length`."
                 "This argument is also used to override the ``max_length`` param of ``model.generate``, which is used "
                 "during ``evaluate`` and ``predict``."
-            )
-        },
-    )
-    pad_to_max_length: bool = field(
-        default=False,
-        metadata={
-            "help": (
-                "Whether to pad all samples to model maximum sentence length. "
-                "If False, will pad the samples dynamically when batching to the maximum length in the batch. More "
-                "efficient on GPU but very bad for TPU."
             )
         },
     )
@@ -250,16 +214,15 @@ class DataTrainingArguments:
         },
     )
     source_prefix: Optional[str] = field(
-        default="", metadata={"help": "A prefix to add before every source text (useful for T5 models)."}
+        default=None, metadata={"help": "A prefix to add before every source text (useful for T5 models)."}
     )
-
     forced_bos_token: Optional[str] = field(
         default=None,
         metadata={
             "help": (
-                "The token to force as the first generated token after the decoder_start_token_id."
-                "Useful for multilingual models like mBART where the first generated token"
-                "needs to be the target language token (Usually it is the target language token)"
+                "The token to force as the first generated token after the :obj:`decoder_start_token_id`.Useful for"
+                " multilingual models like :doc:`mBART <../model_doc/mbart>` where the first generated token needs to"
+                " be the target language token.(Usually it is the target language token)"
             )
         },
     )
@@ -267,13 +230,19 @@ class DataTrainingArguments:
     def __post_init__(self):
         if self.dataset_name is None and self.train_file is None and self.validation_file is None:
             raise ValueError("Need either a dataset name or a training/validation file.")
-        else:
-            if self.train_file is not None:
-                extension = self.train_file.split(".")[-1]
-                assert extension in ["csv", "json"], "`train_file` should be a csv or a json file."
-            if self.validation_file is not None:
-                extension = self.validation_file.split(".")[-1]
-                assert extension in ["csv", "json"], "`validation_file` should be a csv or a json file."
+        elif self.source_lang is None or self.target_lang is None:
+            raise ValueError("Need to specify the source language and the target language.")
+
+        # accepting both json and jsonl file extensions, as
+        # many jsonlines files actually have a .json extension
+        valid_extensions = ["json", "jsonl"]
+
+        if self.train_file is not None:
+            extension = self.train_file.split(".")[-1]
+            assert extension in valid_extensions, "`train_file` should be a jsonlines file."
+        if self.validation_file is not None:
+            extension = self.validation_file.split(".")[-1]
+            assert extension in valid_extensions, "`validation_file` should be a jsonlines file."
         if self.val_max_target_length is None:
             self.val_max_target_length = self.max_target_length
 
@@ -288,48 +257,18 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
     )
-    apply_pruning: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to apply pruning."},
+    quantization_approach: str = field(
+        default="dynamic",
+        metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
     )
-    target_sparsity: float = field(
-        default=0.1,
-        metadata={"help": "Targeted sparsity when pruning the model."},
-    )
-    start_step: int = field(
-        default=0,
-        metadata={"help": "step for which the pruning process will start."},
-    )
-    end_step: Optional[int] = field(
-        default=None,
-        metadata={"help": "step for which the pruning process will end."},
-    )
-    pruning_approach: str = field(
-        default="snip_momentum",
-        metadata={
-            "help": "Pruning approach. Supported approaches are snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock."
-        },
+    num_calibration_samples: int = field(
+        default=50,
+        metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
     )
     verify_loading: bool = field(
         default=False,
         metadata={"help": "Whether or not to verify the loading of the quantized model."},
     )
-
-
-summarization_name_mapping = {
-    "amazon_reviews_multi": ("review_body", "review_title"),
-    "big_patent": ("description", "abstract"),
-    "cnn_dailymail": ("article", "highlights"),
-    "orange_sum": ("text", "summary"),
-    "pn_summary": ("article", "summary"),
-    "psc": ("extract_text", "summary_text"),
-    "samsum": ("dialogue", "summary"),
-    "thaisum": ("body", "summary"),
-    "xglue": ("news_body", "news_title"),
-    "xsum": ("document", "summary"),
-    "wiki_summary": ("article", "highlights"),
-    "multi_news": ("document", "summary"),
-}
 
 
 def main():
@@ -353,6 +292,7 @@ def main():
         datefmt="%m/%d/%Y %H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+
     log_level = training_args.get_process_log_level()
     logger.setLevel(log_level)
     datasets.utils.logging.set_verbosity(log_level)
@@ -375,34 +315,19 @@ def main():
         "t5-11b",
     ]:
         logger.warning(
-            "You're running a t5 model but didn't provide a source prefix, which is the expected, e.g. with "
-            "`--source_prefix 'summarize: ' `"
+            "You're running a t5 model but didn't provide a source prefix, which is expected, e.g. with "
+            "`--source_prefix 'translate English to German: ' `"
         )
-
-    # Detecting last checkpoint.
-    last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
 
-    # Get the datasets: you can either provide your own CSV/JSON training and evaluation files (see below)
+    # Get the datasets: you can either provide your own JSON training and evaluation files (see below)
     # or just provide the name of one of the public datasets available on the hub at https://huggingface.co/datasets/
     # (the dataset will be downloaded automatically from the datasets Hub).
     #
-    # For CSV/JSON files this script will use the first column for the full texts and the second column for the
-    # summaries (unless you specify column names for this with the `text_column` and `summary_column` arguments).
+    # For translation, only JSON files are supported, with one field named "translation" containing two keys for the
+    # source and target languages (unless you adapt what follows).
     #
     # In distributed training, the load_dataset function guarantee that only one local process can concurrently
     # download the dataset.
@@ -463,34 +388,15 @@ def main():
 
     model.resize_token_embeddings(len(tokenizer))
 
+    # Set decoder_start_token_id
     if model.config.decoder_start_token_id is None and isinstance(tokenizer, (MBartTokenizer, MBartTokenizerFast)):
         if isinstance(tokenizer, MBartTokenizer):
-            model.config.decoder_start_token_id = tokenizer.lang_code_to_id[data_args.lang]
+            model.config.decoder_start_token_id = tokenizer.lang_code_to_id[data_args.target_lang]
         else:
-            model.config.decoder_start_token_id = tokenizer.convert_tokens_to_ids(data_args.lang)
+            model.config.decoder_start_token_id = tokenizer.convert_tokens_to_ids(data_args.target_lang)
 
     if model.config.decoder_start_token_id is None:
         raise ValueError("Make sure that `config.decoder_start_token_id` is correctly defined")
-
-    if (
-        hasattr(model.config, "max_position_embeddings")
-        and model.config.max_position_embeddings < data_args.max_source_length
-    ):
-        if model_args.resize_position_embeddings is None:
-            logger.warning(
-                "Increasing the model's number of position embedding vectors from"
-                f" {model.config.max_position_embeddings} to {data_args.max_source_length}."
-            )
-            model.resize_position_embeddings(data_args.max_source_length)
-        elif model_args.resize_position_embeddings:
-            model.resize_position_embeddings(data_args.max_source_length)
-        else:
-            raise ValueError(
-                f"`--max_source_length` is set to {data_args.max_source_length}, but the model only has"
-                f" {model.config.max_position_embeddings} position encodings. Consider either reducing"
-                f" `--max_source_length` to {model.config.max_position_embeddings} or to automatically resize the"
-                " model's position encodings by passing `--resize_position_embeddings`."
-            )
 
     prefix = data_args.source_prefix if data_args.source_prefix is not None else ""
 
@@ -506,13 +412,16 @@ def main():
         logger.info("There is nothing to do. Please pass `do_train`, `do_eval` and/or `do_predict`.")
         return
 
+    # For translation we set the codes of our source and target languages (only useful for mBART, the others will
+    # ignore those attributes).
     if isinstance(tokenizer, tuple(MULTILINGUAL_TOKENIZERS)):
-        assert (
-            data_args.lang is not None
-        ), f"{tokenizer.__class__.__name__} is a multilingual tokenizer which requires --lang argument"
+        assert data_args.target_lang is not None and data_args.source_lang is not None, (
+            f"{tokenizer.__class__.__name__} is a multilingual tokenizer which requires --source_lang and "
+            "--target_lang arguments."
+        )
 
-        tokenizer.src_lang = data_args.lang
-        tokenizer.tgt_lang = data_args.lang
+        tokenizer.src_lang = data_args.source_lang
+        tokenizer.tgt_lang = data_args.target_lang
 
         # For multilingual translation models like mBART-50 and M2M100 we need to force the target language token
         # as the first generated token. We ask the user to explicitly provide this as --forced_bos_token argument.
@@ -521,28 +430,13 @@ def main():
         )
         model.config.forced_bos_token_id = forced_bos_token_id
 
-    # Get the column names for input/target.
-    dataset_columns = summarization_name_mapping.get(data_args.dataset_name, None)
-    if data_args.text_column is None:
-        text_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
-    else:
-        text_column = data_args.text_column
-        if text_column not in column_names:
-            raise ValueError(
-                f"--text_column' value '{data_args.text_column}' needs to be one of: {', '.join(column_names)}"
-            )
-    if data_args.summary_column is None:
-        summary_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
-    else:
-        summary_column = data_args.summary_column
-        if summary_column not in column_names:
-            raise ValueError(
-                f"--summary_column' value '{data_args.summary_column}' needs to be one of: {', '.join(column_names)}"
-            )
+    # Get the language codes for input/target.
+    source_lang = data_args.source_lang.split("_")[0]
+    target_lang = data_args.target_lang.split("_")[0]
 
     # Temporarily set max_target_length for training.
     max_target_length = data_args.max_target_length
-    padding = "max_length" if data_args.pad_to_max_length else False
+    padding = "max_length"
 
     if training_args.label_smoothing_factor > 0 and not hasattr(model, "prepare_decoder_input_ids_from_labels"):
         logger.warning(
@@ -551,14 +445,8 @@ def main():
         )
 
     def preprocess_function(examples):
-        # remove pairs where at least one record is None
-
-        inputs, targets = [], []
-        for i in range(len(examples[text_column])):
-            if examples[text_column][i] and examples[summary_column][i]:
-                inputs.append(examples[text_column][i])
-                targets.append(examples[summary_column][i])
-
+        inputs = [ex[source_lang] for ex in examples["translation"]]
+        targets = [ex[target_lang] for ex in examples["translation"]]
         inputs = [prefix + inp for inp in inputs]
         model_inputs = tokenizer(inputs, max_length=data_args.max_source_length, padding=padding, truncation=True)
 
@@ -576,7 +464,7 @@ def main():
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
 
-    if training_args.do_train:
+    if optim_args.quantization_approach == "static":
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = raw_datasets["train"]
@@ -592,6 +480,10 @@ def main():
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on train dataset",
             )
+        max_train_samples = (
+            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
+        )
+        train_samples = min(max_train_samples, len(train_dataset))
 
     if training_args.do_eval:
         max_target_length = data_args.val_max_target_length
@@ -629,120 +521,44 @@ def main():
                 desc="Running tokenizer on prediction dataset",
             )
 
-    # Data collator
-    label_pad_token_id = -100 if data_args.ignore_pad_token_for_loss else tokenizer.pad_token_id
-    data_collator = DataCollatorForSeq2Seq(
-        tokenizer,
-        model=model,
-        label_pad_token_id=label_pad_token_id,
-        pad_to_multiple_of=8 if training_args.fp16 else None,
-    )
-
     # Metric
-    metric = evaluate.load("rouge")
+    metric = evaluate.load("sacrebleu")
 
     def postprocess_text(preds, labels):
         preds = [pred.strip() for pred in preds]
-        labels = [label.strip() for label in labels]
-
-        # rougeLSum expects newline after each sentence
-        preds = ["\n".join(nltk.sent_tokenize(pred)) for pred in preds]
-        labels = ["\n".join(nltk.sent_tokenize(label)) for label in labels]
-
+        labels = [[label.strip()] for label in labels]
         return preds, labels
 
-    def compute_metrics(eval_preds):
-        preds, labels = eval_preds
-        if isinstance(preds, tuple):
-            preds = preds[0]
-        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-        if data_args.ignore_pad_token_for_loss:
-            # Replace -100 in the labels as we can't decode them.
-            labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-
-        # Some simple post-processing
-        decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
-
-        result = metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
-        result = {k: round(v * 100, 4) for k, v in result.items()}
-        prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
-        result["gen_len"] = np.mean(prediction_lens)
-        return result
-
-    quantization_config = None
-    pruning_config = None
-
-    if optim_args.apply_quantization:
-        quantization_config = QuantizationAwareTrainingConfig()
-
-    if optim_args.apply_pruning:
-        if optim_args.end_step is None:
-            end_step = training_args.num_train_epochs * (
-                len(train_dataset) // training_args.per_device_train_batch_size
-            )
-        else:
-            end_step = min(
-                optim_args.end_step,
-                training_args.num_train_epochs * (len(train_dataset) // training_args.per_device_train_batch_size),
-            )
-
-        pruning_config = WeightPruningConfig(
-            start_step=optim_args.start_step,
-            end_step=end_step,
-            target_sparsity=optim_args.target_sparsity,
-            pruning_type=optim_args.pruning_approach,
+    supported_approach = {"static", "dynamic"}
+    if optim_args.quantization_approach not in supported_approach:
+        raise ValueError(
+            f"Unknown quantization approach. Supported approach are {supported_approach}."
+            f"{optim_args.quantization_approach} was given."
         )
+    quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
 
-    # Initialize our Trainer
-    trainer = INCSeq2SeqTrainer(
-        model=model,
+    quantizer = INCQuantizer.from_pretrained(model)
+    if optim_args.quantization_approach == "static":
+        num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
+        train_dataset = train_dataset.select(range(num_calibration_samples))
+        quantization_config.calibration_sampling_size = num_calibration_samples
+
+    quantizer.quantize(
         quantization_config=quantization_config,
-        pruning_config=pruning_config,
-        args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics if training_args.predict_with_generate else None,
+        save_directory=training_args.output_dir,
+        calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
+        batch_size=training_args.per_device_train_batch_size,
     )
-
-    # Training
-    if training_args.do_train:
-        checkpoint = None
-        if training_args.resume_from_checkpoint is not None:
-            checkpoint = training_args.resume_from_checkpoint
-        elif last_checkpoint is not None:
-            checkpoint = last_checkpoint
-        train_result = trainer.train(resume_from_checkpoint=checkpoint)
-        trainer.save_model()  # Saves the tokenizer too for easy upload
-
-        metrics = train_result.metrics
-        max_train_samples = (
-            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
-        )
-        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
-
-        trainer.log_metrics("train", metrics)
-        trainer.save_metrics("train", metrics)
-        trainer.save_state()
-
-    # Embedding quantization is not supported on CUDA backend
-    if optim_args.apply_quantization and (
-        training_args.do_eval or training_args.do_predict or optim_args.verify_loading
-    ):
-        trainer.model.to("cpu")
-
-    if optim_args.apply_quantization and optim_args.verify_loading:
+    model = quantizer._quantized_model
+    if optim_args.verify_loading:
         loaded_model = INCModelForSeq2SeqLM.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         decoder_start_token_id = (
             loaded_model.config.decoder_start_token_id if loaded_model.config.model_type != "mbart" else 2
         )
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
-        trainer.model.eval()
         with torch.no_grad():
-            original_model_outputs = trainer.model(**tokens, **decoder_inputs)
+            original_model_outputs = model(**tokens, **decoder_inputs)
             loaded_model_outputs = loaded_model(**tokens, **decoder_inputs)
             if torch.allclose(original_model_outputs.logits, loaded_model_outputs.logits, atol=1e-4):
                 logger.info("The quantized model was successfully loaded.")
@@ -757,56 +573,47 @@ def main():
         else data_args.val_max_target_length
     )
     num_beams = data_args.num_beams if data_args.num_beams is not None else training_args.generation_num_beams
+    
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
-        metrics = trainer.evaluate(max_length=max_length, num_beams=num_beams, metric_key_prefix="eval")
-        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
-
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-
-    if training_args.do_predict:
-        logger.info("*** Predict ***")
-
-        predict_results = trainer.predict(
-            predict_dataset, metric_key_prefix="predict", max_length=max_length, num_beams=num_beams
+        model.eval()
+        accelerator = Accelerator()
+        eval_dataloader = DataLoader(
+            eval_dataset, collate_fn=default_data_collator, batch_size=training_args.per_device_eval_batch_size
         )
-        metrics = predict_results.metrics
-        max_predict_samples = (
-            data_args.max_predict_samples if data_args.max_predict_samples is not None else len(predict_dataset)
-        )
-        metrics["predict_samples"] = min(max_predict_samples, len(predict_dataset))
-
-        trainer.log_metrics("predict", metrics)
-        trainer.save_metrics("predict", metrics)
-
-        if trainer.is_world_process_zero():
-            if training_args.predict_with_generate:
-                predictions = tokenizer.batch_decode(
-                    predict_results.predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True
+        samples_seen = 0
+        for step, batch in enumerate(eval_dataloader):
+            with torch.no_grad():
+                generated_tokens = model.generate(
+                    batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    max_length=max_length,
+                    num_beams=num_beams,
                 )
-                predictions = [pred.strip() for pred in predictions]
-                output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.txt")
-                with open(output_prediction_file, "w") as writer:
-                    writer.write("\n".join(predictions))
+                generated_tokens = accelerator.pad_across_processes(generated_tokens, dim=1, pad_index=tokenizer.pad_token_id)
+                labels = batch["labels"]
+                generated_tokens = accelerator.gather(generated_tokens).cpu().numpy()
+                labels = accelerator.gather(labels).cpu().numpy()
 
-    kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "summarization"}
-    if data_args.dataset_name is not None:
-        kwargs["dataset_tags"] = data_args.dataset_name
-        if data_args.dataset_config_name is not None:
-            kwargs["dataset_args"] = data_args.dataset_config_name
-            kwargs["dataset"] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
-        else:
-            kwargs["dataset"] = data_args.dataset_name
+                if data_args.ignore_pad_token_for_loss:
+                    # Replace -100 in the labels as we can't decode them.
+                    labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
 
-    if data_args.lang is not None:
-        kwargs["language"] = data_args.lang
+                decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+                decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
+                decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
 
-    if training_args.push_to_hub:
-        trainer.push_to_hub(**kwargs)
-    else:
-        trainer.create_model_card(**kwargs)
+                # If we are in a multiprocess environment, the last batch has duplicates
+                if accelerator.num_processes > 1:
+                    if step == len(eval_dataloader) - 1:
+                        decoded_preds = decoded_preds[: len(eval_dataloader.dataset) - samples_seen]
+                        decoded_labels = decoded_labels[: len(eval_dataloader.dataset) - samples_seen]
+                    else:
+                        samples_seen += len(decoded_labels)
+
+                metric.add_batch(predictions=decoded_preds, references=decoded_labels)
+        eval_metric = metric.compute()
+        logger.info(f"Evaluation metrics: {eval_metric}")
 
 
 if __name__ == "__main__":

@@ -27,14 +27,13 @@ For pruning, we support snip_momentum(default), snip_momentum_progressive, magni
 The following example applies post-training static quantization on a T5 model.
 
 ```bash
-python run_translation.py \ 
+python run_translation_post_training.py \ 
     --model_name_or_path t5-small \
     --source_lang en \
     --target_lang ro \
     --dataset_name wmt16 \
     --dataset_config_name ro-en \
     --source_prefix "translate English to Romanian: " \
-    --apply_quantization \
     --quantization_approach static \
     --num_calibration_samples 50 \
     --do_eval \
@@ -44,8 +43,9 @@ python run_translation.py \
     --per_device_eval_batch_size=4 \
     --output_dir /tmp/test_translation
 ```
+In order to apply dynamic or static, `quantization_approach` must be set to respectively `dynamic` or `static`.
 
-The following example fine-tunes a T5 model on the wmt16 dataset while applying magnitude pruning and then applies dynamic quantization as a second step.
+The following example fine-tunes a T5 model on the wmt16 dataset while applying magnitude pruning and quantization aware training.
 
 ```bash
 python run_translation.py \ 
@@ -56,7 +56,6 @@ python run_translation.py \
     --dataset_config_name ro-en \
     --source_prefix "translate English to Romanian: " \
     --apply_quantization \
-    --quantization_approach dynamic \
     --apply_pruning \
     --target_sparsity 0.1 \
     --num_train_epochs 4 \
@@ -69,8 +68,5 @@ python run_translation.py \
     --per_device_eval_batch_size=4 \
     --output_dir /tmp/test_translation
 ```
-
-In order to apply dynamic, static or aware-training quantization, `quantization_approach` must be set to 
-respectively `dynamic`, `static` or `aware_training`.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
