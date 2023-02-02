@@ -30,7 +30,7 @@ For pruning, we support snip_momentum(default), snip_momentum_progressive, magni
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the sst-2 task.
 
 ```bash
-python run_glue_post_training_optimization.py \
+python run_glue_post_training.py \
     --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english \
     --task_name sst2 \
     --apply_quantization \
@@ -45,7 +45,7 @@ In order to apply dynamic or static, `quantization_approach` must be set to resp
 The following example fine-tunes DistilBERT on the sst-2 task while applying knowledge distillation with quantization aware training.
 
 ```bash
-python run_glue_during_training_optimization.py \
+python run_glue.py \
     --model_name_or_path distilbert-base-uncased \
     --task_name sst2 \
     --apply_distillation \
@@ -62,7 +62,7 @@ python run_glue_during_training_optimization.py \
 The following example fine-tunes DistilBERT on the sst-2 task while applying magnitude pruning:
 
 ```bash
-python run_glue_during_training_optimization.py \
+python run_glue.py \
     --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english \
     --task_name sst2 \
     --apply_pruning \

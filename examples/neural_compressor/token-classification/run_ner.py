@@ -46,16 +46,9 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 import evaluate
-from neural_compressor import (
-    DistillationConfig,
-    PostTrainingQuantConfig,
-    QuantizationAwareTrainingConfig,
-    WeightPruningConfig,
-)
+from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
 from optimum.intel.neural_compressor import INCModelForTokenClassification, INCQuantizer, INCTrainer
 
-
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.20.0")
@@ -198,10 +191,6 @@ class OptimizationArguments:
     apply_quantization: bool = field(
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
-    )
-    quantization_approach: str = field(
-        default="dynamic",
-        metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
     )
     num_calibration_samples: int = field(
         default=50,
@@ -469,7 +458,7 @@ def main():
         tokenized_inputs["labels"] = labels
         return tokenized_inputs
 
-    if training_args.do_train or (optim_args.apply_quantization and optim_args.quantization_approach == "static"):
+    if training_args.do_train:
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = raw_datasets["train"]
@@ -561,23 +550,12 @@ def main():
         raise ValueError("No optimization activated.")
 
     if not training_args.do_train and (
-        optim_args.apply_distillation
-        or optim_args.apply_pruning
-        or (optim_args.apply_quantization and optim_args.quantization_approach == "aware_training")
+        optim_args.apply_distillation or optim_args.apply_pruning or optim_args.apply_quantization
     ):
         raise ValueError("`do_train` must be set to True.")
 
     if optim_args.apply_quantization:
-        supported_approach = {"static", "dynamic", "aware_training"}
-        if optim_args.quantization_approach not in supported_approach:
-            raise ValueError(
-                f"Unknown quantization approach. Supported approach are {supported_approach}."
-                f"{optim_args.quantization_approach} was given."
-            )
-        if optim_args.quantization_approach == "aware_training":
-            quantization_config = QuantizationAwareTrainingConfig()
-        else:
-            quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
+        quantization_config = QuantizationAwareTrainingConfig()
 
     if optim_args.apply_pruning:
         if optim_args.end_step is None:
@@ -621,7 +599,7 @@ def main():
     trainer = INCTrainer(
         model=model,
         task="token-classification",
-        quantization_config=quantization_config if optim_args.quantization_approach == "aware_training" else None,
+        quantization_config=quantization_config,
         pruning_config=pruning_config,
         distillation_config=distillation_config,
         args=training_args,
@@ -652,25 +630,16 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic"}:
-        model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
-        quantizer = INCQuantizer.from_pretrained(model)
-        if optim_args.quantization_approach == "static":
-            num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
-            train_dataset = train_dataset.select(range(num_calibration_samples))
-            quantization_config.calibration_sampling_size = num_calibration_samples
-
-        quantizer.quantize(
-            quantization_config=quantization_config,
-            save_directory=training_args.output_dir,
-            calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
-            batch_size=training_args.per_device_train_batch_size,
-        )
-        trainer.model = quantizer._quantized_model
+    # Embedding quantization is not supported on CUDA backend
+    if optim_args.apply_quantization and (
+        training_args.do_eval or training_args.do_predict or optim_args.verify_loading
+    ):
+        trainer.model.to("cpu")
 
     if optim_args.apply_quantization and optim_args.verify_loading:
         loaded_model = INCModelForTokenClassification.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
+        trainer.model.eval()
         with torch.no_grad():
             original_model_outputs = trainer.model(**tokens)
             quantized_model_outputs = loaded_model(**tokens)

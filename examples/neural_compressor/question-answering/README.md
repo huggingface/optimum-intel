@@ -34,7 +34,7 @@ the flag `--version_2_with_negative`.
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the SQuAD1.0 dataset.
 
 ```bash
-python run_qa_post_training_optimization.py \
+python run_qa_post_training.py \
     --model_name_or_path distilbert-base-uncased-distilled-squad \
     --dataset_name squad \
     --apply_quantization \
@@ -50,7 +50,7 @@ In order to apply dynamic or static, `quantization_approach` must be set to resp
 The following example fine-tunes DistilBERT on the SQuAD1.0 dataset while applying knowledge distillation with quantization aware training.
 
 ```bash
-python run_qa_during_training_optimization.py \
+python run_qa.py \
     --model_name_or_path distilbert-base-uncased \
     --dataset_name squad \
     --apply_distillation \
@@ -70,7 +70,7 @@ The distillation process can be accelerated by the flag `--generate_teacher_logi
 The following example fine-tunes DistilBERT on the SQuAD1.0 dataset while applying magnitude pruning and quantization aware training.
 
 ```bash
-python run_qa_during_training_optimization.py \
+python run_qa.py \
     --model_name_or_path distilbert-base-uncased-distilled-squad \
     --dataset_name squad \
     --apply_quantization \

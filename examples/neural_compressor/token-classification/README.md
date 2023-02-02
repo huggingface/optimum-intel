@@ -28,7 +28,7 @@ For pruning, we support snip_momentum(default), snip_momentum_progressive, magni
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the CoNLL-2003 task.
 
 ```bash
-python run_ner_post_training_optimization.py \
+python run_ner_post_training.py \
     --model_name_or_path elastic/distilbert-base-uncased-finetuned-conll03-english \
     --dataset_name conll2003 \
     --apply_quantization \
@@ -43,7 +43,7 @@ In order to apply dynamic or static, `quantization_approach` must be set to resp
 The following example fine-tunes DistilBERT on the CoNLL-2003 task while applying knowledge distillation with quantization aware training.
 
 ```bash
-python run_ner_during_training_optimization.py \
+python run_ner.py \
     --model_name_or_path distilbert-base-uncased \
     --dataset_name conll2003 \
     --apply_distillation \
@@ -60,7 +60,7 @@ python run_ner_during_training_optimization.py \
 The following example fine-tunes DistilBERT on the CoNLL-2003 task while applying magnitude pruning.
 
 ```bash
-python run_ner_during_training_optimization.py \
+python run_ner.py \
     --model_name_or_path elastic/distilbert-base-uncased-finetuned-conll03-english \
     --dataset_name conll2003 \
     --apply_quantization \
