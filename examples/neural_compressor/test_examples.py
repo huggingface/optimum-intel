@@ -56,7 +56,6 @@ def get_results(output_dir):
 
 class TestExamples(unittest.TestCase):
     def test_run_glue(self):
-        quantization_approach = "static"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
@@ -64,7 +63,6 @@ class TestExamples(unittest.TestCase):
                 --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english
                 --task_name sst2
                 --apply_quantization
-                --quantization_approach {quantization_approach}
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
@@ -85,7 +83,6 @@ class TestExamples(unittest.TestCase):
                 self.assertGreaterEqual(results["eval_accuracy"], 0.70)
 
     def test_run_qa(self):
-        quantization_approach = "static"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
@@ -93,7 +90,6 @@ class TestExamples(unittest.TestCase):
                 --model_name_or_path distilbert-base-uncased-distilled-squad
                 --dataset_name squad
                 --apply_quantization
-                --quantization_approach {quantization_approach}
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
@@ -115,7 +111,6 @@ class TestExamples(unittest.TestCase):
                 self.assertGreaterEqual(results["eval_exact_match"], 70)
 
     def test_run_ner(self):
-        quantization_approach = "static"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
@@ -123,7 +118,6 @@ class TestExamples(unittest.TestCase):
                 --model_name_or_path elastic/distilbert-base-uncased-finetuned-conll03-english
                 --dataset_name conll2003
                 --apply_quantization
-                --quantization_approach {quantization_approach}
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
@@ -147,14 +141,12 @@ class TestExamples(unittest.TestCase):
                 self.assertGreaterEqual(results["eval_recall"], 0.70)
 
     def test_run_swag(self):
-        quantization_approach = "static"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_swag.py
                 --model_name_or_path ehdwns1516/bert-base-uncased_SWAG
                 --apply_quantization
-                --quantization_approach {quantization_approach}
                 --apply_pruning
                 --target_sparsity 0.02
                 --do_eval
