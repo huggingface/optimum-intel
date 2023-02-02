@@ -24,15 +24,12 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
-from accelerate import Accelerator
-
-from torch.utils.data import DataLoader
-
 import datasets
 import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
+from torch.utils.data import DataLoader
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
@@ -53,6 +50,7 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 import evaluate
+from accelerate import Accelerator
 from neural_compressor import PostTrainingQuantConfig
 from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCQuantizer
 
@@ -573,7 +571,7 @@ def main():
         else data_args.val_max_target_length
     )
     num_beams = data_args.num_beams if data_args.num_beams is not None else training_args.generation_num_beams
-    
+
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
         model.eval()
@@ -590,7 +588,9 @@ def main():
                     max_length=max_length,
                     num_beams=num_beams,
                 )
-                generated_tokens = accelerator.pad_across_processes(generated_tokens, dim=1, pad_index=tokenizer.pad_token_id)
+                generated_tokens = accelerator.pad_across_processes(
+                    generated_tokens, dim=1, pad_index=tokenizer.pad_token_id
+                )
                 labels = batch["labels"]
                 generated_tokens = accelerator.gather(generated_tokens).cpu().numpy()
                 labels = accelerator.gather(labels).cpu().numpy()

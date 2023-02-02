@@ -30,6 +30,7 @@ import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
+from torch.utils.data import DataLoader
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
@@ -46,10 +47,9 @@ from transformers import (
 )
 from transformers.utils import check_min_version, is_offline_mode
 from transformers.utils.versions import require_version
-from accelerate import Accelerator
-from torch.utils.data import DataLoader
 
 import evaluate
+from accelerate import Accelerator
 from filelock import FileLock
 from neural_compressor import PostTrainingQuantConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
 from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCQuantizer
