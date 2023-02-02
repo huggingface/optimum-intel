@@ -24,15 +24,12 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
-
-from accelerate import Accelerator
-from torch.utils.data import DataLoader
-
 import datasets
 import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
+from torch.utils.data import DataLoader
 from transformers import (
     AutoConfig,
     AutoModelForSequenceClassification,
@@ -50,6 +47,7 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 import evaluate
+from accelerate import Accelerator
 from neural_compressor import PostTrainingQuantConfig
 from optimum.intel.neural_compressor import INCModelForSequenceClassification, INCQuantizer
 
@@ -258,7 +256,6 @@ def main():
         + f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
     )
     logger.info(f"Training/evaluation parameters {training_args}")
-
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
@@ -498,6 +495,7 @@ def main():
 
         eval_metric = metric.compute()
         logger.info(f"Eval : {eval_metric}")
+
 
 def _mp_fn(index):
     # For xla_spawn (TPUs)

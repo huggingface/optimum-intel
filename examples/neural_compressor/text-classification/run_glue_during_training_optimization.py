@@ -510,7 +510,9 @@ def main():
     if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
         raise ValueError("No optimization activated.")
 
-    if not training_args.do_train and (optim_args.apply_distillation or optim_args.apply_pruning or optim_args.apply_quantization):
+    if not training_args.do_train and (
+        optim_args.apply_distillation or optim_args.apply_pruning or optim_args.apply_quantization
+    ):
         raise ValueError("`do_train` must be set to True.")
 
     if optim_args.apply_quantization:

@@ -53,6 +53,7 @@ from neural_compressor import PostTrainingQuantConfig
 from optimum.intel.neural_compressor import INCModelForQuestionAnswering, INCQuantizer
 from utils_qa import postprocess_qa_predictions
 
+
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -479,7 +480,7 @@ def main():
 
         return tokenized_examples
 
-    if  optim_args.quantization_approach == "static":
+    if optim_args.quantization_approach == "static":
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = raw_datasets["train"]
@@ -716,6 +717,7 @@ def main():
         prediction = post_processing_function(eval_examples, eval_dataset, outputs_numpy)
         eval_metric = metric.compute(predictions=prediction.predictions, references=prediction.label_ids)
         logger.info(f"Evaluation metrics: {eval_metric}")
+
 
 def _mp_fn(index):
     # For xla_spawn (TPUs)

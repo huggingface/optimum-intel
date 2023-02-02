@@ -55,6 +55,7 @@ from optimum.intel.neural_compressor import INCModelForQuestionAnswering
 from trainer_qa import QuestionAnsweringINCTrainer
 from utils_qa import postprocess_qa_predictions
 
+
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.20.0")
 
@@ -699,7 +700,9 @@ def main():
     if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
         raise ValueError("No optimization activated.")
 
-    if not training_args.do_train and (optim_args.apply_distillation or optim_args.apply_pruning or optim_args.apply_quantization):
+    if not training_args.do_train and (
+        optim_args.apply_distillation or optim_args.apply_pruning or optim_args.apply_quantization
+    ):
         raise ValueError("`do_train` must be set to True.")
 
     if optim_args.apply_quantization:
@@ -802,7 +805,6 @@ def main():
     # Evaluation
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
-        import pdb;pdb.set_trace()
         metrics = trainer.evaluate()
         max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
         metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))

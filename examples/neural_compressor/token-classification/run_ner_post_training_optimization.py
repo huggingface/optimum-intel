@@ -30,6 +30,7 @@ import numpy as np
 import torch
 import transformers
 from datasets import ClassLabel, load_dataset
+from torch.utils.data import DataLoader
 from transformers import (
     AutoConfig,
     AutoModelForTokenClassification,
@@ -43,9 +44,9 @@ from transformers import (
 )
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
-from torch.utils.data import DataLoader
-from accelerate import Accelerator
+
 import evaluate
+from accelerate import Accelerator
 from neural_compressor import PostTrainingQuantConfig
 from optimum.intel.neural_compressor import INCModelForTokenClassification, INCQuantizer
 
@@ -505,7 +506,6 @@ def main():
         ]
         return true_predictions, true_labels
 
-
     def compute_metrics():
         results = metric.compute()
         if data_args.return_entity_level_metrics:
@@ -588,7 +588,6 @@ def main():
             metric.add_batch(predictions=preds, references=refs)
         eval_metric = compute_metrics()
         logger.info(f"Eval : {eval_metric}")
-
 
 
 def _mp_fn(index):
