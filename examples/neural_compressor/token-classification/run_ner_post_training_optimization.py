@@ -46,12 +46,7 @@ from transformers.utils.versions import require_version
 from torch.utils.data import DataLoader
 from accelerate import Accelerator
 import evaluate
-from neural_compressor import (
-    DistillationConfig,
-    PostTrainingQuantConfig,
-    QuantizationAwareTrainingConfig,
-    WeightPruningConfig,
-)
+from neural_compressor import PostTrainingQuantConfig
 from optimum.intel.neural_compressor import INCModelForTokenClassification, INCQuantizer
 
 

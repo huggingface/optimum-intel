@@ -652,7 +652,6 @@ class INCTrainer(Trainer):
         else:
             labels = None
         teacher_outputs = inputs.pop("teacher_logits", None)
-        inputs = self._prepare_input(inputs, model.device)
         outputs = model(**inputs)
 
         # Save past state if it exists
@@ -696,16 +695,16 @@ class INCTrainer(Trainer):
 
         return (loss, outputs) if return_outputs else loss
 
-    def _prepare_input(self, data: Union[torch.Tensor, Any], device: torch.device = None) -> Union[torch.Tensor, Any]:
+    def _prepare_input(self, data: Union[torch.Tensor, Any]) -> Union[torch.Tensor, Any]:
         """
         Prepares one `data` before feeding it to the model, be it a tensor or a nested list/dictionary of tensors.
         """
         if isinstance(data, Mapping):
-            return type(data)({k: self._prepare_input(v, device) for k, v in data.items()})
+            return type(data)({k: self._prepare_input(v) for k, v in data.items()})
         elif isinstance(data, (tuple, list)):
-            return type(data)(self._prepare_input(v, device) for v in data)
+            return type(data)(self._prepare_input(v) for v in data)
         elif isinstance(data, torch.Tensor):
-            kwargs = dict(device=device or self.args.device)
+            kwargs = dict(device=self.model.device)
             if self.deepspeed and data.dtype != torch.int64:
                 # NLP models inputs are int64 and those get adjusted to the right dtype of the
                 # embedding. Other models such as wav2vec2's inputs are already float and thus

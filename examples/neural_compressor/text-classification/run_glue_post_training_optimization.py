@@ -50,12 +50,7 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 import evaluate
-from neural_compressor import (
-    DistillationConfig,
-    PostTrainingQuantConfig,
-    QuantizationAwareTrainingConfig,
-    WeightPruningConfig,
-)
+from neural_compressor import PostTrainingQuantConfig
 from optimum.intel.neural_compressor import INCModelForSequenceClassification, INCQuantizer
 
 
