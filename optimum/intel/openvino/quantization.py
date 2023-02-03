@@ -208,7 +208,7 @@ class OVQuantizer(OptimumQuantizer):
             model.disable_dynamic_graph_building()
             onnx_export(
                 model,
-                tuple([model_inputs.get(key, None) for key in self._export_input_names if len(model_inputs) != 0]),
+                tuple([model_inputs.pop(key, None) for key in self._export_input_names if len(model_inputs) != 0]),
                 f=f,
                 input_names=list(config.inputs.keys()),
                 output_names=list(config.outputs.keys()),
