@@ -437,11 +437,8 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
 
         inputs = {
             "input_ids": input_ids,
+            "attention_mask": attention_mask,
         }
-
-        # Add the attention_mask when needed
-        if "attention_mask" in self.input_names:
-            inputs["attention_mask"] = attention_mask
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:

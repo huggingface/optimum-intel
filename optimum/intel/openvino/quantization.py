@@ -43,7 +43,6 @@ from optimum.quantization_base import OptimumQuantizer
 from ..utils.import_utils import _openvino_version
 from .configuration import OVConfig
 from .utils import (
-    EXTERNAL_DATA_FORMAT_SIZE_LIMIT,
     MAX_ONNX_OPSET,
     MAX_ONNX_OPSET_2022_2_0,
     MIN_ONNX_QDQ_OPSET,
@@ -81,6 +80,9 @@ class OVQuantizer(OptimumQuantizer):
         self.feature = kwargs.pop("feature", None)
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
+        self._export_input_names = [
+            column for column in self._signature_columns if column not in {"label", "labels", "label_ids"}
+        ]
         self.input_names = None
 
     @classmethod
@@ -171,9 +173,13 @@ class OVQuantizer(OptimumQuantizer):
         compress_quantize_weights_transformation(model)
         openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
 
-    @staticmethod
     def _onnx_export(
-        model: NNCFNetwork, config: OnnxConfig, model_inputs: Dict, ov_config: OVConfig, f: Union[str, io.BytesIO]
+        self,
+        model: NNCFNetwork,
+        config: OnnxConfig,
+        model_inputs: Dict,
+        ov_config: OVConfig,
+        f: Union[str, io.BytesIO],
     ):
         openvino_version = version.parse(version.parse(_openvino_version).base_version)
         is_openvino_version_greater_2022_2_0 = openvino_version > version.Version("2022.2.0")
@@ -196,17 +202,15 @@ class OVQuantizer(OptimumQuantizer):
         opset = max_onnx_opset if is_openvino_version_greater_2022_2_0 else MAX_ONNX_OPSET_2022_2_0
         opset = opset if ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
         model_inputs = dict((k, v.to(model.device)) for k, v in model_inputs.items())
-        input_names = list(config.inputs.keys())
-        first_input = model_inputs.pop(input_names[0])
 
         with torch.no_grad():
             # Disable node additions to be exported in the graph
             model.disable_dynamic_graph_building()
             onnx_export(
                 model,
-                (first_input, model_inputs),
+                tuple([model_inputs.get(key, None) for key in self._export_input_names if len(model_inputs) != 0]),
                 f=f,
-                input_names=input_names,
+                input_names=list(config.inputs.keys()),
                 output_names=list(config.outputs.keys()),
                 dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
                 do_constant_folding=True,

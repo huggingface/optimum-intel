@@ -70,6 +70,7 @@ from .utils import (
     MAX_ONNX_OPSET,
     MAX_ONNX_OPSET_2022_2_0,
     MIN_ONNX_QDQ_OPSET,
+    ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
     use_external_data_format,
 )
@@ -594,18 +595,15 @@ class OVTrainer(Trainer):
         model_inputs = config.generate_dummy_inputs(framework="pt")
         device = model.device
         model_inputs = dict((k, v.to(device)) for k, v in model_inputs.items())
-        input_names = list(config.inputs.keys())
-        first_input = model_inputs.pop(input_names[0])
-
         with torch.no_grad():
             model.eval()
             # Disable node additions to be exported in the graph
             model.disable_dynamic_graph_building()
             onnx_export(
                 model,
-                (first_input, model_inputs),
+                tuple([model_inputs.pop(key, None) for key in self._signature_columns if len(model_inputs) != 0]),
                 f=f,
-                input_names=input_names,
+                input_names=list(config.inputs.keys()),
                 output_names=list(config.outputs.keys()),
                 dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
                 do_constant_folding=True,
