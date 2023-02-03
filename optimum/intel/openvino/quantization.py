@@ -202,13 +202,15 @@ class OVQuantizer(OptimumQuantizer):
         opset = max_onnx_opset if is_openvino_version_greater_2022_2_0 else MAX_ONNX_OPSET_2022_2_0
         opset = opset if ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
         model_inputs = dict((k, v.to(model.device)) for k, v in model_inputs.items())
+        # Create ordered inputs for the ONNX export of NNCFNetwork as keyword arguments are currently not supported
+        inputs = tuple([model_inputs.pop(key, None) for key in self._export_input_names if len(model_inputs) != 0])
 
         with torch.no_grad():
             # Disable node additions to be exported in the graph
             model.disable_dynamic_graph_building()
             onnx_export(
                 model,
-                tuple([model_inputs.pop(key, None) for key in self._export_input_names if len(model_inputs) != 0]),
+                inputs,
                 f=f,
                 input_names=list(config.inputs.keys()),
                 output_names=list(config.outputs.keys()),
