@@ -679,6 +679,7 @@ class INCTrainer(Trainer):
                     teacher_outputs = tuple(teacher_outputs.transpose(1, 0))
             else:
                 self.distillation_config.teacher_model.eval()
+                self.distillation_config.teacher_model.to(model.device)
                 teacher_outputs = self.distillation_config.teacher_model(**inputs)
                 teacher_outputs = self._get_logits(teacher_outputs)
 
