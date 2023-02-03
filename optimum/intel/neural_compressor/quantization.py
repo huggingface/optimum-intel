@@ -243,8 +243,10 @@ class INCQuantizer(OptimumQuantizer):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
         dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
         inputs = config.generate_dummy_inputs(framework="pt")
+        device = model.model.device
+        inputs = dict((k, v.to(device)) for k, v in inputs.items())
         torch_to_int8_onnx(
-            fp32_model=self._original_model,
+            fp32_model=self._original_model.to(device),
             int8_model=model.model,
             q_config=model.q_config,
             save_path=str(output_path),
@@ -550,7 +552,7 @@ class INCModel:
         if "best_configure" in state_dict and state_dict["best_configure"] is not None:
             model = load(state_dict_path, model)
 
-        return model
+        return model.eval()
 
 
 class INCModelForQuestionAnswering(INCModel):

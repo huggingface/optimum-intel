@@ -34,7 +34,7 @@ the flag `--version_2_with_negative`.
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the SQuAD1.0 dataset.
 
 ```bash
-python run_qa.py \
+python run_qa_post_training.py \
     --model_name_or_path distilbert-base-uncased-distilled-squad \
     --dataset_name squad \
     --apply_quantization \
@@ -44,6 +44,8 @@ python run_qa.py \
     --verify_loading \
     --output_dir /tmp/squad_output
 ```
+
+In order to apply dynamic or static, `quantization_approach` must be set to respectively `dynamic` or `static`.
 
 The following example fine-tunes DistilBERT on the SQuAD1.0 dataset while applying knowledge distillation with quantization aware training.
 
@@ -55,7 +57,6 @@ python run_qa.py \
     --generate_teacher_logits \
     --teacher_model_name_or_path distilbert-base-uncased-distilled-squad \
     --apply_quantization \
-    --quantization_approach aware_training \
     --do_train \
     --do_eval \
     --num_train_epochs 1 \
@@ -66,15 +67,13 @@ python run_qa.py \
 
 The distillation process can be accelerated by the flag `--generate_teacher_logits`, which will add an additional step where the teacher outputs will be computed and saved in the training dataset, removing the need to compute the teacher outputs at every training step.
 
-The following example fine-tunes DistilBERT on the SQuAD1.0 dataset while applying magnitude pruning and then applies 
-dynamic quantization as a second step.
+The following example fine-tunes DistilBERT on the SQuAD1.0 dataset while applying magnitude pruning and quantization aware training.
 
 ```bash
 python run_qa.py \
     --model_name_or_path distilbert-base-uncased-distilled-squad \
     --dataset_name squad \
     --apply_quantization \
-    --quantization_approach dynamic \
     --apply_pruning \
     --target_sparsity 0.1 \
     --num_train_epochs 4 \
@@ -84,9 +83,6 @@ python run_qa.py \
     --verify_loading \
     --output_dir /tmp/squad_output
 ```
-
-In order to apply dynamic, static or aware-training quantization, `quantization_approach` must be set to 
-respectively `dynamic`, `static` or `aware_training`.
 
 ## Prune Once For All
 
@@ -128,7 +124,6 @@ python run_qa.py \
     --apply_pruning \
     --pruning_config ../config/prune_pattern_lock.yml \
     --apply_quantization \
-    --quantization_approach aware_training \
     --do_train \
     --do_eval \
     --learning_rate 1e-5 \

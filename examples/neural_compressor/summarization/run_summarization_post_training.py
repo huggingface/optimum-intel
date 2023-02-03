@@ -30,6 +30,7 @@ import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
+from torch.utils.data import DataLoader
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
@@ -44,14 +45,17 @@ from transformers import (
     Seq2SeqTrainingArguments,
     set_seed,
 )
-from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, is_offline_mode
 from transformers.utils.versions import require_version
 
 import evaluate
+from accelerate import Accelerator
 from filelock import FileLock
-from neural_compressor import QuantizationAwareTrainingConfig, WeightPruningConfig
-from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCSeq2SeqTrainer
+from neural_compressor import PostTrainingQuantConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
+from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCQuantizer
+
+
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -288,27 +292,13 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
     )
-    apply_pruning: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to apply pruning."},
+    quantization_approach: str = field(
+        default="dynamic",
+        metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
     )
-    target_sparsity: float = field(
-        default=0.1,
-        metadata={"help": "Targeted sparsity when pruning the model."},
-    )
-    start_step: int = field(
-        default=0,
-        metadata={"help": "step for which the pruning process will start."},
-    )
-    end_step: Optional[int] = field(
-        default=None,
-        metadata={"help": "step for which the pruning process will end."},
-    )
-    pruning_approach: str = field(
-        default="snip_momentum",
-        metadata={
-            "help": "Pruning approach. Supported approaches are snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock."
-        },
+    num_calibration_samples: int = field(
+        default=50,
+        metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
     )
     verify_loading: bool = field(
         default=False,
@@ -378,21 +368,6 @@ def main():
             "You're running a t5 model but didn't provide a source prefix, which is the expected, e.g. with "
             "`--source_prefix 'summarize: ' `"
         )
-
-    # Detecting last checkpoint.
-    last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
@@ -576,7 +551,7 @@ def main():
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
 
-    if training_args.do_train:
+    if optim_args.quantization_approach == "static":
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = raw_datasets["train"]
@@ -651,98 +626,36 @@ def main():
 
         return preds, labels
 
-    def compute_metrics(eval_preds):
-        preds, labels = eval_preds
-        if isinstance(preds, tuple):
-            preds = preds[0]
-        decoded_preds = tokenizer.batch_decode(preds, skip_special_tokens=True)
-        if data_args.ignore_pad_token_for_loss:
-            # Replace -100 in the labels as we can't decode them.
-            labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
-        decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
-
-        # Some simple post-processing
-        decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
-
-        result = metric.compute(predictions=decoded_preds, references=decoded_labels, use_stemmer=True)
-        result = {k: round(v * 100, 4) for k, v in result.items()}
-        prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
-        result["gen_len"] = np.mean(prediction_lens)
-        return result
-
-    quantization_config = None
-    pruning_config = None
-
-    if optim_args.apply_quantization:
-        quantization_config = QuantizationAwareTrainingConfig()
-
-    if optim_args.apply_pruning:
-        if optim_args.end_step is None:
-            end_step = training_args.num_train_epochs * (
-                len(train_dataset) // training_args.per_device_train_batch_size
-            )
-        else:
-            end_step = min(
-                optim_args.end_step,
-                training_args.num_train_epochs * (len(train_dataset) // training_args.per_device_train_batch_size),
-            )
-
-        pruning_config = WeightPruningConfig(
-            start_step=optim_args.start_step,
-            end_step=end_step,
-            target_sparsity=optim_args.target_sparsity,
-            pruning_type=optim_args.pruning_approach,
+    supported_approach = {"static", "dynamic"}
+    if optim_args.quantization_approach not in supported_approach:
+        raise ValueError(
+            f"Unknown quantization approach. Supported approach are {supported_approach}."
+            f"{optim_args.quantization_approach} was given."
         )
 
-    # Initialize our Trainer
-    trainer = INCSeq2SeqTrainer(
-        model=model,
+    quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
+    quantizer = INCQuantizer.from_pretrained(model)
+    if optim_args.quantization_approach == "static":
+        num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
+        train_dataset = train_dataset.select(range(num_calibration_samples))
+        quantization_config.calibration_sampling_size = num_calibration_samples
+
+    quantizer.quantize(
         quantization_config=quantization_config,
-        pruning_config=pruning_config,
-        args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics if training_args.predict_with_generate else None,
+        save_directory=training_args.output_dir,
+        calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
+        batch_size=training_args.per_device_train_batch_size,
     )
-
-    # Training
-    if training_args.do_train:
-        checkpoint = None
-        if training_args.resume_from_checkpoint is not None:
-            checkpoint = training_args.resume_from_checkpoint
-        elif last_checkpoint is not None:
-            checkpoint = last_checkpoint
-        train_result = trainer.train(resume_from_checkpoint=checkpoint)
-        trainer.save_model()  # Saves the tokenizer too for easy upload
-
-        metrics = train_result.metrics
-        max_train_samples = (
-            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
-        )
-        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
-
-        trainer.log_metrics("train", metrics)
-        trainer.save_metrics("train", metrics)
-        trainer.save_state()
-
-    # Embedding quantization is not supported on CUDA backend
-    if optim_args.apply_quantization and (
-        training_args.do_eval or training_args.do_predict or optim_args.verify_loading
-    ):
-        trainer.model.to("cpu")
-
-    if optim_args.apply_quantization and optim_args.verify_loading:
+    model = quantizer._quantized_model
+    if optim_args.verify_loading:
         loaded_model = INCModelForSeq2SeqLM.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         decoder_start_token_id = (
             loaded_model.config.decoder_start_token_id if loaded_model.config.model_type != "mbart" else 2
         )
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
-        trainer.model.eval()
         with torch.no_grad():
-            original_model_outputs = trainer.model(**tokens, **decoder_inputs)
+            original_model_outputs = model(**tokens, **decoder_inputs)
             loaded_model_outputs = loaded_model(**tokens, **decoder_inputs)
             if torch.allclose(original_model_outputs.logits, loaded_model_outputs.logits, atol=1e-4):
                 logger.info("The quantized model was successfully loaded.")
@@ -757,56 +670,43 @@ def main():
         else data_args.val_max_target_length
     )
     num_beams = data_args.num_beams if data_args.num_beams is not None else training_args.generation_num_beams
+
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
-        metrics = trainer.evaluate(max_length=max_length, num_beams=num_beams, metric_key_prefix="eval")
-        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
-
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-
-    if training_args.do_predict:
-        logger.info("*** Predict ***")
-
-        predict_results = trainer.predict(
-            predict_dataset, metric_key_prefix="predict", max_length=max_length, num_beams=num_beams
+        accelerator = Accelerator()
+        eval_dataloader = DataLoader(
+            eval_dataset, collate_fn=data_collator, batch_size=training_args.per_device_eval_batch_size
         )
-        metrics = predict_results.metrics
-        max_predict_samples = (
-            data_args.max_predict_samples if data_args.max_predict_samples is not None else len(predict_dataset)
-        )
-        metrics["predict_samples"] = min(max_predict_samples, len(predict_dataset))
-
-        trainer.log_metrics("predict", metrics)
-        trainer.save_metrics("predict", metrics)
-
-        if trainer.is_world_process_zero():
-            if training_args.predict_with_generate:
-                predictions = tokenizer.batch_decode(
-                    predict_results.predictions, skip_special_tokens=True, clean_up_tokenization_spaces=True
+        model.eval()
+        for step, batch in enumerate(eval_dataloader):
+            with torch.no_grad():
+                generated_tokens = model.generate(
+                    batch["input_ids"],
+                    attention_mask=batch["attention_mask"],
+                    max_length=max_length,
+                    num_beams=num_beams,
                 )
-                predictions = [pred.strip() for pred in predictions]
-                output_prediction_file = os.path.join(training_args.output_dir, "generated_predictions.txt")
-                with open(output_prediction_file, "w") as writer:
-                    writer.write("\n".join(predictions))
+                generated_tokens = accelerator.pad_across_processes(
+                    generated_tokens, dim=1, pad_index=tokenizer.pad_token_id
+                )
+                labels = batch["labels"]
+                generated_tokens, labels = accelerator.gather_for_metrics((generated_tokens, labels))
+                generated_tokens = generated_tokens.cpu().numpy()
+                labels = labels.cpu().numpy()
 
-    kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "summarization"}
-    if data_args.dataset_name is not None:
-        kwargs["dataset_tags"] = data_args.dataset_name
-        if data_args.dataset_config_name is not None:
-            kwargs["dataset_args"] = data_args.dataset_config_name
-            kwargs["dataset"] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
-        else:
-            kwargs["dataset"] = data_args.dataset_name
+                if data_args.ignore_pad_token_for_loss:
+                    # Replace -100 in the labels as we can't decode them.
+                    labels = np.where(labels != -100, labels, tokenizer.pad_token_id)
+                if isinstance(generated_tokens, tuple):
+                    generated_tokens = generated_tokens[0]
+                decoded_preds = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+                decoded_labels = tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-    if data_args.lang is not None:
-        kwargs["language"] = data_args.lang
-
-    if training_args.push_to_hub:
-        trainer.push_to_hub(**kwargs)
-    else:
-        trainer.create_model_card(**kwargs)
+                decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
+                metric.add_batch(predictions=decoded_preds, references=decoded_labels)
+        result = metric.compute(use_stemmer=True)
+        result = {k: round(v * 100, 4) for k, v in result.items()}
+        logger.info(f"Evaluation metrics: {result}")
 
 
 if __name__ == "__main__":

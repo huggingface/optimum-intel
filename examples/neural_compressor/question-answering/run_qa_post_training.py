@@ -44,17 +44,17 @@ from transformers import (
     default_data_collator,
     set_seed,
 )
-from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 import evaluate
 from accelerate import Accelerator
-from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
-from optimum.intel.neural_compressor import INCModelForQuestionAnswering
-from trainer_qa import QuestionAnsweringINCTrainer
+from neural_compressor import PostTrainingQuantConfig
+from optimum.intel.neural_compressor import INCModelForQuestionAnswering, INCQuantizer
 from utils_qa import postprocess_qa_predictions
 
+
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.20.0")
@@ -219,40 +219,13 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
     )
-    apply_pruning: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to apply pruning."},
+    quantization_approach: str = field(
+        default="dynamic",
+        metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
     )
-    target_sparsity: float = field(
-        default=0.1,
-        metadata={"help": "Targeted sparsity when pruning the model."},
-    )
-    start_step: int = field(
-        default=0,
-        metadata={"help": "step for which the pruning process will start."},
-    )
-    end_step: Optional[int] = field(
-        default=None,
-        metadata={"help": "step for which the pruning process will end."},
-    )
-    pruning_approach: str = field(
-        default="snip_momentum",
-        metadata={
-            "help": "Pruning approach. Supported approaches are snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock."
-        },
-    )
-    apply_distillation: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to apply distillation."},
-    )
-    generate_teacher_logits: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to compute and save the teacher's outputs to accelerate training when applying distillation."
-        },
-    )
-    teacher_model_name_or_path: Optional[str] = field(
-        default=False, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
+    num_calibration_samples: int = field(
+        default=50,
+        metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
     )
     verify_loading: bool = field(
         default=False,
@@ -295,21 +268,6 @@ def main():
         + f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
     )
     logger.info(f"Training/evaluation parameters {training_args}")
-
-    # Detecting last checkpoint.
-    last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
@@ -409,18 +367,6 @@ def main():
         else DataCollatorWithPadding(tokenizer, pad_to_multiple_of=8 if training_args.fp16 else None)
     )
 
-    class QAModel(torch.nn.Module):
-        def __init__(self, model):
-            super(QAModel, self).__init__()
-            self.model = model
-
-        def forward(self, *args, **kwargs):
-            outputs = self.model(*args, **kwargs)
-            outputs_reshaped = torch.vstack(
-                [torch.vstack([sx, ex]) for sx, ex in zip(outputs["start_logits"], outputs["end_logits"])]
-            )
-            return outputs_reshaped
-
     # Training preprocessing
     def prepare_train_features(examples):
         # Some of the questions have lots of whitespace on the left, which is not useful and will make the
@@ -499,7 +445,7 @@ def main():
 
         return tokenized_examples
 
-    if training_args.do_train:
+    if optim_args.quantization_approach == "static":
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = raw_datasets["train"]
@@ -521,78 +467,6 @@ def main():
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
 
     accelerator = Accelerator(cpu=training_args.no_cuda)
-
-    def move_input_to_device(input, device):
-        if isinstance(input, torch.Tensor):
-            return input if input.device == device else input.to(device)
-        elif isinstance(input, tuple):
-            return tuple([move_input_to_device(ele, device) for ele in input])
-        elif isinstance(input, list):
-            return [move_input_to_device(ele, device) for ele in input]
-        elif isinstance(input, dict):
-            return {key: move_input_to_device(input[key], device) for key in input}
-        else:
-            raise TypeError("Only inputs types torch.Tensor, tuple, list and dict are supported")
-
-    # get logits of teacher model
-    # declare teacher config and model for distillation
-    teacher_config = None
-    teacher_model = None
-    if optim_args.generate_teacher_logits:
-        if not data_args.pad_to_max_length:
-            raise ValueError("To computes teacher logits, pad_to_max_length must be set to True")
-        teacher_config = AutoConfig.from_pretrained(optim_args.teacher_model_name_or_path)
-        teacher_model = AutoModelForQuestionAnswering.from_pretrained(
-            optim_args.teacher_model_name_or_path,
-            from_tf=bool(".ckpt" in optim_args.teacher_model_name_or_path),
-            config=teacher_config,
-        )
-        teacher_model_qa = QAModel(teacher_model)
-        teacher_model_qa = accelerator.prepare(teacher_model_qa)
-        num_param = lambda model: sum(p.numel() for p in model.parameters())
-        logger.info(
-            "***** Number of teacher model parameters: {:.2f}M *****".format(num_param(teacher_model_qa) / 10**6)
-        )
-        logger.info("***** Number of student model parameters: {:.2f}M *****".format(num_param(model) / 10**6))
-
-        def get_logits(teacher_model_qa, train_dataset):
-            logger.info("***** Getting logits of teacher model *****")
-            logger.info(f"  Num examples = {len(train_dataset) }")
-            logger.info(f"  Batch Size = {training_args.per_device_eval_batch_size }")
-
-            sampler = None
-            if accelerator.num_processes > 1:
-                from transformers.trainer_pt_utils import ShardSampler
-
-                sampler = ShardSampler(
-                    train_dataset,
-                    batch_size=training_args.per_device_eval_batch_size,
-                    num_processes=accelerator.num_processes,
-                    process_index=accelerator.process_index,
-                )
-            train_dataloader = DataLoader(
-                train_dataset,
-                collate_fn=data_collator,
-                sampler=sampler,
-                batch_size=training_args.per_device_eval_batch_size,
-            )
-            train_dataloader = tqdm(train_dataloader, desc="Evaluating")
-            teacher_logits = []
-            for step, batch in enumerate(train_dataloader):
-                batch = move_input_to_device(batch, next(teacher_model_qa.parameters()).device)
-                outputs = teacher_model_qa(**batch).cpu().detach().numpy()
-                if accelerator.num_processes > 1:
-                    outputs_list = [None for i in range(accelerator.num_processes)]
-                    torch.distributed.all_gather_object(outputs_list, outputs)
-                    outputs = np.concatenate(outputs_list, axis=0)
-                teacher_logits += [[s, e] for s, e in zip(outputs[0::2], outputs[1::2])]
-            if accelerator.num_processes > 1:
-                teacher_logits = teacher_logits[: len(train_dataset)]
-
-            return train_dataset.add_column("teacher_logits", teacher_logits)
-
-        with torch.no_grad():
-            train_dataset = get_logits(teacher_model_qa, train_dataset)
 
     # Validation preprocessing
     def prepare_validation_features(examples):
@@ -690,112 +564,78 @@ def main():
 
     metric = evaluate.load("squad_v2" if data_args.version_2_with_negative else "squad")
 
+    # Create and fill numpy array of size len_of_validation_data * max_length_of_output_tensor
+    def create_and_fill_np_array(start_or_end_logits, dataset, max_len):
+        """
+        Create and fill numpy array of size len_of_validation_data * max_length_of_output_tensor
+        Args:
+            start_or_end_logits(:obj:`tensor`):
+                This is the output predictions of the model. We can only enter either start or end logits.
+            eval_dataset: Evaluation dataset
+            max_len(:obj:`int`):
+                The maximum length of the output tensor. ( See the model.eval() part for more details )
+        """
+        step = 0
+        # create a numpy array and fill it with -100.
+        logits_concat = np.full((len(dataset), max_len), -100, dtype=np.float64)
+        # Now since we have create an array now we will populate it with the outputs gathered using accelerator.gather_for_metrics
+        for i, output_logit in enumerate(start_or_end_logits):  # populate columns
+            # We have to fill it such that we have to take the whole tensor and replace it on the newly created array
+            # And after every iteration we have to change the step
+
+            batch_size = output_logit.shape[0]
+            cols = output_logit.shape[1]
+
+            if step + batch_size < len(dataset):
+                logits_concat[step : step + batch_size, :cols] = output_logit
+            else:
+                logits_concat[step:, :cols] = output_logit[: len(dataset) - step]
+
+            step += batch_size
+
+        return logits_concat
+
     def compute_metrics(p: EvalPrediction):
         return metric.compute(predictions=p.predictions, references=p.label_ids)
 
-    quantization_config = None
-    pruning_config = None
-    distillation_config = None
-
-    if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
-        raise ValueError("No optimization activated.")
-
-    if not training_args.do_train and (
-        optim_args.apply_distillation or optim_args.apply_pruning or optim_args.apply_quantization
-    ):
-        raise ValueError("`do_train` must be set to True.")
-
-    if optim_args.apply_quantization:
-        quantization_config = QuantizationAwareTrainingConfig()
-
-    if optim_args.apply_pruning:
-        if optim_args.end_step is None:
-            end_step = training_args.num_train_epochs * (
-                len(train_dataset) // training_args.per_device_train_batch_size
-            )
-        else:
-            end_step = min(
-                optim_args.end_step,
-                training_args.num_train_epochs * (len(train_dataset) // training_args.per_device_train_batch_size),
-            )
-
-        pruning_config = WeightPruningConfig(
-            start_step=optim_args.start_step,
-            end_step=end_step,
-            target_sparsity=optim_args.target_sparsity,
-            pruning_type=optim_args.pruning_approach,
+    supported_approach = {"static", "dynamic"}
+    if optim_args.quantization_approach not in supported_approach:
+        raise ValueError(
+            f"Unknown quantization approach. Supported approach are {supported_approach}."
+            f"{optim_args.quantization_approach} was given."
         )
+    quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
+    if training_args.use_ipex:
+        quantization_config.backend = "ipex"
+        if not training_args.bf16:
+            quantization_config.use_bf16 = False
 
-    if optim_args.apply_distillation:
-        if optim_args.teacher_model_name_or_path is None:
-            raise ValueError("A teacher model is needed to apply distillation.")
-
-        teacher_tokenizer = AutoTokenizer.from_pretrained(optim_args.teacher_model_name_or_path, use_fast=True)
-        if teacher_config is None:
-            teacher_config = AutoConfig.from_pretrained(optim_args.teacher_model_name_or_path)
-        if teacher_model is None:
-            teacher_model = AutoModelForQuestionAnswering.from_pretrained(
-                optim_args.teacher_model_name_or_path,
-                from_tf=bool(".ckpt" in optim_args.teacher_model_name_or_path),
-                config=teacher_config,
-            )
-
-        teacher_model.to(training_args.device)
-
-        if teacher_tokenizer.vocab != tokenizer.vocab:
-            raise ValueError("Teacher model and student model should have same tokenizer.")
-
-        distillation_config = DistillationConfig(teacher_model=teacher_model)
-
-    # Initialize our Trainer
-    trainer = QuestionAnsweringINCTrainer(
-        model=model,
-        task="question-answering",
+    quantizer = INCQuantizer.from_pretrained(model)
+    if optim_args.quantization_approach == "static":
+        num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
+        train_dataset = train_dataset.select(range(num_calibration_samples))
+        quantization_config.calibration_sampling_size = num_calibration_samples
+        if training_args.use_ipex:
+            unused_column_names = ["start_positions", "end_positions"]
+            column_to_remove = []
+            for column in unused_column_names:
+                if column in train_dataset.column_names:
+                    column_to_remove.append(column)
+            train_dataset = train_dataset.remove_columns(column_to_remove)
+    quantizer.quantize(
         quantization_config=quantization_config,
-        pruning_config=pruning_config,
-        distillation_config=distillation_config,
-        args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
-        eval_examples=eval_examples if training_args.do_eval else None,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        post_process_function=post_processing_function,
-        compute_metrics=compute_metrics,
+        save_directory=training_args.output_dir,
+        calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
+        batch_size=training_args.per_device_train_batch_size,
     )
+    tokenizer.save_pretrained(training_args.output_dir)
+    model = quantizer._quantized_model
 
-    # Training
-    if training_args.do_train:
-        checkpoint = None
-        if training_args.resume_from_checkpoint is not None:
-            checkpoint = training_args.resume_from_checkpoint
-        elif last_checkpoint is not None:
-            checkpoint = last_checkpoint
-        train_result = trainer.train(resume_from_checkpoint=checkpoint)
-        trainer.save_model()  # Saves the tokenizer too for easy upload
-
-        metrics = train_result.metrics
-        max_train_samples = (
-            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
-        )
-        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
-
-        trainer.log_metrics("train", metrics)
-        trainer.save_metrics("train", metrics)
-        trainer.save_state()
-
-    # Embedding quantization is not supported on CUDA backend
-    if optim_args.apply_quantization and (
-        training_args.do_eval or training_args.do_predict or optim_args.verify_loading
-    ):
-        trainer.model.to("cpu")
-
-    if optim_args.apply_quantization and optim_args.verify_loading:
+    if optim_args.verify_loading:
         loaded_model = INCModelForQuestionAnswering.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        trainer.model.eval()
         with torch.no_grad():
-            original_model_outputs = trainer.model(**tokens)
+            original_model_outputs = model(**tokens)
             loaded_model_outputs = loaded_model(**tokens)
             if torch.allclose(original_model_outputs["end_logits"], loaded_model_outputs["end_logits"], atol=1e-4):
                 logger.info("The quantized model was successfully loaded.")
@@ -805,37 +645,44 @@ def main():
     # Evaluation
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
-        metrics = trainer.evaluate()
-        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-
-    # Prediction
-    if training_args.do_predict:
-        logger.info("*** Predict ***")
-        results = trainer.predict(predict_dataset, predict_examples)
-        metrics = results.metrics
-        max_predict_samples = (
-            data_args.max_predict_samples if data_args.max_predict_samples is not None else len(predict_dataset)
+        logger.info(f"  Num examples = {len(eval_dataset)}")
+        logger.info(f"  Batch size = {training_args.per_device_eval_batch_size}")
+        eval_dataset_for_model = eval_dataset.remove_columns(["example_id", "offset_mapping"])
+        eval_dataloader = DataLoader(
+            eval_dataset_for_model, collate_fn=data_collator, batch_size=training_args.per_device_eval_batch_size
         )
-        metrics["predict_samples"] = min(max_predict_samples, len(predict_dataset))
-        trainer.log_metrics("predict", metrics)
-        trainer.save_metrics("predict", metrics)
 
-    kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "question-answering"}
-    if data_args.dataset_name is not None:
-        kwargs["dataset_tags"] = data_args.dataset_name
-        if data_args.dataset_config_name is not None:
-            kwargs["dataset_args"] = data_args.dataset_config_name
-            kwargs["dataset"] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
-        else:
-            kwargs["dataset"] = data_args.dataset_name
+        all_start_logits = []
+        all_end_logits = []
+        model.eval()
 
-    if training_args.push_to_hub:
-        trainer.push_to_hub(**kwargs)
-    else:
-        trainer.create_model_card(**kwargs)
+        for step, batch in enumerate(eval_dataloader):
+            with torch.no_grad():
+                outputs = model(**batch)
+                start_logits = outputs.start_logits
+                end_logits = outputs.end_logits
+
+                if not data_args.pad_to_max_length:  # necessary to pad predictions and labels for being gathered
+                    start_logits = accelerator.pad_across_processes(start_logits, dim=1, pad_index=-100)
+                    end_logits = accelerator.pad_across_processes(end_logits, dim=1, pad_index=-100)
+
+                all_start_logits.append(accelerator.gather_for_metrics(start_logits).cpu().numpy())
+                all_end_logits.append(accelerator.gather_for_metrics(end_logits).cpu().numpy())
+
+        max_len = max([x.shape[1] for x in all_start_logits])  # Get the max_length of the tensor
+
+        # concatenate the numpy array
+        start_logits_concat = create_and_fill_np_array(all_start_logits, eval_dataset, max_len)
+        end_logits_concat = create_and_fill_np_array(all_end_logits, eval_dataset, max_len)
+
+        # delete the list of numpy arrays
+        del all_start_logits
+        del all_end_logits
+
+        outputs_numpy = (start_logits_concat, end_logits_concat)
+        prediction = post_processing_function(eval_examples, eval_dataset, outputs_numpy)
+        eval_metric = metric.compute(predictions=prediction.predictions, references=prediction.label_ids)
+        logger.info(f"Evaluation metrics: {eval_metric}")
 
 
 def _mp_fn(index):

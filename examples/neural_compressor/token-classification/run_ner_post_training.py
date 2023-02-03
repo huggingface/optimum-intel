@@ -30,6 +30,7 @@ import numpy as np
 import torch
 import transformers
 from datasets import ClassLabel, load_dataset
+from torch.utils.data import DataLoader
 from transformers import (
     AutoConfig,
     AutoModelForTokenClassification,
@@ -41,14 +42,16 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
-from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 import evaluate
-from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
-from optimum.intel.neural_compressor import INCModelForTokenClassification, INCQuantizer, INCTrainer
+from accelerate import Accelerator
+from neural_compressor import PostTrainingQuantConfig
+from optimum.intel.neural_compressor import INCModelForTokenClassification, INCQuantizer
 
+
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.20.0")
@@ -189,47 +192,16 @@ class OptimizationArguments:
     """
 
     apply_quantization: bool = field(
-        default=False,
+        default=True,
         metadata={"help": "Whether or not to apply quantization."},
+    )
+    quantization_approach: str = field(
+        default="dynamic",
+        metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
     )
     num_calibration_samples: int = field(
         default=50,
         metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
-    )
-    apply_pruning: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to apply pruning."},
-    )
-    target_sparsity: float = field(
-        default=0.1,
-        metadata={"help": "Targeted sparsity when pruning the model."},
-    )
-    start_step: int = field(
-        default=0,
-        metadata={"help": "step for which the pruning process will start."},
-    )
-    end_step: Optional[int] = field(
-        default=None,
-        metadata={"help": "step for which the pruning process will end."},
-    )
-    pruning_approach: str = field(
-        default="snip_momentum",
-        metadata={
-            "help": "Pruning approach. Supported approaches are snip_momentum(default), snip_momentum_progressive, magnitude, magnitude_progressive, gradient, gradient_progressive, snip, snip_progressive and pattern_lock."
-        },
-    )
-    apply_distillation: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to apply distillation."},
-    )
-    generate_teacher_logits: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to compute and save the teacher's outputs to accelerate training when applying distillation."
-        },
-    )
-    teacher_model_name_or_path: Optional[str] = field(
-        default=False, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
     verify_loading: bool = field(
         default=False,
@@ -272,21 +244,6 @@ def main():
         + f"distributed training: {bool(training_args.local_rank != -1)}, 16-bits training: {training_args.fp16}"
     )
     logger.info(f"Training/evaluation parameters {training_args}")
-
-    # Detecting last checkpoint.
-    last_checkpoint = None
-    if os.path.isdir(training_args.output_dir) and training_args.do_train and not training_args.overwrite_output_dir:
-        last_checkpoint = get_last_checkpoint(training_args.output_dir)
-        if last_checkpoint is None and len(os.listdir(training_args.output_dir)) > 0:
-            raise ValueError(
-                f"Output directory ({training_args.output_dir}) already exists and is not empty. "
-                "Use --overwrite_output_dir to overcome."
-            )
-        elif last_checkpoint is not None and training_args.resume_from_checkpoint is None:
-            logger.info(
-                f"Checkpoint detected, resuming training at {last_checkpoint}. To avoid this behavior, change "
-                "the `--output_dir` or add `--overwrite_output_dir` to train from scratch."
-            )
 
     # Set seed before initializing model.
     set_seed(training_args.seed)
@@ -458,7 +415,7 @@ def main():
         tokenized_inputs["labels"] = labels
         return tokenized_inputs
 
-    if training_args.do_train:
+    if optim_args.quantization_approach == "static":
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = raw_datasets["train"]
@@ -488,42 +445,34 @@ def main():
                 desc="Running tokenizer on validation dataset",
             )
 
-    if training_args.do_predict:
-        if "test" not in raw_datasets:
-            raise ValueError("--do_predict requires a test dataset")
-        predict_dataset = raw_datasets["test"]
-        if data_args.max_predict_samples is not None:
-            predict_dataset = predict_dataset.select(range(data_args.max_predict_samples))
-        with training_args.main_process_first(desc="prediction dataset map pre-processing"):
-            predict_dataset = predict_dataset.map(
-                tokenize_and_align_labels,
-                batched=True,
-                num_proc=data_args.preprocessing_num_workers,
-                load_from_cache_file=not data_args.overwrite_cache,
-                desc="Running tokenizer on prediction dataset",
-            )
-
     # Data collator
     data_collator = DataCollatorForTokenClassification(tokenizer, pad_to_multiple_of=8 if training_args.fp16 else None)
 
     # Metrics
     metric = evaluate.load("seqeval")
 
-    def compute_metrics(p):
-        predictions, labels = p
-        predictions = np.argmax(predictions, axis=2)
+    def get_labels(predictions, references):
+        # Transform predictions and references tensos to numpy arrays
+        if training_args.device.type == "cpu":
+            y_pred = predictions.detach().clone().numpy()
+            y_true = references.detach().clone().numpy()
+        else:
+            y_pred = predictions.detach().cpu().clone().numpy()
+            y_true = references.detach().cpu().clone().numpy()
 
         # Remove ignored index (special tokens)
         true_predictions = [
-            [label_list[p] for (p, l) in zip(prediction, label) if l != -100]
-            for prediction, label in zip(predictions, labels)
+            [label_list[p] for (p, l) in zip(pred, gold_label) if l != -100]
+            for pred, gold_label in zip(y_pred, y_true)
         ]
         true_labels = [
-            [label_list[l] for (p, l) in zip(prediction, label) if l != -100]
-            for prediction, label in zip(predictions, labels)
+            [label_list[l] for (p, l) in zip(pred, gold_label) if l != -100]
+            for pred, gold_label in zip(y_pred, y_true)
         ]
+        return true_predictions, true_labels
 
-        results = metric.compute(predictions=true_predictions, references=true_labels)
+    def compute_metrics():
+        results = metric.compute()
         if data_args.return_entity_level_metrics:
             # Unpack nested dictionaries
             final_results = {}
@@ -542,108 +491,38 @@ def main():
                 "accuracy": results["overall_accuracy"],
             }
 
-    quantization_config = None
-    pruning_config = None
-    distillation_config = None
-
-    if not optim_args.apply_quantization and not optim_args.apply_pruning and not optim_args.apply_distillation:
-        raise ValueError("No optimization activated.")
-
-    if not training_args.do_train and (
-        optim_args.apply_distillation or optim_args.apply_pruning or optim_args.apply_quantization
-    ):
-        raise ValueError("`do_train` must be set to True.")
-
-    if optim_args.apply_quantization:
-        quantization_config = QuantizationAwareTrainingConfig()
-
-    if optim_args.apply_pruning:
-        if optim_args.end_step is None:
-            end_step = training_args.num_train_epochs * (
-                len(train_dataset) // training_args.per_device_train_batch_size
-            )
-        else:
-            end_step = min(
-                optim_args.end_step,
-                training_args.num_train_epochs * (len(train_dataset) // training_args.per_device_train_batch_size),
-            )
-
-        pruning_config = WeightPruningConfig(
-            start_step=optim_args.start_step,
-            end_step=end_step,
-            target_sparsity=optim_args.target_sparsity,
-            pruning_type=optim_args.pruning_approach,
+    supported_approach = {"static", "dynamic"}
+    if optim_args.quantization_approach not in supported_approach:
+        raise ValueError(
+            f"Unknown quantization approach. Supported approach are {supported_approach}."
+            f"{optim_args.quantization_approach} was given."
         )
 
-    if optim_args.apply_distillation:
-        if optim_args.teacher_model_name_or_path is None:
-            raise ValueError("A teacher model is needed to apply distillation.")
+    quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
 
-        teacher_model = AutoModelForTokenClassification.from_pretrained(
-            optim_args.teacher_model_name_or_path,
-            from_tf=bool(".ckpt" in optim_args.teacher_model_name_or_path),
-            cache_dir=model_args.cache_dir,
-            revision=model_args.model_revision,
-            use_auth_token=True if model_args.use_auth_token else None,
-        )
+    # Apply post-training quantization
+    quantizer = INCQuantizer.from_pretrained(model)
+    if optim_args.quantization_approach == "static":
+        num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
+        train_dataset = train_dataset.select(range(num_calibration_samples))
+        quantization_config.calibration_sampling_size = num_calibration_samples
 
-        teacher_model.to(training_args.device)
-
-        teacher_tokenizer = AutoTokenizer.from_pretrained(optim_args.teacher_model_name_or_path, use_fast=True)
-        if teacher_tokenizer.vocab != tokenizer.vocab:
-            raise ValueError("Teacher model and student model should have same tokenizer.")
-
-        distillation_config = DistillationConfig(teacher_model=teacher_model)
-
-    # Initialize our Trainer
-    trainer = INCTrainer(
-        model=model,
-        task="token-classification",
+    quantizer.quantize(
         quantization_config=quantization_config,
-        pruning_config=pruning_config,
-        distillation_config=distillation_config,
-        args=training_args,
-        train_dataset=train_dataset if training_args.do_train else None,
-        eval_dataset=eval_dataset if training_args.do_eval else None,
-        tokenizer=tokenizer,
-        data_collator=data_collator,
-        compute_metrics=compute_metrics,
+        save_directory=training_args.output_dir,
+        calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
+        batch_size=training_args.per_device_train_batch_size,
     )
+    tokenizer.save_pretrained(training_args.output_dir)
+    model = quantizer._quantized_model.eval()
 
-    # Training
-    if training_args.do_train:
-        checkpoint = None
-        if training_args.resume_from_checkpoint is not None:
-            checkpoint = training_args.resume_from_checkpoint
-        elif last_checkpoint is not None:
-            checkpoint = last_checkpoint
-        train_result = trainer.train(resume_from_checkpoint=checkpoint)
-        metrics = train_result.metrics
-        trainer.save_model()  # Saves the tokenizer too for easy upload
-
-        max_train_samples = (
-            data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
-        )
-        metrics["train_samples"] = min(max_train_samples, len(train_dataset))
-
-        trainer.log_metrics("train", metrics)
-        trainer.save_metrics("train", metrics)
-        trainer.save_state()
-
-    # Embedding quantization is not supported on CUDA backend
-    if optim_args.apply_quantization and (
-        training_args.do_eval or training_args.do_predict or optim_args.verify_loading
-    ):
-        trainer.model.to("cpu")
-
-    if optim_args.apply_quantization and optim_args.verify_loading:
+    if optim_args.verify_loading:
         loaded_model = INCModelForTokenClassification.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        trainer.model.eval()
         with torch.no_grad():
-            original_model_outputs = trainer.model(**tokens)
-            quantized_model_outputs = loaded_model(**tokens)
-            if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
+            original_model_outputs = model(**tokens)
+            loaded_model_outputs = loaded_model(**tokens)
+            if torch.allclose(original_model_outputs.logits, loaded_model_outputs.logits, atol=1e-4):
                 logger.info("The quantized model was successfully loaded.")
             else:
                 logger.warning("The quantized model was not successfully loaded.")
@@ -651,51 +530,30 @@ def main():
     # Evaluation
     if training_args.do_eval:
         logger.info("*** Evaluate ***")
-
-        metrics = trainer.evaluate()
-
-        max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
-        metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
-
-        trainer.log_metrics("eval", metrics)
-        trainer.save_metrics("eval", metrics)
-
-    # Predict
-    if training_args.do_predict:
-        logger.info("*** Predict ***")
-
-        predictions, labels, metrics = trainer.predict(predict_dataset, metric_key_prefix="predict")
-        predictions = np.argmax(predictions, axis=2)
-
-        # Remove ignored index (special tokens)
-        true_predictions = [
-            [label_list[p] for (p, l) in zip(prediction, label) if l != -100]
-            for prediction, label in zip(predictions, labels)
-        ]
-
-        trainer.log_metrics("predict", metrics)
-        trainer.save_metrics("predict", metrics)
-
-        # Save predictions
-        output_predictions_file = os.path.join(training_args.output_dir, "predictions.txt")
-        if trainer.is_world_process_zero():
-            with open(output_predictions_file, "w") as writer:
-                for prediction in true_predictions:
-                    writer.write(" ".join(prediction) + "\n")
-
-    kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "token-classification"}
-    if data_args.dataset_name is not None:
-        kwargs["dataset_tags"] = data_args.dataset_name
-        if data_args.dataset_config_name is not None:
-            kwargs["dataset_args"] = data_args.dataset_config_name
-            kwargs["dataset"] = f"{data_args.dataset_name} {data_args.dataset_config_name}"
-        else:
-            kwargs["dataset"] = data_args.dataset_name
-
-    if training_args.push_to_hub:
-        trainer.push_to_hub(**kwargs)
-    else:
-        trainer.create_model_card(**kwargs)
+        model.eval()
+        accelerator = Accelerator()
+        quantizer._signature_columns += ["label", "label_ids", "labels"]
+        eval_dataset = quantizer._remove_unused_columns(eval_dataset)
+        eval_dataloader = DataLoader(
+            eval_dataset, collate_fn=data_collator, batch_size=training_args.per_device_eval_batch_size
+        )
+        samples_seen = 0
+        for step, batch in enumerate(eval_dataloader):
+            with torch.no_grad():
+                outputs = model(**batch)
+            predictions = outputs.logits.argmax(dim=-1)
+            labels = batch["labels"]
+            predictions_gathered, labels_gathered = accelerator.gather((predictions, labels))
+            if accelerator.num_processes > 1:
+                if step == len(eval_dataloader) - 1:
+                    predictions_gathered = predictions_gathered[: len(eval_dataloader.dataset) - samples_seen]
+                    labels_gathered = labels_gathered[: len(eval_dataloader.dataset) - samples_seen]
+                else:
+                    samples_seen += labels_gathered.shape[0]
+            preds, refs = get_labels(predictions_gathered, labels_gathered)
+            metric.add_batch(predictions=preds, references=refs)
+        eval_metric = compute_metrics()
+        logger.info(f"Evaluation metrics: {eval_metric}")
 
 
 def _mp_fn(index):

@@ -28,7 +28,7 @@ For pruning, we support snip_momentum(default), snip_momentum_progressive, magni
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the CoNLL-2003 task.
 
 ```bash
-python run_ner.py \
+python run_ner_post_training.py \
     --model_name_or_path elastic/distilbert-base-uncased-finetuned-conll03-english \
     --dataset_name conll2003 \
     --apply_quantization \
@@ -38,6 +38,7 @@ python run_ner.py \
     --verify_loading \
     --output_dir /tmp/conll03_output
 ```
+In order to apply dynamic or static, `quantization_approach` must be set to respectively `dynamic` or `static`.
 
 The following example fine-tunes DistilBERT on the CoNLL-2003 task while applying knowledge distillation with quantization aware training.
 
@@ -48,7 +49,6 @@ python run_ner.py \
     --apply_distillation \
     --teacher_model_name_or_path elastic/distilbert-base-uncased-finetuned-conll03-english \
     --apply_quantization \
-    --quantization_approach aware_training \
     --num_train_epochs 1 \
     --max_train_samples 100 \
     --do_train \
@@ -57,15 +57,13 @@ python run_ner.py \
     --output_dir /tmp/conll03_output
 ```
 
-The following example fine-tunes DistilBERT on the CoNLL-2003 task while applying magnitude pruning and then applies 
-dynamic quantization as a second step.
+The following example fine-tunes DistilBERT on the CoNLL-2003 task while applying magnitude pruning.
 
 ```bash
 python run_ner.py \
     --model_name_or_path elastic/distilbert-base-uncased-finetuned-conll03-english \
     --dataset_name conll2003 \
     --apply_quantization \
-    --quantization_approach dynamic \
     --apply_pruning \
     --target_sparsity 0.1 \
     --num_train_epochs 4 \
@@ -75,9 +73,5 @@ python run_ner.py \
     --verify_loading \
     --output_dir /tmp/conll03_output
 ```
-
-In order to apply dynamic, static or aware-training quantization, `quantization_approach` must be set to respectively 
-`dynamic`, `static` or `aware_training`.
-
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.

@@ -31,7 +31,7 @@ tar xvf IAM.tar.gz
 ## Run Command
 The following example applies post-training static quantization on TrOCR small fine-tuned on the IAM dataset. This tuning process will take a long time. If you want to get a quantized model quickly, but do not care about the accuracy, you can set --tolerance_criterion larger or --max_eval_samples small. The default value of tolerance_criterion is 0.01, and max_eval_samples is None(None means the entire datasets).
 ```bash
-python run_ocr.py \
+python run_ocr_post_training.py \
     --model_name_or_path microsoft/trocr-small-handwritten \
     --datasets_dir IAM \
     --apply_quantization \

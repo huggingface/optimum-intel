@@ -50,11 +50,8 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 import evaluate
-from neural_compressor import PostTrainingQuantConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
-from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCQuantizer, INCSeq2SeqTrainer
-
-
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
+from neural_compressor import QuantizationAwareTrainingConfig, WeightPruningConfig
+from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCSeq2SeqTrainer
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -253,14 +250,6 @@ class OptimizationArguments:
     apply_quantization: bool = field(
         default=False,
         metadata={"help": "Whether or not to apply quantization."},
-    )
-    quantization_approach: str = field(
-        default="dynamic",
-        metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
-    )
-    num_calibration_samples: int = field(
-        default=50,
-        metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
     )
     apply_pruning: bool = field(
         default=False,
@@ -498,7 +487,7 @@ def main():
         model_inputs["labels"] = labels["input_ids"]
         return model_inputs
 
-    if training_args.do_train or (optim_args.apply_quantization and optim_args.quantization_approach == "static"):
+    if training_args.do_train:
         if "train" not in raw_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = raw_datasets["train"]
@@ -587,28 +576,9 @@ def main():
 
     quantization_config = None
     pruning_config = None
-    distillation_config = None
-
-    if not optim_args.apply_quantization and not optim_args.apply_pruning:
-        raise ValueError("No optimization activated.")
-
-    if not training_args.do_train and (
-        optim_args.apply_pruning
-        or (optim_args.apply_quantization and optim_args.quantization_approach == "aware_training")
-    ):
-        raise ValueError("`do_train` must be set to True.")
 
     if optim_args.apply_quantization:
-        supported_approach = {"static", "dynamic", "aware_training"}
-        if optim_args.quantization_approach not in supported_approach:
-            raise ValueError(
-                f"Unknown quantization approach. Supported approach are {supported_approach}."
-                f"{optim_args.quantization_approach} was given."
-            )
-        if optim_args.quantization_approach == "aware_training":
-            quantization_config = QuantizationAwareTrainingConfig()
-        else:
-            quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
+        quantization_config = QuantizationAwareTrainingConfig()
 
     if optim_args.apply_pruning:
         if optim_args.end_step is None:
@@ -631,7 +601,7 @@ def main():
     # Initialize our Trainer
     trainer = INCSeq2SeqTrainer(
         model=model,
-        quantization_config=quantization_config if optim_args.quantization_approach == "aware_training" else None,
+        quantization_config=quantization_config,
         pruning_config=pruning_config,
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
@@ -661,21 +631,12 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic"}:
-        model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
-        quantizer = INCQuantizer.from_pretrained(model)
-        if optim_args.quantization_approach == "static":
-            num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
-            train_dataset = train_dataset.select(range(num_calibration_samples))
-            quantization_config.calibration_sampling_size = num_calibration_samples
+    # Embedding quantization is not supported on CUDA backend
+    if optim_args.apply_quantization and (
+        training_args.do_eval or training_args.do_predict or optim_args.verify_loading
+    ):
+        trainer.model.to("cpu")
 
-        quantizer.quantize(
-            quantization_config=quantization_config,
-            save_directory=training_args.output_dir,
-            calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
-            batch_size=training_args.per_device_train_batch_size,
-        )
-        trainer.model = quantizer._quantized_model
     if optim_args.apply_quantization and optim_args.verify_loading:
         loaded_model = INCModelForSeq2SeqLM.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
@@ -683,10 +644,11 @@ def main():
             loaded_model.config.decoder_start_token_id if loaded_model.config.model_type != "mbart" else 2
         )
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
+        trainer.model.eval()
         with torch.no_grad():
             original_model_outputs = trainer.model(**tokens, **decoder_inputs)
-            quantized_model_outputs = loaded_model(**tokens, **decoder_inputs)
-            if torch.allclose(original_model_outputs.logits, quantized_model_outputs.logits, atol=1e-4):
+            loaded_model_outputs = loaded_model(**tokens, **decoder_inputs)
+            if torch.allclose(original_model_outputs.logits, loaded_model_outputs.logits, atol=1e-4):
                 logger.info("The quantized model was successfully loaded.")
             else:
                 logger.warning("The quantized model was not successfully loaded.")
@@ -705,7 +667,6 @@ def main():
         metrics = trainer.evaluate(max_length=max_length, num_beams=num_beams, metric_key_prefix="eval")
         max_eval_samples = data_args.max_eval_samples if data_args.max_eval_samples is not None else len(eval_dataset)
         metrics["eval_samples"] = min(max_eval_samples, len(eval_dataset))
-
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 

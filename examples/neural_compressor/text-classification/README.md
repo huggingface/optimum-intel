@@ -30,7 +30,7 @@ For pruning, we support snip_momentum(default), snip_momentum_progressive, magni
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the sst-2 task.
 
 ```bash
-python run_glue.py \
+python run_glue_post_training.py \
     --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english \
     --task_name sst2 \
     --apply_quantization \
@@ -40,6 +40,7 @@ python run_glue.py \
     --verify_loading \
     --output_dir /tmp/sst2_output
 ```
+In order to apply dynamic or static, `quantization_approach` must be set to respectively `dynamic` or `static`.
 
 The following example fine-tunes DistilBERT on the sst-2 task while applying knowledge distillation with quantization aware training.
 
@@ -50,7 +51,6 @@ python run_glue.py \
     --apply_distillation \
     --teacher_model_name_or_path distilbert-base-uncased-finetuned-sst-2-english \
     --apply_quantization \
-    --quantization_approach aware_training \
     --num_train_epochs 1 \
     --max_train_samples 100 \
     --do_train \
@@ -59,15 +59,12 @@ python run_glue.py \
     --output_dir /tmp/sst2_output
 ```
 
-The following example fine-tunes DistilBERT on the sst-2 task while applying magnitude pruning and then applies 
-dynamic quantization as a second step.
+The following example fine-tunes DistilBERT on the sst-2 task while applying magnitude pruning:
 
 ```bash
 python run_glue.py \
     --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english \
     --task_name sst2 \
-    --apply_quantization \
-    --quantization_approach dynamic \
     --apply_pruning \
     --target_sparsity 0.1 \
     --num_train_epochs 4 \
@@ -79,9 +76,6 @@ python run_glue.py \
     --overwrite_output_dir
 ```
 
-In order to apply dynamic, static or aware-training quantization, `quantization_approach` must be set to 
-respectively `dynamic`, `static` or `aware_training`.
-
 ### Prune Once For All
 
 The following example demonstrate the steps of reproducing Prune Once For All examples results on the sst-2 task.
@@ -92,7 +86,7 @@ For more informations of Prune Once For All, please refer to the paper [Prune On
 
 ```bash
 # for stage 1
-python run_glue.py \
+python run_glue_during_training_optimization.py \
     --model_name_or_path Intel/distilbert-base-uncased-sparse-90-unstructured-pruneofa \
     --task_name sst2 \
     --apply_distillation \
@@ -112,7 +106,7 @@ python run_glue.py \
     --output_dir /tmp/sst2_output_stage1
 
 # for stage 2
-python run_glue.py \
+python run_glue_during_training_optimization.py \
     --model_name_or_path /tmp/sst2_output_stage1 \
     --task_name sst2 \
     --apply_distillation \
@@ -120,7 +114,6 @@ python run_glue.py \
     --apply_pruning \
     --pruning_config ../config/prune_pattern_lock.yml \
     --apply_quantization \
-    --quantization_approach aware_training \
     --do_train \
     --do_eval \
     --learning_rate 1e-6 \
