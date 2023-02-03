@@ -595,6 +595,7 @@ class OVTrainer(Trainer):
         model_inputs = config.generate_dummy_inputs(framework="pt")
         device = model.device
         model_inputs = dict((k, v.to(device)) for k, v in model_inputs.items())
+
         with torch.no_grad():
             model.eval()
             # Disable node additions to be exported in the graph
