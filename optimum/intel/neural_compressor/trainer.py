@@ -130,7 +130,6 @@ class INCTrainer(Trainer):
         self.model.config.framework = "pytorch_fx"
         self.model.config.backend = "default"
         self.model.config.architectures = [self.model.__class__.__name__]
-        self.config = getattr(self.model, "config", None)
 
         self._set_signature_columns_if_needed()
 
@@ -540,8 +539,8 @@ class INCTrainer(Trainer):
         output_model_file = os.path.join(output_dir, WEIGHTS_NAME)
 
         # Save the config
-        if self.config is not None:
-            self.config.save_pretrained(output_dir)
+        if self.model.config is not None:
+            self.model.config.save_pretrained(output_dir)
 
         if self.tokenizer is not None:
             self.tokenizer.save_pretrained(output_dir)
@@ -559,12 +558,12 @@ class INCTrainer(Trainer):
         # Export the compressed model to the ONNX format
         if save_onnx_model:
             self._set_task()
-            model_type = self.config.model_type.replace("_", "-")
+            model_type = self.model.config.model_type.replace("_", "-")
             model_name = getattr(self.model, "name", None)
             onnx_config_class = TasksManager.get_exporter_config_constructor(
                 exporter="onnx", model=self.model, task=self.task, model_type=model_type, model_name=model_name
             )
-            onnx_config = onnx_config_class(self.config)
+            onnx_config = onnx_config_class(self.model.config)
             output_onnx_path = os.path.join(output_dir, ONNX_WEIGHTS_NAME)
 
             signature_columns = copy.deepcopy(self._signature_columns)
@@ -741,22 +740,29 @@ class INCTrainer(Trainer):
         ignore_keys: Optional[List[str]] = None,
         metric_key_prefix: str = "eval",
     ) -> Dict[str, float]:
-        if (
-            hasattr(self.model, "model")
-            and hasattr(self.model.model, "config")
-            and getattr(self.model.model.config, "backend", None) == "ipex"
-        ):
+        if self.quantization_config is not None:
+            logger.warning("Evaluation of quantized models is not supported by the CUDA backend.")
+            self.model.to("cpu")
+        if getattr(self.model.config, "backend", None) == "ipex":
             self.args.use_ipex = False
             self.args.bf16 = False
             self.use_cpu_amp = False
-
-        if self.config is not None and getattr(self.config, "torch_dtype", None) == "int8":
-            if getattr(self.config, "framework", None) in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
-                logger.warn(
-                    f"{self.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
-                )
-                self.use_cpu_amp = False
+        if (
+            getattr(self.model.config, "torch_dtype", None) == "int8"
+            and getattr(self.model.config, "framework", None) in {"pytorch", "pytorch_fx"}
+            and self.use_cpu_amp
+        ):
+            logger.warn(
+                f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
+            )
+            self.use_cpu_amp = False
         return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
+
+    def predict(self, *args, **kwargs):
+        if self.quantization_config is not None:
+            logger.warning("Evaluation of quantized models is not supported by the CUDA backend.")
+            self.model.to("cpu")
+        return super().predict(*args, **kwargs)
 
     def get_model_sparsity(self):
         sparsity = 0.0
