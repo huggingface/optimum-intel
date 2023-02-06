@@ -49,6 +49,7 @@ from transformers.utils import is_sagemaker_mp_enabled, logging
 
 from neural_compressor.experimental.export import torch_to_fp32_onnx, torch_to_int8_onnx
 
+from ..utils.import_utils import is_neural_compressor_version
 from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 
 
@@ -115,6 +116,11 @@ class INCTrainer(Trainer):
             optimizers,
             preprocess_logits_for_metrics,
         )
+
+        if self.args.device.type == "cuda" and not is_neural_compressor_version(">", "2.0.0"):
+            raise ImportError(
+                "Neural Compressor version must be > 2.0.0 to train on CUDA devices. Please update Neural Compressor."
+            )
 
         inc_config = []
         self.task = task

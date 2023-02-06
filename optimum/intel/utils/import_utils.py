@@ -38,11 +38,11 @@ if _transformers_available:
         _transformers_available = False
 
 
-_neural_compressor_available = importlib.util.find_spec("neural-compressor") is not None
+_neural_compressor_available = importlib.util.find_spec("neural_compressor") is not None
 _neural_compressor_version = "N/A"
 if _neural_compressor_available:
     try:
-        _neural_compressor_version = importlib_metadata.version("neural-compressor")
+        _neural_compressor_version = importlib_metadata.version("neural_compressor")
     except importlib_metadata.PackageNotFoundError:
         _neural_compressor_available = False
 
@@ -109,3 +109,21 @@ def is_transformers_version(operation: str, version: str):
     if not _transformers_available:
         return False
     return compare_versions(parse(_transformers_version), operation, version)
+
+
+def is_neural_compressor_version(operation: str, version: str):
+    """
+    Compare the current Neural Compressor version to a given reference with an operation.
+    """
+    if not _neural_compressor_available:
+        return False
+    return compare_versions(parse(_neural_compressor_version), operation, version)
+
+
+def is_openvino_version(operation: str, version: str):
+    """
+    Compare the current OpenVINO version to a given reference with an operation.
+    """
+    if not _openvino_available:
+        return False
+    return compare_versions(parse(_openvino_version), operation, version)
