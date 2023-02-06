@@ -139,7 +139,7 @@ class OVTrainerTest(unittest.TestCase):
             trainer = OVTrainer(
                 model=model,
                 ov_config=ov_config,
-                feature="sequence-classification",
+                task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
                 train_dataset=train_dataset,
                 eval_dataset=eval_dataset,

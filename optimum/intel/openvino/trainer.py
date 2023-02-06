@@ -107,6 +107,7 @@ class OVTrainer(Trainer):
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
         ov_config: Optional[OVConfig] = None,
+        task: Optional[str] = None,
         feature: Optional[str] = None,
     ):
         super().__init__(
@@ -124,11 +125,15 @@ class OVTrainer(Trainer):
         )
 
         self.ov_config = ov_config
-        self.feature = feature
+        if feature is not None:
+            logger.warning("`feature` is deprecated and will be removed in a future version. Use `task` instead.")
+            if task is not None and task != feature:
+                logger.warning(f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export.")
+        self.task = task or feature
         self.compression_controller = None
 
         if self.ov_config is not None and self.args.do_train:
-            self._set_feature()
+            self._set_task()
             train_dataloader = self.get_train_dataloader()
             model_inputs = next(iter(train_dataloader))
             for label_name in self.label_names:
@@ -545,7 +550,7 @@ class OVTrainer(Trainer):
             onnx_config_class = TasksManager.get_exporter_config_constructor(
                 exporter="onnx",
                 model=self.model,
-                task=self.feature,
+                task=self.task,
                 model_type=model_type,
             )
             onnx_config = onnx_config_class(self.model.config)
@@ -559,16 +564,14 @@ class OVTrainer(Trainer):
             compress_quantize_weights_transformation(model)
             openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
 
-    def _set_feature(self):
-        if self.feature is None:
-            raise ValueError(
-                "The model feature defining the model topology needs to be specified for the ONNX export."
-            )
-        elif self.feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-            self.feature = "sequence-classification"
-        elif self.feature in ["feature-extraction", "fill-mask"]:
-            self.feature = "default"
-
+    def _set_task(self):
+        if self.task is None:
+            raise ValueError("The model task defining the model topology needs to be specified for the ONNX export.")
+        elif self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+            self.task = "sequence-classification"
+        elif self.task in ["feature-extraction", "fill-mask"]:
+            self.task = "default"
+    
     def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, ov_config: OVConfig, f: Union[str, io.BytesIO]):
         openvino_version = version.parse(version.parse(_openvino_version).base_version)
         is_openvino_version_greater_2022_2_0 = openvino_version > version.Version("2022.2.0")

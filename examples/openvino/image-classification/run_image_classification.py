@@ -348,7 +348,7 @@ def main():
     trainer = OVTrainer(
         model=model,
         ov_config=ov_config,
-        feature="image-classification",
+        task="image-classification",
         args=training_args,
         train_dataset=dataset["train"] if training_args.do_train else None,
         eval_dataset=dataset["validation"] if training_args.do_eval else None,

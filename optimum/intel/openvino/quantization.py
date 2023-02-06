@@ -66,18 +66,26 @@ class OVQuantizer(OptimumQuantizer):
     Handle the NNCF quantization process.
     """
 
-    def __init__(self, model: transformers.PreTrainedModel, **kwargs):
+    def __init__(self, model: transformers.PreTrainedModel, task: Optional[str] = None, seed: int = 42, **kwargs):
         """
         Args:
             model (`transformers.PreTrainedModel`):
                 The [PreTrainedModel](https://huggingface.co/docs/transformers/main_classes/model#transformers.PreTrainedModel) to quantize.
+            task (`str`, defaults to None):
+                The task defining the model topology used for the ONNX export.
             seed (`int`, defaults to 42):
                 The random seed to use when shuffling the calibration dataset.
         """
         super().__init__()
         self.model = model
-        self.seed = kwargs.pop("seed", 42)
-        self.feature = kwargs.pop("feature", None)
+        feature = kwargs.pop("feature", None)
+        if feature is not None:
+            logger.warning("`feature` is deprecated and will be removed in a future version. Use `task` instead.")
+            if task is not None and task != feature:
+                logger.warning(
+                    f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export."
+                )
+        self.task = task or feature
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
         self._export_input_names = [
@@ -144,14 +152,14 @@ class OVQuantizer(OptimumQuantizer):
         )
         controller.prepare_for_export()
 
-        self._set_feature()
+        self._set_task()
 
         self.model.config.save_pretrained(save_directory)
         model_type = self.model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",
             model=self.model,
-            task=self.feature,
+            task=self.task,
             model_type=model_type,
         )
         onnx_config = onnx_config_class(self.model.config)
@@ -220,18 +228,20 @@ class OVQuantizer(OptimumQuantizer):
             )
             model.enable_dynamic_graph_building()
 
-    def _set_feature(self):
-        if self.feature is None:
-            self.feature = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
-            if self.feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-                self.feature = "sequence-classification"
-            elif self.feature in ["feature-extraction", "fill-mask"]:
-                self.feature = "default"
-            elif self.feature == "text-generation":
-                self.feature = "causal-lm"
-            elif self.feature is None:
-                raise ValueError("The feature could not be extracted and needs to be specified for the ONNX export.")
-        if self.feature in ["seq2seq-lm", "translation", "summarization"]:
+    def _set_task(self):
+        if self.task is None:
+            self.task = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
+            if self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+                self.task = "sequence-classification"
+            elif self.task in ["feature-extraction", "fill-mask"]:
+                self.task = "default"
+            elif self.task == "text-generation":
+                self.task = "causal-lm"
+            elif self.task is None:
+                raise ValueError(
+                    "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
+                )
+        if self.task in ["seq2seq-lm", "translation", "summarization"]:
             raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(

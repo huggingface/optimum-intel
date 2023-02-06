@@ -607,7 +607,7 @@ def main():
     trainer = QuestionAnsweringOVTrainer(
         model=model,
         ov_config=ov_config,
-        feature="question-answering",
+        task="question-answering",
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,
