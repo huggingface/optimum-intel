@@ -1,0 +1,29 @@
+Use Python Launcher to Run Optimum-Intel Optimization with Intel Neural Compressor
+=====
+
+Users can use Python **Launcher** and run the Python model code as it is with automatic enabling of Optimum-Intel optimizations by using Python **Launcher** design.
+
+## Quick-Start
+
+Example: Let's run an NLP model using ```run_glue.py``` from HuggingFace transformers [examples](https://github.com/huggingface/transformers/blob/v4.26-release/examples/pytorch/text-classification/run_glue.py).
+
+Pre-requisites:
+```bash
+pip install transformers torch datasets
+```
+
+Generally we run this code with a Python command line like this:
+```bash
+python run_glue.py --model_name_or_path bert-base-cased --task_name mrpc --do_eval --output_dir result
+```
+
+With Python **Launcher**, users can easily enjoy optimizations by simply adding an inline prefix:
+```bash
+-m optimum.intel.neural_compressor.launcher
+```
+to the Python command line, and everything else remains the same:
+```bash
+python -m optimum.intel.neural_compressor.launcher run_glue.py --model_name_or_path bert-base-cased --task_name mrpc --do_eval --output_dir result
+```
+
+This will run ```run_glue.py``` with the default Optimum-Intel optimization automatically enabled, while everything else (e.g. your input arguments for the code itself) remains the same as the original code.
