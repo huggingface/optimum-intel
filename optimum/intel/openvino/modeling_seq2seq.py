@@ -176,14 +176,12 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.auto_model_class.register(AutoConfig, self.__class__)
 
     def to(self, device: str):
-        self._device = device
-        self.encoder._device = device
-        self.decoder._device = device
-        self.encoder.request = None
-        self.decoder.request = None
+        self._device = device.upper()
+        self.encoder._device = self._device
+        self.decoder._device = self._device
         if self.use_cache:
-            self.decoder_with_past._device = device
-            self.decoder_with_past.request = None
+            self.decoder_with_past._device = self._device
+        self.clear_requests()
         return self
 
     @add_start_docstrings_to_model_forward(

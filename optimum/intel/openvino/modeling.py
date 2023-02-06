@@ -104,7 +104,7 @@ class OVModel(OVBaseModel):
         self.device = torch.device("cpu")
 
     def to(self, device: str):
-        self._device = device
+        self._device = device.upper()
         self.request = None
         return self
 

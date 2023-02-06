@@ -72,7 +72,7 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
         model.reshape(1, 16)
         model.half()
-        model.to("CPU")
+        model.to("cpu")
         pipe = pipeline(
             "text-classification",
             model=model,
