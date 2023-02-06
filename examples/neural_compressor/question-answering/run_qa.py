@@ -773,26 +773,20 @@ def main():
             checkpoint = last_checkpoint
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         trainer.save_model()  # Saves the tokenizer too for easy upload
-
         metrics = train_result.metrics
         max_train_samples = (
             data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
         )
         metrics["train_samples"] = min(max_train_samples, len(train_dataset))
-
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    # Embedding quantization is not supported on CUDA backend
-    if optim_args.apply_quantization and (
-        training_args.do_eval or training_args.do_predict or optim_args.verify_loading
-    ):
-        trainer.model.to("cpu")
-
     if optim_args.apply_quantization and optim_args.verify_loading:
         loaded_model = INCModelForQuestionAnswering.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
+        # Quantized models inference is not supported by the CUDA backend
+        trainer.model.to("cpu")
         trainer.model.eval()
         with torch.no_grad():
             original_model_outputs = trainer.model(**tokens)
