@@ -54,6 +54,10 @@ from neural_compressor import QuantizationAwareTrainingConfig, WeightPruningConf
 from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCSeq2SeqTrainer
 
 
+# Will be removed when neural-compressor next release is out 
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.20.0")
 
