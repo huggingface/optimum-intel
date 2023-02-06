@@ -38,6 +38,7 @@ from openvino.runtime import Core
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
+
 from .configuration import OVConfig
 from .utils import (
     MAX_ONNX_OPSET,
