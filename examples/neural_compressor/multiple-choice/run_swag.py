@@ -48,7 +48,8 @@ from transformers.utils.versions import require_version
 from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
 from optimum.intel.neural_compressor import INCModelForMultipleChoice, INCTrainer
 
-# Will be removed when neural-compressor next release is out 
+
+# Will be removed when neural-compressor next release is out
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 

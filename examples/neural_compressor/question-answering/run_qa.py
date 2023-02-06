@@ -56,7 +56,7 @@ from trainer_qa import QuestionAnsweringINCTrainer
 from utils_qa import postprocess_qa_predictions
 
 
-# Will be removed when neural-compressor next release is out 
+# Will be removed when neural-compressor next release is out
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 

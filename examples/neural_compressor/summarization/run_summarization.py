@@ -54,7 +54,7 @@ from neural_compressor import QuantizationAwareTrainingConfig, WeightPruningConf
 from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCSeq2SeqTrainer
 
 
-# Will be removed when neural-compressor next release is out 
+# Will be removed when neural-compressor next release is out
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 
