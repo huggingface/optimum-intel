@@ -74,6 +74,17 @@ loaded_model_from_hub = INCModelForSequenceClassification.from_pretrained(
 
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
+#### One-click acceleration with launcher
+
+Users can use our Python launcher design to run the Python model code as it is with automatic enabling of the optimization. For example,
+
+```bash
+python -m optimum.intel.neural_compressor.launcher run_glue.py --model_name_or_path bert-base-cased --task_name mrpc --do_eval --output_dir result
+```
+
+For more details, please refer to this [guide](./examples/neural_compressor/launcher/PythonLauncher.md).
+
+
 ## OpenVINO
 
 Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework to accelerate inference.
