@@ -86,6 +86,7 @@ class OVQuantizer(OptimumQuantizer):
                     f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export."
                 )
         self.task = task or feature
+        self.seed = seed
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
         self._export_input_names = [

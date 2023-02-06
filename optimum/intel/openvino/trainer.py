@@ -128,7 +128,9 @@ class OVTrainer(Trainer):
         if feature is not None:
             logger.warning("`feature` is deprecated and will be removed in a future version. Use `task` instead.")
             if task is not None and task != feature:
-                logger.warning(f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export.")
+                logger.warning(
+                    f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export."
+                )
         self.task = task or feature
         self.compression_controller = None
 
@@ -571,7 +573,7 @@ class OVTrainer(Trainer):
             self.task = "sequence-classification"
         elif self.task in ["feature-extraction", "fill-mask"]:
             self.task = "default"
-    
+
     def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, ov_config: OVConfig, f: Union[str, io.BytesIO]):
         openvino_version = version.parse(version.parse(_openvino_version).base_version)
         is_openvino_version_greater_2022_2_0 = openvino_version > version.Version("2022.2.0")
