@@ -136,6 +136,7 @@ class OVQuantizer(OptimumQuantizer):
         >>> OVQuantizer.from_pretrained(model, task="text-classification")
         >>> quantizer.quantize(calibration_dataset=calibration_dataset, save_directory="./quantized_model")
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
+        ```
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
