@@ -127,6 +127,15 @@ class OVQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether or not to remove the columns unused by the model forward method.
+
+        Example:
+        ```python
+        >>> from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
+        >>> from transformers import AutoModelForSequenceClassification
+        >>> model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
+        >>> OVQuantizer.from_pretrained(model, task="text-classification")
+        >>> quantizer.quantize(calibration_dataset=calibration_dataset, save_directory="./quantized_model")
+        >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
