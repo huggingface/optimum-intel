@@ -76,7 +76,7 @@ class OVBaseModel(OptimizedModel):
     ):
         self.config = config
         self.model_save_dir = model_save_dir
-        self._device = kwargs.get("device", "CPU")
+        self._device = kwargs.get("device", "CPU").upper()
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
         self.preprocessors = kwargs.get("preprocessors", [])
@@ -158,12 +158,12 @@ class OVBaseModel(OptimizedModel):
             use_auth_token (`str` or `bool`):
                 The token to use as HTTP bearer authorization for remote files. Needed to load models from a private
                 repository.
-            revision (`str`):
+            revision (`str`, *optional*):
                 The specific model version to use. It can be a branch name, a tag name, or a commit id.
             cache_dir (`Union[str, Path]`, *optional*):
                 The path to a directory in which a downloaded pretrained model configuration should be cached if the
                 standard cache should not be used.
-            force_download (`bool`, *optional*, defaults to `False`):
+            force_download (`bool`, defaults to `False`):
                 Whether or not to force the (re-)download of the model weights and configuration files, overriding the
                 cached versions if they exist.
             file_name(`str`, *optional*):
@@ -172,7 +172,6 @@ class OVBaseModel(OptimizedModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
-
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
 

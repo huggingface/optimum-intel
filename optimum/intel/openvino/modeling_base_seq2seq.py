@@ -65,7 +65,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.config = config
         self.use_cache = decoder_with_past is not None
         self.model_save_dir = kwargs.get("model_save_dir")
-        self._device = kwargs.get("device", "CPU")
+        self._device = kwargs.get("device", "CPU").upper()
         self.is_dynamic = kwargs.get("dynamic_shapes", True)
         self.preprocessors = kwargs.get("preprocessors", [])
         self.ov_config = {}

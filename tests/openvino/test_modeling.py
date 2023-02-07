@@ -103,8 +103,9 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_load_from_hub_and_save_seq2seq_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForSeq2SeqLM.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID)
+        loaded_model = OVModelForSeq2SeqLM.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        loaded_model.to("cpu")
         loaded_model_outputs = loaded_model.generate(**tokens)
 
         with tempfile.TemporaryDirectory() as tmpdirname:
@@ -113,7 +114,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertTrue(OV_ENCODER_NAME in folder_contents)
             self.assertTrue(OV_DECODER_NAME in folder_contents)
             self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
-            model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname)
+            model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, device="cpu")
 
         outputs = model.generate(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs, outputs))
@@ -158,6 +159,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         if model_arch == "bert":
             # Test FP16 conversion
             model.half()
+            model.to("cpu")
             model.compile()
             outputs = pipe(text)
             self.assertGreaterEqual(outputs[0]["score"], 0.0)
