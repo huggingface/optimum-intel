@@ -236,7 +236,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
     ) -> Dict:
         return {
             "decoder_input_ids": input_ids,
-            "past_key_values": past_key_values,
+            "past_key_values": past_key_values or kwargs.get("past", None),
             "encoder_outputs": encoder_outputs,
             "attention_mask": attention_mask,
             "head_mask": head_mask,
