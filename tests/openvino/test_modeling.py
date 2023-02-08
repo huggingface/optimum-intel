@@ -15,6 +15,7 @@
 import gc
 import os
 import tempfile
+import time
 import unittest
 
 import numpy as np
@@ -75,6 +76,15 @@ MODEL_NAMES = {
 }
 
 SEED = 42
+
+
+class Timer(object):
+    def __enter__(self):
+        self.elapsed = time.perf_counter()
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
 class OVModelIntegrationTest(unittest.TestCase):
@@ -418,6 +428,9 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         "t5",
     )
 
+    GENERATION_LENGTH = 100
+    SPEEDUP_CACHE = 1.2
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -495,16 +508,34 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
         gc.collect()
 
-    def test_compare_with_and_without_past_key_values_model_outputs(self):
+    def test_compare_with_and_without_past_key_values(self):
         model_id = MODEL_NAMES["t5"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
+
         model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=True)
-        outputs_model_with_pkv = model_with_pkv.generate(**tokens)
+        _ = model_with_pkv.generate(**tokens)  # warmup
+        with Timer() as with_pkv_timer:
+            outputs_model_with_pkv = model_with_pkv.generate(
+                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+
         model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
-        outputs_model_without_pkv = model_without_pkv.generate(**tokens)
+        _ = model_without_pkv.generate(**tokens)  # warmup
+        with Timer() as without_pkv_timer:
+            outputs_model_without_pkv = model_without_pkv.generate(
+                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
+        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
+        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
+        self.assertTrue(
+            without_pkv_timer.elapsed / with_pkv_timer.elapsed > self.SPEEDUP_CACHE,
+            f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
+            f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
+        )
 
 
 class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
