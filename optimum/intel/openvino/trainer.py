@@ -61,6 +61,7 @@ from transformers.utils import (
 )
 
 import openvino
+from huggingface_hub import HfApi
 from nncf import NNCFConfig
 from nncf.common.logging.logger import nncf_logger, set_log_level
 from nncf.common.utils.tensorboard import prepare_for_tensorboard
@@ -79,6 +80,7 @@ from optimum.utils import logging
 
 from .configuration import OVConfig
 from .quantization import OVDataLoader
+from .training_args import OVTrainingArguments
 from .utils import (
     MAX_ONNX_OPSET,
     MAX_ONNX_OPSET_2022_2_0,
@@ -87,7 +89,6 @@ from .utils import (
     OV_XML_FILE_NAME,
     use_external_data_format,
 )
-from .training_args import OVTrainingArguments
 
 
 if is_apex_available():
@@ -689,7 +690,7 @@ class OVTrainer(Trainer):
             )
             onnx_config = onnx_config_class(self.model.config)
             if self.onnx_config is None:
-                onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][self.feature]
+                onnx_config_cls = FeaturesManager._SUPPORTED_MODEL_TYPE[model_type][self.task]
                 onnx_config = onnx_config_cls(self.model.config)
             else:
                 onnx_config = self.onnx_config
@@ -760,15 +761,21 @@ class OVTrainer(Trainer):
             bin_pth = xml_pth.replace(".xml", ".bin")
             openvino.runtime.serialize(ov_model, xml_pth, bin_pth)
 
-    def _set_feature(self):
-        if self.feature is None:
-            raise ValueError(
-                "The model feature defining the model topology needs to be specified for the ONNX export."
-            )
-        elif self.feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-            self.feature = "sequence-classification"
-        elif self.feature in ["feature-extraction", "fill-mask"]:
-            self.feature = "default"
+    def _set_task(self):
+        if self.task is None:
+            self.task = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
+            if self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+                self.task = "sequence-classification"
+            elif self.task in ["feature-extraction", "fill-mask"]:
+                self.task = "default"
+            elif self.task == "text-generation":
+                self.task = "causal-lm"
+            elif self.task is None:
+                raise ValueError(
+                    "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
+                )
+        if self.task in ["seq2seq-lm", "translation", "summarization"]:
+            raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
 
     def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, ov_config: OVConfig, f: Union[str, io.BytesIO]):
         opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
