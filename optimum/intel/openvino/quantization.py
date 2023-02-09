@@ -22,7 +22,6 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 import torch
 import transformers
 from datasets import Dataset, load_dataset
-from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
@@ -40,7 +39,6 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
 
-from ..utils.import_utils import _openvino_version
 from .configuration import OVConfig
 from .utils import (
     MAX_ONNX_OPSET,
@@ -200,26 +198,8 @@ class OVQuantizer(OptimumQuantizer):
         ov_config: OVConfig,
         f: Union[str, io.BytesIO],
     ):
-        openvino_version = version.parse(version.parse(_openvino_version).base_version)
-        is_openvino_version_greater_2022_2_0 = openvino_version > version.Version("2022.2.0")
-
-        if not is_openvino_version_greater_2022_2_0:
-            if config.DEFAULT_ONNX_OPSET > MAX_ONNX_OPSET_2022_2_0 + 1:
-                if not ov_config.save_onnx_model:
-                    logger.warning(
-                        f"The minimal ONNX opset for the given model architecture is {config.DEFAULT_ONNX_OPSET}. Currently, "
-                        f"some models may not work with the installed version of OpenVINO. You can update OpenVINO "
-                        f"to 2022.3.* version or use ONNX opset version {MAX_ONNX_OPSET_2022_2_0} to resolve the issue."
-                    )
-                else:
-                    logger.warning(
-                        f"The minimal ONNX opset for QDQ format export is {MIN_ONNX_QDQ_OPSET}. Currently, some models"
-                        f"may not work with the installed version of OpenVINO in this opset. You can update OpenVINO "
-                        f"to 2022.3.* version or set `save_onnx_model` to `False`."
-                    )
-        max_onnx_opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
-        opset = max_onnx_opset if is_openvino_version_greater_2022_2_0 else MAX_ONNX_OPSET_2022_2_0
-        opset = opset if ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
+        opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+        opset = opset if not ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
         model_inputs = dict((k, v.to(model.device)) for k, v in model_inputs.items())
         # Create ordered inputs for the ONNX export of NNCFNetwork as keyword arguments are currently not supported
         inputs = tuple([model_inputs.pop(key, None) for key in self._export_input_names if len(model_inputs) != 0])
