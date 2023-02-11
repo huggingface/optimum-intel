@@ -130,6 +130,9 @@ class ModelArguments:
         default="google/vit-base-patch16-224-in21k",
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"},
     )
+    teacher_model_or_path: str = field(
+        default=None, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
+    )
     model_type: Optional[str] = field(
         default=None,
         metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(MODEL_TYPES)},
@@ -288,10 +291,10 @@ def main():
     )
 
     teacher_model = None
-    if training_args.teacher_model_or_path is not None:
+    if model_args.teacher_model_or_path is not None:
         teacher_model = AutoModelForImageClassification.from_pretrained(
-            training_args.teacher_model_or_path,
-            from_tf=bool(".ckpt" in training_args.teacher_model_or_path),
+            model_args.teacher_model_or_path,
+            from_tf=bool(".ckpt" in model_args.teacher_model_or_path),
             cache_dir=model_args.cache_dir,
         )
 

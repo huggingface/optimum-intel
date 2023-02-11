@@ -12,9 +12,6 @@ class OVTrainingArguments(TrainingArguments):
     nncf_compression_config: str = field(
         default=None, metadata={"help": "NNCF configuration .json file for compression-enabled training"}
     )
-    teacher_model_or_path: str = field(
-        default=None, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
-    )
     distillation_weight: float = field(
         default=0.5, metadata={"help": "weightage of distillation loss, value between 0.0 to 1.0"}
     )

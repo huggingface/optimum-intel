@@ -12,7 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import torch
 
@@ -44,7 +44,7 @@ class OVConfig(BaseConfig):
 
     def __init__(
         self,
-        compression: Optional[Dict] = None,
+        compression: Union[List[Dict], Dict, None] = None,
         input_info: Optional[List] = None,
         save_onnx_model: bool = False,
         **kwargs,

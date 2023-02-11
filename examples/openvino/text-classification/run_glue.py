@@ -174,6 +174,9 @@ class ModelArguments:
     model_name_or_path: str = field(
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
+    teacher_model_or_path: str = field(
+        default=None, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
+    )
     config_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
     )
@@ -351,7 +354,7 @@ def main():
             label_list.sort()  # Let's sort it for determinism
             num_labels = len(label_list)
 
-    if is_regression and training_args.teacher_model_or_path is not None:
+    if is_regression and model_args.teacher_model_or_path is not None:
         raise NotImplementedError(
             "Built-in knowledge distillation of `OVTrainer` only supports single label classification task now."
         )
@@ -385,10 +388,10 @@ def main():
         ignore_mismatched_sizes=model_args.ignore_mismatched_sizes,
     )
     teacher_model = None
-    if training_args.teacher_model_or_path is not None:
+    if model_args.teacher_model_or_path is not None:
         teacher_model = AutoModelForSequenceClassification.from_pretrained(
-            training_args.teacher_model_or_path,
-            from_tf=bool(".ckpt" in training_args.teacher_model_or_path),
+            model_args.teacher_model_or_path,
+            from_tf=bool(".ckpt" in model_args.teacher_model_or_path),
             cache_dir=model_args.cache_dir,
         )
 
