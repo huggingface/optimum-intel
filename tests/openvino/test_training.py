@@ -222,7 +222,7 @@ class OVTrainerTest(unittest.TestCase):
             self.assertEqual(train_outputs.global_step, total_steps)
             trainer.save_model()
 
-            for metric in trainer.compression_metrics:
+            for metric in desc.compression_metrics:
                 self.assertIn(metric, trainer.compression_metrics)
 
             # check saved OVModel can output
