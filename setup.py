@@ -12,7 +12,7 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-    "optimum>=1.7.0",
+    "optimum>=1.6.4",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
     "torch",
