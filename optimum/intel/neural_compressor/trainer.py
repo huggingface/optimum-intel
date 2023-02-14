@@ -118,7 +118,7 @@ class INCTrainer(Trainer):
         )
 
         if self.args.device.type == "cuda" and not is_neural_compressor_version(">", "2.0.0"):
-            raise ImportError(
+            logger.warning(
                 "Neural Compressor version must be > 2.0.0 to train on CUDA devices. "
                 "Please upgrade Neural Compressor or train your model on CPU devices instead."
             )
