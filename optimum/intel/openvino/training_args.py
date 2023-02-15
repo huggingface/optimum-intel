@@ -9,9 +9,6 @@ class OVTrainingArguments(TrainingArguments):
     Arguments pertaining to OpenVINO/NNCF-enabled training flow
     """
 
-    nncf_compression_config: str = field(
-        default=None, metadata={"help": "NNCF configuration .json file for compression-enabled training"}
-    )
     distillation_weight: float = field(
         default=0.5, metadata={"help": "weightage of distillation loss, value between 0.0 to 1.0"}
     )

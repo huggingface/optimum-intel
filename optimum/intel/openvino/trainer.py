@@ -26,7 +26,6 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
@@ -37,12 +36,11 @@ from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 from transformers.deepspeed import deepspeed_init
 from transformers.integrations import hp_params
 from transformers.modeling_utils import PreTrainedModel, unwrap_model
-from transformers.onnx import FeaturesManager, OnnxConfig
-from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS, is_torch_less_than_1_11
+from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer import TRAINER_STATE_NAME, TRAINING_ARGS_NAME
 from transformers.trainer_callback import TrainerCallback, TrainerState
-from transformers.trainer_pt_utils import IterableDatasetShard, get_parameter_names
+from transformers.trainer_pt_utils import IterableDatasetShard
 from transformers.trainer_utils import (
     EvalPrediction,
     HPSearchBackend,
@@ -61,7 +59,6 @@ from transformers.utils import (
 )
 
 import openvino
-from huggingface_hub import HfApi
 from nncf import NNCFConfig
 from nncf.common.logging.logger import nncf_logger, set_log_level
 from nncf.common.utils.tensorboard import prepare_for_tensorboard
@@ -72,7 +69,7 @@ from nncf.torch import create_compressed_model
 from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core, PartialShape
+from openvino.runtime import Core
 from openvino.tools.mo import convert_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
@@ -96,6 +93,9 @@ if is_apex_available():
 
 if is_sagemaker_mp_enabled():
     import smdistributed.modelparallel.torch as smp
+
+if is_torch_tpu_available(check_device=False):
+    import torch_xla.core.xla_model as xm
 
 core = Core()
 
@@ -156,8 +156,6 @@ class OVTrainer(Trainer):
         if teacher_model is not None:
             self.teacher = teacher_model.to(args.device)
             self.teacher.eval()
-            self.distillation_weight = args.distillation_weight
-            self.temperature = args.distillation_temperature
         self.compression_controller = None
 
         if self.ov_config is not None and self.args.do_train:
@@ -188,9 +186,6 @@ class OVTrainer(Trainer):
 
             self.compression_controller, self.model = create_compressed_model(self.model, nncf_config)
             self.model_wrapped = self.model
-
-        # TODO(yujie): change design of compression_metrics
-        self.compression_metrics = dict()
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
@@ -364,6 +359,7 @@ class OVTrainer(Trainer):
         self.state.is_world_process_zero = self.is_world_process_zero()
 
         tr_loss = torch.tensor(0.0).to(args.device)
+        self.compression_metrics = defaultdict(lambda: torch.tensor(0.0).to(args.device))
         # _total_loss_scalar is updated everytime .item() has to be called on tr_loss and stores the sum of all losses
         self._total_loss_scalar = 0.0
         self._globalstep_last_logged = self.state.global_step
@@ -427,7 +423,6 @@ class OVTrainer(Trainer):
 
                 if step % args.gradient_accumulation_steps == 0:
                     self.control = self.callback_handler.on_step_begin(args, self.state, self.control)
-                    # if self.teacher is not None or self.compression_controller is not None:
                     if self.compression_controller is not None:
                         # Must be called at the beginning of each training step to prepare the compression method
                         self.compression_controller.scheduler.step()
@@ -561,11 +556,12 @@ class OVTrainer(Trainer):
             teacher_outputs = self.teacher(**inputs)
         teacher_logits = teacher_outputs.logits
         student_logits = student_outputs.logits
+        temperature = self.args.distillation_temperature
         return F.kl_div(
-            input=F.log_softmax(student_logits / self.temperature, dim=-1),
-            target=F.softmax(teacher_logits / self.temperature, dim=-1),
+            input=F.log_softmax(student_logits / temperature, dim=-1),
+            target=F.softmax(teacher_logits / temperature, dim=-1),
             reduction="batchmean",
-        ) * (self.temperature**2)
+        ) * (temperature**2)
 
     def compute_loss(self, model, inputs, return_outputs=False):
         if self.teacher is None:
@@ -580,15 +576,17 @@ class OVTrainer(Trainer):
             if self.args.n_gpu > 1:
                 task_loss = task_loss.mean()
             distillation_loss = self.compute_distillation_loss(inputs, outputs)
-            loss = ((1 - self.distillation_weight) * task_loss) + (self.distillation_weight * distillation_loss)
+            loss = (1 - self.args.distillation_weight) * task_loss + self.args.distillation_weight * distillation_loss
 
-            self.compression_metrics["task_loss"] = task_loss.item()
-            self.compression_metrics["distillation_loss"] = distillation_loss.item()
+            if model.training:
+                self.compression_metrics["task_loss"] = task_loss.item()
+                self.compression_metrics["distillation_loss"] = distillation_loss.item()
 
         if self.compression_controller is not None:
             compression_loss = self.compression_controller.loss()
             loss += compression_loss
-            self.compression_metrics["compression_loss"] = compression_loss.item()
+            if model.training:
+                self.compression_metrics["compression_loss"] = compression_loss.item()
 
         return (loss, outputs) if return_outputs else loss
 
@@ -608,8 +606,9 @@ class OVTrainer(Trainer):
             logs["loss"] = round(tr_loss_scalar / (self.state.global_step - self._globalstep_last_logged), 4)
             logs["learning_rate"] = self._get_learning_rate()
 
-            for key, value in self.compression_metrics.items():
-                logs[key] = value
+            if model.training:
+                for key, value in self.compression_metrics.items():
+                    logs[key] = value
 
             if self.compression_controller is not None:
                 compression_stats = self.compression_controller.statistics()
@@ -685,12 +684,11 @@ class OVTrainer(Trainer):
             )
             onnx_config = onnx_config_class(self.model.config)
 
-            if self._is_pruning_controller_exists():
+            if self._get_movement_sparsity_controller() is not None:
                 # Note:
                 # OpenVINO provides automated structured pruning of sparse structure in IR.
                 # However it requires static axes, current export utilizes nncf exporter
                 # which generates static-shaped IR.
-
                 f = os.path.join(output_dir, ONNX_WEIGHTS_NAME)
                 self.compression_controller.export_model(
                     f, input_names=list(onnx_config.inputs.keys()), output_names=list(onnx_config.outputs.keys())
@@ -707,64 +705,43 @@ class OVTrainer(Trainer):
                 compress_quantize_weights_transformation(model)
                 openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
 
-    def _is_pruning_controller_exists(self):
-        if self.compression_controller is None:
-            return False
+    def _get_movement_sparsity_controller(self) -> Optional[MovementSparsityController]:
+        if isinstance(self.compression_controller, MovementSparsityController):
+            return self.compression_controller
         if isinstance(self.compression_controller, PTCompositeCompressionAlgorithmController):
             for child_controller in self.compression_controller.child_ctrls:
                 if isinstance(child_controller, MovementSparsityController):
-                    return True
-        elif isinstance(self.compression_controller, MovementSparsityController):
-            return True
-        return False
+                    return child_controller
+        return None
 
     def _generate_openvino_ir(self, onnx_model):
         if self.compression_controller is None:
             return
-
-        ir_pruning = False
-        if self._is_pruning_controller_exists():
-            pruning_controller = None
-            if isinstance(self.compression_controller, PTCompositeCompressionAlgorithmController):
-                for child_controller in self.compression_controller.child_ctrls:
-                    if isinstance(child_controller, MovementSparsityController):
-                        pruning_controller = child_controller
-            elif isinstance(self.compression_controller, MovementSparsityController):
-                pruning_controller = self.compression_controller
-
-            if pruning_controller is not None:
-                if pruning_controller.scheduler.current_stage == MovementSchedulerStage.POST_WARMUP:
-                    ir_pruning = True
-
         try:
-            if ir_pruning:
+            movement_controller = self._get_movement_sparsity_controller()
+            if (
+                movement_controller is not None
+                and movement_controller.scheduler.current_stage == MovementSchedulerStage.POST_WARMUP
+            ):
                 ov_model = convert_model(onnx_model, transform="Pruning")
             else:
                 ov_model = convert_model(onnx_model)
-        except:
+        except Exception as err:
             logger.warning(
-                "Error encountered during IR generation. Run continues, please check compression config and model.onnx"
+                f"Error encountered during IR generation: {err}. Run continues, please check compression config and model.onnx"
             )
         else:
             xml_pth = os.path.join(os.path.dirname(onnx_model), OV_XML_FILE_NAME)
-            bin_pth = xml_pth.replace(".xml", ".bin")
+            bin_pth = os.path.join(os.path.dirname(onnx_model), OV_XML_FILE_NAME.replace(".xml", ".bin"))
             openvino.runtime.serialize(ov_model, xml_pth, bin_pth)
 
     def _set_task(self):
         if self.task is None:
-            self.task = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
-            if self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-                self.task = "sequence-classification"
-            elif self.task in ["feature-extraction", "fill-mask"]:
-                self.task = "default"
-            elif self.task == "text-generation":
-                self.task = "causal-lm"
-            elif self.task is None:
-                raise ValueError(
-                    "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
-                )
-        if self.task in ["seq2seq-lm", "translation", "summarization"]:
-            raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
+            raise ValueError("The model task defining the model topology needs to be specified for the ONNX export.")
+        elif self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+            self.task = "sequence-classification"
+        elif self.task in ["feature-extraction", "fill-mask"]:
+            self.task = "default"
 
     def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, ov_config: OVConfig, f: Union[str, io.BytesIO]):
         opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)

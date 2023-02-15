@@ -182,6 +182,9 @@ class OVTrainerTest(unittest.TestCase):
         self.train_dataset = self.dataset["train"].select(range(8)).map(tokenizer_fn, batched=True)
         self.eval_dataset = self.dataset["validation"].select(range(4)).map(tokenizer_fn, batched=True)
         self.metric = evaluate.load("glue", "sst2")
+        self.compute_metric = lambda p: self.metric.compute(
+            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
+        )
 
     def test_training(self):
         desc: OVTrainerTestDescriptor = self.descriptor
@@ -240,9 +243,6 @@ class OVTrainerTest(unittest.TestCase):
             state_dict = torch.load(Path(output_dir, WEIGHTS_NAME), map_location="cpu")
             num_binary_masks = sum(key.endswith("_binary_mask") for key in state_dict)
             self.assertEqual(desc.expected_binary_masks, num_binary_masks)
-
-    def compute_metric(self, p):
-        return self.metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
 
     def count_quantization_op_number(self, ovmodel):
         num_fake_quantize = 0

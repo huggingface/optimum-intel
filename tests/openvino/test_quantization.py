@@ -12,14 +12,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import copy
 import tempfile
 import unittest
 from functools import partial
-from pathlib import Path
 
 import numpy as np
-import torch
 from datasets import load_dataset
 from transformers import (
     AutoModelForQuestionAnswering,
@@ -28,26 +25,13 @@ from transformers import (
     TrainingArguments,
     default_data_collator,
 )
-from transformers.utils import WEIGHTS_NAME
 
 import evaluate
-from nncf.torch.dynamic_graph.graph_tracer import create_mock_tensor
-from optimum.intel.openvino import OVTrainingArguments
-from optimum.intel.openvino.configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
+from optimum.intel.openvino.configuration import OVConfig
 from optimum.intel.openvino.modeling import OVModelForQuestionAnswering, OVModelForSequenceClassification
 from optimum.intel.openvino.quantization import OVQuantizer
 from optimum.intel.openvino.trainer import OVTrainer
 from parameterized import parameterized
-
-
-def generate_mock_tokens(input_infos):
-    mock_tokens = dict()
-    for info in input_infos:
-        single_batch_info = copy.copy(info)
-        input_shape = tuple([1] + list(info.shape)[1:])
-        single_batch_info.shape = input_shape
-        mock_tokens[info.keyword] = create_mock_tensor(single_batch_info, "cpu")
-    return mock_tokens
 
 
 class OVQuantizerTest(unittest.TestCase):
@@ -132,23 +116,6 @@ class OVQuantizerQATest(unittest.TestCase):
                 self.fail("Loading BERT QA model a second time failed")
 
 
-MOVEMENT_SPARSITY_CONFIG_FOR_BERT = {
-    "algorithm": "movement_sparsity",
-    "params": {
-        "warmup_start_epoch": 1,
-        "warmup_end_epoch": 2,
-        "importance_regularization_factor": 1.0,
-        "enable_structured_masking": True,
-    },
-    "sparse_structure_by_scopes": [
-        {"mode": "block", "sparse_factors": [32, 32], "target_scopes": "{re}.*BertAttention.*"},
-        {"mode": "per_dim", "axis": 0, "target_scopes": "{re}.*BertIntermediate.*"},
-        {"mode": "per_dim", "axis": 1, "target_scopes": "{re}.*BertOutput.*"},
-    ],
-    "ignored_scopes": ["{re}.*NNCFEmbedding", "{re}.*LayerNorm.*", "{re}.*pooler.*", "{re}.*classifier.*"],
-}
-
-
 class OVTrainerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-uncased", 50, 38),)
 
@@ -195,3 +162,6 @@ class OVTrainerTest(unittest.TestCase):
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
             self.assertEqual(expected_int8, num_int8)
 
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            outputs = model(**tokens)
+            self.assertTrue("logits" in outputs)

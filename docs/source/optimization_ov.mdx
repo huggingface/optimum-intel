@@ -102,7 +102,7 @@ compute_metrics = lambda p: metric.compute(predictions=np.argmax(p.predictions, 
     tokenizer=tokenizer,
     data_collator=default_data_collator,
 +   ov_config=ov_config,
-+   feature="sequence-classification",
++   task="sequence-classification",
 )
 
 # Train the model while applying quantization
@@ -134,7 +134,7 @@ trainer = OVTrainer(
     tokenizer=tokenizer,
     data_collator=default_data_collator,
     ov_config=ov_config,
-    feature="sequence-classification",
+    task="sequence-classification",
 )
 ```
 
@@ -183,7 +183,7 @@ trainer = OVTrainer(
     tokenizer=tokenizer,
     data_collator=default_data_collator,
     ov_config=ov_config,
-    feature="sequence-classification",
+    task="sequence-classification",
 )
 ```
 
