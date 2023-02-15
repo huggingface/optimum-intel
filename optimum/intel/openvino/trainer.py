@@ -403,6 +403,9 @@ class OVTrainer(Trainer):
             if self.compression_controller is not None:
                 # Must be called at the beginning of each training epoch to prepare the compression method
                 self.compression_controller.scheduler.epoch_step()
+                nncf_logger.info(
+                    "\nEpoch {} |".format(epoch).join(self.compression_controller.statistics().to_str().split("\n"))
+                )
 
             if epoch == epochs_trained and resume_from_checkpoint is not None and steps_trained_in_current_epoch == 0:
                 self._load_rng_state(resume_from_checkpoint)
