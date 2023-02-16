@@ -20,6 +20,7 @@ import sys
 import time
 import warnings
 from collections import defaultdict
+from copy import deepcopy
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -67,7 +68,9 @@ from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityContr
 from nncf.experimental.torch.sparsity.movement.scheduler import MovementSchedulerStage
 from nncf.torch import create_compressed_model
 from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
+from nncf.torch.exporter import PTExporter
 from nncf.torch.nncf_network import NNCFNetwork
+from nncf.torch.utils import get_model_device
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
 from openvino.tools.mo import convert_model
@@ -155,6 +158,8 @@ class OVTrainer(Trainer):
         self.teacher = None
         if teacher_model is not None:
             self.teacher = teacher_model.to(args.device)
+            if self.args.n_gpu > 1:
+                self.teacher = torch.nn.DataParallel(self.teacher)
             self.teacher.eval()
         self.compression_controller = None
 
@@ -687,16 +692,22 @@ class OVTrainer(Trainer):
             )
             onnx_config = onnx_config_class(self.model.config)
 
-            if self._get_movement_sparsity_controller() is not None:
+            movement_controller = self._get_movement_sparsity_controller_if_exists()
+            if movement_controller is not None:
                 # Note:
                 # OpenVINO provides automated structured pruning of sparse structure in IR.
                 # However it requires static axes, current export utilizes nncf exporter
                 # which generates static-shaped IR.
                 f = os.path.join(output_dir, ONNX_WEIGHTS_NAME)
-                self.compression_controller.export_model(
-                    f, input_names=list(onnx_config.inputs.keys()), output_names=list(onnx_config.outputs.keys())
+                original_device = get_model_device(self.model)
+                # prevent modification to original model by PTExporter which affects data parallel
+                model = deepcopy(self.model)
+                exporter = PTExporter(
+                    model, input_names=list(onnx_config.inputs.keys()), output_names=list(onnx_config.outputs.keys())
                 )
+                exporter.export_model(f)
                 self._generate_openvino_ir(f)
+                self.model.to(original_device)
             else:
                 num_parameters = self.model.num_parameters()
                 save_as_external_data = use_external_data_format(num_parameters) or self.ov_config.save_onnx_model
@@ -708,7 +719,7 @@ class OVTrainer(Trainer):
                 compress_quantize_weights_transformation(model)
                 openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
 
-    def _get_movement_sparsity_controller(self) -> Optional[MovementSparsityController]:
+    def _get_movement_sparsity_controller_if_exists(self) -> Optional[MovementSparsityController]:
         if isinstance(self.compression_controller, MovementSparsityController):
             return self.compression_controller
         if isinstance(self.compression_controller, PTCompositeCompressionAlgorithmController):
@@ -717,15 +728,16 @@ class OVTrainer(Trainer):
                     return child_controller
         return None
 
+    def _should_apply_pruning_transform(self):
+        movement_controller = self._get_movement_sparsity_controller_if_exists()
+        return (
+            movement_controller is not None
+            and movement_controller.scheduler.current_stage == MovementSchedulerStage.POST_WARMUP
+        )
+
     def _generate_openvino_ir(self, onnx_model):
-        if self.compression_controller is None:
-            return
         try:
-            movement_controller = self._get_movement_sparsity_controller()
-            if (
-                movement_controller is not None
-                and movement_controller.scheduler.current_stage == MovementSchedulerStage.POST_WARMUP
-            ):
+            if self._should_apply_pruning_transform():
                 ov_model = convert_model(onnx_model, transform="Pruning")
             else:
                 ov_model = convert_model(onnx_model)
