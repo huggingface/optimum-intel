@@ -122,3 +122,16 @@ tokenizer.save_pretrained(save_directory)
 
 [{'translation_text': "Il n'est jamais sorti sans un livre sous son bras, et il est souvent revenu avec deux."}]
 ```
+
+## Supported tasks
+
+| Task                                 | Auto Class                           |
+|--------------------------------------|--------------------------------------|
+| `sequence-classification`            | `OVModelForSequenceClassification`   |
+| `token-classification`               | `OVModelForTokenClassification`      |
+| `question-answering`                 | `OVModelForQuestionAnswering`        |
+| `audio-classification`               | `OVModelForAudioClassification`      |
+| `masked-lm`                          | `OVModelForMaskedLM`                 |
+| `causal-lm`                          | `OVModelForCausalLM`                 |
+| `seq2seq-lm`                         | `OVModelForSeq2SeqLM`                |
+| `image-classification`               | `OVModelForImageClassification`      |
