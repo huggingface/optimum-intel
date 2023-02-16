@@ -16,7 +16,8 @@ limitations under the License.
 
 # Optimization
 
-🤗 Optimum Intel provides an `optimum.openvino` package that enables you to apply quantization on many model hosted on the 🤗 hub using the [NNCF](https://docs.openvino.ai/2022.1/docs_nncf_introduction.html) framework.
+🤗 Optimum Intel provides an `optimum.openvino` package that enables you to apply a variety of model compression methods such as quantization, pruning, on many models hosted on the 🤗 hub using the [NNCF](https://docs.openvino.ai/2022.1/docs_nncf_introduction.html) framework.
+
 
 ## Post-training optimization
 
@@ -61,10 +62,15 @@ tokenizer.save_pretrained(save_dir)
 
 The `quantize()` method applies post-training static quantization and export the resulting quantized model to the OpenVINO Intermediate Representation (IR). The resulting graph is represented with two files: an XML file describing the network topology and a binary file describing the weights. The resulting model can be run on any target Intel device.
 
+
 ## During training optimization
 
-Quantization aware training (QAT) can also be applied in order to simulate the effects of quantization during training, in order to alleviate its effects on the model's accuracy. In the case where post-training quantization results in an import accuracy degradation, QAT can be used instead.
-Here is an example on how to fine-tune a DistilBERT on the sst-2 task while applying quantization aware training (QAT).
+Apart from optimizing a model after training like post-training quantization above, `optimum.openvino` also provide optimization methods during training, namely Quantization-Aware Training (QAT) and Joint Pruning, Quantization and Distillation (JPQD).
+
+
+### Quantization-Aware Training (QAT) 
+
+QAT simulates the effects of quantization during training, in order to alleviate its effects on the model's accuracy. It is recommended in the case where post-training quantization results in high accuracy degradation. Here is an example on how to fine-tune a DistilBERT on the sst-2 task while applying quantization aware training (QAT).
 
 ```python
 import evaluate
@@ -112,9 +118,42 @@ metrics = trainer.evaluate()
 trainer.save_model()
 ```
 
-## Distillation
 
-Distillation is an effective method to improve model performance by learning from the knowledge of, usually, larger model. `OVTrainer` also provides the capability to perform distillation during training. Users are required to load the teacher and feed the loaded model to `OVTrainer` as follows. Subclassed from `TrainingArguments`, `OVTrainingArguments` is provided to ease users to specify distillation hyperparameters (such as teacher model path, distillation weightage and temperature), as well as to expose the hyperparameters as commandline arguments to the training script.
+### Joint Pruning, Quantization and Distillation (JPQD)
+
+Other than quantization, compression methods like pruning and distillation are common in further improving the task performance and efficiency. Structured pruning slims a model for lower computational demands while distillation leverages knowledge of a teacher, usually, larger model to improve model prediction. Combining these methods with quantization can result in optimized model with significant efficiency improvement while enjoying good task accuracy retention. In `optimum.openvino`, `OVTrainer` provides the capability to jointly prune, quantize and distill a model during training. Following is an example on how to perform the optimization on BERT-base for the sst-2 task.
+
+First, we create a config dictionary to specify the target algorithms. As `optimum.openvino` relies on NNCF as backend, the config format follows NNCF specifications (see [here](https://github.com/openvinotoolkit/nncf/tree/develop/docs/compression_algorithms)). In the example config below, we specify pruning and quantization in a list of compression with thier hyperparameters. The pruning method closely resembles the work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf) whereas the quantization refers to QAT. With this configuration, the model under optimization will be initialized with pruning and quantization operators at the beginning of the training.
+
+```python
+compression_config = [
+    {
+        "compression":
+        {
+        "algorithm":  "movement_sparsity",
+        "params": {
+            "warmup_start_epoch":  1,
+            "warmup_end_epoch":    4,
+            "importance_regularization_factor":  0.01,
+            "enable_structured_masking":  True
+        },
+        "sparse_structure_by_scopes": [
+            {"mode":  "block",   "sparse_factors": [32, 32], "target_scopes": "{re}.*BertAttention.*"},
+            {"mode":  "per_dim", "axis":  0,                 "target_scopes": "{re}.*BertIntermediate.*"},
+            {"mode":  "per_dim", "axis":  1,                 "target_scopes": "{re}.*BertOutput.*"},
+        ],
+        "ignored_scopes": ["{re}.*NNCFEmbedding", "{re}.*pooler.*", "{re}.*LayerNorm.*"]
+        }
+    },
+    {
+        "algorithm": "quantization",
+        "weights": {"mode": "symmetric"}
+        "activations": { "mode": "symmetric"},
+    }
+]
+```
+
+Once we have the config ready, we can start develop the training pipeline like the snippet below. Since we are customizing joint compression with config above, notice that `OVConfig` is initialized with config dictionary (JSON parsing to python dictionary is skipped for brevity). As for distillation, users are required to load the teacher model, it is just like a normal model loading with transformers API. `OVTrainingArguments` extends transformers' `TrainingArguments` with distillation hyperparameters, i.e. distillation weightage and temperature for ease of use. The snippet below shows how we load a teacher model and create training arguments with `OVTrainingArguments`. Subsequently, the teacher model, with the instantiated `OVConfig` and `OVTrainingArguments` are fed to `OVTrainer`. Voila! that is all we need, the rest of the pipeline is identical to native transformers training.
 
 ```diff
 -from optimum.intel.openvino.trainer import OVConfig, OVTrainer
@@ -122,6 +161,9 @@ Distillation is an effective method to improve model performance by learning fro
 
 # Load teacher model
 +teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_or_path)
+
+-ov_config = OVConfig()
++ov_config = OVConfig(compression=compression_config)
 
 trainer = OVTrainer(
     model=model,
@@ -133,59 +175,23 @@ trainer = OVTrainer(
     compute_metrics=compute_metrics,
     tokenizer=tokenizer,
     data_collator=default_data_collator,
-    ov_config=ov_config,
++   ov_config=ov_config,
     task="sequence-classification",
 )
-```
 
-## Advanced Compression with NNCF
-
-`OVTrainer` integrates NNCF as backend of model optimization. It exposes most of the model compression algorithms in NNCF, variants of quantization, pruning to name a few. Users only need to provide a config dictionary to apply the selected NNCF algorithm(s). For example, NNCF provides structured pruning capability which closely resembles the work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf), following is the config dictionary to apply the algorithm.
-
-```python
-compression_config = {
-    "compression":
-    {
-    "algorithm":  "movement_sparsity",
-    "params": {
-        "warmup_start_epoch":  1,
-        "warmup_end_epoch":    4,
-        "importance_regularization_factor":  0.01,
-        "enable_structured_masking":  True
-    },
-    "sparse_structure_by_scopes": [
-        {"mode":  "block",   "sparse_factors": [32, 32], "target_scopes": "{re}.*BertAttention.*"},
-        {"mode":  "per_dim", "axis":  0,                 "target_scopes": "{re}.*BertIntermediate.*"},
-        {"mode":  "per_dim", "axis":  1,                 "target_scopes": "{re}.*BertOutput.*"},
-    ],
-    "ignored_scopes": ["{re}.*NNCFEmbedding", "{re}.*pooler.*", "{re}.*LayerNorm.*"]
-    }
-}
+# Train the model like usual, internally the training is applied with pruning, quantization and distillation
+train_result = trainer.train()
+metrics = trainer.evaluate()
+# Export the quantized model to OpenVINO IR format and save it
+trainer.save_model()
 ```
 
 More on the description and how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
-More on the available algorithms in NNCF, see documentation [here](https://github.com/openvinotoolkit/nncf/tree/develop/docs/compression_algorithms).
+More on available algorithms in NNCF, see documentation [here](https://github.com/openvinotoolkit/nncf/tree/develop/docs/compression_algorithms).
 
-To enable the algorithm above in `OVTrainer`, the config must be supplied to `OVConfig` and subsequently to `OVTrainer`. Following snippet shows an example for setting up `OVTrainer` with pruning, as well as distillation. As you can see, it is simple to apply joint compression with `OVTrainer`. A good example of this usage will be jointly prune, quantize and distill a model for high inference performance. Please refer to examples provided [here](https://github.com/huggingface/optimum-intel/tree/main/examples/openvino). 
+For complete JPQD scripts, please refer to examples provided [here](https://github.com/huggingface/optimum-intel/tree/main/examples/openvino). 
 
-```diff
--ov_config = OVConfig()
-+ov_config = OVConfig(compression=compression_config)
-
-trainer = OVTrainer(
-    model=model,
-    teacher_model=teacher_model,
-    args=OVTrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True, distillation_temperature=3, distillation_weight=0.9),
-    train_dataset=dataset["train"].select(range(300)),
-    eval_dataset=dataset["validation"],
-    compute_metrics=compute_metrics,
-    tokenizer=tokenizer,
-    data_collator=default_data_collator,
-    ov_config=ov_config,
-    task="sequence-classification",
-)
-```
 
 ## Inference with Transformers pipeline
 
@@ -194,11 +200,22 @@ After applying quantization on our model, we can then easily load it with our [`
 ```python
 from transformers import pipeline
 from optimum.intel.openvino import OVModelForSequenceClassification
+from functools import partialmethod
 
 ov_model = OVModelForSequenceClassification.from_pretrained(save_dir)
+tokenizer = AutoTokenizer.from_pretrained(model_dir)
+
+# This is a workaround for current limitation (See note below)
+# tokenizer call to always pad to the required length of ov_model
+tokenizer.__class__.__call__ = partialmethod(tokenizer.__class__.__call__, padding="max_length", max_length=128. truncation=True)
+
 cls_pipe = pipeline("text-classification", model=ov_model, tokenizer=tokenizer)
+
 text = "He's a dreadful magician."
 outputs = cls_pipe(text)
 
-[{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
+# print(output)
+# [{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
 ```
+
+> Known limitation: current OpenVINO model is saved/generated with input of fixed shape, meaning inference call to model is only functional when input matched the defined shape. See snippet above shows a workaround to pad output of tokeniker to match OVModel input shape. 
