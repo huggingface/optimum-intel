@@ -63,9 +63,9 @@ tokenizer.save_pretrained(save_dir)
 The `quantize()` method applies post-training static quantization and export the resulting quantized model to the OpenVINO Intermediate Representation (IR). The resulting graph is represented with two files: an XML file describing the network topology and a binary file describing the weights. The resulting model can be run on any target Intel device.
 
 
-## During training optimization
+## Training-time optimization
 
-Apart from optimizing a model after training like post-training quantization above, `optimum.openvino` also provide optimization methods during training, namely Quantization-Aware Training (QAT) and Joint Pruning, Quantization and Distillation (JPQD).
+Apart from optimizing a model after training like post-training quantization above, `optimum.openvino` also provides optimization methods during training, namely Quantization-Aware Training (QAT) and Joint Pruning, Quantization and Distillation (JPQD).
 
 
 ### Quantization-Aware Training (QAT) 
@@ -153,6 +153,8 @@ compression_config = [
 ]
 ```
 
+> Known limitation: Current structured pruning with movement sparsity only supports *BERT, Wav2vec2 and Swin* family of models. See [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md) for more information.
+
 Once we have the config ready, we can start develop the training pipeline like the snippet below. Since we are customizing joint compression with config above, notice that `OVConfig` is initialized with config dictionary (JSON parsing to python dictionary is skipped for brevity). As for distillation, users are required to load the teacher model, it is just like a normal model loading with transformers API. `OVTrainingArguments` extends transformers' `TrainingArguments` with distillation hyperparameters, i.e. distillation weightage and temperature for ease of use. The snippet below shows how we load a teacher model and create training arguments with `OVTrainingArguments`. Subsequently, the teacher model, with the instantiated `OVConfig` and `OVTrainingArguments` are fed to `OVTrainer`. Voila! that is all we need, the rest of the pipeline is identical to native transformers training.
 
 ```diff
@@ -218,4 +220,4 @@ outputs = cls_pipe(text)
 # [{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
 ```
 
-> Known limitation: current OpenVINO model is saved/generated with input of fixed shape, meaning inference call to model is only functional when input matched the defined shape. See snippet above shows a workaround to pad output of tokeniker to match OVModel input shape. 
+> Known limitation: Current OpenVINO model is saved/generated with input of fixed shape, meaning inference call to model is only functional when input matched the defined shape. See snippet above shows a workaround to pad output of tokeniker to match OVModel input shape. 
