@@ -122,3 +122,20 @@ tokenizer.save_pretrained(save_directory)
 
 [{'translation_text': "Il n'est jamais sorti sans un livre sous son bras, et il est souvent revenu avec deux."}]
 ```
+
+## Supported tasks
+
+As shown in the table below, each task is associated with a class enabling to automatically load your model.
+
+
+| Task                                 | Auto Class                           |
+|--------------------------------------|--------------------------------------|
+| `sequence-classification`            | `OVModelForSequenceClassification`   |
+| `token-classification`               | `OVModelForTokenClassification`      |
+| `question-answering`                 | `OVModelForQuestionAnswering`        |
+| `audio-classification`               | `OVModelForAudioClassification`      |
+| `image-classification`               | `OVModelForImageClassification`      |
+| `feature-extraction`                 | `OVModelForFeatureExtraction`        |
+| `masked-lm`                          | `OVModelForMaskedLM`                 |
+| `causal-lm`                          | `OVModelForCausalLM`                 |
+| `seq2seq-lm`                         | `OVModelForSeq2SeqLM`                |
