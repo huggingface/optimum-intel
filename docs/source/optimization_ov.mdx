@@ -197,20 +197,14 @@ For complete JPQD scripts, please refer to examples provided [here](https://gith
 
 ## Inference with Transformers pipeline
 
-After applying quantization on our model, we can then easily load it with our [`OVModelForXxx`](https://huggingface.co/docs/optimum/intel_inference#optimum-inference-with-openvino) classes and perform inference with OpenVINO Runtime using the Transformers [pipelines](https://huggingface.co/docs/transformers/main/en/main_classes/pipelines).
+After applying quantization on our model, we can then easily load it with our `OVModelFor<Task>` classes and perform inference with OpenVINO Runtime using the Transformers [pipelines](https://huggingface.co/docs/transformers/main/en/main_classes/pipelines).
 
 ```python
 from transformers import pipeline
 from optimum.intel.openvino import OVModelForSequenceClassification
-from functools import partialmethod
 
-ov_model = OVModelForSequenceClassification.from_pretrained(save_dir)
+ov_model = OVModelForSequenceClassification.from_pretrained(model_dir)
 tokenizer = AutoTokenizer.from_pretrained(model_dir)
-
-# This is a workaround for current limitation (See note below)
-# tokenizer call to always pad to the required length of ov_model
-tokenizer.__class__.__call__ = partialmethod(tokenizer.__class__.__call__, padding="max_length", max_length=128. truncation=True)
-
 cls_pipe = pipeline("text-classification", model=ov_model, tokenizer=tokenizer)
 
 text = "He's a dreadful magician."
@@ -219,5 +213,3 @@ outputs = cls_pipe(text)
 # print(output)
 # [{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
 ```
-
-> Known limitation: Current OpenVINO model is saved/generated with input of fixed shape, meaning inference call to model is only functional when input matched the defined shape. See snippet above shows a workaround to pad output of tokeniker to match OVModel input shape. 
