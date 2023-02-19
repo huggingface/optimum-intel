@@ -22,6 +22,7 @@ import warnings
 from collections import defaultdict
 from copy import deepcopy
 from itertools import chain
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -72,8 +73,13 @@ from nncf.torch.exporter import PTExporter
 from nncf.torch.nncf_network import NNCFNetwork
 from nncf.torch.utils import get_model_device
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core
+from openvino.runtime import Core, PartialShape, serialize
 from openvino.tools.mo import convert_model
+from openvino.tools.mo.back.offline_transformations import (
+    apply_fused_names_cleanup,
+    apply_moc_transformations,
+    apply_user_transformations,
+)
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.utils import logging
@@ -692,32 +698,39 @@ class OVTrainer(Trainer):
             )
             onnx_config = onnx_config_class(self.model.config)
 
+            num_parameters = self.model.num_parameters()
+            save_as_external_data = use_external_data_format(num_parameters) or self.ov_config.save_onnx_model
+            f = io.BytesIO() if not save_as_external_data else os.path.join(output_dir, ONNX_WEIGHTS_NAME)
+            self._onnx_export(self.model, onnx_config, self.ov_config, f)
+            ov_model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
+
+            # if not save_as_external_data:
+            #     Path(os.path.join(output_dir, "dbg_"+ONNX_WEIGHTS_NAME)).write_bytes(f.getbuffer().tobytes())
+
+            # Prune IR if structured pruner exists and in post warm-up stage
             movement_controller = self._get_movement_sparsity_controller_if_exists()
             if movement_controller is not None:
-                # Note:
-                # OpenVINO provides automated structured pruning of sparse structure in IR.
-                # However it requires static axes, current export utilizes nncf exporter
-                # which generates static-shaped IR.
-                f = os.path.join(output_dir, ONNX_WEIGHTS_NAME)
-                original_device = get_model_device(self.model)
-                # prevent modification to original model by PTExporter which affects data parallel
-                model = deepcopy(self.model)
-                exporter = PTExporter(
-                    model, input_names=list(onnx_config.inputs.keys()), output_names=list(onnx_config.outputs.keys())
-                )
-                exporter.export_model(f)
-                self._generate_openvino_ir(f)
-                self.model.to(original_device)
+                if self._should_apply_pruning_transform():
+                    try:
+                        # OpenVINO IR pruning requires static-shaped input
+                        ov_model = self._reshape_ir(ov_model, static_shape=True)
+                        apply_moc_transformations(ov_model)
+                        compress_quantize_weights_transformation(ov_model)
+                        apply_user_transformations(ov_model, [("Pruning", {})])
+                        apply_fused_names_cleanup(ov_model)
+                        # Reshaping dynamic IR
+                        ov_model = self._reshape_ir(ov_model, static_shape=False)
+                    except Exception as err:
+                        debug_onnx_path = os.path.join(output_dir, "debug_" + ONNX_WEIGHTS_NAME)
+                        Path(debug_onnx_path).write_bytes(f.getbuffer().tobytes())
+                        logger.warning(
+                            f"Error encountered during IR pruning: {err}. {debug_onnx_path} is dumped for debug. Run continues."
+                        )
             else:
-                num_parameters = self.model.num_parameters()
-                save_as_external_data = use_external_data_format(num_parameters) or self.ov_config.save_onnx_model
-                f = io.BytesIO() if not save_as_external_data else os.path.join(output_dir, ONNX_WEIGHTS_NAME)
-                self._onnx_export(self.model, onnx_config, self.ov_config, f)
+                compress_quantize_weights_transformation(ov_model)
 
-                # Load and save the compressed model
-                model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
-                compress_quantize_weights_transformation(model)
-                openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
+            # Serialize IR xml and bin
+            serialize(ov_model, output_path, output_path.replace(".xml", ".bin"))
 
     def _get_movement_sparsity_controller_if_exists(self) -> Optional[MovementSparsityController]:
         if isinstance(self.compression_controller, MovementSparsityController):
@@ -735,20 +748,15 @@ class OVTrainer(Trainer):
             and movement_controller.scheduler.current_stage == MovementSchedulerStage.POST_WARMUP
         )
 
-    def _generate_openvino_ir(self, onnx_model):
-        try:
-            if self._should_apply_pruning_transform():
-                ov_model = convert_model(onnx_model, transform="Pruning")
+    def _reshape_ir(self, ov_model, static_shape):
+        new_iport_cfg = dict()
+        for iport in ov_model.inputs:
+            if static_shape is True:
+                new_iport_cfg[iport.any_name] = PartialShape(list(range(1, len(iport.partial_shape) + 1)))
             else:
-                ov_model = convert_model(onnx_model)
-        except Exception as err:
-            logger.warning(
-                f"Error encountered during IR generation: {err}. Run continues, please check compression config and model.onnx"
-            )
-        else:
-            xml_pth = os.path.join(os.path.dirname(onnx_model), OV_XML_FILE_NAME)
-            bin_pth = os.path.join(os.path.dirname(onnx_model), OV_XML_FILE_NAME.replace(".xml", ".bin"))
-            openvino.runtime.serialize(ov_model, xml_pth, bin_pth)
+                new_iport_cfg[iport.any_name] = PartialShape([-1] * len(iport.partial_shape))
+        ov_model.reshape(new_iport_cfg)
+        return ov_model
 
     def _set_task(self):
         if self.task is None:
