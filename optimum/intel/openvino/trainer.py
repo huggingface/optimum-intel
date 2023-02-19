@@ -704,9 +704,6 @@ class OVTrainer(Trainer):
             self._onnx_export(self.model, onnx_config, self.ov_config, f)
             ov_model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
 
-            # if not save_as_external_data:
-            #     Path(os.path.join(output_dir, "dbg_"+ONNX_WEIGHTS_NAME)).write_bytes(f.getbuffer().tobytes())
-
             # Prune IR if structured pruner exists and in post warm-up stage
             movement_controller = self._get_movement_sparsity_controller_if_exists()
             if movement_controller is not None:
