@@ -18,19 +18,18 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Union
 
-import transformers
-from transformers import AutoConfig, PretrainedConfig
-from transformers.file_utils import add_start_docstrings, default_cache_path
-from transformers.onnx.utils import get_preprocessor
+from transformers import PretrainedConfig
+from transformers.file_utils import add_start_docstrings
 
 import openvino
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from openvino.runtime import Core
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
 from optimum.modeling_base import OptimizedModel
+from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
 from ..utils.import_utils import is_transformers_version
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
@@ -227,7 +226,10 @@ class OVBaseModel(OptimizedModel):
             model_save_dir = Path(model_cache_path).parent
             bin_file_name = file_names[1] if not from_onnx else None
             model = cls.load_model(file_names[0], bin_file_name=bin_file_name)
-        return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
+
+        preprocessors = maybe_load_preprocessors(model_id)
+
+        return cls(model, config=config, model_save_dir=model_save_dir, preprocessors=preprocessors, **kwargs)
 
     @classmethod
     def _from_transformers(
@@ -284,6 +286,7 @@ class OVBaseModel(OptimizedModel):
             opset=onnx_config.DEFAULT_ONNX_OPSET,
             output=save_dir_path / ONNX_WEIGHTS_NAME,
         )
+        maybe_save_preprocessors(model_id, save_dir_path)
 
         return cls._from_pretrained(
             model_id=save_dir_path,

@@ -94,40 +94,46 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
 
     def test_load_from_hub_and_save_model(self):
+        model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID)
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID)
-        self.assertIsInstance(loaded_model.config, PretrainedConfig)
-        loaded_model_outputs = loaded_model(**tokens)
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt")
+        self.assertIsInstance(model.config, PretrainedConfig)
+        model_outputs = model(**tokens)
 
         with tempfile.TemporaryDirectory() as tmpdirname:
-            loaded_model.save_pretrained(tmpdirname)
+            model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            model = OVModelForSequenceClassification.from_pretrained(tmpdirname)
+            loaded_model = OVModelForSequenceClassification.from_pretrained(tmpdirname)
+            loaded_tokenizer = AutoTokenizer.from_pretrained(tmpdirname)
 
-        outputs = model(**tokens)
-        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+        tokens = loaded_tokenizer(inputs, return_tensors="pt")
+        loaded_model_outputs = loaded_model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, model_outputs.logits))
 
     def test_load_from_hub_and_save_seq2seq_model(self):
-        tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForSeq2SeqLM.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID, compile=False)
-        self.assertIsInstance(loaded_model.config, PretrainedConfig)
-        loaded_model.to("cpu")
-        loaded_model_outputs = loaded_model.generate(**tokens)
+        model = OVModelForSeq2SeqLM.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID, compile=False)
+        tokenizer = AutoTokenizer.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID)
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt")
+        self.assertIsInstance(model.config, PretrainedConfig)
+        model.to("cpu")
+        model_outputs = model.generate(**tokens)
 
         with tempfile.TemporaryDirectory() as tmpdirname:
-            loaded_model.save_pretrained(tmpdirname)
+            model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_ENCODER_NAME in folder_contents)
             self.assertTrue(OV_DECODER_NAME in folder_contents)
             self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
-            model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, device="cpu")
+            loaded_model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, device="cpu")
+            loaded_tokenizer = AutoTokenizer.from_pretrained(tmpdirname)
 
-        outputs = model.generate(**tokens)
-        self.assertTrue(torch.equal(loaded_model_outputs, outputs))
+        tokens = loaded_tokenizer(inputs, return_tensors="pt")
+        loaded_model_outputs = loaded_model.generate(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs, model_outputs))
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):

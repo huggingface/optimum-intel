@@ -18,18 +18,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Union
 
-import transformers
-from transformers import AutoConfig, PretrainedConfig
-from transformers.file_utils import add_start_docstrings, default_cache_path
-from transformers.onnx import FeaturesManager, export
-from transformers.onnx.utils import get_preprocessor
+from transformers import PretrainedConfig
+from transformers.file_utils import add_start_docstrings
 
 import openvino
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from openvino._offline_transformations import compress_model_transformation
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export
+from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
@@ -266,12 +264,15 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             else:
                 decoder_with_past = None
 
+        preprocessors = maybe_load_preprocessors(model_id)
+
         return cls(
             encoder=encoder,
             decoder=decoder,
             decoder_with_past=decoder_with_past,
             config=config,
             model_save_dir=model_save_dir,
+            preprocessors=preprocessors,
             **kwargs,
         )
 
@@ -343,6 +344,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             output_dir=save_dir_path,
             output_names=output_names,
         )
+        maybe_save_preprocessors(model_id, save_dir_path)
 
         return cls._from_pretrained(
             model_id=save_dir_path,
