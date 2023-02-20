@@ -29,6 +29,7 @@ from transformers.utils import WEIGHTS_NAME
 
 import evaluate
 from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
+from openvino.runtime import PartialShape
 from optimum.intel.openvino import OVTrainingArguments
 from optimum.intel.openvino.configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
 from optimum.intel.openvino.modeling import OVModelForSequenceClassification
@@ -296,9 +297,10 @@ class OVTrainerTrainingTest(unittest.TestCase):
             self.assertTrue(Path(output_dir, WEIGHTS_NAME).is_file())
             self.assertTrue(Path(output_dir, OV_XML_FILE_NAME).is_file())
 
-            # check saved ovmodel can output
+            # check saved ovmodel IR and output
             ovmodel = OVModelForSequenceClassification.from_pretrained(output_dir)
             self.check_irmodel_is_dynamic(ovmodel.model)
+            self.check_irmodel_reshaping(ovmodel.model)
             self.check_ovmodel_output_equals_torch_output(ovmodel, trainer.model)
 
             # check ovmodel quantization ops
@@ -370,4 +372,30 @@ class OVTrainerTrainingTest(unittest.TestCase):
                 )
 
     def check_irmodel_is_dynamic(self, irmodel):
+        self.assertTrue(irmodel.is_dynamic())
+
+    def check_irmodel_reshaping(self, irmodel):
+        def _reshape_ir_by_input_shape(ov_model, batch_size, seqlen):
+            new_input_cfg = dict()
+            for input_ in ov_model.inputs:
+                new_input_cfg[input_.any_name] = PartialShape([batch_size, seqlen])
+            ov_model.reshape(new_input_cfg)
+            return ov_model
+
+        def _assertInputsEqual(ov_model, shape):
+            for input_ in ov_model.inputs:
+                self.assertSequenceEqual(list(input_.get_shape()), shape)
+
+        bs, sl = 4, 256
+        irmodel = _reshape_ir_by_input_shape(irmodel, batch_size=bs, seqlen=sl)
+        _assertInputsEqual(irmodel, shape=[bs, sl])
+
+        irmodel = _reshape_ir_by_input_shape(irmodel, batch_size=-1, seqlen=-1)
+        self.assertTrue(irmodel.is_dynamic())
+
+        bs, sl = 1, 89
+        irmodel = _reshape_ir_by_input_shape(irmodel, batch_size=bs, seqlen=sl)
+        _assertInputsEqual(irmodel, shape=[bs, sl])
+
+        irmodel = _reshape_ir_by_input_shape(irmodel, batch_size=-1, seqlen=-1)
         self.assertTrue(irmodel.is_dynamic())
