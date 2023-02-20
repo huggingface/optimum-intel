@@ -23,7 +23,7 @@ from collections import defaultdict
 from copy import deepcopy
 from itertools import chain
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
 import torch
 import torch.distributed as dist
@@ -61,6 +61,7 @@ from transformers.utils import (
 )
 
 import openvino
+import openvino.runtime
 from nncf import NNCFConfig
 from nncf.common.logging.logger import nncf_logger, set_log_level
 from nncf.common.utils.tensorboard import prepare_for_tensorboard
@@ -69,8 +70,10 @@ from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityContr
 from nncf.experimental.torch.sparsity.movement.scheduler import MovementSchedulerStage
 from nncf.torch import create_compressed_model
 from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
+from nncf.torch.compression_method_api import PTCompressionAlgorithmController
 from nncf.torch.exporter import PTExporter
 from nncf.torch.nncf_network import NNCFNetwork
+from nncf.torch.quantization.algo import QuantizationController
 from nncf.torch.utils import get_model_device
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, PartialShape, serialize
@@ -82,6 +85,7 @@ from openvino.tools.mo.back.offline_transformations import (
 )
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
+from optimum.intel.openvino.modeling import OVModel
 from optimum.utils import logging
 
 from .configuration import OVConfig
@@ -704,55 +708,59 @@ class OVTrainer(Trainer):
             self._onnx_export(self.model, onnx_config, self.ov_config, f)
             ov_model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
 
-            # Prune IR if structured pruner exists and in post warm-up stage
-            movement_controller = self._get_movement_sparsity_controller_if_exists()
-            if movement_controller is not None:
-                if self._should_apply_pruning_transform():
-                    try:
-                        # OpenVINO IR pruning requires static-shaped input
-                        ov_model = self._reshape_ir(ov_model, static_shape=True)
-                        apply_moc_transformations(ov_model)
+            # Prune IR if structured pruning is conducted on the model
+            if self._should_apply_pruning_transform():
+                try:
+                    # OpenVINO IR pruning requires static-shaped input
+                    ov_model = self._reshape_ir(ov_model, static_shape=True)
+                    apply_moc_transformations(ov_model)
+                    if self._get_compression_controller_by_cls(QuantizationController) is not None:
                         compress_quantize_weights_transformation(ov_model)
-                        apply_user_transformations(ov_model, [("Pruning", {})])
-                        apply_fused_names_cleanup(ov_model)
-                        # Reshaping dynamic IR
-                        ov_model = self._reshape_ir(ov_model, static_shape=False)
-                    except Exception as err:
-                        debug_onnx_path = os.path.join(output_dir, "debug_" + ONNX_WEIGHTS_NAME)
-                        Path(debug_onnx_path).write_bytes(f.getbuffer().tobytes())
-                        logger.warning(
-                            f"Error encountered during IR pruning: {err}. {debug_onnx_path} is dumped for debug. Run continues."
-                        )
+                    apply_user_transformations(ov_model, [("Pruning", {})])
+                    apply_fused_names_cleanup(ov_model)
+                    # Reshape back to dynamic shape IR
+                    ov_model = self._reshape_ir(ov_model, static_shape=False)
+                except Exception as err:
+                    onnx_path = Path(output_dir, ONNX_WEIGHTS_NAME)
+                    if not save_as_external_data:
+                        onnx_path.write_bytes(f.getvalue())
+                    logger.warning(
+                        f"Error encountered during IR pruning: {err}. {onnx_path} is dumped for debug. Run continues."
+                    )
             else:
-                compress_quantize_weights_transformation(ov_model)
+                if self._get_compression_controller_by_cls(QuantizationController) is not None:
+                    compress_quantize_weights_transformation(ov_model)
 
             # Serialize IR xml and bin
             serialize(ov_model, output_path, output_path.replace(".xml", ".bin"))
 
-    def _get_movement_sparsity_controller_if_exists(self) -> Optional[MovementSparsityController]:
-        if isinstance(self.compression_controller, MovementSparsityController):
+    def _get_compression_controller_by_cls(
+        self, controller_cls: Type[PTCompressionAlgorithmController]
+    ) -> Optional[PTCompressionAlgorithmController]:
+        if isinstance(self.compression_controller, controller_cls):
             return self.compression_controller
         if isinstance(self.compression_controller, PTCompositeCompressionAlgorithmController):
             for child_controller in self.compression_controller.child_ctrls:
-                if isinstance(child_controller, MovementSparsityController):
+                if isinstance(child_controller, controller_cls):
                     return child_controller
         return None
 
-    def _should_apply_pruning_transform(self):
-        movement_controller = self._get_movement_sparsity_controller_if_exists()
+    def _should_apply_pruning_transform(self) -> bool:
+        movement_controller = self._get_compression_controller_by_cls(MovementSparsityController)
         return (
             movement_controller is not None
+            and movement_controller.scheduler.enable_structured_masking
             and movement_controller.scheduler.current_stage == MovementSchedulerStage.POST_WARMUP
         )
 
-    def _reshape_ir(self, ov_model, static_shape):
-        new_iport_cfg = dict()
-        for iport in ov_model.inputs:
+    def _reshape_ir(self, ov_model: openvino.runtime.Model, static_shape: bool) -> openvino.runtime.Model:
+        new_input_cfg = dict()
+        for input_ in ov_model.inputs:
             if static_shape is True:
-                new_iport_cfg[iport.any_name] = PartialShape(list(range(1, len(iport.partial_shape) + 1)))
+                new_input_cfg[input_.any_name] = PartialShape(list(range(1, len(input_.partial_shape) + 1)))
             else:
-                new_iport_cfg[iport.any_name] = PartialShape([-1] * len(iport.partial_shape))
-        ov_model.reshape(new_iport_cfg)
+                new_input_cfg[input_.any_name] = PartialShape([-1] * len(input_.partial_shape))
+        ov_model.reshape(new_input_cfg)
         return ov_model
 
     def _set_task(self):

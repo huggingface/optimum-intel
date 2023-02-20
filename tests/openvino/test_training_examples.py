@@ -49,8 +49,8 @@ class TrainingExampleDescriptor:
         return [*args, flag, str(output_dir)]
 
 
-TRAINING_EXAMPLE_DESCRIPTORS = [
-    TrainingExampleDescriptor(
+TRAINING_EXAMPLE_DESCRIPTORS = {
+    "text-classification-QAT": TrainingExampleDescriptor(
         cwd=OPENVINO_EXAMPLES_PATH / "text-classification",
         filename="run_glue.py",
         args=[
@@ -84,7 +84,7 @@ TRAINING_EXAMPLE_DESCRIPTORS = [
         ],
         timeout=300,
     ),
-    TrainingExampleDescriptor(
+    "text-classification-JPQD": TrainingExampleDescriptor(
         cwd=OPENVINO_EXAMPLES_PATH / "text-classification",
         filename="run_glue.py",
         args=[
@@ -122,7 +122,7 @@ TRAINING_EXAMPLE_DESCRIPTORS = [
         ],
         timeout=300,
     ),
-]
+}
 
 
 def get_available_cuda_device_ids() -> List[int]:
@@ -142,8 +142,8 @@ class OVTrainingExampleTest(unittest.TestCase):
         self.available_cuda_device_ids = get_available_cuda_device_ids()
         self.env = os.environ.copy()
 
-    @parameterized.expand(zip(TRAINING_EXAMPLE_DESCRIPTORS))
-    def test_single_card_training(self, desc: TrainingExampleDescriptor):
+    @parameterized.expand(TRAINING_EXAMPLE_DESCRIPTORS.items())
+    def test_single_card_training(self, _, desc: TrainingExampleDescriptor):
         if len(self.available_cuda_device_ids) < 1:
             self.skipTest("No enough cuda devices.")
 
@@ -159,8 +159,8 @@ class OVTrainingExampleTest(unittest.TestCase):
             self.assertEqual(return_code, 0)
             self.assertTrue(Path(output_dir, OV_XML_FILE_NAME).is_file())
 
-    @parameterized.expand(zip(TRAINING_EXAMPLE_DESCRIPTORS))
-    def test_data_parallel_training(self, desc: TrainingExampleDescriptor):
+    @parameterized.expand(TRAINING_EXAMPLE_DESCRIPTORS.items())
+    def test_data_parallel_training(self, _, desc: TrainingExampleDescriptor):
         if len(self.available_cuda_device_ids) < 2:
             self.skipTest("No enough cuda devices.")
 
@@ -176,8 +176,8 @@ class OVTrainingExampleTest(unittest.TestCase):
             self.assertEqual(return_code, 0)
             self.assertTrue(Path(output_dir, OV_XML_FILE_NAME).is_file())
 
-    @parameterized.expand(zip(TRAINING_EXAMPLE_DESCRIPTORS))
-    def test_distributed_data_parallel_training(self, desc: TrainingExampleDescriptor):
+    @parameterized.expand(TRAINING_EXAMPLE_DESCRIPTORS.items())
+    def test_distributed_data_parallel_training(self, _, desc: TrainingExampleDescriptor):
         if len(self.available_cuda_device_ids) < 2:
             self.skipTest("No enough cuda devices.")
 
