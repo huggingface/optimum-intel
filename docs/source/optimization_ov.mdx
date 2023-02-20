@@ -203,8 +203,11 @@ After applying quantization on our model, we can then easily load it with our `O
 from transformers import pipeline
 from optimum.intel.openvino import OVModelForSequenceClassification
 
-ov_model = OVModelForSequenceClassification.from_pretrained(model_dir)
-tokenizer = AutoTokenizer.from_pretrained(model_dir)
+model_id = "helenai/distilbert-base-uncased-finetuned-sst-2-english-ov-int8"
+
+ov_model = OVModelForSequenceClassification.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+
 cls_pipe = pipeline("text-classification", model=ov_model, tokenizer=tokenizer)
 
 text = "He's a dreadful magician."
