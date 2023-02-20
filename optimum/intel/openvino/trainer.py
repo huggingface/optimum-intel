@@ -18,12 +18,10 @@ import math
 import os
 import sys
 import time
-import warnings
 from collections import defaultdict
-from copy import deepcopy
 from itertools import chain
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Callable, Dict, List, Optional, Tuple, Type, Union
 
 import torch
 import torch.distributed as dist
@@ -71,13 +69,10 @@ from nncf.experimental.torch.sparsity.movement.scheduler import MovementSchedule
 from nncf.torch import create_compressed_model
 from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
 from nncf.torch.compression_method_api import PTCompressionAlgorithmController
-from nncf.torch.exporter import PTExporter
 from nncf.torch.nncf_network import NNCFNetwork
 from nncf.torch.quantization.algo import QuantizationController
-from nncf.torch.utils import get_model_device
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, PartialShape, serialize
-from openvino.tools.mo import convert_model
 from openvino.tools.mo.back.offline_transformations import (
     apply_fused_names_cleanup,
     apply_moc_transformations,
@@ -85,7 +80,6 @@ from openvino.tools.mo.back.offline_transformations import (
 )
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
-from optimum.intel.openvino.modeling import OVModel
 from optimum.utils import logging
 
 from .configuration import OVConfig
