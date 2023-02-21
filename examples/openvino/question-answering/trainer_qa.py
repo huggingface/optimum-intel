@@ -15,7 +15,9 @@
 """
 A subclass of `OVTrainer` specific to Question-Answering tasks
 """
-
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from transformers.trainer_utils import PredictionOutput
 
 from optimum.intel.openvino.trainer import OVTrainer
@@ -26,6 +28,7 @@ class QuestionAnsweringOVTrainer(OVTrainer):
         super().__init__(*args, **kwargs)
         self.eval_examples = eval_examples
         self.post_process_function = post_process_function
+        self.criterion = nn.CrossEntropyLoss()
 
     def evaluate(self, eval_dataset=None, eval_examples=None, ignore_keys=None, metric_key_prefix: str = "eval"):
         eval_dataset = self.eval_dataset if eval_dataset is None else eval_dataset
@@ -95,3 +98,51 @@ class QuestionAnsweringOVTrainer(OVTrainer):
                 metrics[f"{metric_key_prefix}_{key}"] = metrics.pop(key)
 
         return PredictionOutput(predictions=predictions.predictions, label_ids=predictions.label_ids, metrics=metrics)
+
+    def compute_distillation_loss(self, inputs, student_outputs):
+        with torch.no_grad():
+            teacher_outputs = self.teacher(**inputs)
+
+        temperature = self.args.distillation_temperature
+        distilliation_loss_start = F.kl_div(
+            input=F.log_softmax(student_outputs.start_logits / temperature, dim=-1),
+            target=F.softmax(teacher_outputs.start_logits / temperature, dim=-1),
+            reduction="batchmean",
+        ) * (temperature**2)
+        distilliation_loss_end = F.kl_div(
+            input=F.log_softmax(student_outputs.end_logits / temperature, dim=-1),
+            target=F.softmax(teacher_outputs.end_logits / temperature, dim=-1),
+            reduction="batchmean",
+        ) * (temperature**2)
+        return (distilliation_loss_start + distilliation_loss_end) / 2.0
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        if self.teacher is None:
+            retval = super().compute_loss(model, inputs, return_outputs)
+
+            if return_outputs is True:
+                loss, outputs = retval
+            else:
+                loss = retval
+        else:
+            # compute_loss is not used as QA distillation requires custom handling for outputs
+            # Using compute_loss incurs excessive computational footprint
+            outputs = self.model(**inputs)
+
+            task_loss_start = self.criterion(outputs.start_logits, inputs["start_positions"])
+            task_loss_end = self.criterion(outputs.end_logits, inputs["end_positions"])
+            task_loss = (task_loss_start + task_loss_end) / 2.0
+
+            distillation_loss = self.compute_distillation_loss(inputs, outputs)
+            loss = (1 - self.args.distillation_weight) * task_loss + self.args.distillation_weight * distillation_loss
+            if model.training:
+                self.compression_metrics["task_loss"] = task_loss.item()
+                self.compression_metrics["distillation_loss"] = distillation_loss.item()
+
+        if self.compression_controller is not None:
+            compression_loss = self.compression_controller.loss()
+            loss += compression_loss
+            if model.training:
+                self.compression_metrics["compression_loss"] = compression_loss.item()
+
+        return (loss, outputs) if return_outputs else loss
