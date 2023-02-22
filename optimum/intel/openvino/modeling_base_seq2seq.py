@@ -193,7 +193,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
             encoder = cls.load_model(os.path.join(model_id, encoder_file_name))
             decoder = cls.load_model(os.path.join(model_id, decoder_file_name))
-            decoder_with_past = cls.load_model(os.path.join(model_id, decoder_with_past_file_name)) if use_cache else None
+            decoder_with_past = (
+                cls.load_model(os.path.join(model_id, decoder_with_past_file_name)) if use_cache else None
+            )
             model_save_dir = Path(model_id)
 
         # Load model from hub
