@@ -104,17 +104,18 @@ class OVBaseModel(OptimizedModel):
             self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
     @staticmethod
-    def load_model(file_name: Union[str, Path], bin_file_name: Optional[Union[str, Path]] = None):
+    def load_model(file_name: Union[str, Path]):
         """
         Loads the model.
 
         Arguments:
             file_name (`str` or `Path`):
                 The path of the model ONNX or XML file.
-            bin_file_name (`str` or `Path`, *optional*):
-                The path of the model binary file, for OpenVINO IR the weights file is expected to be in the same
-                directory as the .xml file if not provided.
         """
+        if isinstance(file_name, str):
+            file_name = Path(file_name)
+        bin_file_name = file_name.with_suffix(".bin") if file_name.suffix == ".xml" else None
+
         return core.read_model(file_name, bin_file_name)
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
@@ -184,8 +185,7 @@ class OVBaseModel(OptimizedModel):
                     "The file names `ov_model.xml` and `ov_model.bin` will be soon deprecated."
                     "Make sure to rename your file to respectively `openvino_model.xml` and `openvino_model.bin`"
                 )
-            bin_file_name = file_name.replace(".xml", ".bin") if not from_onnx else None
-            model = cls.load_model(file_name, bin_file_name)
+            model = cls.load_model(file_name)
             model_save_dir = model_id
         # Download the model from the hub
         else:
@@ -225,8 +225,7 @@ class OVBaseModel(OptimizedModel):
                     "Make sure to rename your file to respectively `openvino_model.xml` and `openvino_model.bin`"
                 )
             model_save_dir = Path(model_cache_path).parent
-            bin_file_name = file_names[1] if not from_onnx else None
-            model = cls.load_model(file_names[0], bin_file_name=bin_file_name)
+            model = cls.load_model(file_names[0])
         return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
 
     @classmethod
