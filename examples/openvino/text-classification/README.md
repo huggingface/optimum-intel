@@ -51,6 +51,11 @@ On a single V100 GPU, this script should run in ~40 minutes and yield accuracy o
 `OVTrainer` also provides advanced optimization workflow via NNCF to structurally prune, quantize and distillation. Following is an example to optimize a sparse-quantized BERT-base model for SST2, distilling from a BERT-large teacher. Do take note of additional NNCF config `--nncf_compression_config`.
 More on how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
+To run the JPQD example, please install optimum-intel from source. This command will install or upgrade optimum-intel and all necessary dependencies:
+
+```python -m pip install --upgrade "git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[openvino, nncf]"
+```
+
 ```bash
 TASK_NAME=sst2
 python run_glue.py \
