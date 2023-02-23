@@ -147,9 +147,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         prompt = "sailing ship in storm by Leonardo da Vinci"
         height = 16
         width = 16
-        vae_scale_factor = 4 # needed for dummy stable diffusion model
+        vae_scale_factor = 4  # needed for dummy stable diffusion model
         pipeline_outputs = loaded_pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np")
-        self.assertEqual(pipeline_outputs.images.shape, (1,  height // vae_scale_factor, width // vae_scale_factor, 3))
+        self.assertEqual(pipeline_outputs.images.shape, (1, height // vae_scale_factor, width // vae_scale_factor, 3))
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
