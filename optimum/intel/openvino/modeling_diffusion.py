@@ -174,12 +174,14 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
 
         if not os.path.isdir(model_id):
             allow_patterns = [os.path.join(k, "*") for k in config.keys() if not k.startswith("_")]
-
             allow_patterns += list(
                 {
                     vae_decoder_file_name,
                     text_encoder_file_name,
                     unet_file_name,
+                    vae_decoder_file_name.replace(".xml", ".bin"),
+                    vae_decoder_file_name.replace(".xml", ".bin"),
+                    unet_file_name.replace(".xml", ".bin"),
                     SCHEDULER_CONFIG_NAME,
                     CONFIG_NAME,
                     cls.config_name,
@@ -193,7 +195,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
                 use_auth_token=use_auth_token,
                 revision=revision,
                 allow_patterns=allow_patterns,
-                ignore_patterns=["*.msgpack", "*.safetensors", "*.bin"],
+                ignore_patterns=["*.msgpack", "*.safetensors", "*pytorch_model.bin"],
             )
         new_model_save_dir = Path(model_id)
 

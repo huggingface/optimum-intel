@@ -107,6 +107,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         super().__init__(*args, **kwargs)
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
+        self.OV_STABLE_DIFFUSION_MODEL_ID = "echarlaix/stable-diffusion-2-1-openvino"
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
@@ -126,7 +127,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
 
     def test_load_from_hub_and_save_seq2seq_model(self):
-        tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
+        tokenizer = AutoTokenizer.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         loaded_model = OVModelForSeq2SeqLM.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
@@ -143,6 +144,30 @@ class OVModelIntegrationTest(unittest.TestCase):
 
         outputs = model.generate(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs, outputs))
+
+    def test_load_from_hub_and_save_stable_diffusion_model(self):
+        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_STABLE_DIFFUSION_MODEL_ID, compile=False)
+        self.assertIsInstance(loaded_pipeline.config, Dict)
+        # loaded_pipeline.to("cpu")
+        # prompt = "sailing ship in storm by Leonardo da Vinci"
+        # loaded_pipeline_outputs = loaded_pipeline(prompt, num_inference_steps=2, output_type="np").images
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            loaded_pipeline.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertIn(loaded_pipeline.config_name, folder_contents)
+            for subfoler in {
+                DIFFUSION_MODEL_UNET_SUBFOLDER,
+                DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+                DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
+            }:
+                folder_contents = os.listdir(os.path.join(tmpdirname, subfoler))
+                self.assertIn(OV_XML_FILE_NAME, folder_contents)
+                self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
+                # pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
+
+        # outputs = pipeline(prompt, num_inference_steps=2, output_type="np").images
+        # self.assertTrue(torch.equal(loaded_pipeline_outputs, outputs))
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
