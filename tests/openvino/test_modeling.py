@@ -144,9 +144,11 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_load_from_hub_and_save_stable_diffusion_model(self):
         loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_STABLE_DIFFUSION_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_pipeline.config, Dict)
-        # loaded_pipeline.to("cpu")
-        # prompt = "sailing ship in storm by Leonardo da Vinci"
-        # loaded_pipeline_outputs = loaded_pipeline(prompt, num_inference_steps=2, output_type="np").images
+        prompt = "sailing ship in storm by Leonardo da Vinci"
+        height = 16
+        width = 16
+        pipeline_outputs = loaded_pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np")
+        self.assertEqual(pipeline_outputs.images.shape, (1, height, width, 3))
 
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
@@ -162,8 +164,8 @@ class OVModelIntegrationTest(unittest.TestCase):
                 self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
                 # pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
 
-        # outputs = pipeline(prompt, num_inference_steps=2, output_type="np").images
-        # self.assertTrue(torch.equal(loaded_pipeline_outputs, outputs))
+        # outputs = pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np").images
+        # self.assertTrue(torch.equal(pipeline_outputs.images, outputs))
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
