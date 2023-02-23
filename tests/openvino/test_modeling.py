@@ -634,16 +634,17 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
         outputs = pipeline([prompt] * batch_size, num_inference_steps=2, output_type="np").images
         self.assertEqual(outputs.shape, (batch_size, 128, 128, 3))
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
-    def test_static_shapes(self):
+    def test_num_images_per_prompt(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
         batch_size = 3
         num_images_per_prompt = 4
         height = 128
         width = 64
+        vae_scale_factor = 4
         prompt = "sailing ship in storm by Leonardo da Vinci"
-        pipeline = OVStableDiffusionPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-2-1", export=True, compile=False
-        )
+        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, compile=False)
         pipeline.half()
         pipeline.reshape(
             batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt
@@ -658,7 +659,10 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
             width=width,
             output_type="np",
         ).images
-        self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
+        self.assertEqual(
+            outputs.shape,
+            (batch_size * num_images_per_prompt, height // vae_scale_factor, width // vae_scale_factor, 3),
+        )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
