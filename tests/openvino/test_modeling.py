@@ -56,13 +56,9 @@ from optimum.intel.openvino import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
-)
-from optimum.intel.openvino.modeling_diffusion import (
-    OVModelTextEncoder,
-    OVModelUnet,
-    OVModelVaeDecoder,
     OVStableDiffusionPipeline,
 )
+from optimum.intel.openvino.modeling_diffusion import OVModelTextEncoder, OVModelUnet, OVModelVaeDecoder
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.utils import (
     CONFIG_NAME,

@@ -65,6 +65,15 @@ if _nncf_available:
         _nncf_available = False
 
 
+_diffusers_available = importlib.util.find_spec("diffusers") is not None
+_diffusers_version = "N/A"
+if _diffusers_available:
+    try:
+        _diffusers_version = importlib_metadata.version("diffusers")
+    except importlib_metadata.PackageNotFoundError:
+        _diffusers_available = False
+
+
 def is_transformers_available():
     return _transformers_available
 
@@ -79,6 +88,10 @@ def is_openvino_available():
 
 def is_nncf_available():
     return _nncf_available
+
+
+def is_diffusers_available():
+    return _diffusers_available
 
 
 # This function was copied from: https://github.com/huggingface/accelerate/blob/874c4967d94badd24f893064cc3bef45f57cadf7/src/accelerate/utils/versions.py#L319
@@ -127,3 +140,12 @@ def is_openvino_version(operation: str, version: str):
     if not _openvino_available:
         return False
     return compare_versions(parse(_openvino_version), operation, version)
+
+
+def is_diffusers_version(operation: str, version: str):
+    """
+    Compare the current diffusers version to a given reference with an operation.
+    """
+    if not _diffusers_available:
+        return False
+    return compare_versions(parse(_diffusers_version), operation, version)
