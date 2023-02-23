@@ -20,7 +20,7 @@ INSTALL_REQUIRE = [
     "scipy",
 ]
 
-TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate"]
+TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate", "diffusers"]
 
 QUALITY_REQUIRE = ["black==22.3", "isort>=5.5.4"]
 

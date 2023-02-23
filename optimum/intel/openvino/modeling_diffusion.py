@@ -73,12 +73,13 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         device: str = "CPU",
         dynamic_shapes: bool = True,
         compile: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
         **kwargs,
     ):
         self._internal_dict = config
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
-        self.ov_config = {}
+        self.ov_config = ov_config if ov_config is not None else {}
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
         self.text_encoder = OVModelTextEncoder(text_encoder, self)
         self.unet = OVModelUnet(unet, self)
@@ -89,7 +90,10 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         self.text_encoder_request = None
         self.unet_request = None
         self.safety_checker = None
-        self.preprocessors = kwargs.get("preprocessors", [])
+        self.preprocessors = []
+
+        if self.is_dynamic:
+            self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
 
         if compile:
             self.compile()
@@ -134,7 +138,6 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             self.text_encoder.model: save_directory / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
             self.unet.model: save_directory / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name,
         }
-
         for src_file, dst_path in src_to_dst_file.items():
             dst_path.parent.mkdir(parents=True, exist_ok=True)
             openvino.runtime.serialize(src_file, str(dst_path), str(dst_path.with_suffix(".bin")))
@@ -296,8 +299,64 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         self.clear_requests()
         return self
 
-    def reshape(self, *args, **kwargs):
-        logger.warning("Stable Diffusion models do not currently support reshaping.")
+    @property
+    def device(self) -> str:
+        return self._device.lower()
+
+    def _reshape_unet(
+        self,
+        model: openvino.runtime.Model,
+        batch_size: int = -1,
+        height: int = -1,
+        width: int = -1,
+        num_images_per_prompt: int = -1,
+    ):
+        if batch_size == -1 or num_images_per_prompt == -1:
+            batch_size = -1
+        else:
+            # The factor of 2 comes from the guidance scale > 1
+            batch_size = 2 * batch_size * num_images_per_prompt
+
+        height = height // 8 if height > 0 else height
+        width = width // 8 if width > 0 else width
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            if inputs.get_any_name().startswith("timestep"):
+                shapes[inputs][0] = 1
+            elif inputs.get_any_name().startswith("sample"):
+                shapes[inputs] = [batch_size, 4, height, width]
+            else:
+                shapes[inputs][0] = batch_size
+                shapes[inputs][1] = self.tokenizer.model_max_length
+        model.reshape(shapes)
+        return model
+
+    def _reshape_text_encoder(self, model: openvino.runtime.Model, batch_size: int = -1):
+        if batch_size != -1:
+            shapes = {model.inputs[0]: [batch_size, self.tokenizer.model_max_length]}
+            model.reshape(shapes)
+        return model
+
+    def _reshape_vae_decoder(self, model: openvino.runtime.Model, height: int = -1, width: int = -1):
+        height = height // 8 if height > -1 else height
+        width = width // 8 if width > -1 else width
+        shapes = {model.inputs[0]: [1, 4, height, width]}
+        model.reshape(shapes)
+        return model
+
+    def reshape(
+        self,
+        batch_size: int,
+        height: int,
+        width: int,
+        num_images_per_prompt: int = -1,
+    ):
+        self.is_dynamic = -1 in {batch_size, height, width, num_images_per_prompt}
+        self.text_encoder.model = self._reshape_text_encoder(self.text_encoder.model, batch_size)
+        self.vae_decoder.model = self._reshape_vae_decoder(self.vae_decoder.model, height, width)
+        self.unet.model = self._reshape_unet(self.unet.model, batch_size, height, width, num_images_per_prompt)
+        self.clear_requests()
         return self
 
     def half(self):
@@ -321,6 +380,12 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         self.unet._create_inference_request()
 
     def __call__(self, *args, **kwargs):
+        guidance_scale = kwargs.get("guidance_scale", None)
+        if guidance_scale is not None and guidance_scale <= 1 and not self.is_dynamic:
+            raise ValueError(
+                f"`guidance_scale` was set to {guidance_scale}, static shapes are only supported for `guidance_scale` > 1, "
+                "please set `dynamic_shapes` to `True` when loading the model."
+            )
         return StableDiffusionPipelineMixin.__call__(self, *args, **kwargs)
 
     @classmethod
@@ -332,7 +397,9 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
 
 
 class OVModelPart:
-    def __init__(self, model: openvino.runtime.Model, parent_model: "OVModel" = None):
+    def __init__(
+        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+    ):
         self.model = model
         self.parent_model = parent_model
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
@@ -340,7 +407,7 @@ class OVModelPart:
             inputs.get_any_name(): OV_TO_NP_TYPE[inputs.get_element_type().get_type_name()]
             for inputs in self.model.inputs
         }
-        self.ov_config = self.parent_model.ov_config
+        self.ov_config = ov_config or self.parent_model.ov_config
         self.request = None
 
     def _create_inference_request(self):
@@ -363,8 +430,7 @@ class OVModelTextEncoder(OVModelPart):
             "input_ids": input_ids,
         }
         outputs = self.request.infer(inputs)
-        outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        return outputs
+        return list(outputs.values())
 
 
 class OVModelUnet(OVModelPart):
@@ -377,9 +443,9 @@ class OVModelUnet(OVModelPart):
             "timestep": timestep,
             "encoder_hidden_states": encoder_hidden_states,
         }
+
         outputs = self.request.infer(inputs)
-        outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        return outputs
+        return list(outputs.values())
 
 
 class OVModelVaeDecoder(OVModelPart):
@@ -391,5 +457,4 @@ class OVModelVaeDecoder(OVModelPart):
             "latent_sample": latent_sample,
         }
         outputs = self.request.infer(inputs)
-        outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        return outputs
+        return list(outputs.values())

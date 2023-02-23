@@ -17,6 +17,7 @@ import os
 import tempfile
 import time
 import unittest
+from typing import Dict
 
 import numpy as np
 import torch
@@ -56,7 +57,20 @@ from optimum.intel.openvino import (
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
 )
+from optimum.intel.openvino.modeling_diffusion import (
+    OVModelTextEncoder,
+    OVModelUnet,
+    OVModelVaeDecoder,
+    OVStableDiffusionPipeline,
+)
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
+from optimum.utils import (
+    CONFIG_NAME,
+    DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+    DIFFUSION_MODEL_UNET_SUBFOLDER,
+    DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
+)
+from optimum.utils.testing_utils import require_diffusers
 from parameterized import parameterized
 
 
@@ -70,6 +84,7 @@ MODEL_NAMES = {
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "m2m_100": "valhalla/m2m100_tiny_random",
     "roberta": "hf-internal-testing/tiny-random-roberta",
+    "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
     "t5": "hf-internal-testing/tiny-random-t5",
     "vit": "hf-internal-testing/tiny-random-vit",
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
@@ -556,3 +571,112 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-3))
+
+
+class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_diffusers
+    def test_compare_to_diffusers(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        ov_pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, compile=False)
+        self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
+        self.assertIsInstance(ov_pipeline.vae_decoder, OVModelVaeDecoder)
+        self.assertIsInstance(ov_pipeline.unet, OVModelUnet)
+        self.assertIsInstance(ov_pipeline.config, Dict)
+
+        from diffusers import StableDiffusionPipeline
+
+        diffusers_pipeline = StableDiffusionPipeline.from_pretrained(model_id)
+        diffusers_pipeline.safety_checker = None
+        num_images_per_prompt, height, width, scale_factor = 1, 512, 512, 8
+        latents_shape = (
+            num_images_per_prompt,
+            diffusers_pipeline.unet.in_channels,
+            height // scale_factor,
+            width // scale_factor,
+        )
+        latents = np.random.randn(*latents_shape).astype(np.float32)
+        kwargs = {
+            "prompt": "sailing ship in storm by Leonardo da Vinci",
+            "num_inference_steps": 1,
+            "output_type": "np",
+            "num_images_per_prompt": num_images_per_prompt,
+            "height": height,
+            "width": width,
+        }
+        ov_pipeline.to("cpu")
+        ov_pipeline.compile()
+        ov_outputs = ov_pipeline(latents=latents, **kwargs).images
+        self.assertIsInstance(ov_outputs, np.ndarray)
+        with torch.no_grad():
+            diffusers_outputs = diffusers_pipeline(latents=torch.from_numpy(latents), **kwargs).images
+        # Compare model outputs
+        self.assertTrue(np.allclose(ov_outputs, diffusers_outputs, atol=1e-4))
+        # Compare model devices
+        self.assertEqual(diffusers_pipeline.device.type, ov_pipeline.device)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_diffusers
+    def test_num_images_per_prompt(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        num_images_per_prompt = 4
+        batch_size = 6
+        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
+        prompt = "sailing ship in storm by Leonardo da Vinci"
+        outputs = pipeline(prompt, num_inference_steps=2, output_type="np").images
+        self.assertEqual(outputs.shape, (1, 128, 128, 3))
+        outputs = pipeline(
+            prompt, num_inference_steps=2, num_images_per_prompt=num_images_per_prompt, output_type="np"
+        ).images
+        self.assertEqual(outputs.shape, (num_images_per_prompt, 128, 128, 3))
+        outputs = pipeline([prompt] * batch_size, num_inference_steps=2, output_type="np").images
+        self.assertEqual(outputs.shape, (batch_size, 128, 128, 3))
+
+    @require_diffusers
+    def test_static_shapes(self):
+        batch_size = 3
+        num_images_per_prompt = 4
+        height = 128
+        width = 64
+        prompt = "sailing ship in storm by Leonardo da Vinci"
+        pipeline = OVStableDiffusionPipeline.from_pretrained(
+            "stabilityai/stable-diffusion-2-1", export=True, compile=False
+        )
+        pipeline.half()
+        pipeline.reshape(
+            batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt
+        )
+        self.assertFalse(pipeline.is_dynamic)
+        pipeline.compile()
+        outputs = pipeline(
+            [prompt] * batch_size,
+            num_inference_steps=2,
+            num_images_per_prompt=num_images_per_prompt,
+            height=height,
+            width=width,
+            output_type="np",
+        ).images
+        self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_diffusers
+    def test_image_reproducibility(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
+
+        kwargs = {
+            "prompt": "sailing ship in storm by Leonardo da Vinci",
+            "output_type": "np",
+            "num_inference_steps": 2,
+        }
+        np.random.seed(0)
+        outputs_1 = pipeline(**kwargs)
+        np.random.seed(0)
+        outputs_2 = pipeline(**kwargs)
+        outputs_3 = pipeline(**kwargs)
+
+        # Compare model outputs
+        self.assertTrue(np.array_equal(outputs_1.images[0], outputs_2.images[0]))
+        self.assertFalse(np.array_equal(outputs_1.images[0], outputs_3.images[0]))
