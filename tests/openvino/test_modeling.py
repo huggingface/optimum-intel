@@ -103,7 +103,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         super().__init__(*args, **kwargs)
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
-        self.OV_STABLE_DIFFUSION_MODEL_ID = "echarlaix/stable-diffusion-2-1-openvino"
+        self.OV_STABLE_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
@@ -147,9 +147,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         prompt = "sailing ship in storm by Leonardo da Vinci"
         height = 16
         width = 16
+        vae_scale_factor = 4 # needed for dummy stable diffusion model
         pipeline_outputs = loaded_pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np")
-        self.assertEqual(pipeline_outputs.images.shape, (1, height, width, 3))
-
+        self.assertEqual(pipeline_outputs.images.shape, (1,  height // vae_scale_factor, width // vae_scale_factor, 3))
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
@@ -162,10 +162,10 @@ class OVModelIntegrationTest(unittest.TestCase):
                 folder_contents = os.listdir(os.path.join(tmpdirname, subfoler))
                 self.assertIn(OV_XML_FILE_NAME, folder_contents)
                 self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
-                # pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
+                pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
 
-        # outputs = pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np").images
-        # self.assertTrue(torch.equal(pipeline_outputs.images, outputs))
+        outputs = pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np").images
+        self.assertTrue(torch.equal(pipeline_outputs.images, outputs))
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
