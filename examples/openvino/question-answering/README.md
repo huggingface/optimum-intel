@@ -47,9 +47,15 @@ python run_qa.py \
 ```
 
 ### Joint Pruning, Quantization and Distillation (JPQD) for BERT on SQuAD1.0
-`OVTrainer` also provides an advanced optimization workflow through the NNCF when Transformer model can be structurally pruned along with 8-bit quantization and distillation. Below is an example which demonstrates how to jointly prune, quantize BERT-base for SQuAD 1.0 using NNCF config `--nncf_compression_config` and distill from BERT-large teacher. This example closely resembles the movement sparsification work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf). This example takes about 12 hours with a single V100 GPU and the output model attains about 40% structured sparsity (denominated by linear layers only). The joint pruned and quantized OpenVINO IR provides >60% more throughput over quantize-only model on AWS EC2 instance (c6i.32xlarge). Attributed to large teacher distillation, the sparse-quantized model has F1 improved to >89%.
+`OVTrainer` also provides an advanced optimization workflow through the NNCF when Transformer model can be structurally pruned along with 8-bit quantization and distillation. Below is an example which demonstrates how to jointly prune, quantize BERT-base for SQuAD 1.0 using NNCF config `--nncf_compression_config` and distill from BERT-large teacher. This example closely resembles the movement sparsification work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf). This example takes about 12 hours with a single V100 GPU and ~40% of the weights of the Transformer blocks were pruned.
 
 More on how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
+
+To run the JPQD example, please install optimum-intel from source. This command will install or upgrade optimum-intel and all necessary dependencies:
+
+```python -m pip install --upgrade "git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[openvino, nncf]"
+```
+
 ```bash
 python run_qa.py \
     --model_name_or_path bert-base-uncased \

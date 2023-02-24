@@ -596,6 +596,16 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**inputs)
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-3))
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForAudioClassification.from_pretrained(model_id, from_transformers=True)
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
+        outputs = pipe([np.random.random(16000)])
+        self.assertEqual(pipe.device, model.device)
+        self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
+
 
 class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
