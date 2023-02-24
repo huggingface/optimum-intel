@@ -15,6 +15,7 @@
 import logging
 from typing import Any, Dict, Optional
 
+import numpy as np
 import torch
 import transformers
 from transformers import (
@@ -157,13 +158,13 @@ class OVModelForSequenceClassification(OVModel):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids.numpy(),
-            "attention_mask": attention_mask.numpy(),
+            "input_ids": np.array(input_ids),
+            "attention_mask": np.array(attention_mask),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids.numpy()
+            inputs["token_type_ids"] = np.array(token_type_ids)
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -218,13 +219,13 @@ class OVModelForQuestionAnswering(OVModel):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids.numpy(),
-            "attention_mask": attention_mask.numpy(),
+            "input_ids": np.array(input_ids),
+            "attention_mask": np.array(attention_mask),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids.numpy()
+            inputs["token_type_ids"] = np.array(token_type_ids)
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -279,13 +280,13 @@ class OVModelForTokenClassification(OVModel):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids.numpy(),
-            "attention_mask": attention_mask.numpy(),
+            "input_ids": np.array(input_ids),
+            "attention_mask": np.array(attention_mask),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids.numpy()
+            inputs["token_type_ids"] = np.array(token_type_ids)
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -333,13 +334,13 @@ class OVModelForFeatureExtraction(OVModel):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids.numpy(),
-            "attention_mask": attention_mask.numpy(),
+            "input_ids": np.array(input_ids),
+            "attention_mask": np.array(attention_mask),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids.numpy()
+            inputs["token_type_ids"] = np.array(token_type_ids)
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -431,13 +432,13 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids.numpy(),
-            "attention_mask": attention_mask.numpy(),
+            "input_ids": np.array(input_ids),
+            "attention_mask": np.array(attention_mask),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids.numpy()
+            inputs["token_type_ids"] = np.array(token_type_ids)
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -522,13 +523,13 @@ class OVModelForMaskedLM(OVModel):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids.numpy(),
-            "attention_mask": attention_mask.numpy(),
+            "input_ids": np.array(input_ids),
+            "attention_mask": np.array(attention_mask),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids.numpy()
+            inputs["token_type_ids"] = np.array(token_type_ids)
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -583,7 +584,7 @@ class OVModelForImageClassification(OVModel):
         self.compile()
 
         inputs = {
-            "pixel_values": pixel_values.numpy(),
+            "pixel_values": np.array(pixel_values),
         }
 
         # Run inference
@@ -641,12 +642,12 @@ class OVModelForAudioClassification(OVModel):
         self.compile()
 
         inputs = {
-            "input_values": input_values.numpy(),
+            "input_values": np.array(input_values),
         }
 
         # Add the token_type_ids when needed
         if "attention_mask" in self.input_names:
-            inputs["attention_mask"] = attention_mask.numpy()
+            inputs["attention_mask"] = np.array(attention_mask)
 
         # Run inference
         outputs = self.request.infer(inputs)
