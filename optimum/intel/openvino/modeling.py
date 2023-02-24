@@ -157,11 +157,11 @@ class OVModelForSequenceClassification(OVModel):
     ):
         self.compile()
 
-        use_torch = isinstance(input_ids, torch.Tensor)
-        if use_torch:
-            input_ids = input_ids.cpu().detach().numpy()
-            attention_mask = attention_mask.cpu().detach().numpy()
-            token_type_ids = token_type_ids.cpu().detach().numpy() if token_type_ids is not None else token_type_ids
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = np.array(input_ids)
+            attention_mask = np.array(attention_mask)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -175,7 +175,7 @@ class OVModelForSequenceClassification(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self.device) if use_torch else outputs["logits"]
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return SequenceClassifierOutput(logits=logits)
 
 
@@ -224,11 +224,11 @@ class OVModelForQuestionAnswering(OVModel):
     ):
         self.compile()
 
-        use_torch = isinstance(input_ids, torch.Tensor)
-        if use_torch:
-            input_ids = input_ids.cpu().detach().numpy()
-            attention_mask = attention_mask.cpu().detach().numpy()
-            token_type_ids = token_type_ids.cpu().detach().numpy() if token_type_ids is not None else token_type_ids
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = np.array(input_ids)
+            attention_mask = np.array(attention_mask)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -243,9 +243,11 @@ class OVModelForQuestionAnswering(OVModel):
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
         start_logits = (
-            torch.from_numpy(outputs["start_logits"]).to(self.device) if use_torch else outputs["start_logits"]
+            torch.from_numpy(outputs["start_logits"]).to(self.device) if not np_inputs else outputs["start_logits"]
         )
-        end_logits = torch.from_numpy(outputs["end_logits"]).to(self.device) if use_torch else outputs["end_logits"]
+        end_logits = (
+            torch.from_numpy(outputs["end_logits"]).to(self.device) if not np_inputs else outputs["end_logits"]
+        )
         return QuestionAnsweringModelOutput(start_logits=start_logits, end_logits=end_logits)
 
 
@@ -293,11 +295,11 @@ class OVModelForTokenClassification(OVModel):
     ):
         self.compile()
 
-        use_torch = isinstance(input_ids, torch.Tensor)
-        if use_torch:
-            input_ids = input_ids.cpu().detach().numpy()
-            attention_mask = attention_mask.cpu().detach().numpy()
-            token_type_ids = token_type_ids.cpu().detach().numpy() if token_type_ids is not None else token_type_ids
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = np.array(input_ids)
+            attention_mask = np.array(attention_mask)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -311,7 +313,7 @@ class OVModelForTokenClassification(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self.device) if use_torch else outputs["logits"]
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return TokenClassifierOutput(logits=logits)
 
 
@@ -353,11 +355,11 @@ class OVModelForFeatureExtraction(OVModel):
     ):
         self.compile()
 
-        use_torch = isinstance(input_ids, torch.Tensor)
-        if use_torch:
-            input_ids = input_ids.cpu().detach().numpy()
-            attention_mask = attention_mask.cpu().detach().numpy()
-            token_type_ids = token_type_ids.cpu().detach().numpy() if token_type_ids is not None else token_type_ids
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = np.array(input_ids)
+            attention_mask = np.array(attention_mask)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -373,7 +375,7 @@ class OVModelForFeatureExtraction(OVModel):
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
 
         last_hidden_state = outputs["last_hidden_state"]
-        if use_torch:
+        if not np_inputs:
             last_hidden_state = torch.from_numpy(last_hidden_state).to(self.device)
 
         return BaseModelOutput(last_hidden_state=last_hidden_state)
@@ -552,11 +554,11 @@ class OVModelForMaskedLM(OVModel):
     ):
         self.compile()
 
-        use_torch = isinstance(input_ids, torch.Tensor)
-        if use_torch:
-            input_ids = input_ids.cpu().detach().numpy()
-            attention_mask = attention_mask.cpu().detach().numpy()
-            token_type_ids = token_type_ids.cpu().detach().numpy() if token_type_ids is not None else token_type_ids
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = np.array(input_ids)
+            attention_mask = np.array(attention_mask)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -570,7 +572,7 @@ class OVModelForMaskedLM(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self.device) if use_torch else outputs["logits"]
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return MaskedLMOutput(logits=logits)
 
 
@@ -618,9 +620,9 @@ class OVModelForImageClassification(OVModel):
     ):
         self.compile()
 
-        use_torch = isinstance(pixel_values, torch.Tensor)
-        if use_torch:
-            pixel_values = pixel_values.cpu().detach().numpy()
+        np_inputs = isinstance(pixel_values, np.ndarray)
+        if not np_inputs:
+            pixel_values = np.array(pixel_values)
 
         inputs = {
             "pixel_values": pixel_values,
@@ -629,7 +631,7 @@ class OVModelForImageClassification(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self.device) if use_torch else outputs["logits"]
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return ImageClassifierOutput(logits=logits)
 
 
@@ -679,10 +681,10 @@ class OVModelForAudioClassification(OVModel):
     ):
         self.compile()
 
-        use_torch = isinstance(input_values, torch.Tensor)
-        if use_torch:
-            input_values = input_values.cpu().detach().numpy()
-            attention_mask = attention_mask.cpu().detach().numpy() if attention_mask is not None else attention_mask
+        np_inputs = isinstance(input_values, np.ndarray)
+        if not np_inputs:
+            input_values = np.array(input_values)
+            attention_mask = np.array(attention_mask) if attention_mask is not None else attention_mask
 
         inputs = {
             "input_values": input_values,
@@ -695,5 +697,5 @@ class OVModelForAudioClassification(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self.device) if use_torch else outputs["logits"]
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return SequenceClassifierOutput(logits=logits)
