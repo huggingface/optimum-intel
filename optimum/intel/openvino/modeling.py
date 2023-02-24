@@ -157,13 +157,13 @@ class OVModelForSequenceClassification(OVModel):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
+            "input_ids": input_ids.numpy(),
+            "attention_mask": attention_mask.numpy(),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids.numpy()
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -218,13 +218,13 @@ class OVModelForQuestionAnswering(OVModel):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
+            "input_ids": input_ids.numpy(),
+            "attention_mask": attention_mask.numpy(),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids.numpy()
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -279,13 +279,13 @@ class OVModelForTokenClassification(OVModel):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
+            "input_ids": input_ids.numpy(),
+            "attention_mask": attention_mask.numpy(),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids.numpy()
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -333,13 +333,13 @@ class OVModelForFeatureExtraction(OVModel):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
+            "input_ids": input_ids.numpy(),
+            "attention_mask": attention_mask.numpy(),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids.numpy()
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -431,13 +431,13 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
+            "input_ids": input_ids.numpy(),
+            "attention_mask": attention_mask.numpy(),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids.numpy()
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -522,13 +522,13 @@ class OVModelForMaskedLM(OVModel):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
+            "input_ids": input_ids.numpy(),
+            "attention_mask": attention_mask.numpy(),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids.numpy()
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -583,7 +583,7 @@ class OVModelForImageClassification(OVModel):
         self.compile()
 
         inputs = {
-            "pixel_values": pixel_values,
+            "pixel_values": pixel_values.numpy(),
         }
 
         # Run inference
@@ -641,12 +641,12 @@ class OVModelForAudioClassification(OVModel):
         self.compile()
 
         inputs = {
-            "input_values": input_values,
+            "input_values": input_values.numpy(),
         }
 
         # Add the token_type_ids when needed
         if "attention_mask" in self.input_names:
-            inputs["attention_mask"] = attention_mask
+            inputs["attention_mask"] = attention_mask.numpy()
 
         # Run inference
         outputs = self.request.infer(inputs)
