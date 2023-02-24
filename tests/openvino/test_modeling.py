@@ -148,10 +148,12 @@ class OVModelIntegrationTest(unittest.TestCase):
         height = 16
         width = 16
         vae_scale_factor = 4  # needed for dummy stable diffusion model
+        np.random.seed(0)
         pipeline_outputs = loaded_pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np")
         self.assertEqual(pipeline_outputs.images.shape, (1, height // vae_scale_factor, width // vae_scale_factor, 3))
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
+            pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
             self.assertIn(loaded_pipeline.config_name, folder_contents)
             for subfoler in {
@@ -162,10 +164,9 @@ class OVModelIntegrationTest(unittest.TestCase):
                 folder_contents = os.listdir(os.path.join(tmpdirname, subfoler))
                 self.assertIn(OV_XML_FILE_NAME, folder_contents)
                 self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
-                pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
-
+        np.random.seed(0)
         outputs = pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np").images
-        self.assertTrue(torch.equal(pipeline_outputs.images, outputs))
+        self.assertTrue(np.array_equal(pipeline_outputs.images, outputs))
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
