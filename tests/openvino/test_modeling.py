@@ -432,7 +432,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
         for input_type in ["pt", "np"]:
-            inputs = preprocessor(images=image, return_tensors="pt")
+            inputs = preprocessor(images=image, return_tensors=input_type)
             ov_outputs = ov_model(**inputs)
             self.assertIn("logits", ov_outputs)
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
