@@ -539,7 +539,7 @@ class INCModel:
 
                     raise EnvironmentError(msg)
 
-        if config.backend == "ipex":
+        if getattr(config, "backend", None) == "ipex":
             # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.
             # return load(state_dict_path)
             load_model = torch.jit.load(state_dict_path)
