@@ -26,7 +26,7 @@ QUALITY_REQUIRE = ["black==22.3", "isort>=5.5.4"]
 
 EXTRAS_REQUIRE = {
     "neural-compressor": ["neural-compressor>=2.0.0", "onnx", "onnxruntime"],
-    "openvino": ["openvino==2023.0.0.dev20230217", "onnx", "onnxruntime"],
+    "openvino": ["openvino>=2023.0.0.dev20230217", "onnx", "onnxruntime"],
     "nncf": [
         "nncf>=2.4.0",
         "openvino-dev==2023.0.0.dev20230217",
