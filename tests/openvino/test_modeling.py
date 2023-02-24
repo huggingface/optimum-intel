@@ -75,6 +75,11 @@ MODEL_NAMES = {
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
 }
 
+TENSOR_ALIAS_TO_TYPE = {
+    "pt": torch.Tensor,
+    "np": np.ndarray,
+}
+
 SEED = 42
 
 
@@ -145,14 +150,17 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-        ov_outputs = ov_model(**tokens)
-        self.assertTrue("logits" in ov_outputs)
-        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
-        gc.collect()
+        for input_type in ["pt", "np"]:
+            tokens = tokenizer(inputs, return_tensors=input_type)
+            ov_outputs = ov_model(**tokens)
+            self.assertIn("logits", ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -199,16 +207,24 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-        ov_outputs = ov_model(**tokens)
-        self.assertTrue("start_logits" in ov_outputs)
-        self.assertTrue("end_logits" in ov_outputs)
-        self.assertIsInstance(ov_outputs.start_logits, torch.Tensor)
-        self.assertIsInstance(ov_outputs.end_logits, torch.Tensor)
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
-        self.assertTrue(torch.allclose(ov_outputs.start_logits, transformers_outputs.start_logits, atol=1e-4))
-        self.assertTrue(torch.allclose(ov_outputs.end_logits, transformers_outputs.end_logits, atol=1e-4))
+        for input_type in ["pt", "np"]:
+            tokens = tokenizer(inputs, return_tensors=input_type)
+            ov_outputs = ov_model(**tokens)
+            self.assertIn("start_logits", ov_outputs)
+            self.assertIn("end_logits", ov_outputs)
+            self.assertIsInstance(ov_outputs.start_logits, TENSOR_ALIAS_TO_TYPE[input_type])
+            self.assertIsInstance(ov_outputs.end_logits, TENSOR_ALIAS_TO_TYPE[input_type])
+            # Compare tensor outputs
+            self.assertTrue(
+                torch.allclose(torch.Tensor(ov_outputs.start_logits), transformers_outputs.start_logits, atol=1e-4)
+            )
+            self.assertTrue(
+                torch.allclose(torch.Tensor(ov_outputs.end_logits), transformers_outputs.end_logits, atol=1e-4)
+            )
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -257,13 +273,17 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForTokenClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-        ov_outputs = ov_model(**tokens)
-        self.assertTrue("logits" in ov_outputs)
-        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        for input_type in ["pt", "np"]:
+            tokens = tokenizer(inputs, return_tensors=input_type)
+            ov_outputs = ov_model(**tokens)
+            self.assertIn("logits", ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -293,15 +313,21 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModel.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-        ov_outputs = ov_model(**tokens)
-        self.assertTrue("last_hidden_state" in ov_outputs)
-        self.assertIsInstance(ov_outputs.last_hidden_state, torch.Tensor)
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
-        self.assertTrue(
-            torch.allclose(ov_outputs.last_hidden_state, transformers_outputs.last_hidden_state, atol=1e-4)
-        )
+        for input_type in ["pt", "np"]:
+            tokens = tokenizer(inputs, return_tensors=input_type)
+            ov_outputs = ov_model(**tokens)
+            self.assertIn("last_hidden_state", ov_outputs)
+            self.assertIsInstance(ov_outputs.last_hidden_state, TENSOR_ALIAS_TO_TYPE[input_type])
+            # Compare tensor outputs
+            self.assertTrue(
+                torch.allclose(
+                    torch.Tensor(ov_outputs.last_hidden_state), transformers_outputs.last_hidden_state, atol=1e-4
+                )
+            )
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -333,6 +359,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
+        # Compare tensor outputs
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
         gc.collect()
 
@@ -363,13 +390,17 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForMaskedLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer(f"This is a sample {tokenizer.mask_token}", return_tensors="pt")
-        ov_outputs = ov_model(**tokens)
-        self.assertTrue("logits" in ov_outputs)
-        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        inputs = f"This is a sample {tokenizer.mask_token}"
+        tokens = tokenizer(inputs, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        for input_type in ["pt", "np"]:
+            tokens = tokenizer(inputs, return_tensors=input_type)
+            ov_outputs = ov_model(**tokens)
+            self.assertIn("logits", ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -398,12 +429,15 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         url = "http://images.cocodataset.org/val2017/000000039769.jpg"
         image = Image.open(requests.get(url, stream=True).raw)
         inputs = preprocessor(images=image, return_tensors="pt")
-        ov_outputs = ov_model(**inputs)
-        self.assertTrue("logits" in ov_outputs)
-        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        for input_type in ["pt", "np"]:
+            inputs = preprocessor(images=image, return_tensors=input_type)
+            ov_outputs = ov_model(**inputs)
+            self.assertIn("logits", ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -549,13 +583,17 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForAudioClassification.from_pretrained(model_id)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        inputs = preprocessor([np.random.random(16000)], sampling_rate=preprocessor.sampling_rate, return_tensors="pt")
-        ov_outputs = ov_model(**inputs)
-        self.assertTrue("logits" in ov_outputs)
-        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        wavs = [np.random.random(16000)]
+        inputs = preprocessor(wavs, sampling_rate=preprocessor.sampling_rate, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-3))
+        for input_type in ["pt", "np"]:
+            inputs = preprocessor(wavs, sampling_rate=preprocessor.sampling_rate, return_tensors=input_type)
+            ov_outputs = ov_model(**inputs)
+            self.assertIn("logits", ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
