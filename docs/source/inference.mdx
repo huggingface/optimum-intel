@@ -139,11 +139,11 @@ from optimum.intel.openvino import OVStableDiffusionPipeline
 
 model_id = "runwayml/stable-diffusion-v1-5"
 stable_diffusion = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
-prompt = "sailing ship in storm by Leonardo da Vinci"
+prompt = "sailing ship in storm by Rembrandt"
 image = stable_diffusion(prompt).images[0]
 ```
 
-![img](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/openvino/stable_diffusion_v2_1_sail_boat.png)
+![img](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/stable_diffusion_v2_1_sail_boat_rembrandt.png)
 
 
 ## Supported tasks
