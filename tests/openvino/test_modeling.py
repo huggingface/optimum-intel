@@ -594,3 +594,13 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
             # Compare tensor outputs
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForAudioClassification.from_pretrained(model_id, from_transformers=True)
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
+        outputs = pipe([np.random.random(16000)])
+        self.assertEqual(pipe.device, model.device)
+        self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
