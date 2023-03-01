@@ -33,4 +33,4 @@ class NeuralCoderAdaptorTest(unittest.TestCase):
         # determine if the code optimization is correct
         import filecmp
 
-        self.assertEqual(True, filecmp.cmp("run_glue_target.py", "run_glue_source_optimized.py"))
+        self.assertEqual(True, filecmp.cmp("run_glue_target.txt", "run_glue_source_optimized.py"))
