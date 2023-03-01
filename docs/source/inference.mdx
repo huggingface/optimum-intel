@@ -132,15 +132,26 @@ are exported to the OpenVINO format, they are decomposed into three components t
 - The U-NET
 - The VAE decoder
 
-Here is an example of how you can load a stable diffusion model, export it to the OpenVINO format and run inference using OpenVINO Runtime:
+Here is an example of how you can load an OpenVINO Stable Diffusion model and run inference using OpenVINO Runtime:
 
 ```python
 from optimum.intel.openvino import OVStableDiffusionPipeline
 
-model_id = "runwayml/stable-diffusion-v1-5"
-stable_diffusion = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
+model_id = "echarlaix/stable-diffusion-2-1-openvino"
+stable_diffusion = OVStableDiffusionPipeline.from_pretrained(model_id)
 prompt = "sailing ship in storm by Rembrandt"
 image = stable_diffusion(prompt).images[0]
+```
+
+To load your PyTorch model and convert it to the OpenVINO format on-the-fly, simply pass `export=True` to the `from_pretrained` method.
+After this step, don't forget to save your model using the `save_pretrained` method, to be able to load your OpenVINO model directly.
+
+```python
+model_id = "stabilityai/stable-diffusion-2-1"
+stable_diffusion = ORTStableDiffusionPipeline.from_pretrained(model_id, export=True)
+
+# Save the exported model
+stable_diffusion.save_pretrained("a_local_path")
 ```
 
 ![img](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/stable_diffusion_v2_1_sail_boat_rembrandt.png)
