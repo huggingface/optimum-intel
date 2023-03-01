@@ -1,8 +1,8 @@
 import unittest
-
 from argparse import Namespace
-from optimum.intel.neural_compressor.neural_coder_adaptor import NeuralCoderAdaptor
+
 from neural_coder.launcher import Launcher
+from optimum.intel.neural_compressor.neural_coder_adaptor import NeuralCoderAdaptor
 
 
 class NeuralCoderAdaptorTest(unittest.TestCase):
@@ -33,4 +33,4 @@ class NeuralCoderAdaptorTest(unittest.TestCase):
         # determine if the code optimization is correct
         import filecmp
 
-        self.assertEqual(True, filecmp.cmp("run_glue_target.txt", "run_glue_source_optimized.py"))
+        self.assertEqual(True, filecmp.cmp("run_glue_target.py", "run_glue_source_optimized.py"))
