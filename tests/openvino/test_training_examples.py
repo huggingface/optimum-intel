@@ -143,6 +143,22 @@ class OVTrainingExampleTest(unittest.TestCase):
         self.env = os.environ.copy()
 
     @parameterized.expand(TRAINING_EXAMPLE_DESCRIPTORS.items())
+    def test_cpu_training(self, _, desc: TrainingExampleDescriptor):
+        self.env[CUDA_VISIBLE_DEVICES] = '-1'
+        with tempfile.TemporaryDirectory() as output_dir:
+            args = [sys.executable, desc.filename, *desc.get_args_with_output_dir(output_dir)]
+            if "--fp16" in args:
+                args.remove("--fp16")  # CPU training with fp16 is not supported
+            proc = subprocess.Popen(
+                args=args,
+                cwd=desc.cwd,
+                env=self.env.copy(),
+            )
+            return_code = proc.wait(desc.timeout)
+            self.assertEqual(return_code, 0)
+            self.assertTrue(Path(output_dir, OV_XML_FILE_NAME).is_file())
+
+    @parameterized.expand(TRAINING_EXAMPLE_DESCRIPTORS.items())
     def test_single_card_training(self, _, desc: TrainingExampleDescriptor):
         if len(self.available_cuda_device_ids) < 1:
             self.skipTest("No enough cuda devices.")
