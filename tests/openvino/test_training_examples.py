@@ -144,7 +144,7 @@ class OVTrainingExampleTest(unittest.TestCase):
 
     @parameterized.expand(TRAINING_EXAMPLE_DESCRIPTORS.items())
     def test_cpu_training(self, _, desc: TrainingExampleDescriptor):
-        self.env[CUDA_VISIBLE_DEVICES] = '-1'
+        self.env[CUDA_VISIBLE_DEVICES] = "-1"
         with tempfile.TemporaryDirectory() as output_dir:
             args = [sys.executable, desc.filename, *desc.get_args_with_output_dir(output_dir)]
             if "--fp16" in args:
