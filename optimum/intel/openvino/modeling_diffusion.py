@@ -34,11 +34,6 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export_models, get_stable_diffusion_models_for_export
 from optimum.pipelines.diffusers.pipeline_stable_diffusion import StableDiffusionPipelineMixin
 from optimum.utils import (
-    DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
-    DIFFUSION_MODEL_UNET_SUBFOLDER,
-    DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
-)
-from optimum.utils.constant import (
     CONFIG_NAME,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
@@ -74,15 +69,30 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         dynamic_shapes: bool = True,
         compile: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         **kwargs,
     ):
         self._internal_dict = config
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {}
-        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
-        self.text_encoder = OVModelTextEncoder(text_encoder, self)
-        self.unet = OVModelUnet(unet, self)
+        model_save_dir = model_save_dir.name if isinstance(model_save_dir, TemporaryDirectory) else model_save_dir
+
+        self.vae_decoder = OVModelVaeDecoder(
+            vae_decoder,
+            self,
+            {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)},
+        )
+        self.text_encoder = OVModelTextEncoder(
+            text_encoder,
+            self,
+            {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER)},
+        )
+        self.unet = OVModelUnet(
+            unet,
+            self,
+            {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_UNET_SUBFOLDER)},
+        )
         self.tokenizer = tokenizer
         self.scheduler = scheduler
         self.feature_extractor = feature_extractor
