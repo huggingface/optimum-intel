@@ -69,7 +69,7 @@ class ModelArguments:
     model_name_or_path: str = field(
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
-    teacher_model_or_path: str = field(
+    teacher_model_name_or_path: str = field(
         default=None, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
     config_name: Optional[str] = field(
@@ -350,10 +350,10 @@ def main():
     )
 
     teacher_model = None
-    if model_args.teacher_model_or_path is not None:
+    if model_args.teacher_model_name_or_path is not None:
         teacher_model = AutoModelForQuestionAnswering.from_pretrained(
-            model_args.teacher_model_or_path,
-            from_tf=bool(".ckpt" in model_args.teacher_model_or_path),
+            model_args.teacher_model_name_or_path,
+            from_tf=bool(".ckpt" in model_args.teacher_model_name_or_path),
             cache_dir=model_args.cache_dir,
         )
 

@@ -46,7 +46,7 @@ Following is an example to prune Swin-base model structurally, quantize while di
 ```bash
 python run_image_classification.py \
     --model_name_or_path microsoft/swin-base-patch4-window7-224 \
-    --teacher_model_or_path skylord/swin-finetuned-food101 \
+    --teacher_model_name_or_path skylord/swin-finetuned-food101 \
     --distillation_weight 0.9 \
     --ignore_mismatched_sizes \
     --dataset_name food101 \

@@ -69,7 +69,7 @@ More on how to configure movement sparsity, see NNCF documentation [here](https:
 ```bash
 python run_audio_classification.py \
     --model_name_or_path facebook/wav2vec2-base \
-    --teacher_model_or_path anton-l/wav2vec2-base-ft-keyword-spotting \
+    --teacher_model_name_or_path anton-l/wav2vec2-base-ft-keyword-spotting \
     --nncf_compression_config configs/wav2vec2-base-jpqd.json \
     --distillation_weight 0.9 \
     --dataset_name superb \
