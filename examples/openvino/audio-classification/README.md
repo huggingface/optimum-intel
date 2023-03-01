@@ -16,17 +16,11 @@ limitations under the License.
 
 # Audio classification examples
 
-The following examples showcase how to fine-tune `Wav2Vec2` for audio classification using PyTorch.
+This folder contains [`run_audio_classification.py`](https://github.com/huggingface/optimum/blob/main/examples/openvino/audio-classification/run_audio_classification.py), a script to fine-tune a 🤗 Transformers model on the 🗣️ [Keyword Spotting subset](https://huggingface.co/datasets/superb#ks) of the SUPERB dataset while applying quantization aware training (QAT). QAT can be easily applied by replacing the Transformers [`Trainer`](https://huggingface.co/docs/transformers/main/en/main_classes/trainer#trainer) with the Optimum [`OVTrainer`]. Any model from our [hub](https://huggingface.co/models) can be fine-tuned and quantized, as long as the model is supported by the [`AutoModelForAudioClassification`](https://huggingface.co/docs/transformers/main/en/model_doc/auto#transformers.AutoModelForAudioClassification) API.
 
-Speech recognition models that have been pretrained in unsupervised fashion on audio data alone,
-*e.g.* [Wav2Vec2](https://huggingface.co/transformers/main/model_doc/wav2vec2.html),
-[HuBERT](https://huggingface.co/transformers/main/model_doc/hubert.html),
-[XLSR-Wav2Vec2](https://huggingface.co/transformers/main/model_doc/xlsr_wav2vec2.html), have shown to require only
-very little annotated data to yield good performance on speech classification datasets.
+### Fintuning Wav2Vec2 on Keyword Spotting with QAT
 
-## Single-GPU
-
-The following command shows how to fine-tune [wav2vec2-base](https://huggingface.co/facebook/wav2vec2-base) on the 🗣️ [Keyword Spotting subset](https://huggingface.co/datasets/superb#ks) of the SUPERB dataset.
+The following command shows how to fine-tune [wav2vec2-base](https://huggingface.co/facebook/wav2vec2-base) on the 🗣️ [Keyword Spotting subset](https://huggingface.co/datasets/superb#ks) of the SUPERB dataset with Quantization Aware Training (QAT).
 
 ```bash
 python run_audio_classification.py \
@@ -56,15 +50,22 @@ python run_audio_classification.py \
     --load_best_model_at_end True \
     --metric_for_best_model accuracy \
     --save_total_limit 3 \
-    --seed 0 \
-    --push_to_hub
+    --seed 42
 ```
 
 On a single V100 GPU, this script should run in ~45 minutes and yield quantized model with accuracy of **98.1%**.
 
-### Joint Pruning, Quantization and Distillation (JPQD) of Wav2Vec2 for Keyword Spotting
-Above example results in a quantized model through `OVTrainer`. `OVTrainer` also provides an advanced optimization workflow through the NNCF which can structurally prune transformer along with 8-bit quantization and distillation. Following is an example to jointly prune, quantize, distill a Wav2Vec2 model for keyword spotting task. Do take note of additional NNCF config `--nncf_compression_config`.
-More on how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
+### Joint Pruning, Quantization and Distillation (JPQD) of Wav2Vec2 on Keyword Spotting
+
+`OVTrainer` also provides advanced optimization workflow via NNCF to structurally prune, quantize and distillation. Following is an example to jointly prune, quantize, distill a Wav2Vec2 model for keyword spotting task. Do take note of additional NNCF config `--nncf_compression_config`. More on how to configure the pruning algorithm, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
+
+To run the JPQD example, please install optimum-intel from source. This command will install or upgrade optimum-intel and all necessary dependencies:
+
+```bash
+python -m pip install --upgrade "git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[openvino, nncf]"
+```
+
+After installation, launch the run with:
 
 ```bash
 python run_audio_classification.py \
@@ -74,7 +75,7 @@ python run_audio_classification.py \
     --distillation_weight 0.9 \
     --dataset_name superb \
     --dataset_config_name ks \
-    --output_dir /tmp/wav2vec2_ks \
+    --output_dir /tmp/jpqd-wav2vec2-base-ft-keyword-spotting \
     --overwrite_output_dir \
     --remove_unused_columns False \
     --do_eval \
@@ -95,8 +96,8 @@ python run_audio_classification.py \
     --evaluation_strategy epoch \
     --save_strategy epoch \
     --load_best_model_at_end False \
-    --metric_for_best_model accuracy \
-    --save_total_limit 5 \
-    --seed 42 
+    --save_total_limit 3 \
+    --seed 42
 ```
-This script should take about 3hrs on a single V100 GPU and produce a 80% quantized wav2vec2 with ~80% structured sparsity in its linear layers. The model accuracy should converge to about 97.5%. Its IR gives an additional ~50% throughput over quantize-only IR on AWS EC2 instance (c6i.32xlarge). 
+
+This script should take about 3hrs on a single V100 GPU and produce a 80% quantized wav2vec2 with ~80% structured sparsity in its linear layers. The model accuracy should converge to about 97.5%. Its IR gives an additional ~50% throughput over quantize-only IR on AWS EC2 instance (c6i.32xlarge).

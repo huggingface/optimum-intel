@@ -42,7 +42,17 @@ python run_image_classification.py \
 ```
 
 ### Joint Pruning, Quantization and Distillation on Swin for food101
-Following is an example to prune Swin-base model structurally, quantize while distilling from a swin-base model fine-tuned on food101. More on how to configure the pruning algorithm, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
+
+Following is an example to prune Swin-base model structurally, quantize while distilling from a swin-base model fine-tuned on food101. Do take note of additional NNCF config `--nncf_compression_config`. More on how to configure the pruning algorithm, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
+
+To run the JPQD example, please install optimum-intel from source. This command will install or upgrade optimum-intel and all necessary dependencies:
+
+```bash
+python -m pip install --upgrade "git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[openvino, nncf]"
+```
+
+After installation, launch the run with:
+
 ```bash
 python run_image_classification.py \
     --model_name_or_path microsoft/swin-base-patch4-window7-224 \
@@ -68,6 +78,7 @@ python run_image_classification.py \
     --seed 42 \
     --overwrite_output_dir \
     --output_dir /tmp/food101_outputs/ \
-    --nncf_compression_config configs/swin-base-movement-sparsity.json
+    --nncf_compression_config configs/swin-base-jpqd.json
 ```
+
 This example results in a quantized swin-base model with ~40% sparsity in the transformer blocks, giving 90.84% accuracy on food101 and taking about 12.5hours on a single V100 GPU.
