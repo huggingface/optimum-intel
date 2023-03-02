@@ -150,15 +150,13 @@ images = stable_diffusion(prompt).images
 
 To load your PyTorch model and convert it to OpenVINO on-the-fly, you can set `export=True`.
 
+Don't forget to save the resulting OpenVINO model using the `save_pretrained` method.
+
 
 ```python
 model_id = "stabilityai/stable-diffusion-2-1"
 stable_diffusion = ORTStableDiffusionPipeline.from_pretrained(model_id, export=True)
-```
 
-Don't forget to save the resulting OpenVINO model using the `save_pretrained` method.
-
-```python
 # Save the exported model
 stable_diffusion.save_pretrained("a_local_path")
 ```
