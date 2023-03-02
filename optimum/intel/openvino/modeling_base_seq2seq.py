@@ -190,22 +190,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     "will be soon deprecated. Make sure to rename your file to respectively `openvino_encoder_model.xml`, "
                     "`openvino_decoder_model.xml` and `openvino_decoder_with_past_model.xml`"
                 )
-            encoder_bin_file_name = (
-                os.path.join(model_id, encoder_file_name.replace(".xml", ".bin")) if not from_onnx else None
-            )
-            decoder_bin_file_name = (
-                os.path.join(model_id, decoder_file_name.replace(".xml", ".bin")) if not from_onnx else None
-            )
-            decoder_with_past_bin_file_name = (
-                os.path.join(model_id, decoder_with_past_file_name.replace(".xml", ".bin")) if not from_onnx else None
-            )
 
-            encoder = cls.load_model(os.path.join(model_id, encoder_file_name), encoder_bin_file_name)
-            decoder = cls.load_model(os.path.join(model_id, decoder_file_name), decoder_bin_file_name)
+            encoder = cls.load_model(os.path.join(model_id, encoder_file_name))
+            decoder = cls.load_model(os.path.join(model_id, decoder_file_name))
             decoder_with_past = (
-                cls.load_model(os.path.join(model_id, decoder_with_past_file_name), decoder_with_past_bin_file_name)
-                if use_cache
-                else None
+                cls.load_model(os.path.join(model_id, decoder_with_past_file_name)) if use_cache else None
             )
             model_save_dir = Path(model_id)
 
@@ -257,14 +246,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 )
 
             model_save_dir = Path(model_cache_path).parent
-            encoder = cls.load_model(file_names["encoder"], bin_file_name=file_names.pop("encoder_bin", None))
-            decoder = cls.load_model(file_names["decoder"], bin_file_name=file_names.pop("decoder_bin", None))
-            if use_cache:
-                decoder_with_past = cls.load_model(
-                    file_names["decoder_with_past"], bin_file_name=file_names.pop("decoder_with_past_bin", None)
-                )
-            else:
-                decoder_with_past = None
+            encoder = cls.load_model(file_names["encoder"])
+            decoder = cls.load_model(file_names["decoder"])
+            decoder_with_past = cls.load_model(file_names["decoder_with_past"]) if use_cache else None
 
         return cls(
             encoder=encoder,

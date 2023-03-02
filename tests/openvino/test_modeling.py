@@ -17,6 +17,7 @@ import os
 import tempfile
 import time
 import unittest
+from typing import Dict
 
 import numpy as np
 import torch
@@ -55,8 +56,17 @@ from optimum.intel.openvino import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
+    OVStableDiffusionPipeline,
 )
+from optimum.intel.openvino.modeling_diffusion import OVModelTextEncoder, OVModelUnet, OVModelVaeDecoder
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
+from optimum.utils import (
+    CONFIG_NAME,
+    DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+    DIFFUSION_MODEL_UNET_SUBFOLDER,
+    DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
+)
+from optimum.utils.testing_utils import require_diffusers
 from parameterized import parameterized
 
 
@@ -70,6 +80,7 @@ MODEL_NAMES = {
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "m2m_100": "valhalla/m2m100_tiny_random",
     "roberta": "hf-internal-testing/tiny-random-roberta",
+    "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
     "t5": "hf-internal-testing/tiny-random-t5",
     "vit": "hf-internal-testing/tiny-random-vit",
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
@@ -97,6 +108,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         super().__init__(*args, **kwargs)
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
+        self.OV_STABLE_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
@@ -116,7 +128,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
 
     def test_load_from_hub_and_save_seq2seq_model(self):
-        tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
+        tokenizer = AutoTokenizer.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         loaded_model = OVModelForSeq2SeqLM.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
@@ -133,6 +145,33 @@ class OVModelIntegrationTest(unittest.TestCase):
 
         outputs = model.generate(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs, outputs))
+
+    def test_load_from_hub_and_save_stable_diffusion_model(self):
+        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_STABLE_DIFFUSION_MODEL_ID, compile=False)
+        self.assertIsInstance(loaded_pipeline.config, Dict)
+        prompt = "sailing ship in storm by Leonardo da Vinci"
+        height = 16
+        width = 16
+        vae_scale_factor = 4  # needed for dummy stable diffusion model
+        np.random.seed(0)
+        pipeline_outputs = loaded_pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np")
+        self.assertEqual(pipeline_outputs.images.shape, (1, height // vae_scale_factor, width // vae_scale_factor, 3))
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            loaded_pipeline.save_pretrained(tmpdirname)
+            pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertIn(loaded_pipeline.config_name, folder_contents)
+            for subfoler in {
+                DIFFUSION_MODEL_UNET_SUBFOLDER,
+                DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+                DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
+            }:
+                folder_contents = os.listdir(os.path.join(tmpdirname, subfoler))
+                self.assertIn(OV_XML_FILE_NAME, folder_contents)
+                self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
+        np.random.seed(0)
+        outputs = pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np").images
+        self.assertTrue(np.array_equal(pipeline_outputs.images, outputs))
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
@@ -604,3 +643,116 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         outputs = pipe([np.random.random(16000)])
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
+
+
+class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_diffusers
+    def test_compare_to_diffusers(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        ov_pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, compile=False)
+        self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
+        self.assertIsInstance(ov_pipeline.vae_decoder, OVModelVaeDecoder)
+        self.assertIsInstance(ov_pipeline.unet, OVModelUnet)
+        self.assertIsInstance(ov_pipeline.config, Dict)
+
+        from diffusers import StableDiffusionPipeline
+
+        diffusers_pipeline = StableDiffusionPipeline.from_pretrained(model_id)
+        diffusers_pipeline.safety_checker = None
+        num_images_per_prompt, height, width, scale_factor = 1, 512, 512, 8
+        latents_shape = (
+            num_images_per_prompt,
+            diffusers_pipeline.unet.in_channels,
+            height // scale_factor,
+            width // scale_factor,
+        )
+        latents = np.random.randn(*latents_shape).astype(np.float32)
+        kwargs = {
+            "prompt": "sailing ship in storm by Leonardo da Vinci",
+            "num_inference_steps": 1,
+            "output_type": "np",
+            "num_images_per_prompt": num_images_per_prompt,
+            "height": height,
+            "width": width,
+        }
+        ov_pipeline.to("cpu")
+        ov_pipeline.compile()
+        ov_outputs = ov_pipeline(latents=latents, **kwargs).images
+        self.assertIsInstance(ov_outputs, np.ndarray)
+        with torch.no_grad():
+            diffusers_outputs = diffusers_pipeline(latents=torch.from_numpy(latents), **kwargs).images
+        # Compare model outputs
+        self.assertTrue(np.allclose(ov_outputs, diffusers_outputs, atol=1e-4))
+        # Compare model devices
+        self.assertEqual(diffusers_pipeline.device.type, ov_pipeline.device)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_diffusers
+    def test_num_images_per_prompt(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        num_images_per_prompt = 4
+        batch_size = 6
+        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
+        prompt = "sailing ship in storm by Leonardo da Vinci"
+        outputs = pipeline(prompt, num_inference_steps=2, output_type="np").images
+        self.assertEqual(outputs.shape, (1, 128, 128, 3))
+        outputs = pipeline(
+            prompt, num_inference_steps=2, num_images_per_prompt=num_images_per_prompt, output_type="np"
+        ).images
+        self.assertEqual(outputs.shape, (num_images_per_prompt, 128, 128, 3))
+        outputs = pipeline([prompt] * batch_size, num_inference_steps=2, output_type="np").images
+        self.assertEqual(outputs.shape, (batch_size, 128, 128, 3))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_diffusers
+    def test_num_images_per_prompt(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        batch_size = 3
+        num_images_per_prompt = 4
+        height = 128
+        width = 64
+        vae_scale_factor = 4
+        prompt = "sailing ship in storm by Leonardo da Vinci"
+        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, compile=False)
+        pipeline.half()
+        pipeline.reshape(
+            batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt
+        )
+        self.assertFalse(pipeline.is_dynamic)
+        pipeline.compile()
+        outputs = pipeline(
+            [prompt] * batch_size,
+            num_inference_steps=2,
+            num_images_per_prompt=num_images_per_prompt,
+            height=height,
+            width=width,
+            output_type="np",
+        ).images
+        self.assertEqual(
+            outputs.shape,
+            (batch_size * num_images_per_prompt, height // vae_scale_factor, width // vae_scale_factor, 3),
+        )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_diffusers
+    def test_image_reproducibility(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
+
+        kwargs = {
+            "prompt": "sailing ship in storm by Leonardo da Vinci",
+            "output_type": "np",
+            "num_inference_steps": 2,
+        }
+        np.random.seed(0)
+        outputs_1 = pipeline(**kwargs)
+        np.random.seed(0)
+        outputs_2 = pipeline(**kwargs)
+        outputs_3 = pipeline(**kwargs)
+
+        # Compare model outputs
+        self.assertTrue(np.array_equal(outputs_1.images[0], outputs_2.images[0]))
+        self.assertFalse(np.array_equal(outputs_1.images[0], outputs_3.images[0]))

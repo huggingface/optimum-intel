@@ -14,7 +14,7 @@
 
 import importlib.util
 
-from ..utils.import_utils import is_nncf_available
+from ..utils.import_utils import is_diffusers_available, is_nncf_available
 from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 
 
@@ -39,3 +39,7 @@ from .modeling import (
     OVModelForTokenClassification,
 )
 from .modeling_seq2seq import OVModelForSeq2SeqLM
+
+
+if is_diffusers_available():
+    from .modeling_diffusion import OVStableDiffusionPipeline

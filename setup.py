@@ -12,7 +12,7 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-    "optimum>=1.6.1",
+    "optimum>=1.7.0",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
     "torch",
@@ -20,17 +20,14 @@ INSTALL_REQUIRE = [
     "scipy",
 ]
 
-TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate"]
+TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate", "diffusers"]
 
 QUALITY_REQUIRE = ["black==22.3", "isort>=5.5.4"]
 
 EXTRAS_REQUIRE = {
     "neural-compressor": ["neural-compressor>=2.0.0", "onnx", "onnxruntime"],
     "openvino": ["openvino>=2023.0.0.dev20230217", "onnx", "onnxruntime"],
-    "nncf": [
-        "nncf>=2.4.0",
-        "openvino-dev>=2023.0.0.dev20230217",
-    ],
+    "nncf": ["nncf>=2.4.0", "openvino-dev>=2023.0.0.dev20230217"],
     "ipex": ["intel_extension_for_pytorch"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
