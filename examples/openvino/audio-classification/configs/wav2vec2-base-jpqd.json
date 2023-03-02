@@ -36,7 +36,7 @@
         "algorithm": "quantization",
         "quantize_inputs": false,
         "preset": "mixed",
-        "overflow_fix": "disable",
+        "overflow_fix": "enable",
         "initializer": {
             "range": {
                 "num_init_samples": 256,
