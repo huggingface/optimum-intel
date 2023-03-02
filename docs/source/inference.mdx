@@ -159,7 +159,7 @@ stable_diffusion = ORTStableDiffusionPipeline.from_pretrained(model_id, export=T
 stable_diffusion.save_pretrained("a_local_path")
 ```
 
-To further speedup inference, the model can be statically reshaped :
+To further speed up inference, the model can be statically reshaped :
 
 ```python
 batch_size = 1
