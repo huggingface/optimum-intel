@@ -123,6 +123,40 @@ tokenizer.save_pretrained(save_directory)
 [{'translation_text': "Il n'est jamais sorti sans un livre sous son bras, et il est souvent revenu avec deux."}]
 ```
 
+
+## Run inference for stable diffusion models
+
+Stable diffusion models can also be used when running inference with OpenVINO. When Stable diffusion models
+are exported to the OpenVINO format, they are decomposed into three components that are later combined during inference:
+- The text encoder
+- The U-NET
+- The VAE decoder
+
+Here is an example of how you can load an OpenVINO Stable Diffusion model and run inference using OpenVINO Runtime:
+
+```python
+from optimum.intel.openvino import OVStableDiffusionPipeline
+
+model_id = "echarlaix/stable-diffusion-2-1-openvino"
+stable_diffusion = OVStableDiffusionPipeline.from_pretrained(model_id)
+prompt = "sailing ship in storm by Rembrandt"
+image = stable_diffusion(prompt).images[0]
+```
+
+To load your PyTorch model and convert it to the OpenVINO format on-the-fly, simply pass `export=True` to the `from_pretrained` method.
+After this step, don't forget to save your model using the `save_pretrained` method, to be able to load your OpenVINO model directly.
+
+```python
+model_id = "stabilityai/stable-diffusion-2-1"
+stable_diffusion = ORTStableDiffusionPipeline.from_pretrained(model_id, export=True)
+
+# Save the exported model
+stable_diffusion.save_pretrained("a_local_path")
+```
+
+![img](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/stable_diffusion_v2_1_sail_boat_rembrandt.png)
+
+
 ## Supported tasks
 
 As shown in the table below, each task is associated with a class enabling to automatically load your model.
@@ -139,3 +173,4 @@ As shown in the table below, each task is associated with a class enabling to au
 | `masked-lm`                          | `OVModelForMaskedLM`                 |
 | `causal-lm`                          | `OVModelForCausalLM`                 |
 | `seq2seq-lm`                         | `OVModelForSeq2SeqLM`                |
+| `text-to-image`                      | `OVStableDiffusionPipeline`          |
