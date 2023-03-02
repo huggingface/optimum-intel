@@ -13,8 +13,9 @@ Optimum Intel can be used to load optimized models from the [Hugging Face Hub](h
 
 ## Switching from Transformers to Optimum Inference
 
-The Optimum Inference models are API compatible with Hugging Face Transformers models. This means you can just replace your `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
-To perform inference from a vanilla Transformers models, which will be later converted to an OpenVINO IR, set `from_transformers=True` when loading the model with the `from_pretrained()` method. 
+You can now easily perform inference with OpenVINO Runtime on a variety of Intel processors ([see](https://docs.openvino.ai/latest/openvino_docs_OV_UG_supported_plugins_Supported_Devices.html) the full list of supported devices). 
+For that, just replace the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
+To load a Transformers model and convert it to the OpenVINO format on-the-fly, you can set `export=True` when loading your model.
 
 Here is an example on how to perform inference with OpenVINO Runtime for a text classification class:
 
@@ -24,7 +25,7 @@ Here is an example on how to perform inference with OpenVINO Runtime for a text 
 from transformers import AutoTokenizer, pipeline
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 -model = AutoModelForSequenceClassification.from_pretrained(model_id)
-+model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
++model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 cls_pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
 result = cls_pipe("He's a dreadful magician.")
@@ -46,9 +47,11 @@ By default, `OVModelForXxx` support dynamic shapes, enabling inputs of every sha
 ```python
 # Fix the batch size to 1 and the sequence length to 9
 model.reshape(1, 9)
+# Compile the model before the first inference
+model.compile()
 ```
 
-Currently, OpenVINO only supports static shapes for inference on GPU. FP16 precision can also be enabled in order to further decrease latency.
+Currently, OpenVINO only supports static shapes when running inference on Intel's GPU. FP16 precision can also be enabled in order to further decrease latency.
 
 ```python
 # Fix the batch size to 1 and the sequence length to 9
@@ -56,6 +59,8 @@ model.reshape(1, 9)
 # Enable FP16 precision
 model.half()
 model.to("gpu")
+# Compile the model before the first inference
+model.compile()
 ```
 
 When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape. When instantiating your pipeline, you can specify the maximum total input sequence length after tokenization in order for shorter sequences to be padded and for longer sequences to be truncated.
@@ -67,7 +72,7 @@ from evaluate import evaluator
 from optimum.intel.openvino.modeling import OVModelForQuestionAnswering
 
 model_id = "distilbert-base-cased-distilled-squad"
-model = OVModelForQuestionAnswering.from_pretrained(model_id, from_transformers=True)
+model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
 model.reshape(1, 384)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 eval_dataset = load_dataset("squad", split="validation").select(range(50))
@@ -90,7 +95,7 @@ from optimum.intel.openvino import OVModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 # Load the model and disable the model compilation
-model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True, compile=False)
+model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, compile=False)
 model.half()
 model.to("gpu")
 # Compile the model before the first inference
@@ -109,7 +114,7 @@ from transformers import AutoTokenizer, pipeline
 from optimum.intel.openvino import OVModelForSeq2SeqLM
 
 model_id = "t5-small"
-model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True)
+model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 translation_pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
 text = "He never went out without a book under his arm, and he often came back with two."
@@ -140,11 +145,11 @@ from optimum.intel.openvino import OVStableDiffusionPipeline
 model_id = "echarlaix/stable-diffusion-2-1-openvino"
 stable_diffusion = OVStableDiffusionPipeline.from_pretrained(model_id)
 prompt = "sailing ship in storm by Rembrandt"
-image = stable_diffusion(prompt).images[0]
+images = stable_diffusion(prompt).images
 ```
 
-To load your PyTorch model and convert it to the OpenVINO format on-the-fly, simply pass `export=True` to the `from_pretrained` method.
-After this step, don't forget to save your model using the `save_pretrained` method, to be able to load your OpenVINO model directly.
+To load your PyTorch model and convert it to OpenVINO on-the-fly, you can set `export=True`.
+Don't forget to save the resulting OpenVINO model using the `save_pretrained` method.
 
 ```python
 model_id = "stabilityai/stable-diffusion-2-1"
@@ -152,6 +157,22 @@ stable_diffusion = ORTStableDiffusionPipeline.from_pretrained(model_id, export=T
 
 # Save the exported model
 stable_diffusion.save_pretrained("a_local_path")
+```
+
+To further speedup inference, the model can be statically reshaped :
+
+```python
+batch_size = 1
+num_images_per_prompt = 1
+height = 512
+width = 512
+
+stable_diffusion.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt)
+# Compile the model before the first inference
+stable_diffusion.compile()
+
+# Run inference with the defined shapes
+images = stable_diffusion(prompt, height=height, width=width, num_images_per_prompt=num_images_per_prompt).images
 ```
 
 ![img](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/stable_diffusion_v2_1_sail_boat_rembrandt.png)

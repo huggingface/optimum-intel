@@ -185,7 +185,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
+        ov_model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -204,6 +204,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        # TODO : Replace from_transformers with export for optimum-intel v1.8
         model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True, compile=False)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
@@ -242,7 +243,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForQuestionAnswering.from_pretrained(model_id, from_transformers=True)
+        ov_model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -308,7 +309,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForTokenClassification.from_pretrained(model_id, from_transformers=True)
+        ov_model = OVModelForTokenClassification.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForTokenClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -348,7 +349,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForFeatureExtraction.from_pretrained(model_id, from_transformers=True)
+        ov_model = OVModelForFeatureExtraction.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModel.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -388,7 +389,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True)
+        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -425,7 +426,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForMaskedLM.from_pretrained(model_id, from_transformers=True)
+        ov_model = OVModelForMaskedLM.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForMaskedLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -461,7 +462,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForImageClassification.from_pretrained(model_id, from_transformers=True)
+        ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
@@ -508,7 +509,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
+        ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=False)
 
         self.assertIsInstance(ov_model.encoder, OVEncoder)
         self.assertIsInstance(ov_model.decoder, OVDecoder)
@@ -618,7 +619,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForAudioClassification.from_pretrained(model_id, from_transformers=True)
+        ov_model = OVModelForAudioClassification.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForAudioClassification.from_pretrained(model_id)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
