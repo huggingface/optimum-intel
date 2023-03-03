@@ -141,7 +141,7 @@ Here is an example of how you can load an OpenVINO Stable Diffusion model and ru
 ```python
 from optimum.intel.openvino import OVStableDiffusionPipeline
 
-model_id = "echarlaix/stable-diffusion-2-1-openvino"
+model_id = "echarlaix/stable-diffusion-v1-5-openvino"
 stable_diffusion = OVStableDiffusionPipeline.from_pretrained(model_id)
 prompt = "sailing ship in storm by Rembrandt"
 images = stable_diffusion(prompt).images
@@ -150,9 +150,8 @@ images = stable_diffusion(prompt).images
 To load your PyTorch model and convert it to OpenVINO on-the-fly, you can set `export=True`.
 
 ```python
-model_id = "stabilityai/stable-diffusion-2-1"
+model_id = "runwayml/stable-diffusion-v1-5"
 stable_diffusion = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
-
 # Don't forget to save the exported model
 stable_diffusion.save_pretrained("a_local_path")
 ```
@@ -178,7 +177,7 @@ images = stable_diffusion(prompt, height=height, width=width, num_images_per_pro
 In case you want to change any parameters such as the outputs height or height, you'll need to statically reshape your model once again.
 
 
-![img](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/stable_diffusion_v2_1_sail_boat_rembrandt.png)
+![img](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/stable_diffusion_v1_5_sail_boat_rembrandt.png)
 
 
 ## Supported tasks
