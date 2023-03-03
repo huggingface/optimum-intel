@@ -102,7 +102,7 @@ model.to("gpu")
 model.compile()
 ```
 
-## Run inference for sequence-to-sequence models
+## Export and inference of sequence-to-sequence models
 
 Sequence-to-sequence (Seq2Seq) models, that generate a new sequence from an input, can also be used when running inference with OpenVINO. When Seq2Seq models are exported to the OpenVINO IR, they are decomposed into two parts : the encoder and the "decoder" (which actually consists of the decoder with the language modeling head), that are later combined during inference.
 To leverage the pre-computed key/values hidden-states to speed up sequential decoding, simply pass `use_cache=True` to the `from_pretrained()` method. An additional model component will be exported: the "decoder" with pre-computed key/values as one of its inputs.
@@ -128,10 +128,9 @@ tokenizer.save_pretrained(save_directory)
 [{'translation_text': "Il n'est jamais sorti sans un livre sous son bras, et il est souvent revenu avec deux."}]
 ```
 
+## Export and inference of Stable Diffusion models
 
-## Run inference for stable diffusion models
-
-Stable diffusion models can also be used when running inference with OpenVINO. When Stable diffusion models
+Stable Diffusion models can also be used when running inference with OpenVINO. When Stable Diffusion models
 are exported to the OpenVINO format, they are decomposed into three components that are later combined during inference:
 - The text encoder
 - The U-NET
