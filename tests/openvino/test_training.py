@@ -40,6 +40,7 @@ from parameterized import parameterized
 
 CUSTOMIZED_QUANTIZATION_CONFIG = {
     "algorithm": "quantization",
+    "overflow_fix": "enable",
     "initializer": {
         "range": {
             "num_init_samples": 16,
