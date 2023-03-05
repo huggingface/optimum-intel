@@ -81,4 +81,4 @@ python run_image_classification.py \
     --nncf_compression_config configs/swin-base-jpqd.json
 ```
 
-This example results in a quantized swin-base model with ~40% sparsity in the transformer blocks, giving 90.84% accuracy on food101 and taking about 12.5hours on a single V100 GPU.
+This example results in a quantized swin-base model with ~40% sparsity in its linear layers of the transformer blocks, giving 90.7% accuracy on food101 and taking about 12.5 hours on a single V100 GPU.

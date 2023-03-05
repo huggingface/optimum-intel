@@ -53,7 +53,7 @@ python run_audio_classification.py \
     --seed 42
 ```
 
-On a single V100 GPU, this script should run in ~45 minutes and yield quantized model with accuracy of **98.1%**.
+On a single V100 GPU, this script should run in ~45 minutes and yield quantized model with accuracy of **97.5%**.
 
 ### Joint Pruning, Quantization and Distillation (JPQD) of Wav2Vec2 on Keyword Spotting
 
@@ -97,7 +97,7 @@ python run_audio_classification.py \
     --save_strategy epoch \
     --load_best_model_at_end False \
     --save_total_limit 3 \
-    --seed 42
+    --seed 0
 ```
 
-This script should take about 3 hours on a single V100 GPU and produce a quantized wav2vec2 model with ~80% structured sparsity in its linear layers. The model accuracy should converge to about 97.5%. Its IR gives an additional ~50% throughput over quantize-only IR on AWS EC2 instance (c6i.32xlarge).
+This script should take about 3 hours on a single V100 GPU and produce a quantized wav2vec2 model with ~80% structured sparsity in its linear layers. The model accuracy should converge to about 97.4%. Its IR gives an additional ~50% throughput over quantize-only IR on AWS EC2 instance (c6i.32xlarge).
