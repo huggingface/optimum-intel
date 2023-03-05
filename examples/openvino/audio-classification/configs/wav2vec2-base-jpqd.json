@@ -4,7 +4,7 @@
         "params": {
             "warmup_start_epoch": 3,
             "warmup_end_epoch": 8,
-            "importance_regularization_factor": 0.100,
+            "importance_regularization_factor": 0.1,
             "enable_structured_masking": true
         },
         "sparse_structure_by_scopes": [
@@ -39,18 +39,20 @@
         "overflow_fix": "enable",
         "initializer": {
             "range": {
-                "num_init_samples": 256,
-                "type": "percentile",
-                "params": {
-                    "min_percentile": 0.01,
-                    "max_percentile": 99.99
-                }
+                "num_init_samples": 300,
+                "type": "mean_min_max"
             },
             "batchnorm_adaptation": {
                 "num_bn_adaptation_samples": 0
             }
         },
-        "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
+        "scope_overrides": {
+            "activations": {
+                "{re}.*matmul_0": {
+                    "mode": "symmetric"
+                }
+            }
+        },
         "ignored_scopes": [
             "{re}.*feature_extractor.*",
             "{re}.*__add___[0-1]",
