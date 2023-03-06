@@ -659,8 +659,8 @@ def main():
         for step, batch in enumerate(eval_dataloader):
             with torch.no_grad():
                 outputs = model(**batch)
-                start_logits = outputs.start_logits
-                end_logits = outputs.end_logits
+                start_logits = outputs["start_logits"]
+                end_logits = outputs["end_logits"]
 
                 if not data_args.pad_to_max_length:  # necessary to pad predictions and labels for being gathered
                     start_logits = accelerator.pad_across_processes(start_logits, dim=1, pad_index=-100)
