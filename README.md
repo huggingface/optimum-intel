@@ -75,7 +75,7 @@ You can load many more quantized models hosted on the hub under the Intel organi
 
 #### Apply dynamic quantization on your model using the CLI
 
-Users can use our Python launcher design to run the Python model code as it is with automatic enabling of the optimization. For example,
+Dynamic quantization and ONNX export can be used through the Optimum Intel command-line:
 
 ```bash
 python -m optimum.intel.neural_compressor.launcher run_glue.py --model_name_or_path bert-base-cased --task_name mrpc --do_eval --output_dir result
