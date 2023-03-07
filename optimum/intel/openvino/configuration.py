@@ -22,7 +22,7 @@ from optimum.configuration_utils import BaseConfig
 DEFAULT_QUANTIZATION_CONFIG = {
     "algorithm": "quantization",
     "preset": "mixed",
-    "overflow_fix": "enable",
+    "overflow_fix": "disable",
     "initializer": {
         "range": {"num_init_samples": 300, "type": "mean_min_max"},
         "batchnorm_adaptation": {"num_bn_adaptation_samples": 0},
