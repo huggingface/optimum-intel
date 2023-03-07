@@ -70,7 +70,7 @@ MODEL_START_DOCSTRING = r"""
             The device type for which the model will be optimized for. The resulting compiled model will contains nodes specific to this device.
         dynamic_shapes (`bool`, defaults to `True`):
             All the model's dimension will be set to dynamic when set to `True`. Should be set to `False` for the model to not be dynamically reshaped by default.
-        ov_config (`Optional[dict]`, defaults to `None`):
+        ov_config (`Optional[Dict]`, defaults to `None`):
             The dictionnary containing the informations related to the model compilation.
         compile (`bool`, defaults to `True`):
             Disable the model compilation during the loading step when set to `False`.
