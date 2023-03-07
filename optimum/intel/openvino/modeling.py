@@ -61,10 +61,20 @@ MODEL_START_DOCSTRING = r"""
     This model inherits from [`optimum.intel.openvino.modeling.OVBaseModel`]. Check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving)
     Parameters:
-        config (`transformers.PretrainedConfig`): [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig) is the Model configuration class with all the parameters of the model.
-            Initializing with a config file does not load the weights associated with the model, only the
-            configuration. Check out the [`~intel.openvino.modeling.OVBaseModel.from_pretrained`] method to load the model weights.
         model (`openvino.runtime.Model`): is the main class used to run OpenVINO Runtime inference.
+        config (`transformers.PretrainedConfig`): [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig)
+            is the Model configuration class with all the parameters of the model.
+            Initializing with a config file does not load the weights associated with the model, only the configuration.
+            Check out the [`~intel.openvino.modeling.OVBaseModel.from_pretrained`] method to load the model weights.
+        device (`str`, defaults to `"CPU"`):
+            The device type for which the model will be optimized for. The resulting compiled model will contains nodes specific to this device.
+        dynamic_shapes (`bool`, defaults to `True`):
+            All the model's dimension will be set to dynamic when set to `True`. Should be set to `False` for the model to not be dynamically reshaped by default.
+        ov_config (`Optional[dict]`, defaults to `None`):
+            The dictionnary containing the informations related to the model compilation.
+        compile (`bool`, defaults to `True`):
+            Disable the model compilation during the loading step when set to `False`.
+            Can be useful to avoid unnecessary compilation, in the case where the model needs to be statically reshaped, the device modified or if FP16 conversion is enabled.
 """
 
 INPUTS_DOCSTRING = r"""
