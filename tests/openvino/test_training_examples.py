@@ -148,7 +148,7 @@ class OVTrainingExampleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as output_dir:
             args = [sys.executable, desc.filename, *desc.get_args_with_output_dir(output_dir)]
             if "--fp16" in args:
-                args.remove("--fp16")  # CPU training with fp16 is not supported
+                args.remove("--fp16")  # CPU training does not support fp16
             proc = subprocess.Popen(
                 args=args,
                 cwd=desc.cwd,
