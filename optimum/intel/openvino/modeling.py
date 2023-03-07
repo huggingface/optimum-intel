@@ -341,6 +341,12 @@ FEATURE_EXTRACTION_EXAMPLE = r"""
 """
 
 
+@add_start_docstrings(
+    """
+    OpenVINO Model with a BaseModelOutput for feature extraction tasks.
+    """,
+    MODEL_START_DOCSTRING,
+)
 class OVModelForFeatureExtraction(OVModel):
     export_feature = "default"
     auto_model_class = AutoModel
