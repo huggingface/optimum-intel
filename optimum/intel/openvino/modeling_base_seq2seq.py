@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Union, Dict
+from typing import Dict, Optional, Union
 
 import transformers
 from transformers import AutoConfig, PretrainedConfig
