@@ -1,6 +1,8 @@
 - sections:
   - local: index
     title: 🤗 Optimum Intel
+  - local: installation
+    title: Installation
   - sections:
     - local: optimization_inc
       title: Optimization
