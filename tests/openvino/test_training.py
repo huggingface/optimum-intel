@@ -368,7 +368,7 @@ class OVTrainerTrainingTest(unittest.TestCase):
                     torch.allclose(
                         torch.softmax(ovmodel_logits, dim=-1),
                         torch.softmax(torch_logits, dim=-1),
-                        rtol=0.01,
+                        rtol=0.001,
                     )
                 )
 
