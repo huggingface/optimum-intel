@@ -129,16 +129,19 @@ class ModelArguments:
 
     model_name_or_path: str = field(
         default="facebook/wav2vec2-base",
-        metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"},
+        metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models."},
     )
     teacher_model_name_or_path: str = field(
-        default=None, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
+        default=None,
+        metadata={
+            "help": "Path to pretrained model or model identifier from huggingface.co/models as teacher model in distillation."
+        },
     )
     config_name: Optional[str] = field(
-        default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
+        default=None, metadata={"help": "Pretrained config name or path if not the same as model_name."}
     )
     cache_dir: Optional[str] = field(
-        default=None, metadata={"help": "Where do you want to store the pretrained models downloaded from the Hub"}
+        default=None, metadata={"help": "Where do you want to store the pretrained models downloaded from the Hub."}
     )
     model_revision: str = field(
         default="main",

@@ -131,7 +131,10 @@ class ModelArguments:
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"},
     )
     teacher_model_name_or_path: str = field(
-        default=None, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
+        default=None,
+        metadata={
+            "help": "Path to pretrained model or model identifier from huggingface.co/models as teacher model in distillation."
+        },
     )
     model_type: Optional[str] = field(
         default=None,
