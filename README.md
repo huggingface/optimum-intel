@@ -73,7 +73,7 @@ loaded_model_from_hub = INCModelForSequenceClassification.from_pretrained(
 
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
-#### One-click acceleration with launcher
+#### Apply dynamic quantization on your model using the CLI
 
 Users can use our Python launcher design to run the Python model code as it is with automatic enabling of the optimization. For example,
 
