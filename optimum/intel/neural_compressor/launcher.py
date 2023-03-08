@@ -2,6 +2,7 @@ from neural_coder.launcher import Launcher
 
 from .neural_coder_adaptor import NeuralCoderAdaptor
 
+
 def main():
     modular_pattern = {}
 
@@ -11,6 +12,7 @@ def main():
 
     args = Launcher.parse_args()
     Launcher.execute(args, use_modular=True, modular_pattern=modular_pattern, use_inc=False)
+
 
 if __name__ == "__main__":
     main()

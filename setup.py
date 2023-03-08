@@ -64,9 +64,5 @@ setup(
     extras_require=EXTRAS_REQUIRE,
     include_package_data=True,
     zip_safe=False,
-    entry_points={
-        "console_scripts": [
-            "inc-quantization = optimum.intel.neural_compressor.launcher:main"
-        ]
-    },
+    entry_points={"console_scripts": ["inc-quantization = optimum.intel.neural_compressor.launcher:main"]},
 )
