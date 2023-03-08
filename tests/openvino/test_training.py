@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import re
 import tempfile
 import unittest
 from copy import deepcopy
@@ -100,9 +101,8 @@ def initialize_movement_sparsifier_parameters_by_sparsity(
                 operand.bias_importance.copy_(bias_init_tensor)
 
 
-def is_avx512_vnni_supported() -> bool:
-    flags = [flag.lower() for flag in cpuinfo.get_cpu_info()["flags"]]
-    return "avx512_vnni" in flags or "avx512vnni" in flags or "avx_vnni" in flags
+def is_avx_vnni_supported() -> bool:
+    return any(re.search("avx.*vnni", flag.lower()) is not None for flag in cpuinfo.get_cpu_info()["flags"])
 
 
 @dataclass
@@ -324,7 +324,7 @@ class OVTrainerTrainingTest(unittest.TestCase):
         torch.manual_seed(42)
         self.ov_config = OVConfig()
         nncf_compression_config = desc.nncf_compression_config
-        if not is_avx512_vnni_supported():
+        if not is_avx_vnni_supported():
             # should enable "overflow_fix" in quantization otherwise accuracy degradation may be seen
             nncf_compression_config = self.get_nncf_config_with_overflow_fix_override(
                 nncf_compression_config, "enable"
