@@ -50,7 +50,7 @@ On a single V100 GPU, this example takes about 1 minute and yields a quantized m
 To run the JPQD example, please install optimum-intel from source. This command will install or upgrade optimum-intel and all necessary dependencies:
 
 ```bash
-python -m pip install --upgrade "git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[openvino, nncf]"
+python -m pip install --upgrade "git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[openvino,nncf]"
 ```
 
 After installation, launch the run with:

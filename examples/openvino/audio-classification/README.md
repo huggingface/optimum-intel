@@ -62,7 +62,7 @@ On a single V100 GPU, this script should run in ~45 minutes and yield a quantize
 To run the JPQD example, please install optimum-intel from source. This command will install or upgrade optimum-intel and all necessary dependencies:
 
 ```bash
-python -m pip install --upgrade "git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[openvino, nncf]"
+python -m pip install --upgrade "git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[openvino,nncf]"
 ```
 
 After installation, launch the run with:
