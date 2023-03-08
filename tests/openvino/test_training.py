@@ -102,7 +102,7 @@ def initialize_movement_sparsifier_parameters_by_sparsity(
 
 def is_avx512_vnni_supported() -> bool:
     flags = [flag.lower() for flag in cpuinfo.get_cpu_info()["flags"]]
-    return "avx512_vnni" in flags or "avx512vnni" in flags
+    return "avx512_vnni" in flags or "avx512vnni" in flags or "avx_vnni" in flags
 
 
 @dataclass
