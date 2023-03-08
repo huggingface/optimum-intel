@@ -58,13 +58,19 @@ from optimum.intel.openvino import (
     OVModelForTokenClassification,
     OVStableDiffusionPipeline,
 )
-from optimum.intel.openvino.modeling_diffusion import OVModelTextEncoder, OVModelUnet, OVModelVaeDecoder
+from optimum.intel.openvino.modeling_diffusion import (
+    OVModelTextEncoder,
+    OVModelUnet,
+    OVModelVaeDecoder,
+    OVModelVaeEncoder,
+)
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.utils import (
     CONFIG_NAME,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
+    DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 from optimum.utils.testing_utils import require_diffusers
 from parameterized import parameterized
@@ -164,6 +170,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             for subfoler in {
                 DIFFUSION_MODEL_UNET_SUBFOLDER,
                 DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+                DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
                 DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
             }:
                 folder_contents = os.listdir(os.path.join(tmpdirname, subfoler))
@@ -655,6 +662,7 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         ov_pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, compile=False)
         self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
+        self.assertIsInstance(ov_pipeline.vae_encoder, OVModelVaeEncoder)
         self.assertIsInstance(ov_pipeline.vae_decoder, OVModelVaeDecoder)
         self.assertIsInstance(ov_pipeline.unet, OVModelUnet)
         self.assertIsInstance(ov_pipeline.config, Dict)
