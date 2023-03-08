@@ -1,3 +1,4 @@
+import contextlib
 import unittest
 from argparse import Namespace
 
@@ -19,14 +20,16 @@ class NeuralCoderAdaptorTest(unittest.TestCase):
         r = requests.get(url)
         f = open("run_glue.py", "wb")
         f.write(r.content)
+        f.close()
 
         args = Namespace(
             opt="",
             approach="auto",
             config="",
             bench=False,
-            enable=True,
+            enable=False,
             script="run_glue.py",
+            script_args="--model_name_or_path bert-base-cased --task_name mrpc --do_eval --output_dir result",
         )
 
         modular_pattern = {}
@@ -35,7 +38,16 @@ class NeuralCoderAdaptorTest(unittest.TestCase):
         modular_pattern["pytorch_inc_dynamic_quant"] = NeuralCoderAdaptor.default_quant_dynamic
         modular_pattern["inc_auto"] = NeuralCoderAdaptor.default_quant_dynamic
 
-        Launcher.execute(args, use_modular=True, modular_pattern=modular_pattern, use_inc=False)
+        execution_status = ""
 
-        # to-add: execute "run_glue_optimized.py" and see if the saved model can correctly perform inference?
-        self.assertEqual(0, 0)
+        # execute launcher-optimized "run_glue.py" and see if it runs finely
+        try:
+            Launcher.execute(args, use_modular=True, modular_pattern=modular_pattern, use_inc=False)
+            print("Execution of optimized code has succeeded.")
+            execution_status = "pass"
+        except Exception as e:
+            print("Execution of optimized code has failed.")
+            print("Error: ", e)
+            execution_status = "fail"
+
+        self.assertEqual(execution_status, "pass")
