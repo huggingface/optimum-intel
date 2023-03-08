@@ -262,16 +262,15 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
-        model = TasksManager.get_model_from_task(
-            task,
-            model_id,
-            revision=revision,
-            cache_dir=cache_dir,
-            config=config,
-            use_auth_token=use_auth_token,
-            local_files_only=local_files_only,
-            force_download=force_download,
-        )
+        model_kwargs = {
+            "revision": revision,
+            "use_auth_token": use_auth_token,
+            "cache_dir": cache_dir,
+            "local_files_only": local_files_only,
+            "force_download": force_download,
+            "config": config,
+        }
+        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
 
         output_names = [
             os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER, ONNX_WEIGHTS_NAME),
