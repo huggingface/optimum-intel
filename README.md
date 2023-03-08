@@ -79,7 +79,7 @@ You can load many more quantized models hosted on the hub under the Intel organi
 Dynamic quantization and ONNX export can be used through the Optimum Intel command-line:
 
 ```bash
-python -m optimum.intel.neural_compressor.launcher run_glue.py --model_name_or_path bert-base-cased --task_name mrpc --do_eval --output_dir result
+inc-quantization run_glue.py --model_name_or_path bert-base-cased --task_name mrpc --do_eval --output_dir result
 ```
 
 For more details, please refer to this [guide](./examples/neural_compressor/launcher/PythonLauncher.md).
