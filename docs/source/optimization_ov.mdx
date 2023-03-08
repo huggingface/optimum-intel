@@ -92,14 +92,14 @@ compute_metrics = lambda p: metric.compute(predictions=np.argmax(p.predictions, 
 ```
 
 ```diff
--from transformers import Trainer
-+from optimum.intel.openvino.trainer import OVConfig, OVTrainer
+- from transformers import Trainer
++ from optimum.intel.openvino.trainer import OVConfig, OVTrainer
 
 # Load the default quantization configuration detailing the quantization we wish to apply
-+ov_config = OVConfig()
++ ov_config = OVConfig()
 
--trainer = Trainer(
-+trainer = OVTrainer(
+- trainer = Trainer(
++ trainer = OVTrainer(
     model=model,
     args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
     train_dataset=dataset["train"].select(range(300)),
@@ -158,20 +158,20 @@ compression_config = [
 Once we have the config ready, we can start develop the training pipeline like the snippet below. Since we are customizing joint compression with config above, notice that `OVConfig` is initialized with config dictionary (JSON parsing to python dictionary is skipped for brevity). As for distillation, users are required to load the teacher model, it is just like a normal model loading with transformers API. `OVTrainingArguments` extends transformers' `TrainingArguments` with distillation hyperparameters, i.e. distillation weightage and temperature for ease of use. The snippet below shows how we load a teacher model and create training arguments with `OVTrainingArguments`. Subsequently, the teacher model, with the instantiated `OVConfig` and `OVTrainingArguments` are fed to `OVTrainer`. Voila! that is all we need, the rest of the pipeline is identical to native transformers training.
 
 ```diff
--from optimum.intel.openvino.trainer import OVConfig, OVTrainer
-+from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
+- from optimum.intel.openvino.trainer import OVConfig, OVTrainer
++ from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
 
 # Load teacher model
-+teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_or_path)
++ teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_or_path)
 
--ov_config = OVConfig()
-+ov_config = OVConfig(compression=compression_config)
+- ov_config = OVConfig()
++ ov_config = OVConfig(compression=compression_config)
 
 trainer = OVTrainer(
     model=model,
 +   teacher_model=teacher_model,
--    args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
-+    args=OVTrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True, distillation_temperature=3, distillation_weight=0.9),
+-   args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
++   args=OVTrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True, distillation_temperature=3, distillation_weight=0.9),
     train_dataset=dataset["train"].select(range(300)),
     eval_dataset=dataset["validation"],
     compute_metrics=compute_metrics,
