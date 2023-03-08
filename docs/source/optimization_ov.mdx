@@ -72,11 +72,18 @@ Apart from optimizing a model after training like post-training quantization abo
 
 QAT simulates the effects of quantization during training, in order to alleviate its effects on the model's accuracy. It is recommended in the case where post-training quantization results in high accuracy degradation. Here is an example on how to fine-tune a DistilBERT on the sst-2 task while applying quantization aware training (QAT).
 
-```python
+```diff
 import evaluate
 import numpy as np
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    TrainingArguments,
+    default_data_collator,
+)
 from datasets import load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
+- from transformers import Trainer
++ from optimum.intel.openvino.trainer import OVConfig, OVTrainer, OVModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)
@@ -85,15 +92,13 @@ tokenizer = AutoTokenizer.from_pretrained(model_id)
 save_dir = "qat_model"
 dataset = load_dataset("glue", "sst2")
 dataset = dataset.map(
-    lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
+    lambda examples: tokenizer(examples["sentence"], padding=True), batched=True
 )
 metric = evaluate.load("glue", "sst2")
-compute_metrics = lambda p: metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
-```
 
-```diff
-- from transformers import Trainer
-+ from optimum.intel.openvino.trainer import OVConfig, OVTrainer
+def compute_metrics(eval_preds):
+    preds = np.argmax(eval_preds.predictions, axis=1)
+    return metric.compute(predictions=preds, references=eval_preds.label_ids)
 
 # Load the default quantization configuration detailing the quantization we wish to apply
 + ov_config = OVConfig()
@@ -116,6 +121,10 @@ train_result = trainer.train()
 metrics = trainer.evaluate()
 # Export the quantized model to OpenVINO IR format and save it
 trainer.save_model()
+
+# Load the resulting quantized model
+- model = AutoModelForSequenceClassification.from_pretrained(save_dir)
++ model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
 
@@ -204,15 +213,11 @@ from transformers import pipeline
 from optimum.intel.openvino import OVModelForSequenceClassification
 
 model_id = "helenai/distilbert-base-uncased-finetuned-sst-2-english-ov-int8"
-
 ov_model = OVModelForSequenceClassification.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-
 cls_pipe = pipeline("text-classification", model=ov_model, tokenizer=tokenizer)
-
 text = "He's a dreadful magician."
 outputs = cls_pipe(text)
 
-# print(output)
-# [{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
+[{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
 ```

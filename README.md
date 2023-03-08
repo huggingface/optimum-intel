@@ -91,9 +91,9 @@ model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 - model = AutoModelForSequenceClassification.from_pretrained(model_id)
 + model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-pipe_cls = pipeline("text-classification", model=model, tokenizer=tokenizer)
+cls_pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
 text = "He's a dreadful magician."
-outputs = pipe_cls(text)
+outputs = cls_pipe(text)
 ```
 
 #### Post-training static quantization:
