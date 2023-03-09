@@ -21,14 +21,15 @@ This folder contains [`run_audio_classification.py`](https://github.com/huggingf
 ### Fintuning Wav2Vec2 on Keyword Spotting with QAT
 
 The following command shows how to fine-tune [wav2vec2-base](https://huggingface.co/facebook/wav2vec2-base) on the 🗣️ [Keyword Spotting subset](https://huggingface.co/datasets/superb#ks) of the SUPERB dataset with Quantization-Aware Training (QAT).
+You can customize the quantization algorithm by specifying `--nncf_compression_config`. For more details on the configuration, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md).
 
 ```bash
 python run_audio_classification.py \
     --model_name_or_path facebook/wav2vec2-base \
+    --nncf_compression_config configs/wav2vec2-base-qat.json \
     --dataset_name superb \
     --dataset_config_name ks \
     --output_dir /tmp/qat-wav2vec2-base-ft-keyword-spotting \
-    --nncf_compression_config configs/wav2vec2-base-qat.json \
     --overwrite_output_dir \
     --remove_unused_columns False \
     --do_train \
