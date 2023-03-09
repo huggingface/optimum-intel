@@ -47,14 +47,6 @@ On a single V100 GPU, this example takes about 1 minute and yields a quantized m
 
 `OVTrainer` also provides advanced optimization workflow via NNCF to structurally prune, quantize and distill. Following is an example of joint pruning, quantization and distillation on Swin-base model for food101 dataset. To enable JPQD optimization, use an alternative configuration specified with `--nncf_compression_config`. For more details on how to configure the pruning algorithm, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
-To run the JPQD example, please install optimum-intel from source. This command will install or upgrade optimum-intel and all necessary dependencies:
-
-```bash
-python -m pip install --upgrade "git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[openvino,nncf]"
-```
-
-After installation, launch the run with:
-
 ```bash
 python run_image_classification.py \
     --model_name_or_path microsoft/swin-base-patch4-window7-224 \

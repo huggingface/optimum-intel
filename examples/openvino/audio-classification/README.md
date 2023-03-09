@@ -60,14 +60,6 @@ On a single V100 GPU, this script should run in ~45 minutes and yield a quantize
 
 `OVTrainer` also provides advanced optimization workflow via NNCF to structurally prune, quantize and distill. Following is an example of joint pruning, quantization and distillation on Wav2Vec2-base model for keyword spotting task. To enable JPQD optimization, use an alternative configuration specified with `--nncf_compression_config`. For more details on how to configure the pruning algorithm, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
-To run the JPQD example, please install optimum-intel from source. This command will install or upgrade optimum-intel and all necessary dependencies:
-
-```bash
-python -m pip install --upgrade "git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[openvino,nncf]"
-```
-
-After installation, launch the run with:
-
 ```bash
 python run_audio_classification.py \
     --model_name_or_path facebook/wav2vec2-base \
