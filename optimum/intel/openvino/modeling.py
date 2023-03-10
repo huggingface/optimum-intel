@@ -130,7 +130,7 @@ SEQUENCE_CLASSIFICATION_EXAMPLE = r"""
     >>> from optimum.intel.openvino import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
     >>> outputs = pipe("Hello, my dog is cute")
     ```
@@ -196,7 +196,7 @@ QUESTION_ANSWERING_EXAMPLE = r"""
     >>> from optimum.intel.openvino import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
     >>> question, text = "Who was Jim Henson?", "Jim Henson was a nice puppet"
     >>> outputs = pipe(question, text)
@@ -268,7 +268,7 @@ TOKEN_CLASSIFICATION_EXAMPLE = r"""
     >>> from optimum.intel.openvino import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
     >>> outputs = pipe("My Name is Peter and I live in New York.")
     ```
@@ -334,7 +334,7 @@ FEATURE_EXTRACTION_EXAMPLE = r"""
     >>> from optimum.intel.openvino import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
     >>> outputs = pipe("My Name is Peter and I live in New York.")
     ```
@@ -404,7 +404,7 @@ MASKED_LM_EXAMPLE = r"""
     >>> from optimum.intel.openvino import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> mask_token = tokenizer.mask_token
     >>> pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
     >>> outputs = pipe("The goal of life is" + mask_token)
@@ -416,8 +416,9 @@ TEXT_GENERATION_EXAMPLE = r"""
     ```python
     >>> from transformers import {processor_class}
     >>> from optimum.intel.openvino import {model_class}
+
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> inputs = tokenizer("I love this story because", return_tensors="pt")
     >>> gen_tokens = model.generate(**inputs, do_sample=True, temperature=0.9, min_length=20, max_length=20)
     >>> tokenizer.batch_decode(gen_tokens)
@@ -426,8 +427,9 @@ TEXT_GENERATION_EXAMPLE = r"""
     ```python
     >>> from transformers import {processor_class}, pipeline
     >>> from optimum.intel.openvino import {model_class}
+
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> gen_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer)
     >>> text = "I love this story because"
     >>> gen = gen_pipeline(text)
@@ -599,7 +601,7 @@ IMAGE_CLASSIFICATION_EXAMPLE = r"""
     >>> from optimum.intel.openvino import {model_class}
 
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> model.reshape(batch_size=1, sequence_length=3, height=224, width=224)
     >>> pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
     >>> url = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -659,7 +661,7 @@ AUDIO_CLASSIFICATION_EXAMPLE = r"""
     >>> from optimum.intel.openvino import {model_class}
 
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
     >>> dataset = load_dataset("superb", "ks", split="test")
     >>> audio_file = dataset[3]["audio"]["array"]
