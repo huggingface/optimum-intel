@@ -7,11 +7,6 @@ Users can use our Python Launcher CLI design to run the Python model code as it 
 
 Example: Let's run an NLP model using ```run_glue.py``` from HuggingFace Transformers PyTorch [examples](https://github.com/huggingface/transformers/blob/v4.26-release/examples/pytorch/text-classification/run_glue.py).
 
-Pre-requisites:
-
-```bash
-pip install transformers torch datasets
-```
 
 Generally we run this code with a Python command line like this:
 
