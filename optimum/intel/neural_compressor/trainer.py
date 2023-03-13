@@ -547,7 +547,7 @@ class INCTrainer(Trainer):
         self,
         output_dir=None,
         state_dict=None,
-        save_onnx_mode=False,
+        save_onnx_model=False,
         activations_dtype="u8",
         weights_dtype="s8",
     ):
