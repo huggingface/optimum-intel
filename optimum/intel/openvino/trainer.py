@@ -754,7 +754,9 @@ class OVTrainer(Trainer):
         input_name_vs_shape = {item["keyword"]: item["sample_size"] for item in self.ov_config.input_info}
         for input_ in ov_model.inputs:
             if static_shape is True:
-                new_input_cfg[input_.any_name] = PartialShape(input_name_vs_shape[input_.any_name])
+                new_input_cfg[input_.any_name] = PartialShape(
+                    [1, *input_name_vs_shape[input_.any_name][1:]]
+                )  # use batch size of 1 for static shape IR
             else:
                 new_input_cfg[input_.any_name] = PartialShape([-1] * len(input_.partial_shape))
         ov_model.reshape(new_input_cfg)
