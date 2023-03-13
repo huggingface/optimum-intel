@@ -150,7 +150,7 @@ class INCTrainer(Trainer):
             self._compression_manager = training.prepare_compression(self.model, confs=inc_config)
             self.model = self._compression_manager.model.model
             self.model_wrapped = self.model
-        
+
         for callback in self._compression_manager.callbacks.callbacks_list:
             if isinstance(callback, DistillationCallbacks):
                 self.distillation_callback = callback
