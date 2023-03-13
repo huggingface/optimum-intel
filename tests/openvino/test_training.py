@@ -44,6 +44,7 @@ from openvino.runtime import PartialShape
 from optimum.intel.openvino import OVTrainingArguments
 from optimum.intel.openvino.configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
 from optimum.intel.openvino.modeling import (
+    OVModel,
     OVModelForAudioClassification,
     OVModelForImageClassification,
     OVModelForSequenceClassification,
@@ -129,7 +130,7 @@ class OVTrainerTestDescriptor:
     compression_metrics: List[str] = field(default_factory=list)
 
 
-OVTRAINER_TRAINING_TEST_DESCRIPTORS = {
+OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "distillation": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-bert",
         teacher_model_id="hf-internal-testing/tiny-bert",
@@ -262,7 +263,7 @@ OVTRAINER_TRAINING_TEST_DESCRIPTORS = {
 
 
 class OVTrainerTextClassificationTrainingTest(unittest.TestCase):
-    @parameterized.expand(OVTRAINER_TRAINING_TEST_DESCRIPTORS.items())
+    @parameterized.expand(OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS.items())
     def test_training(self, _, desc: OVTrainerTestDescriptor):
         self.prepare(desc)
         num_train_epochs = 3
@@ -580,7 +581,8 @@ class OVTrainerImageClassificationTrainingTest(unittest.TestCase):
 
             # check saved ovmodel IR and output
             ovmodel = OVModelForImageClassification.from_pretrained(output_dir)
-            self.check_irmodel_is_dynamic(ovmodel.model)
+            self.check_if_ovmodel_is_dynamic(ovmodel, True)
+            self.check_ovmodel_reshaping(ovmodel)
             self.check_ovmodel_output_equals_torch_output(ovmodel, trainer.model)
 
             # check ovmodel quantization ops
@@ -604,8 +606,8 @@ class OVTrainerImageClassificationTrainingTest(unittest.TestCase):
         if desc.teacher_model_id:
             self.teacher_model = AutoModelForImageClassification.from_pretrained(desc.teacher_model_id, num_labels=3)
 
-        def data_transform(examples):
-            batch = self.image_processor(examples["image"], return_tensors="pt")
+        def data_transform(examples, size=None):
+            batch = self.image_processor(examples["image"], size=size, return_tensors="pt")
             batch["labels"] = examples["labels"]
             return batch
 
@@ -638,21 +640,39 @@ class OVTrainerImageClassificationTrainingTest(unittest.TestCase):
 
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
-        for inputs in self.trainer.get_eval_dataloader():
-            ovmodel_outputs = ovmodel(**inputs)
-            self.assertIn("logits", ovmodel_outputs)
-            ovmodel_logits = ovmodel_outputs.logits
-            torch_logits = torch_model(**inputs).logits
-            self.assertTrue(
-                torch.allclose(
-                    torch.softmax(ovmodel_logits, dim=-1),
-                    torch.softmax(torch_logits, dim=-1),
-                    rtol=0.0001,
-                )
-            )
+        for batch_size in [1, 4]:
+            for size in [128, 224, 256]:
+                self.trainer.args.per_device_eval_batch_size = batch_size
+                dataset = self.eval_dataset.set_transform(partial(self.data_transform, size=size))
+                for inputs in self.trainer.get_eval_dataloader(dataset):
+                    ovmodel_outputs = ovmodel(**inputs)
+                    self.assertIn("logits", ovmodel_outputs)
+                    ovmodel_logits = ovmodel_outputs.logits
+                    torch_logits = torch_model(**inputs).logits
+                    self.assertTrue(
+                        torch.allclose(
+                            torch.softmax(ovmodel_logits, dim=-1),
+                            torch.softmax(torch_logits, dim=-1),
+                            rtol=0.0001,
+                        )
+                    )
 
-    def check_irmodel_is_dynamic(self, irmodel):
-        self.assertTrue(irmodel.is_dynamic())
+    def check_if_ovmodel_is_dynamic(self, ovmodel: OVModel, expected_result: bool = True):
+        if expected_result is True:
+            self.assertTrue(ovmodel.model.is_dynamic())
+        else:
+            self.assertFalse(ovmodel.model.is_dynamic())
+
+    def check_ovmodel_reshaping(self, ovmodel: OVModel):
+        for batch_size in [1, 4]:
+            for size in [128, 224, 256]:
+                shape = [batch_size, 3, size, size]
+                ovmodel.reshape(*shape)
+                self.check_if_ovmodel_is_dynamic(ovmodel, False)
+                for input_ in ovmodel.model.inputs:
+                    self.assertSequenceEqual(list(input_.get_shape()), shape)
+                ovmodel.reshape(-1, -1, -1, -1)
+                self.check_if_ovmodel_is_dynamic(ovmodel, True)
 
 
 QUANTIZATION_CONFIG_FOR_WAV2VEC2 = {
@@ -750,10 +770,6 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
     ),
 }
 
-OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
-    "quan": OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS["quantization"]
-}
-
 
 class OVTrainerAudioClassificationTrainingTest(unittest.TestCase):
     @parameterized.expand(OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS.items())
@@ -815,7 +831,8 @@ class OVTrainerAudioClassificationTrainingTest(unittest.TestCase):
 
             # check saved ovmodel IR and output
             ovmodel = OVModelForAudioClassification.from_pretrained(output_dir)
-            self.check_irmodel_is_dynamic(ovmodel.model)
+            self.check_if_ovmodel_is_dynamic(ovmodel, True)
+            self.check_ovmodel_reshaping(ovmodel)
             self.check_ovmodel_output_equals_torch_output(ovmodel, trainer.model)
 
             # check ovmodel quantization ops
@@ -893,7 +910,6 @@ class OVTrainerAudioClassificationTrainingTest(unittest.TestCase):
                 dataset = self.eval_dataset.set_transform(partial(self.data_transform, max_length=max_length))
                 for inputs in self.trainer.get_eval_dataloader(dataset):
                     ovmodel_outputs = ovmodel(**inputs)
-                    print(inputs["input_values"].shape)
                     self.assertIn("logits", ovmodel_outputs)
                     ovmodel_logits = ovmodel_outputs.logits
                     torch_logits = torch_model(**inputs).logits
@@ -905,5 +921,19 @@ class OVTrainerAudioClassificationTrainingTest(unittest.TestCase):
                         )
                     )
 
-    def check_irmodel_is_dynamic(self, irmodel):
-        self.assertTrue(irmodel.is_dynamic())
+    def check_if_ovmodel_is_dynamic(self, ovmodel: OVModel, expected_result: bool = True):
+        if expected_result is True:
+            self.assertTrue(ovmodel.model.is_dynamic())
+        else:
+            self.assertFalse(ovmodel.model.is_dynamic())
+
+    def check_ovmodel_reshaping(self, ovmodel: OVModel):
+        for batch_size in [1, 4]:
+            for seq_len in [1234, 16000]:
+                shape = [batch_size, seq_len]
+                ovmodel.reshape(*shape)
+                self.check_if_ovmodel_is_dynamic(ovmodel, False)
+                for input_ in ovmodel.model.inputs:
+                    self.assertSequenceEqual(list(input_.get_shape()), shape)
+                ovmodel.reshape(-1, -1)
+                self.check_if_ovmodel_is_dynamic(ovmodel, True)
