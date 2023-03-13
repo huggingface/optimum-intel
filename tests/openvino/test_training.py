@@ -44,10 +44,10 @@ from openvino.runtime import PartialShape
 from optimum.intel.openvino import OVTrainingArguments
 from optimum.intel.openvino.configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
 from optimum.intel.openvino.modeling import (
+    OVModel,
     OVModelForAudioClassification,
     OVModelForImageClassification,
     OVModelForSequenceClassification,
-    OVModel,
 )
 from optimum.intel.openvino.trainer import OVTrainer
 from optimum.intel.openvino.utils import OV_XML_FILE_NAME
@@ -357,7 +357,9 @@ class OVTrainerTextClassificationTrainingTest(unittest.TestCase):
 
         self.dataset = load_dataset("glue", "sst2")
         self.train_dataset = self.dataset["train"].sort("sentence").select(range(8)).map(tokenizer_fn, batched=True)
-        self.eval_dataset = self.dataset["validation"].sort("sentence").select(range(4)).map(tokenizer_fn, batched=True)
+        self.eval_dataset = (
+            self.dataset["validation"].sort("sentence").select(range(4)).map(tokenizer_fn, batched=True)
+        )
         self.metric = evaluate.load("glue", "sst2")
         self.compute_metric = lambda p: self.metric.compute(
             predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
@@ -652,7 +654,6 @@ class OVTrainerImageClassificationTrainingTest(unittest.TestCase):
                         rtol=0.0001,
                     )
                 )
-
 
     def check_if_ovmodel_is_dynamic(self, ovmodel: OVModel, expected_result: bool = True):
         if expected_result is True:
