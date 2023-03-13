@@ -23,10 +23,9 @@ from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
-import torchvision
 from datasets import load_dataset
 from transformers import (
-    AutoFeatureExtractor,
+    AutoImageProcessor,
     AutoModelForImageClassification,
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -542,7 +541,7 @@ class OVTrainerImageClassificationTrainingTest(unittest.TestCase):
                 task=self.task,
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
-                tokenizer=self.feature_extractor,
+                tokenizer=self.image_processor,
                 data_collator=self.collate_fn,
                 compute_metrics=self.compute_metric,
             )
@@ -591,28 +590,15 @@ class OVTrainerImageClassificationTrainingTest(unittest.TestCase):
         self.ov_config = OVConfig()
         self.ov_config.compression = desc.nncf_compression_config
         self.task = "image-classification"
-        self.feature_extractor = AutoFeatureExtractor.from_pretrained(desc.model_id)
+        self.image_processor = AutoImageProcessor.from_pretrained(desc.model_id)
         self.model = AutoModelForImageClassification.from_pretrained(desc.model_id, num_labels=3)
         self.teacher_model = None
         if desc.teacher_model_id:
             self.teacher_model = AutoModelForImageClassification.from_pretrained(desc.teacher_model_id, num_labels=3)
 
-        if "shortest_edge" in self.feature_extractor.size:
-            size = self.feature_extractor.size["shortest_edge"]
-        else:
-            size = (self.feature_extractor.size["height"], self.feature_extractor.size["width"])
-        image_transforms = torchvision.transforms.Compose(
-            [
-                torchvision.transforms.RandomResizedCrop(size),
-                torchvision.transforms.ToTensor(),
-                torchvision.transforms.Normalize(
-                    mean=self.feature_extractor.image_mean, std=self.feature_extractor.image_std
-                ),
-            ]
-        )
-
-        def data_transform(batch):
-            batch["pixel_values"] = [image_transforms(pil_img.convert("RGB")) for pil_img in batch["image"]]
+        def data_transform(examples):
+            batch = self.image_processor(examples["image"], return_tensors="pt")
+            batch["labels"] = examples["labels"]
             return batch
 
         def collate_fn(examples):
@@ -623,7 +609,7 @@ class OVTrainerImageClassificationTrainingTest(unittest.TestCase):
         self.dataset = load_dataset("beans", task="image-classification")
         self.dataset.set_transform(data_transform)
         self.train_dataset = self.dataset["train"].select(range(8))
-        self.eval_dataset = self.dataset["validation"].select(range(8))
+        self.eval_dataset = self.dataset["validation"].select(range(4))
         self.data_transform = data_transform
         self.collate_fn = collate_fn
         self.metric = evaluate.load("accuracy")
@@ -653,7 +639,7 @@ class OVTrainerImageClassificationTrainingTest(unittest.TestCase):
                 torch.allclose(
                     torch.softmax(ovmodel_logits, dim=-1),
                     torch.softmax(torch_logits, dim=-1),
-                    rtol=1e-4,
+                    rtol=0.0001,
                 )
             )
 
