@@ -750,10 +750,6 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
     ),
 }
 
-OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
-    "quan": OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS["quantization"]
-}
-
 
 class OVTrainerAudioClassificationTrainingTest(unittest.TestCase):
     @parameterized.expand(OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS.items())
@@ -893,7 +889,6 @@ class OVTrainerAudioClassificationTrainingTest(unittest.TestCase):
                 dataset = self.eval_dataset.set_transform(partial(self.data_transform, max_length=max_length))
                 for inputs in self.trainer.get_eval_dataloader(dataset):
                     ovmodel_outputs = ovmodel(**inputs)
-                    print(inputs["input_values"].shape)
                     self.assertIn("logits", ovmodel_outputs)
                     ovmodel_logits = ovmodel_outputs.logits
                     torch_logits = torch_model(**inputs).logits
