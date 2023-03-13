@@ -13,10 +13,12 @@
 #  limitations under the License.
 
 import re
+import random
 import tempfile
 import unittest
 from copy import deepcopy
 from dataclasses import dataclass, field
+from functools import partial
 from math import ceil
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -25,7 +27,9 @@ import numpy as np
 import torch
 from datasets import load_dataset
 from transformers import (
+    AutoFeatureExtractor,
     AutoImageProcessor,
+    AutoModelForAudioClassification,
     AutoModelForImageClassification,
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -39,7 +43,11 @@ from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityContr
 from openvino.runtime import PartialShape
 from optimum.intel.openvino import OVTrainingArguments
 from optimum.intel.openvino.configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
-from optimum.intel.openvino.modeling import OVModelForImageClassification, OVModelForSequenceClassification
+from optimum.intel.openvino.modeling import (
+    OVModelForAudioClassification,
+    OVModelForImageClassification,
+    OVModelForSequenceClassification,
+)
 from optimum.intel.openvino.trainer import OVTrainer
 from optimum.intel.openvino.utils import OV_XML_FILE_NAME
 from parameterized import parameterized
@@ -642,6 +650,260 @@ class OVTrainerImageClassificationTrainingTest(unittest.TestCase):
                     rtol=0.0001,
                 )
             )
+
+    def check_irmodel_is_dynamic(self, irmodel):
+        self.assertTrue(irmodel.is_dynamic())
+
+
+QUANTIZATION_CONFIG_FOR_WAV2VEC2 = {
+    "algorithm": "quantization",
+    "quantize_inputs": False,
+    "preset": "mixed",
+    "overflow_fix": "enable",
+    "initializer": {
+        "range": {"num_init_samples": 10, "type": "mean_min_max"},
+        "batchnorm_adaptation": {"num_bn_adaptation_samples": 0},
+    },
+    "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
+    "ignored_scopes": ["{re}.*feature_extractor.*", "{re}.*__add___[0-1]", "{re}.*layer_norm_0"],
+}
+
+STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2 = {
+    "algorithm": "movement_sparsity",
+    "params": {
+        "warmup_start_epoch": 1,
+        "warmup_end_epoch": 2,
+        "importance_regularization_factor": 0.1,
+        "enable_structured_masking": True,
+    },
+    "sparse_structure_by_scopes": [
+        {"mode": "block", "sparse_factors": [8, 8], "target_scopes": "{re}.*Wav2Vec2Attention.*"},
+        {"mode": "per_dim", "axis": 0, "target_scopes": "{re}.*intermediate_dense.*"},
+        {"mode": "per_dim", "axis": 1, "target_scopes": "{re}.*output_dense.*"},
+    ],
+    "ignored_scopes": [
+        "{re}projector",
+        "{re}classifier",
+        "{re}feature_extractor",
+        "{re}feature_projection",
+        "{re}pos_conv_embed",
+    ],
+}
+
+UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2 = deepcopy(STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2)
+UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2["params"]["enable_structured_masking"] = False
+
+
+OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
+    "quantization": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
+        nncf_compression_config=[QUANTIZATION_CONFIG_FOR_WAV2VEC2],
+        expected_fake_quantize=45,
+        expected_int8=28,
+        compression_metrics=["compression_loss"],
+    ),
+    "structured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
+        nncf_compression_config=[STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2],
+        expected_binary_masks=48,
+        compression_metrics=["compression_loss"],
+    ),
+    "unstructured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
+        nncf_compression_config=[UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2],
+        expected_binary_masks=48,
+        compression_metrics=["compression_loss"],
+    ),
+    "quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
+        nncf_compression_config=[QUANTIZATION_CONFIG_FOR_WAV2VEC2, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2],
+        expected_fake_quantize=45,
+        expected_int8=28,
+        expected_binary_masks=48,
+        compression_metrics=["compression_loss"],
+    ),
+    "quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
+        nncf_compression_config=[QUANTIZATION_CONFIG_FOR_WAV2VEC2, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2],
+        expected_fake_quantize=45,
+        expected_int8=28,
+        expected_binary_masks=48,
+        compression_metrics=["compression_loss"],
+    ),
+    "distillation,quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
+        teacher_model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
+        nncf_compression_config=[QUANTIZATION_CONFIG_FOR_WAV2VEC2, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2],
+        expected_fake_quantize=45,
+        expected_int8=28,
+        expected_binary_masks=48,
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
+    ),
+    "distillation,quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
+        teacher_model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
+        nncf_compression_config=[QUANTIZATION_CONFIG_FOR_WAV2VEC2, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2],
+        expected_fake_quantize=45,
+        expected_int8=28,
+        expected_binary_masks=48,
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
+    ),
+}
+
+OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
+    "quan": OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS["quantization"]
+}
+
+
+class OVTrainerAudioClassificationTrainingTest(unittest.TestCase):
+    @parameterized.expand(OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS.items())
+    def test_training(self, _, desc: OVTrainerTestDescriptor):
+        self.prepare(desc)
+        num_train_epochs = 3
+        train_batch_size = 4
+        total_steps = ceil(len(self.train_dataset) / train_batch_size) * num_train_epochs
+        with tempfile.TemporaryDirectory() as output_dir:
+            self.args = OVTrainingArguments(
+                output_dir=output_dir,
+                num_train_epochs=num_train_epochs,
+                learning_rate=1e-7,
+                do_train=True,
+                do_eval=True,
+                logging_steps=1,
+                per_device_train_batch_size=train_batch_size,
+                per_device_eval_batch_size=1,
+                no_cuda=True,
+                full_determinism=True,
+                remove_unused_columns=False,
+            )
+            self.trainer = OVTrainer(
+                model=self.model,
+                teacher_model=self.teacher_model,
+                args=self.args,
+                ov_config=self.ov_config,
+                task=self.task,
+                train_dataset=self.train_dataset,
+                eval_dataset=self.eval_dataset,
+                tokenizer=self.feature_extractor,
+                data_collator=self.collate_fn,
+                compute_metrics=self.compute_metric,
+            )
+
+            trainer = self.trainer
+            movement_controller = trainer._get_compression_controller_by_cls(
+                MovementSparsityController
+            )  # pylint: disable=protected-access
+            if movement_controller is not None:
+                # make sure the binary masks will have many zeros
+                initialize_movement_sparsifier_parameters_by_sparsity(movement_controller, sparsity=0.95)
+
+            # check evaluation can work even before training.
+            metrics = trainer.evaluate()
+            self.assertIn("eval_loss", metrics)
+            self.assertIn("eval_accuracy", metrics)
+
+            # check trainining
+            train_outputs = trainer.train()
+            self.assertIsInstance(train_outputs, TrainOutput)
+            self.assertEqual(train_outputs.global_step, total_steps)
+            self.assertEqual(sorted(desc.compression_metrics), sorted(trainer.compression_metrics.keys()))
+
+            # check model can be saved
+            trainer.save_model()
+            self.assertTrue(Path(output_dir, WEIGHTS_NAME).is_file())
+            self.assertTrue(Path(output_dir, OV_XML_FILE_NAME).is_file())
+
+            # check saved ovmodel IR and output
+            ovmodel = OVModelForAudioClassification.from_pretrained(output_dir)
+            self.check_irmodel_is_dynamic(ovmodel.model)
+            self.check_ovmodel_output_equals_torch_output(ovmodel, trainer.model)
+
+            # check ovmodel quantization ops
+            num_fake_quantize, num_int8 = self.count_quantization_op_number(ovmodel)
+            self.assertEqual(desc.expected_fake_quantize, num_fake_quantize)
+            self.assertEqual(desc.expected_int8, num_int8)
+
+            # check binary mask in sparsity/pruning algorithms
+            state_dict = torch.load(Path(output_dir, WEIGHTS_NAME), map_location="cpu")
+            num_binary_masks = sum(key.endswith("_binary_mask") for key in state_dict)
+            self.assertEqual(desc.expected_binary_masks, num_binary_masks)
+
+    def prepare(self, desc: OVTrainerTestDescriptor):
+        torch.manual_seed(42)
+        self.ov_config = OVConfig()
+        self.ov_config.compression = desc.nncf_compression_config
+        self.task = "audio-classification"
+        self.dataset = load_dataset("superb", "ks")
+        self.num_labels = len(self.dataset["train"].features["label"].names)
+
+        self.feature_extractor = AutoFeatureExtractor.from_pretrained(desc.model_id)
+        self.model = AutoModelForAudioClassification.from_pretrained(desc.model_id, num_labels=self.num_labels)
+        self.teacher_model = None
+        if desc.teacher_model_id:
+            self.teacher_model = AutoModelForAudioClassification.from_pretrained(
+                desc.teacher_model_id, num_labels=self.num_labels
+            )
+
+        def random_subsample(wav: np.ndarray, max_length: float = 1, sample_rate: int = 16000):
+            """Randomly sample chunks of `max_length` seconds from the input audio"""
+            sample_length = int(round(sample_rate * max_length))
+            if len(wav) <= sample_length:
+                return wav
+            random_offset = random.randint(0, len(wav) - sample_length - 1)
+            return wav[random_offset : random_offset + sample_length]
+
+        def data_transform(examples, max_length=1):
+            sampling_rate = self.feature_extractor.sampling_rate
+            audio = random_subsample(examples["audio"][0]["array"], max_length=max_length, sample_rate=sampling_rate)
+            batch = self.feature_extractor(audio, return_tensors="pt", sampling_rate=sampling_rate)
+            batch["labels"] = examples["label"]
+            return batch
+
+        def collate_fn(examples):
+            pixel_values = torch.stack([example["input_values"] for example in examples])
+            labels = torch.tensor([example["labels"] for example in examples])
+            return {"input_values": pixel_values, "labels": labels}
+
+        self.dataset.set_transform(data_transform)
+        self.train_dataset = self.dataset["train"].select(range(8))
+        self.eval_dataset = self.dataset["validation"].select(range(4))
+        self.data_transform = data_transform
+        self.collate_fn = collate_fn
+        self.metric = evaluate.load("accuracy")
+        self.compute_metric = lambda p: self.metric.compute(
+            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
+        )
+
+    def count_quantization_op_number(self, ovmodel):
+        num_fake_quantize = 0
+        num_int8 = 0
+        for elem in ovmodel.model.get_ops():
+            if "FakeQuantize" in elem.name:
+                num_fake_quantize += 1
+            for i in range(elem.get_output_size()):
+                if "8" in elem.get_output_element_type(i).get_type_name():
+                    num_int8 += 1
+        return num_fake_quantize, num_int8
+
+    def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
+        torch_model = torch_model.eval()
+        for batch_size in [1, 4]:
+            for max_length in [1, 0.2]:
+                self.trainer.args.per_device_eval_batch_size = batch_size
+                dataset = self.eval_dataset.set_transform(partial(self.data_transform, max_length=max_length))
+                for inputs in self.trainer.get_eval_dataloader(dataset):
+                    ovmodel_outputs = ovmodel(**inputs)
+                    print(inputs["input_values"].shape)
+                    self.assertIn("logits", ovmodel_outputs)
+                    ovmodel_logits = ovmodel_outputs.logits
+                    torch_logits = torch_model(**inputs).logits
+                    self.assertTrue(
+                        torch.allclose(
+                            torch.softmax(ovmodel_logits, dim=-1),
+                            torch.softmax(torch_logits, dim=-1),
+                            rtol=0.0001,
+                        )
+                    )
 
     def check_irmodel_is_dynamic(self, irmodel):
         self.assertTrue(irmodel.is_dynamic())
