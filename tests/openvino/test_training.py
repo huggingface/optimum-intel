@@ -116,7 +116,7 @@ class OVTrainerBaseTrainingTest(unittest.TestCase):
         trainer = self.trainer
         self.override_movement_sparsifier_initialization(trainer)
 
-        # check evaluation can work even before training.
+        # check evaluation can work even before training
         metrics = trainer.evaluate()
         self.check_eval_metrics(metrics)
 
