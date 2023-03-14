@@ -777,7 +777,7 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
 
     def check_ovmodel_reshaping(self, ovmodel: OVModel):
         for batch_size in [1, 4]:
-            for seq_len in [1234, 16000]:
+            for seq_len in [12345, 16000]:
                 shape = [batch_size, seq_len]
                 ovmodel.reshape(*shape)
                 self.check_if_ovmodel_is_dynamic(ovmodel, False)
@@ -789,7 +789,7 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
         for batch_size in [1, 4]:
-            for max_length in [16000, 12345]:
+            for max_length in [12345, 16000]:
                 self.trainer.args.per_device_eval_batch_size = batch_size
                 dataset = self.eval_dataset.set_transform(partial(self.data_transform, max_length=max_length))
                 for inputs in self.trainer.get_eval_dataloader(dataset):
