@@ -321,7 +321,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
         expected_fake_quantize=19,
         expected_int8=14,
-        compression_metrics=["distillation_loss", "task_loss", "compression_loss"],
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "customized_quantization": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-bert",
@@ -336,7 +336,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG,
         expected_fake_quantize=31,
         expected_int8=17,
-        compression_metrics=["distillation_loss", "task_loss", "compression_loss"],
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "structured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-bert",
@@ -374,7 +374,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         expected_fake_quantize=19,
         expected_int8=14,
         expected_binary_masks=24,
-        compression_metrics=["distillation_loss", "task_loss", "compression_loss"],
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "distillation,customized_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-bert",
@@ -383,7 +383,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         expected_fake_quantize=31,
         expected_int8=17,
         expected_binary_masks=24,
-        compression_metrics=["distillation_loss", "task_loss", "compression_loss"],
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-bert",
@@ -396,7 +396,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         teacher_model_id="hf-internal-testing/tiny-bert",
         nncf_compression_config=UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
         expected_binary_masks=24,
-        compression_metrics=["distillation_loss", "task_loss", "compression_loss"],
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-bert",
@@ -421,7 +421,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         expected_fake_quantize=19,
         expected_int8=14,
         expected_binary_masks=24,
-        compression_metrics=["distillation_loss", "task_loss", "compression_loss"],
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "distillation,customized_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-bert",
@@ -430,7 +430,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         expected_fake_quantize=31,
         expected_int8=17,
         expected_binary_masks=24,
-        compression_metrics=["distillation_loss", "task_loss", "compression_loss"],
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
 }
 
