@@ -306,7 +306,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         model_id="hf-internal-testing/tiny-bert",
         teacher_model_id="hf-internal-testing/tiny-bert",
         nncf_compression_config=[],
-        compression_metrics=["distillation_loss", "task_loss"],
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "default_quantization": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-bert",
