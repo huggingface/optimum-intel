@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import re
 import tempfile
 import unittest
 from copy import deepcopy
@@ -27,6 +28,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from transformers.trainer_utils import TrainOutput
 from transformers.utils import WEIGHTS_NAME
 
+import cpuinfo
 import evaluate
 from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
 from openvino.runtime import PartialShape
@@ -40,6 +42,7 @@ from parameterized import parameterized
 
 CUSTOMIZED_QUANTIZATION_CONFIG = {
     "algorithm": "quantization",
+    "overflow_fix": "disable",
     "initializer": {
         "range": {
             "num_init_samples": 16,
@@ -96,6 +99,10 @@ def initialize_movement_sparsifier_parameters_by_sparsity(
             if operand.prune_bias:
                 bias_init_tensor = torch.ones_like(operand.bias_importance) * negative_value
                 operand.bias_importance.copy_(bias_init_tensor)
+
+
+def is_avx_vnni_supported() -> bool:
+    return any(re.search("avx.*vnni", flag.lower()) is not None for flag in cpuinfo.get_cpu_info()["flags"])
 
 
 @dataclass
@@ -316,7 +323,14 @@ class OVTrainerTrainingTest(unittest.TestCase):
     def prepare(self, desc: OVTrainerTestDescriptor):
         torch.manual_seed(42)
         self.ov_config = OVConfig()
-        self.ov_config.compression = desc.nncf_compression_config
+        nncf_compression_config = desc.nncf_compression_config
+        if not is_avx_vnni_supported():
+            # should enable "overflow_fix" in quantization otherwise accuracy degradation may be seen
+            nncf_compression_config = self.get_nncf_config_with_overflow_fix_override(
+                nncf_compression_config, "enable"
+            )
+
+        self.ov_config.compression = nncf_compression_config
         self.tokenizer = AutoTokenizer.from_pretrained(desc.model_id)
         self.task = "sequence-classification"
         self.model = AutoModelForSequenceClassification.from_pretrained(desc.model_id)
@@ -336,6 +350,23 @@ class OVTrainerTrainingTest(unittest.TestCase):
         self.compute_metric = lambda p: self.metric.compute(
             predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
         )
+
+    def get_nncf_config_with_overflow_fix_override(
+        self, nncf_compression_config: Union[List[Dict], Dict, None], value: str = "enable"
+    ):
+        overrided_config = deepcopy(nncf_compression_config)
+        quantization_config = None
+        if isinstance(overrided_config, list):
+            for config in overrided_config:
+                if config["algorithm"] == "quantization":
+                    quantization_config = config
+                    break
+        elif isinstance(overrided_config, dict):
+            if overrided_config["algorithm"] == "quantization":
+                quantization_config = overrided_config
+        if quantization_config is not None:
+            quantization_config["overflow_fix"] = value
+        return overrided_config
 
     def count_quantization_op_number(self, ovmodel):
         num_fake_quantize = 0
@@ -367,7 +398,7 @@ class OVTrainerTrainingTest(unittest.TestCase):
                     torch.allclose(
                         torch.softmax(ovmodel_logits, dim=-1),
                         torch.softmax(torch_logits, dim=-1),
-                        rtol=0.2,
+                        rtol=0.0001,
                     )
                 )
 
