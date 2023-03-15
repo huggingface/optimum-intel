@@ -130,7 +130,7 @@ class OVTrainerBaseTrainingTest(unittest.TestCase):
         self.check_model_saving()
 
         # check saved ovmodel IR and output
-        ovmodel: OVModel = self.ovmodel_cls.from_pretrained(self.output_dir)
+        ovmodel = self.get_ov_model()
         self.check_if_ovmodel_is_dynamic(ovmodel, True)
         self.check_ovmodel_output_equals_torch_output(ovmodel, trainer.model)
         self.check_ovmodel_reshaping(ovmodel)
@@ -147,10 +147,10 @@ class OVTrainerBaseTrainingTest(unittest.TestCase):
     def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
         pass
 
-    def check_ovmodel_reshaping(self, ovmodel: OVModel):
+    def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         pass
 
-    def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
+    def check_ovmodel_reshaping(self, ovmodel: OVModel):
         pass
 
     def compute_metric(self, predictions: EvalPrediction):
@@ -247,6 +247,10 @@ class OVTrainerBaseTrainingTest(unittest.TestCase):
             )
         ov_config.compression = nncf_compression_config
         return ov_config
+
+    def get_ov_model(self, model_id=None) -> OVModel:
+        model_id = model_id or self.output_dir
+        return self.ovmodel_cls.from_pretrained(model_id)
 
     def get_nncf_config_with_overflow_fix_override(
         self, nncf_compression_config: Union[List[Dict], Dict, None], value: str = "enable"
@@ -467,15 +471,6 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
         self.eval_dataset.set_transform(data_transform)
         self.data_collator = None
 
-    def check_ovmodel_reshaping(self, ovmodel: OVModel):
-        for batch_size, seq_len in [(4, 256), (1, 89)]:
-            ovmodel.reshape(batch_size, seq_len)
-            self.check_if_ovmodel_is_dynamic(ovmodel, False)
-            for input_ in ovmodel.model.inputs:
-                self.assertSequenceEqual(list(input_.get_shape()), [batch_size, seq_len])
-            ovmodel.reshape(-1, -1)
-            self.check_if_ovmodel_is_dynamic(ovmodel, True)
-
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
         for max_seq_length in [16, 128]:
@@ -500,6 +495,17 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
                     )
                 )
 
+    def check_ovmodel_reshaping(self, ovmodel: OVModel):
+        self.check_if_ovmodel_is_dynamic(ovmodel, True)
+        for batch_size, seq_len in [(4, 256), (1, 89)]:
+            static_shape = [batch_size, seq_len]
+            ovmodel.reshape(*static_shape)
+            self.check_if_ovmodel_is_dynamic(ovmodel, False)
+            for input_ in ovmodel.model.inputs:
+                self.assertSequenceEqual(list(input_.get_shape()), static_shape)
+            ovmodel.reshape(-1, -1)
+            self.check_if_ovmodel_is_dynamic(ovmodel, True)
+
 
 STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN = {
     "algorithm": "movement_sparsity",
@@ -521,26 +527,26 @@ UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN["params"]["enable_structured_mask
 
 OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS = {
     "default_quantization": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
+        model_id="yujiepan/tiny-swin-patch4-window7-224",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG],
         expected_fake_quantize=27,
         expected_int8=27,
         compression_metrics=["compression_loss"],
     ),
     "structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
+        model_id="yujiepan/tiny-swin-patch4-window7-224",
         nncf_compression_config=[STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
     ),
     "unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
+        model_id="yujiepan/tiny-swin-patch4-window7-224",
         nncf_compression_config=[UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
     ),
     "default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
+        model_id="yujiepan/tiny-swin-patch4-window7-224",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
         expected_fake_quantize=27,
         expected_int8=27,
@@ -548,7 +554,7 @@ OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS = {
         compression_metrics=["compression_loss"],
     ),
     "default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
+        model_id="yujiepan/tiny-swin-patch4-window7-224",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
         expected_fake_quantize=27,
         expected_int8=27,
@@ -556,8 +562,8 @@ OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS = {
         compression_metrics=["compression_loss"],
     ),
     "distillation,default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
-        teacher_model_id="yujiepan/tiny-random-SwinModel",
+        model_id="yujiepan/tiny-swin-patch4-window7-224",
+        teacher_model_id="yujiepan/tiny-swin-patch4-window7-224",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
         expected_fake_quantize=27,
         expected_int8=27,
@@ -565,8 +571,8 @@ OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS = {
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "distillation,default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
-        teacher_model_id="yujiepan/tiny-random-SwinModel",
+        model_id="yujiepan/tiny-swin-patch4-window7-224",
+        teacher_model_id="yujiepan/tiny-swin-patch4-window7-224",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
         expected_fake_quantize=27,
         expected_int8=27,
@@ -608,35 +614,44 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
         self.data_transform = data_transform
         self.data_collator = default_data_collator
 
-    def check_ovmodel_reshaping(self, ovmodel: OVModel):
+    def get_ov_model(self, model_id=None) -> OVModel:
+        # image models, e.g. swin, may require a determined image size
+        model_id = model_id or self.output_dir
         size = (self.feature_extractor.size["height"], self.feature_extractor.size["width"])
-        for batch_size in [1, 4]:
-            shape = [batch_size, 3, *size]
-            ovmodel.reshape(*shape)
-            self.check_if_ovmodel_is_dynamic(ovmodel, False)
-            for input_ in ovmodel.model.inputs:
-                self.assertSequenceEqual(list(input_.get_shape()), shape)
-            ovmodel.reshape(*([-1] * len(shape)))
-            self.check_if_ovmodel_is_dynamic(ovmodel, True)
+        ovmodel = self.ovmodel_cls.from_pretrained(model_id, compile=False)
+        ovmodel.reshape(-1, 3, *size)
+        ovmodel.compile()
+        return ovmodel
 
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
         for batch_size in [1, 4]:
-            for size in [128, 224, 256]:
-                self.trainer.args.per_device_eval_batch_size = batch_size
-                dataset = self.eval_dataset.set_transform(partial(self.data_transform, size=size))
-                for inputs in self.trainer.get_eval_dataloader(dataset):
-                    ovmodel_outputs = ovmodel(**inputs)
-                    self.assertIn("logits", ovmodel_outputs)
-                    ovmodel_logits = ovmodel_outputs.logits
-                    torch_logits = torch_model(**inputs).logits
-                    self.assertTrue(
-                        torch.allclose(
-                            torch.softmax(ovmodel_logits, dim=-1),
-                            torch.softmax(torch_logits, dim=-1),
-                            rtol=0.0001,
-                        )
+            self.trainer.args.per_device_eval_batch_size = batch_size
+            for inputs in self.trainer.get_eval_dataloader():
+                ovmodel_outputs = ovmodel(**inputs)
+                self.assertIn("logits", ovmodel_outputs)
+                ovmodel_logits = ovmodel_outputs.logits
+                torch_logits = torch_model(**inputs).logits
+                self.assertTrue(
+                    torch.allclose(
+                        torch.softmax(ovmodel_logits, dim=-1),
+                        torch.softmax(torch_logits, dim=-1),
+                        rtol=0.0001,
                     )
+                )
+
+    def check_ovmodel_reshaping(self, ovmodel: OVModel):
+        self.check_if_ovmodel_is_dynamic(ovmodel, True)
+        size = (self.feature_extractor.size["height"], self.feature_extractor.size["width"])
+        dynamic_shape = [-1, 3, *size]
+        for batch_size in [1, 4]:
+            static_shape = [batch_size] + dynamic_shape[1:]
+            ovmodel.reshape(*static_shape)
+            self.check_if_ovmodel_is_dynamic(ovmodel, False)
+            for input_ in ovmodel.model.inputs:
+                self.assertSequenceEqual(list(input_.get_shape()), static_shape)
+            ovmodel.reshape(*dynamic_shape)
+            self.check_if_ovmodel_is_dynamic(ovmodel, True)
 
 
 QUANTIZATION_CONFIG_FOR_WAV2VEC2 = {
@@ -776,13 +791,14 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
         self.data_collator = None
 
     def check_ovmodel_reshaping(self, ovmodel: OVModel):
+        self.check_if_ovmodel_is_dynamic(ovmodel, True)
         for batch_size in [1, 4]:
             for seq_len in [12345, 16000]:
-                shape = [batch_size, seq_len]
-                ovmodel.reshape(*shape)
+                static_shape = [batch_size, seq_len]
+                ovmodel.reshape(*static_shape)
                 self.check_if_ovmodel_is_dynamic(ovmodel, False)
                 for input_ in ovmodel.model.inputs:
-                    self.assertSequenceEqual(list(input_.get_shape()), shape)
+                    self.assertSequenceEqual(list(input_.get_shape()), static_shape)
                 ovmodel.reshape(-1, -1)
                 self.check_if_ovmodel_is_dynamic(ovmodel, True)
 
