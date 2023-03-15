@@ -17,6 +17,7 @@ import re
 import shutil
 import tempfile
 import unittest
+from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import partial
@@ -97,7 +98,7 @@ class OVTrainerTestDescriptor:
     compression_metrics: List[str] = field(default_factory=list)
 
 
-class OVTrainerBaseTrainingTest(unittest.TestCase):
+class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
     ovmodel_cls = OVModel
     task = "unknown"
 
@@ -141,15 +142,15 @@ class OVTrainerBaseTrainingTest(unittest.TestCase):
         # check binary mask in sparsity/pruning algorithms
         self.check_binary_mask_number(desc.expected_binary_masks)
 
-    def tearDown(self):
-        shutil.rmtree(self.output_dir)
-
+    @abstractmethod
     def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
         pass
 
+    @abstractmethod
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         pass
 
+    @abstractmethod
     def check_ovmodel_reshaping(self, ovmodel: OVModel):
         pass
 
@@ -268,6 +269,9 @@ class OVTrainerBaseTrainingTest(unittest.TestCase):
         if quantization_config is not None:
             quantization_config["overflow_fix"] = value
         return overrided_config
+
+    def tearDown(self):
+        shutil.rmtree(self.output_dir)
 
 
 CUSTOMIZED_QUANTIZATION_CONFIG = {
