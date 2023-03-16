@@ -140,7 +140,7 @@ class INCTrainer(Trainer):
 
         self._set_signature_columns_if_needed()
 
-        for config in [quantization_config, pruning_config, distillation_config]:
+        for config in [pruning_config, distillation_config, quantization_config]:
             if config is not None:
                 inc_config.append(config)
 
@@ -601,7 +601,7 @@ class INCTrainer(Trainer):
 
         if self.dtype == "int8":
             torch_to_int8_onnx(
-                fp32_model=self._compression_manager.fp32_model.model.to(device),
+                fp32_model=self._compression_manager.model.fp32_model.to(device),
                 int8_model=model,
                 q_config=self._compression_manager.model.q_config,
                 save_path=output_path,
