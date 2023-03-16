@@ -123,7 +123,7 @@ class INCQuantizer(OptimumQuantizer):
         """
         super().__init__()
         self._original_model = model
-        self.eval_fn = eval_fn
+        self.eval_fn = eval_fn if eval_fn is not None else lambda model: 1
         self.calibration_fn = calibration_fn
         self.task = task
         self.seed = seed
