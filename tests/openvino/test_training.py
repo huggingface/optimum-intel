@@ -458,7 +458,6 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
 
         self.tokenizer = AutoTokenizer.from_pretrained(desc.model_id)
         self.model = AutoModelForSequenceClassification.from_pretrained(desc.model_id, num_labels=self.num_labels)
-        self.model.init_weights()
         self.teacher_model = None
         if desc.teacher_model_id:
             self.teacher_model = AutoModelForSequenceClassification.from_pretrained(
