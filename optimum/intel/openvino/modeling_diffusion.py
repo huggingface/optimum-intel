@@ -51,7 +51,6 @@ logger = logging.getLogger(__name__)
 
 
 class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
-
     auto_model_class = StableDiffusionPipeline
     config_name = "model_index.json"
     export_feature = "stable-diffusion"
@@ -434,7 +433,6 @@ class OVModelPart:
 
 class OVModelTextEncoder(OVModelPart):
     def __call__(self, input_ids: np.ndarray):
-
         self._create_inference_request()
 
         inputs = {
@@ -446,7 +444,6 @@ class OVModelTextEncoder(OVModelPart):
 
 class OVModelUnet(OVModelPart):
     def __call__(self, sample: np.ndarray, timestep: np.ndarray, encoder_hidden_states: np.ndarray):
-
         self._create_inference_request()
 
         inputs = {
@@ -461,7 +458,6 @@ class OVModelUnet(OVModelPart):
 
 class OVModelVaeDecoder(OVModelPart):
     def __call__(self, latent_sample: np.ndarray):
-
         self._create_inference_request()
 
         inputs = {

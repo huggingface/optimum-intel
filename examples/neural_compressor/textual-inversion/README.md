@@ -28,7 +28,7 @@ Use the following command to fine-tune the Stable Diffusion model on the above d
 export MODEL_NAME="CompVis/stable-diffusion-v1-4"
 export DATA_DIR="./dicoo"
 
-python textual_inversion.py \
+accelerate launch textual_inversion.py \
   --pretrained_model_name_or_path=$MODEL_NAME \
   --train_data_dir=$DATA_DIR \
   --learnable_property="object" \
