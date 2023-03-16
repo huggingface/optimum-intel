@@ -516,10 +516,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, compile=False)
-        ov_model.half()
-        ov_model.to("cpu")
-        ov_model.compile()
+        ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
 
         self.assertIsInstance(ov_model.encoder, OVEncoder)
         self.assertIsInstance(ov_model.decoder, OVDecoder)
@@ -546,8 +543,11 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True,  compile=False)
+        model.half()
+        model.to("cpu")
+        model.compile()
 
         # Text2Text generation
         pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
