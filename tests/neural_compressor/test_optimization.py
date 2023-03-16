@@ -334,7 +334,7 @@ class PruningTest(unittest.TestCase):
                 pruning_config=pruning_config,
                 task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=False),
-                train_dataset=dataset["train"].select(range(8)),
+                train_dataset=dataset["train"].select(range(16)),
                 eval_dataset=dataset["validation"].select(range(8)),
                 compute_metrics=compute_metrics,
                 tokenizer=tokenizer,
