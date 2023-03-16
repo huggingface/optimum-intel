@@ -458,6 +458,7 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
 
         self.tokenizer = AutoTokenizer.from_pretrained(desc.model_id)
         self.model = AutoModelForSequenceClassification.from_pretrained(desc.model_id, num_labels=self.num_labels)
+        self.model.init_weights()
         self.teacher_model = None
         if desc.teacher_model_id:
             self.teacher_model = AutoModelForSequenceClassification.from_pretrained(
@@ -472,8 +473,8 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
         self.data_transform = data_transform
         self.dataset.set_transform(data_transform)
         raw_dataset = self.dataset["train"].sort("sentence")
-        self.train_dataset = raw_dataset.select(range(6))
-        self.eval_dataset = raw_dataset.select(range(6, 10))
+        self.eval_dataset = raw_dataset.select(range(4))
+        self.train_dataset = raw_dataset.select(range(4, 10))
         self.data_collator = None
 
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
@@ -611,8 +612,8 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
         self.data_transform = data_transform
         self.dataset.set_transform(data_transform)
         raw_dataset = self.dataset["train"].shuffle(seed=42)
-        self.train_dataset = raw_dataset.select(range(6))
-        self.eval_dataset = raw_dataset.select(range(6, 10))
+        self.eval_dataset = raw_dataset.select(range(4))
+        self.train_dataset = raw_dataset.select(range(4, 10))
         self.data_collator = default_data_collator
 
     def get_ov_model(self, model_id=None) -> OVModel:
@@ -787,8 +788,8 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
 
         self.data_transform = data_transform
         self.dataset.set_transform(data_transform)
-        self.train_dataset = self.dataset["test"].select(range(6))
-        self.eval_dataset = self.dataset["test"].select(range(6, 10))
+        self.eval_dataset = self.dataset["test"].select(range(4))
+        self.train_dataset = self.dataset["test"].select(range(4, 10))
         self.data_collator = None
 
     def check_ovmodel_reshaping(self, ovmodel: OVModel):
