@@ -209,11 +209,12 @@ class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
 
     def get_training_args(self) -> OVTrainingArguments:
         num_train_epochs = 3
-        train_batch_size = 4
+        train_batch_size = 3
         args = OVTrainingArguments(
             output_dir=self.output_dir,
             num_train_epochs=num_train_epochs,
             learning_rate=1e-4,
+            optim="adamw_torch",
             do_train=True,
             do_eval=True,
             logging_steps=1,
@@ -469,35 +470,30 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
             return result
 
         self.data_transform = data_transform
-        self.train_dataset = self.dataset["train"].select(range(8))
-        self.eval_dataset = self.dataset["validation"].select(range(4))
-        self.train_dataset.set_transform(data_transform)
-        self.eval_dataset.set_transform(data_transform)
+        self.dataset.set_transform(data_transform)
+        raw_dataset = self.dataset["train"].sort("sentence")
+        self.train_dataset = raw_dataset.select(range(6))
+        self.eval_dataset = raw_dataset.select(range(6, 10))
         self.data_collator = None
 
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
-        for max_seq_length in [16, 89, 128]:
-            for batch_size in [1, 3, 7, 11]:
-                examples = self.dataset["train"].sort("sentence")[:batch_size]
-                inputs = self.tokenizer(
-                    examples["sentence"],
-                    padding="max_length",
-                    max_length=max_seq_length,
-                    truncation=True,
-                    return_tensors="pt",
-                )
-                ovmodel_outputs = ovmodel(**inputs)
-                self.assertIn("logits", ovmodel_outputs)
-                ovmodel_logits = ovmodel_outputs.logits
-                torch_logits = torch_model(**inputs).logits
-                self.assertTrue(
-                    torch.allclose(
+        for max_length in [64, 128]:
+            for batch_size in [1, 4]:
+                self.trainer.args.per_device_eval_batch_size = batch_size
+                dataset = self.eval_dataset.set_transform(partial(self.data_transform, max_length=max_length))
+                for inputs in self.trainer.get_eval_dataloader(dataset):
+                    ovmodel_outputs = ovmodel(**inputs)
+                    self.assertIn("logits", ovmodel_outputs)
+                    ovmodel_logits = ovmodel_outputs.logits
+                    with torch.no_grad():
+                        torch_logits = torch_model(**inputs).logits
+                    torch.testing.assert_close(
                         torch.softmax(ovmodel_logits, dim=-1),
                         torch.softmax(torch_logits, dim=-1),
-                        rtol=0.0001,
+                        atol=1e-4,
+                        rtol=1e-4,
                     )
-                )
 
     def check_ovmodel_reshaping(self, ovmodel: OVModel):
         self.check_if_ovmodel_is_dynamic(ovmodel, True)
@@ -531,55 +527,55 @@ UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN["params"]["enable_structured_mask
 
 OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS = {
     "default_quantization": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-swin-patch4-window7-224",
+        model_id="yujiepan/tiny-random-SwinModel",
         nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
-        expected_fake_quantize=28,
-        expected_int8=28,
+        expected_fake_quantize=27,
+        expected_int8=27,
         compression_metrics=["compression_loss"],
     ),
     "structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-swin-patch4-window7-224",
+        model_id="yujiepan/tiny-random-SwinModel",
         nncf_compression_config=STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN,
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
     ),
     "unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-swin-patch4-window7-224",
+        model_id="yujiepan/tiny-random-SwinModel",
         nncf_compression_config=UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN,
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
     ),
     "default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-swin-patch4-window7-224",
+        model_id="yujiepan/tiny-random-SwinModel",
         nncf_compression_config=[STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN, DEFAULT_QUANTIZATION_CONFIG],
-        expected_fake_quantize=28,
-        expected_int8=28,
+        expected_fake_quantize=27,
+        expected_int8=27,
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
     ),
     "default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-swin-patch4-window7-224",
+        model_id="yujiepan/tiny-random-SwinModel",
         nncf_compression_config=[UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN, DEFAULT_QUANTIZATION_CONFIG],
-        expected_fake_quantize=28,
-        expected_int8=28,
+        expected_fake_quantize=27,
+        expected_int8=27,
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
     ),
     "distillation,default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-swin-patch4-window7-224",
-        teacher_model_id="yujiepan/tiny-swin-patch4-window7-224",
+        model_id="yujiepan/tiny-random-SwinModel",
+        teacher_model_id="yujiepan/tiny-random-SwinModel",
         nncf_compression_config=[STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN, DEFAULT_QUANTIZATION_CONFIG],
-        expected_fake_quantize=28,
-        expected_int8=28,
+        expected_fake_quantize=27,
+        expected_int8=27,
         expected_binary_masks=48,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "distillation,default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-swin-patch4-window7-224",
-        teacher_model_id="yujiepan/tiny-swin-patch4-window7-224",
+        model_id="yujiepan/tiny-random-SwinModel",
+        teacher_model_id="yujiepan/tiny-random-SwinModel",
         nncf_compression_config=[UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN, DEFAULT_QUANTIZATION_CONFIG],
-        expected_fake_quantize=28,
-        expected_int8=28,
+        expected_fake_quantize=27,
+        expected_int8=27,
         expected_binary_masks=48,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
@@ -595,7 +591,7 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
         self.run_ovtrainer_training_checks(desc)
 
     def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
-        self.dataset = load_dataset("beans", task="image-classification")
+        self.dataset = load_dataset("hf-internal-testing/cats_vs_dogs_sample")
         self.num_labels = len(self.dataset["train"].features["labels"].names)
 
         self.feature_extractor = AutoImageProcessor.from_pretrained(desc.model_id)
@@ -612,10 +608,11 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
             result["labels"] = examples["labels"]
             return result
 
-        self.dataset.set_transform(data_transform)
-        self.train_dataset = self.dataset["train"].select(range(8))
-        self.eval_dataset = self.dataset["validation"].select(range(4))
         self.data_transform = data_transform
+        self.dataset.set_transform(data_transform)
+        raw_dataset = self.dataset["train"].shuffle(seed=42)
+        self.train_dataset = raw_dataset.select(range(6))
+        self.eval_dataset = raw_dataset.select(range(6, 10))
         self.data_collator = default_data_collator
 
     def get_ov_model(self, model_id=None) -> OVModel:
@@ -635,13 +632,13 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
                 ovmodel_outputs = ovmodel(**inputs)
                 self.assertIn("logits", ovmodel_outputs)
                 ovmodel_logits = ovmodel_outputs.logits
-                torch_logits = torch_model(**inputs).logits
-                self.assertTrue(
-                    torch.allclose(
-                        torch.softmax(ovmodel_logits, dim=-1),
-                        torch.softmax(torch_logits, dim=-1),
-                        atol=0.001,  # TODO: swin has higher errors
-                    )
+                with torch.no_grad():
+                    torch_logits = torch_model(**inputs).logits
+                torch.testing.assert_close(
+                    torch.softmax(ovmodel_logits, dim=-1),
+                    torch.softmax(torch_logits, dim=-1),
+                    atol=1e-4,
+                    rtol=1e-4,
                 )
 
     def check_ovmodel_reshaping(self, ovmodel: OVModel):
@@ -763,8 +760,8 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
         self.run_ovtrainer_training_checks(desc)
 
     def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
-        self.dataset = load_dataset("superb", "ks")
-        self.num_labels = len(self.dataset["train"].features["label"].names)
+        self.dataset = load_dataset("anton-l/superb_dummy", "ks")
+        self.num_labels = len(self.dataset["test"].features["label"].names)
 
         self.feature_extractor = AutoFeatureExtractor.from_pretrained(desc.model_id)
         self.tokenizer = self.feature_extractor
@@ -775,23 +772,23 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
                 desc.teacher_model_id, num_labels=self.num_labels
             )
 
-        def random_subsample(wav: np.ndarray, max_length: int = 16000):
-            if len(wav) <= max_length:
-                return wav
-            random_offset = random.randint(0, len(wav) - max_length - 1)
-            return wav[random_offset : random_offset + max_length]
-
         def data_transform(examples, max_length: int = 16000):
             sampling_rate = self.feature_extractor.sampling_rate
-            audio = random_subsample(examples["audio"][0]["array"], max_length=max_length)
-            batch = self.feature_extractor(audio, sampling_rate=sampling_rate, return_tensors="pt")
+            batch = self.feature_extractor(
+                examples["speech"],
+                padding="max_length",
+                max_length=max_length,
+                truncation=True,
+                sampling_rate=sampling_rate,
+                return_tensors="pt",
+            )
             batch["labels"] = examples["label"]
             return batch
 
         self.data_transform = data_transform
         self.dataset.set_transform(data_transform)
-        self.train_dataset = self.dataset["train"].select(range(8))
-        self.eval_dataset = self.dataset["validation"].select(range(4))
+        self.train_dataset = self.dataset["test"].select(range(6))
+        self.eval_dataset = self.dataset["test"].select(range(6, 10))
         self.data_collator = None
 
     def check_ovmodel_reshaping(self, ovmodel: OVModel):
@@ -816,11 +813,11 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
                     ovmodel_outputs = ovmodel(**inputs)
                     self.assertIn("logits", ovmodel_outputs)
                     ovmodel_logits = ovmodel_outputs.logits
-                    torch_logits = torch_model(**inputs).logits
-                    self.assertTrue(
-                        torch.allclose(
-                            torch.softmax(ovmodel_logits, dim=-1),
-                            torch.softmax(torch_logits, dim=-1),
-                            rtol=0.0001,
-                        )
+                    with torch.no_grad():
+                        torch_logits = torch_model(**inputs).logits
+                    torch.testing.assert_close(
+                        torch.softmax(ovmodel_logits, dim=-1),
+                        torch.softmax(torch_logits, dim=-1),
+                        atol=1e-4,
+                        rtol=1e-4,
                     )
