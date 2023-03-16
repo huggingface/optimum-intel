@@ -287,7 +287,7 @@ CUSTOMIZED_QUANTIZATION_CONFIG = {
         "batchnorm_adaptation": {"num_bn_adaptation_samples": 4},
     },
     "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "asymmetric"}}},
-    "ignored_scopes": [],
+    "ignored_scopes": ["{re}.*LayerNorm.*"],
 }
 
 STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT = {
