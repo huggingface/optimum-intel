@@ -419,7 +419,7 @@ class OVDecoder:
             output_names = key.get_names()
             output_name = "logits" if "logits" in output_names else next(iter(output_names))
             outputs[output_name] = value.data
-                           
+
         # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
         # self-attention layer and 2 to the cross-attention layer)
         past_key_values = tuple(
