@@ -102,9 +102,6 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         self.tokenizer = tokenizer
         self.scheduler = scheduler
         self.feature_extractor = feature_extractor
-        self.vae_decoder_request = None
-        self.text_encoder_request = None
-        self.unet_request = None
         self.safety_checker = None
         self.preprocessors = []
 
