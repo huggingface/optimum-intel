@@ -397,20 +397,6 @@ class OVModelForFeatureExtraction(OVModel):
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
 
-MASKED_LM_EXAMPLE = r"""
-    Example of masked language modeling using `transformers.pipelines`:
-    ```python
-    >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
-
-    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
-    >>> mask_token = tokenizer.mask_token
-    >>> pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
-    >>> outputs = pipe("The goal of life is" + mask_token)
-    ```
-"""
-
 TEXT_GENERATION_EXAMPLE = r"""
     Example of text generation:
     ```python
@@ -540,6 +526,21 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
             height=height,
             width=width,
         )
+
+
+MASKED_LM_EXAMPLE = r"""
+    Example of masked language modeling using `transformers.pipelines`:
+    ```python
+    >>> from transformers import {processor_class}, pipeline
+    >>> from optimum.intel.openvino import {model_class}
+
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+    >>> mask_token = tokenizer.mask_token
+    >>> pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
+    >>> outputs = pipe("The goal of life is" + mask_token)
+    ```
+"""
 
 
 @add_start_docstrings(
