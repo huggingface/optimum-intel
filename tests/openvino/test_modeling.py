@@ -544,7 +544,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True,  compile=False)
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, compile=False)
         model.half()
         model.to("cpu")
         model.compile()
