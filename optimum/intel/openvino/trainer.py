@@ -719,7 +719,7 @@ class OVTrainer(Trainer):
                     if not save_as_external_data:
                         onnx_path.write_bytes(f.getvalue())
                     logger.warning(
-                        f"Error encountered during OpenVINO IR pruning: {err}. {onnx_path} is dumped for debug. "
+                        f"Error encountered during OpenVINO IR pruning: {err}. {onnx_path} is dumped for debugging. "
                         "Run continues without saving OpenVINO IR files."
                     )
                     return
@@ -755,7 +755,7 @@ class OVTrainer(Trainer):
         for input_ in ov_model.inputs:
             if static_shape is True:
                 new_input_cfg[input_.any_name] = PartialShape(
-                    [1, *input_name_vs_shape[input_.any_name][1:]]
+                    [1] + input_name_vs_shape[input_.any_name][1:]
                 )  # use batch size of 1 for static shape IR
             else:
                 new_input_cfg[input_.any_name] = PartialShape([-1] * len(input_.partial_shape))

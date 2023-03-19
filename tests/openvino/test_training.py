@@ -14,8 +14,10 @@
 
 import random
 import re
+import shutil
 import tempfile
 import unittest
+from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import partial
@@ -29,21 +31,23 @@ from datasets import load_dataset
 from transformers import (
     AutoFeatureExtractor,
     AutoImageProcessor,
+    AutoModel,
     AutoModelForAudioClassification,
     AutoModelForImageClassification,
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    default_data_collator,
 )
-from transformers.trainer_utils import TrainOutput
+from transformers.trainer_utils import EvalPrediction, TrainOutput
 from transformers.utils import WEIGHTS_NAME
 
 import cpuinfo
 import evaluate
 from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
-from openvino.runtime import PartialShape
 from optimum.intel.openvino import OVTrainingArguments
 from optimum.intel.openvino.configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
 from optimum.intel.openvino.modeling import (
+    OVModel,
     OVModelForAudioClassification,
     OVModelForImageClassification,
     OVModelForSequenceClassification,
@@ -51,41 +55,6 @@ from optimum.intel.openvino.modeling import (
 from optimum.intel.openvino.trainer import OVTrainer
 from optimum.intel.openvino.utils import OV_XML_FILE_NAME
 from parameterized import parameterized
-
-
-CUSTOMIZED_QUANTIZATION_CONFIG = {
-    "algorithm": "quantization",
-    "overflow_fix": "disable",
-    "initializer": {
-        "range": {
-            "num_init_samples": 16,
-            "type": "percentile",
-            "params": {"min_percentile": 0.01, "max_percentile": 99.99},
-        },
-        "batchnorm_adaptation": {"num_bn_adaptation_samples": 4},
-    },
-    "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "asymmetric"}}},
-    "ignored_scopes": [],
-}
-
-STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT = {
-    "algorithm": "movement_sparsity",
-    "params": {
-        "warmup_start_epoch": 1,
-        "warmup_end_epoch": 2,
-        "importance_regularization_factor": 1.0,
-        "enable_structured_masking": True,
-    },
-    "sparse_structure_by_scopes": [
-        {"mode": "block", "sparse_factors": [32, 32], "target_scopes": "{re}.*BertAttention.*"},
-        {"mode": "per_dim", "axis": 0, "target_scopes": "{re}.*BertIntermediate.*"},
-        {"mode": "per_dim", "axis": 1, "target_scopes": "{re}.*BertOutput.*"},
-    ],
-    "ignored_scopes": ["{re}.*NNCFEmbedding", "{re}.*LayerNorm.*", "{re}.*pooler.*", "{re}.*classifier.*"],
-}
-
-UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT = deepcopy(STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT)
-UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT["params"]["enable_structured_masking"] = False
 
 
 def initialize_movement_sparsifier_parameters_by_sparsity(
@@ -129,240 +98,160 @@ class OVTrainerTestDescriptor:
     compression_metrics: List[str] = field(default_factory=list)
 
 
-OVTRAINER_TRAINING_TEST_DESCRIPTORS = {
-    "distillation": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        teacher_model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=[],
-        compression_metrics=["distillation_loss"],
-    ),
-    "default_quantization": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
-        expected_fake_quantize=19,
-        expected_int8=14,
-    ),
-    "distillation,default_quantization": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        teacher_model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
-        expected_fake_quantize=19,
-        expected_int8=14,
-        compression_metrics=["distillation_loss"],
-    ),
-    "customized_quantization": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG,
-        expected_fake_quantize=31,
-        expected_int8=17,
-    ),
-    "distillation,customized_quantization": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        teacher_model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG,
-        expected_fake_quantize=31,
-        expected_int8=17,
-        compression_metrics=["distillation_loss"],
-    ),
-    "structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss"],
-    ),
-    "distillation,structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        teacher_model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss", "distillation_loss"],
-    ),
-    "default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=19,
-        expected_int8=14,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss"],
-    ),
-    "customized_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=31,
-        expected_int8=17,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss"],
-    ),
-    "distillation,default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        teacher_model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=19,
-        expected_int8=14,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss", "distillation_loss"],
-    ),
-    "distillation,customized_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        teacher_model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=31,
-        expected_int8=17,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss", "distillation_loss"],
-    ),
-    "unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss"],
-    ),
-    "distillation,unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        teacher_model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss", "distillation_loss"],
-    ),
-    "default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=19,
-        expected_int8=14,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss"],
-    ),
-    "customized_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=31,
-        expected_int8=17,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss"],
-    ),
-    "distillation,default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        teacher_model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=19,
-        expected_int8=14,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss", "distillation_loss"],
-    ),
-    "distillation,customized_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="hf-internal-testing/tiny-bert",
-        teacher_model_id="hf-internal-testing/tiny-bert",
-        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=31,
-        expected_int8=17,
-        expected_binary_masks=24,
-        compression_metrics=["compression_loss", "distillation_loss"],
-    ),
-}
+class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
+    ovmodel_cls = OVModel
+    task = "unknown"
 
+    def setUp(self):
+        torch.manual_seed(42)
+        random.seed(42)
+        np.random.seed(42)
+        self.output_dir = tempfile.mkdtemp()
 
-class OVTrainerTextClassificationTrainingTest(unittest.TestCase):
-    @parameterized.expand(OVTRAINER_TRAINING_TEST_DESCRIPTORS.items())
-    def test_training(self, _, desc: OVTrainerTestDescriptor):
-        self.prepare(desc)
+    def run_ovtrainer_training_checks(self, desc: OVTrainerTestDescriptor):
+        self.prepare_model_and_dataset(desc)
+        self.args = self.get_training_args()
+        self.ov_config = self.get_ov_config(desc.nncf_compression_config)
+        self.trainer = self.get_ov_trainer()
+
+        trainer = self.trainer
+        self.override_movement_sparsifier_initialization(trainer)
+
+        # check evaluation can work even before training
+        metrics = trainer.evaluate()
+        self.check_eval_metrics(metrics)
+
+        # check trainining & saving
+        train_output = trainer.train()
+        self.check_train_output(train_output)
+        self.check_compression_metrics(desc.compression_metrics)
+
+        # check model can be saved
+        trainer.save_model()
+        self.check_model_saving()
+
+        # check saved ovmodel IR and output
+        ovmodel = self.get_ov_model()
+        self.check_if_ovmodel_is_dynamic(ovmodel, True)
+        self.check_ovmodel_output_equals_torch_output(ovmodel, trainer.model)
+        self.check_ovmodel_reshaping(ovmodel)
+
+        # check ovmodel quantization ops
+        self.check_quantization_op_number(ovmodel, desc.expected_fake_quantize, desc.expected_int8)
+
+        # check binary mask in sparsity/pruning algorithms
+        self.check_binary_mask_number(desc.expected_binary_masks)
+
+    @abstractmethod
+    def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
+        pass
+
+    @abstractmethod
+    def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
+        pass
+
+    @abstractmethod
+    def check_ovmodel_reshaping(self, ovmodel: OVModel):
+        pass
+
+    def compute_metric(self, predictions: EvalPrediction):
+        metric = evaluate.load("accuracy")
+        return metric.compute(predictions=np.argmax(predictions.predictions, axis=1), references=predictions.label_ids)
+
+    def check_eval_metrics(self, metrics: Dict[str, float]):
+        for eval_metric in ["loss", "accuracy"]:
+            self.assertIn(f"eval_{eval_metric}", metrics)
+
+    def check_train_output(self, train_output: TrainOutput):
+        self.assertIsInstance(train_output, TrainOutput)
+        total_steps = (
+            ceil(len(self.train_dataset) / self.args.per_device_train_batch_size) * self.args.num_train_epochs
+        )
+        self.assertEqual(train_output.global_step, total_steps)
+
+    def check_model_saving(self):
+        for file_name in [WEIGHTS_NAME, OV_XML_FILE_NAME, OV_XML_FILE_NAME.replace(".xml", ".bin")]:
+            self.assertTrue(Path(self.output_dir, file_name).is_file())
+
+    def check_compression_metrics(self, expected_compression_metrics: List[str]):
+        self.assertEqual(sorted(expected_compression_metrics), sorted(self.trainer.compression_metrics.keys()))
+
+    def check_quantization_op_number(self, ovmodel: OVModel, expected_fake_quantize: int, expected_int8: int):
+        num_fake_quantize = 0
+        num_int8 = 0
+        for elem in ovmodel.model.get_ops():
+            if "FakeQuantize" in elem.name:
+                num_fake_quantize += 1
+            for i in range(elem.get_output_size()):
+                if "8" in elem.get_output_element_type(i).get_type_name():
+                    num_int8 += 1
+        self.assertEqual(expected_fake_quantize, num_fake_quantize)
+        self.assertEqual(expected_int8, num_int8)
+
+    def check_binary_mask_number(self, expected_binary_masks: int):
+        state_dict = torch.load(Path(self.output_dir, WEIGHTS_NAME), map_location="cpu")
+        num_binary_masks = sum(key.endswith("_binary_mask") for key in state_dict)
+        self.assertEqual(expected_binary_masks, num_binary_masks)
+
+    def check_if_ovmodel_is_dynamic(self, ovmodel: OVModel, expected_result: bool = True):
+        if expected_result is True:
+            self.assertTrue(ovmodel.model.is_dynamic())
+        else:
+            self.assertFalse(ovmodel.model.is_dynamic())
+
+    def override_movement_sparsifier_initialization(self, trainer: OVTrainer, sparsity=0.95):
+        movement_controller = trainer._get_compression_controller_by_cls(
+            MovementSparsityController
+        )  # pylint: disable=protected-access
+        if movement_controller is not None:
+            # make sure the binary masks will have many zeros
+            initialize_movement_sparsifier_parameters_by_sparsity(movement_controller, sparsity=sparsity)
+
+    def get_training_args(self) -> OVTrainingArguments:
         num_train_epochs = 3
         train_batch_size = 4
-        total_steps = ceil(len(self.train_dataset) / train_batch_size) * num_train_epochs
-        with tempfile.TemporaryDirectory() as output_dir:
-            args = OVTrainingArguments(
-                output_dir=output_dir,
-                num_train_epochs=num_train_epochs,
-                learning_rate=1e-7,
-                do_train=True,
-                do_eval=True,
-                logging_steps=1,
-                per_device_train_batch_size=train_batch_size,
-                per_device_eval_batch_size=1,
-                no_cuda=True,
-                full_determinism=True,
-            )
-            trainer = OVTrainer(
-                model=self.model,
-                teacher_model=self.teacher_model,
-                args=args,
-                ov_config=self.ov_config,
-                task=self.task,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
-                tokenizer=self.tokenizer,
-                compute_metrics=self.compute_metric,
-            )
+        args = OVTrainingArguments(
+            output_dir=self.output_dir,
+            num_train_epochs=num_train_epochs,
+            learning_rate=1e-7,
+            do_train=True,
+            do_eval=True,
+            logging_steps=1,
+            per_device_train_batch_size=train_batch_size,
+            per_device_eval_batch_size=1,
+            no_cuda=True,
+            full_determinism=True,
+            remove_unused_columns=False,
+        )
+        return args
 
-            movement_controller = trainer._get_compression_controller_by_cls(
-                MovementSparsityController
-            )  # pylint: disable=protected-access
-            if movement_controller is not None:
-                # make sure the binary masks will have many zeros
-                initialize_movement_sparsifier_parameters_by_sparsity(movement_controller, sparsity=0.95)
+    def get_ov_trainer(self) -> OVTrainer:
+        return OVTrainer(
+            model=self.model,
+            teacher_model=self.teacher_model,
+            args=self.args,
+            ov_config=self.ov_config,
+            task=self.task,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            tokenizer=self.tokenizer,
+            compute_metrics=self.compute_metric,
+            data_collator=self.data_collator,
+        )
 
-            # check evaluation can work even before training.
-            metrics = trainer.evaluate()
-            self.assertIn("eval_loss", metrics)
-            self.assertIn("eval_accuracy", metrics)
-
-            # check trainining & saving
-            train_outputs = trainer.train()
-            self.assertIsInstance(train_outputs, TrainOutput)
-            self.assertEqual(train_outputs.global_step, total_steps)
-            for metric in desc.compression_metrics:
-                self.assertIn(metric, trainer.compression_metrics)
-
-            # check model can be saved
-            trainer.save_model()
-            self.assertTrue(Path(output_dir, WEIGHTS_NAME).is_file())
-            self.assertTrue(Path(output_dir, OV_XML_FILE_NAME).is_file())
-
-            # check saved ovmodel IR and output
-            ovmodel = OVModelForSequenceClassification.from_pretrained(output_dir)
-            self.check_irmodel_is_dynamic(ovmodel.model)
-            self.check_irmodel_reshaping(ovmodel.model)
-            self.check_ovmodel_output_equals_torch_output(ovmodel, trainer.model)
-
-            # check ovmodel quantization ops
-            num_fake_quantize, num_int8 = self.count_quantization_op_number(ovmodel)
-            self.assertEqual(desc.expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(desc.expected_int8, num_int8)
-
-            # check binary mask in sparsity/pruning algorithms
-            state_dict = torch.load(Path(output_dir, WEIGHTS_NAME), map_location="cpu")
-            num_binary_masks = sum(key.endswith("_binary_mask") for key in state_dict)
-            self.assertEqual(desc.expected_binary_masks, num_binary_masks)
-
-    def prepare(self, desc: OVTrainerTestDescriptor):
-        torch.manual_seed(42)
-        self.ov_config = OVConfig()
-        nncf_compression_config = desc.nncf_compression_config
+    def get_ov_config(self, nncf_compression_config: Union[List[Dict], Dict, None]) -> OVConfig:
+        ov_config = OVConfig()
         if not is_avx_vnni_supported():
             # should enable "overflow_fix" in quantization otherwise accuracy degradation may be seen
             nncf_compression_config = self.get_nncf_config_with_overflow_fix_override(
                 nncf_compression_config, "enable"
             )
+        ov_config.compression = nncf_compression_config
+        return ov_config
 
-        self.ov_config.compression = nncf_compression_config
-        self.tokenizer = AutoTokenizer.from_pretrained(desc.model_id)
-        self.task = "sequence-classification"
-        self.model = AutoModelForSequenceClassification.from_pretrained(desc.model_id)
-        self.teacher_model = None
-        if desc.teacher_model_id:
-            self.teacher_model = AutoModelForSequenceClassification.from_pretrained(desc.teacher_model_id)
-
-        def tokenizer_fn(examples):
-            return self.tokenizer(examples["sentence"], padding="max_length", max_length=128)
-
-        self.dataset = load_dataset("glue", "sst2")
-        self.train_dataset = self.dataset["train"].sort("sentence").select(range(8)).map(tokenizer_fn, batched=True)
-        self.eval_dataset = (
-            self.dataset["validation"].sort("sentence").select(range(4)).map(tokenizer_fn, batched=True)
-        )
-        self.metric = evaluate.load("glue", "sst2")
-        self.compute_metric = lambda p: self.metric.compute(
-            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
-        )
+    def get_ov_model(self, model_id=None) -> OVModel:
+        model_id = model_id or self.output_dir
+        return self.ovmodel_cls.from_pretrained(model_id)
 
     def get_nncf_config_with_overflow_fix_override(
         self, nncf_compression_config: Union[List[Dict], Dict, None], value: str = "enable"
@@ -381,68 +270,249 @@ class OVTrainerTextClassificationTrainingTest(unittest.TestCase):
             quantization_config["overflow_fix"] = value
         return overrided_config
 
-    def count_quantization_op_number(self, ovmodel):
-        num_fake_quantize = 0
-        num_int8 = 0
-        for elem in ovmodel.model.get_ops():
-            if "FakeQuantize" in elem.name:
-                num_fake_quantize += 1
-            if "8" in elem.get_element_type().get_type_name():
-                num_int8 += 1
-        return num_fake_quantize, num_int8
+    def tearDown(self):
+        shutil.rmtree(self.output_dir)
+
+
+CUSTOMIZED_QUANTIZATION_CONFIG = {
+    "algorithm": "quantization",
+    "overflow_fix": "disable",
+    "initializer": {
+        "range": {
+            "num_init_samples": 16,
+            "type": "percentile",
+            "params": {"min_percentile": 0.01, "max_percentile": 99.99},
+        },
+        "batchnorm_adaptation": {"num_bn_adaptation_samples": 4},
+    },
+    "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "asymmetric"}}},
+    "ignored_scopes": [],
+}
+
+STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT = {
+    "algorithm": "movement_sparsity",
+    "params": {
+        "warmup_start_epoch": 1,
+        "warmup_end_epoch": 2,
+        "importance_regularization_factor": 1.0,
+        "enable_structured_masking": True,
+    },
+    "sparse_structure_by_scopes": [
+        {"mode": "block", "sparse_factors": [8, 8], "target_scopes": "{re}.*BertAttention.*"},
+        {"mode": "per_dim", "axis": 0, "target_scopes": "{re}.*BertIntermediate.*"},
+        {"mode": "per_dim", "axis": 1, "target_scopes": "{re}.*BertOutput.*"},
+    ],
+    "ignored_scopes": ["{re}.*NNCFEmbedding", "{re}.*LayerNorm.*", "{re}.*pooler.*", "{re}.*classifier.*"],
+}
+
+UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT = deepcopy(STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT)
+UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT["params"]["enable_structured_masking"] = False
+
+
+OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
+    "distillation": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        teacher_model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=[],
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
+    ),
+    "default_quantization": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
+        expected_fake_quantize=43,
+        expected_int8=32,
+        compression_metrics=["compression_loss"],
+    ),
+    "distillation,default_quantization": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        teacher_model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
+        expected_fake_quantize=43,
+        expected_int8=32,
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
+    ),
+    "customized_quantization": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG,
+        expected_fake_quantize=70,
+        expected_int8=35,
+        compression_metrics=["compression_loss"],
+    ),
+    "distillation,customized_quantization": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        teacher_model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG,
+        expected_fake_quantize=70,
+        expected_int8=35,
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
+    ),
+    "structured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss"],
+    ),
+    "distillation,structured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        teacher_model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
+    ),
+    "default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        expected_fake_quantize=43,
+        expected_int8=32,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss"],
+    ),
+    "customized_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        expected_fake_quantize=70,
+        expected_int8=35,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss"],
+    ),
+    "distillation,default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        teacher_model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        expected_fake_quantize=43,
+        expected_int8=32,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
+    ),
+    "distillation,customized_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        teacher_model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        expected_fake_quantize=70,
+        expected_int8=35,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
+    ),
+    "unstructured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss"],
+    ),
+    "distillation,unstructured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        teacher_model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
+    ),
+    "default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        expected_fake_quantize=43,
+        expected_int8=32,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss"],
+    ),
+    "customized_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        expected_fake_quantize=70,
+        expected_int8=35,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss"],
+    ),
+    "distillation,default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        teacher_model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        expected_fake_quantize=43,
+        expected_int8=32,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
+    ),
+    "distillation,customized_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
+        model_id="hf-internal-testing/tiny-random-bert",
+        teacher_model_id="hf-internal-testing/tiny-random-bert",
+        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        expected_fake_quantize=70,
+        expected_int8=35,
+        expected_binary_masks=60,
+        compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
+    ),
+}
+
+
+class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
+    ovmodel_cls = OVModelForSequenceClassification
+    task = "sequence-classification"
+
+    @parameterized.expand(OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS.items())
+    def test_training(self, _, desc: OVTrainerTestDescriptor):
+        self.run_ovtrainer_training_checks(desc)
+
+    def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
+        self.dataset = load_dataset("glue", "sst2")
+        self.num_labels = len(self.dataset["train"].features["label"].names)
+
+        self.tokenizer = AutoTokenizer.from_pretrained(desc.model_id)
+        self.model = AutoModelForSequenceClassification.from_pretrained(desc.model_id, num_labels=self.num_labels)
+        self.teacher_model = None
+        if desc.teacher_model_id:
+            self.teacher_model = AutoModelForSequenceClassification.from_pretrained(
+                desc.teacher_model_id, num_labels=self.num_labels
+            )
+
+        def data_transform(examples, max_length: int = 128):
+            result = self.tokenizer(
+                examples["sentence"],
+                padding="max_length",
+                max_length=max_length,
+                truncation=True,
+                return_tensors="pt",
+            )
+            result["labels"] = examples["label"]
+            return result
+
+        self.data_transform = data_transform
+        self.train_dataset = self.dataset["train"].select(range(8))
+        self.eval_dataset = self.dataset["validation"].select(range(4))
+        self.train_dataset.set_transform(data_transform)
+        self.eval_dataset.set_transform(data_transform)
+        self.data_collator = None
 
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
-        for max_seq_length in [16, 128]:
-            for batch_size in [1, 3]:
-                examples = self.dataset["train"].sort("sentence")[:batch_size]
-                inputs = self.tokenizer(
-                    examples["sentence"],
-                    padding="max_length",
-                    max_length=max_seq_length,
-                    truncation=True,
-                    return_tensors="pt",
-                )
-                ovmodel_outputs = ovmodel(**inputs)
-                self.assertIn("logits", ovmodel_outputs)
-                ovmodel_logits = ovmodel_outputs.logits
-                torch_logits = torch_model(**inputs).logits
-                self.assertTrue(
-                    torch.allclose(
+        for batch_size in [1, 4]:
+            for seq_length in [16, 89, 128]:
+                self.trainer.args.per_device_eval_batch_size = batch_size
+                dataset = deepcopy(self.eval_dataset)
+                dataset.set_transform(partial(self.data_transform, max_length=seq_length))
+                for inputs in self.trainer.get_eval_dataloader(dataset):
+                    self.assertSequenceEqual(inputs["input_ids"].shape, [batch_size, seq_length])
+                    ovmodel_outputs = ovmodel(**inputs)
+                    self.assertIn("logits", ovmodel_outputs)
+                    ovmodel_logits = ovmodel_outputs.logits
+                    with torch.no_grad():
+                        torch_logits = torch_model(**inputs).logits
+                    torch.testing.assert_close(
                         torch.softmax(ovmodel_logits, dim=-1),
                         torch.softmax(torch_logits, dim=-1),
-                        rtol=0.0001,
+                        rtol=1e-4,
+                        atol=1e-4,
                     )
-                )
 
-    def check_irmodel_is_dynamic(self, irmodel):
-        self.assertTrue(irmodel.is_dynamic())
-
-    def check_irmodel_reshaping(self, irmodel):
-        def _reshape_ir_by_input_shape(ov_model, batch_size, seqlen):
-            new_input_cfg = dict()
-            for input_ in ov_model.inputs:
-                new_input_cfg[input_.any_name] = PartialShape([batch_size, seqlen])
-            ov_model.reshape(new_input_cfg)
-            return ov_model
-
-        def _assertInputsEqual(ov_model, shape):
-            for input_ in ov_model.inputs:
-                self.assertSequenceEqual(list(input_.get_shape()), shape)
-
-        bs, sl = 4, 256
-        irmodel = _reshape_ir_by_input_shape(irmodel, batch_size=bs, seqlen=sl)
-        _assertInputsEqual(irmodel, shape=[bs, sl])
-
-        irmodel = _reshape_ir_by_input_shape(irmodel, batch_size=-1, seqlen=-1)
-        self.assertTrue(irmodel.is_dynamic())
-
-        bs, sl = 1, 89
-        irmodel = _reshape_ir_by_input_shape(irmodel, batch_size=bs, seqlen=sl)
-        _assertInputsEqual(irmodel, shape=[bs, sl])
-
-        irmodel = _reshape_ir_by_input_shape(irmodel, batch_size=-1, seqlen=-1)
-        self.assertTrue(irmodel.is_dynamic())
+    def check_ovmodel_reshaping(self, ovmodel: OVModel):
+        self.check_if_ovmodel_is_dynamic(ovmodel, True)
+        for batch_size in [1, 4]:
+            for seq_length in [16, 89, 128]:
+                static_shape = [batch_size, seq_length]
+                ovmodel.reshape(*static_shape)
+                self.check_if_ovmodel_is_dynamic(ovmodel, False)
+                for input_ in ovmodel.model.inputs:
+                    self.assertSequenceEqual(list(input_.get_shape()), static_shape)
+                ovmodel.reshape(-1, -1)
+                self.check_if_ovmodel_is_dynamic(ovmodel, True)
 
 
 STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN = {
@@ -454,7 +524,7 @@ STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN = {
         "enable_structured_masking": True,
     },
     "sparse_structure_by_scopes": [
-        {"mode": "block", "sparse_factors": [8, 8], "target_scopes": "{re}.*SwinAttention.*"},
+        {"mode": "block", "sparse_factors": [4, 4], "target_scopes": "{re}.*SwinAttention.*"},
         {"mode": "per_dim", "axis": 0, "target_scopes": "{re}.*SwinIntermediate.*"},
         {"mode": "per_dim", "axis": 1, "target_scopes": "{re}.*SwinOutput.*"},
     ],
@@ -465,194 +535,133 @@ UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN["params"]["enable_structured_mask
 
 OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS = {
     "default_quantization": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG],
-        expected_fake_quantize=27,
-        expected_int8=27,
+        model_id="yujiepan/tiny-random-swin-patch4-window7-224",
+        nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
+        expected_fake_quantize=28,
+        expected_int8=28,
         compression_metrics=["compression_loss"],
     ),
     "structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
-        nncf_compression_config=[STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
+        model_id="yujiepan/tiny-random-swin-patch4-window7-224",
+        nncf_compression_config=STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN,
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
     ),
     "unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
-        nncf_compression_config=[UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
+        model_id="yujiepan/tiny-random-swin-patch4-window7-224",
+        nncf_compression_config=UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN,
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
     ),
     "default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
-        expected_fake_quantize=27,
-        expected_int8=27,
+        model_id="yujiepan/tiny-random-swin-patch4-window7-224",
+        nncf_compression_config=[STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN, DEFAULT_QUANTIZATION_CONFIG],
+        expected_fake_quantize=28,
+        expected_int8=28,
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
     ),
     "default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
-        expected_fake_quantize=27,
-        expected_int8=27,
+        model_id="yujiepan/tiny-random-swin-patch4-window7-224",
+        nncf_compression_config=[UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN, DEFAULT_QUANTIZATION_CONFIG],
+        expected_fake_quantize=28,
+        expected_int8=28,
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
     ),
     "distillation,default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
-        teacher_model_id="yujiepan/tiny-random-SwinModel",
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
-        expected_fake_quantize=27,
-        expected_int8=27,
+        model_id="yujiepan/tiny-random-swin-patch4-window7-224",
+        teacher_model_id="yujiepan/tiny-random-swin-patch4-window7-224",
+        nncf_compression_config=[STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN, DEFAULT_QUANTIZATION_CONFIG],
+        expected_fake_quantize=28,
+        expected_int8=28,
         expected_binary_masks=48,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "distillation,default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id="yujiepan/tiny-random-SwinModel",
-        teacher_model_id="yujiepan/tiny-random-SwinModel",
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN],
-        expected_fake_quantize=27,
-        expected_int8=27,
+        model_id="yujiepan/tiny-random-swin-patch4-window7-224",
+        teacher_model_id="yujiepan/tiny-random-swin-patch4-window7-224",
+        nncf_compression_config=[UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_SWIN, DEFAULT_QUANTIZATION_CONFIG],
+        expected_fake_quantize=28,
+        expected_int8=28,
         expected_binary_masks=48,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
 }
 
 
-class OVTrainerImageClassificationTrainingTest(unittest.TestCase):
+class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
+    ovmodel_cls = OVModelForImageClassification
+    task = "image-classification"
+
     @parameterized.expand(OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS.items())
     def test_training(self, _, desc: OVTrainerTestDescriptor):
-        self.prepare(desc)
-        num_train_epochs = 3
-        train_batch_size = 4
-        total_steps = ceil(len(self.train_dataset) / train_batch_size) * num_train_epochs
-        with tempfile.TemporaryDirectory() as output_dir:
-            self.args = OVTrainingArguments(
-                output_dir=output_dir,
-                num_train_epochs=num_train_epochs,
-                learning_rate=1e-7,
-                do_train=True,
-                do_eval=True,
-                logging_steps=1,
-                per_device_train_batch_size=train_batch_size,
-                per_device_eval_batch_size=1,
-                no_cuda=True,
-                full_determinism=True,
-                remove_unused_columns=False,
-            )
-            self.trainer = OVTrainer(
-                model=self.model,
-                teacher_model=self.teacher_model,
-                args=self.args,
-                ov_config=self.ov_config,
-                task=self.task,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
-                tokenizer=self.image_processor,
-                data_collator=self.collate_fn,
-                compute_metrics=self.compute_metric,
-            )
+        self.run_ovtrainer_training_checks(desc)
 
-            trainer = self.trainer
-            movement_controller = trainer._get_compression_controller_by_cls(
-                MovementSparsityController
-            )  # pylint: disable=protected-access
-            if movement_controller is not None:
-                # make sure the binary masks will have many zeros
-                initialize_movement_sparsifier_parameters_by_sparsity(movement_controller, sparsity=0.95)
+    def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
+        self.dataset = load_dataset("hf-internal-testing/cats_vs_dogs_sample")
+        self.num_labels = len(self.dataset["train"].features["labels"].names)
 
-            # check evaluation can work even before training.
-            metrics = trainer.evaluate()
-            self.assertIn("eval_loss", metrics)
-            self.assertIn("eval_accuracy", metrics)
-
-            # check trainining
-            train_outputs = trainer.train()
-            self.assertIsInstance(train_outputs, TrainOutput)
-            self.assertEqual(train_outputs.global_step, total_steps)
-            self.assertEqual(sorted(desc.compression_metrics), sorted(trainer.compression_metrics.keys()))
-
-            # check model can be saved
-            trainer.save_model()
-            self.assertTrue(Path(output_dir, WEIGHTS_NAME).is_file())
-            self.assertTrue(Path(output_dir, OV_XML_FILE_NAME).is_file())
-
-            # check saved ovmodel IR and output
-            ovmodel = OVModelForImageClassification.from_pretrained(output_dir)
-            self.check_irmodel_is_dynamic(ovmodel.model)
-            self.check_ovmodel_output_equals_torch_output(ovmodel, trainer.model)
-
-            # check ovmodel quantization ops
-            num_fake_quantize, num_int8 = self.count_quantization_op_number(ovmodel)
-            self.assertEqual(desc.expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(desc.expected_int8, num_int8)
-
-            # check binary mask in sparsity/pruning algorithms
-            state_dict = torch.load(Path(output_dir, WEIGHTS_NAME), map_location="cpu")
-            num_binary_masks = sum(key.endswith("_binary_mask") for key in state_dict)
-            self.assertEqual(desc.expected_binary_masks, num_binary_masks)
-
-    def prepare(self, desc: OVTrainerTestDescriptor):
-        torch.manual_seed(42)
-        self.ov_config = OVConfig()
-        self.ov_config.compression = desc.nncf_compression_config
-        self.task = "image-classification"
-        self.image_processor = AutoImageProcessor.from_pretrained(desc.model_id)
-        self.model = AutoModelForImageClassification.from_pretrained(desc.model_id, num_labels=3)
+        self.feature_extractor = AutoImageProcessor.from_pretrained(desc.model_id)
+        self.tokenizer = self.feature_extractor
+        self.model = AutoModelForImageClassification.from_pretrained(desc.model_id, num_labels=self.num_labels)
         self.teacher_model = None
         if desc.teacher_model_id:
-            self.teacher_model = AutoModelForImageClassification.from_pretrained(desc.teacher_model_id, num_labels=3)
+            self.teacher_model = AutoModelForImageClassification.from_pretrained(
+                desc.teacher_model_id, num_labels=self.num_labels
+            )
 
-        def data_transform(examples):
-            batch = self.image_processor(examples["image"], return_tensors="pt")
-            batch["labels"] = examples["labels"]
-            return batch
+        def data_transform(examples, size=None):
+            result = self.feature_extractor(examples["image"], size=size, return_tensors="pt")
+            result["labels"] = examples["labels"]
+            return result
 
-        def collate_fn(examples):
-            pixel_values = torch.stack([example["pixel_values"] for example in examples])
-            labels = torch.tensor([example["labels"] for example in examples])
-            return {"pixel_values": pixel_values, "labels": labels}
-
-        self.dataset = load_dataset("beans", task="image-classification")
-        self.dataset.set_transform(data_transform)
-        self.train_dataset = self.dataset["train"].select(range(8))
-        self.eval_dataset = self.dataset["validation"].select(range(4))
         self.data_transform = data_transform
-        self.collate_fn = collate_fn
-        self.metric = evaluate.load("accuracy")
-        self.compute_metric = lambda p: self.metric.compute(
-            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
-        )
+        self.dataset.set_transform(data_transform)
+        raw_dataset = self.dataset["train"].shuffle(seed=42)
+        self.train_dataset = raw_dataset.select(range(8))
+        self.eval_dataset = raw_dataset.select(range(8, 12))
+        self.data_collator = default_data_collator
 
-    def count_quantization_op_number(self, ovmodel):
-        num_fake_quantize = 0
-        num_int8 = 0
-        for elem in ovmodel.model.get_ops():
-            if "FakeQuantize" in elem.name:
-                num_fake_quantize += 1
-            for i in range(elem.get_output_size()):
-                if "8" in elem.get_output_element_type(i).get_type_name():
-                    num_int8 += 1
-        return num_fake_quantize, num_int8
+    def get_ov_model(self, model_id=None) -> OVModel:
+        # image models, e.g. swin, may require a determined image size
+        model_id = model_id or self.output_dir
+        size = (self.feature_extractor.size["height"], self.feature_extractor.size["width"])
+        ovmodel = self.ovmodel_cls.from_pretrained(model_id, compile=False)
+        ovmodel.reshape(-1, 3, *size)
+        ovmodel.compile()
+        return ovmodel
 
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
-        for inputs in self.trainer.get_eval_dataloader():
-            ovmodel_outputs = ovmodel(**inputs)
-            self.assertIn("logits", ovmodel_outputs)
-            ovmodel_logits = ovmodel_outputs.logits
-            torch_logits = torch_model(**inputs).logits
-            self.assertTrue(
-                torch.allclose(
+        for batch_size in [1, 4]:
+            self.trainer.args.per_device_eval_batch_size = batch_size
+            for inputs in self.trainer.get_eval_dataloader():
+                self.assertEqual(inputs["pixel_values"].shape[0], batch_size)
+                ovmodel_outputs = ovmodel(**inputs)
+                self.assertIn("logits", ovmodel_outputs)
+                ovmodel_logits = ovmodel_outputs.logits
+                with torch.no_grad():
+                    torch_logits = torch_model(**inputs).logits
+                torch.testing.assert_close(
                     torch.softmax(ovmodel_logits, dim=-1),
                     torch.softmax(torch_logits, dim=-1),
-                    rtol=0.0001,
+                    atol=1e-4,
+                    rtol=1e-4,
                 )
-            )
 
-    def check_irmodel_is_dynamic(self, irmodel):
-        self.assertTrue(irmodel.is_dynamic())
+    def check_ovmodel_reshaping(self, ovmodel: OVModel):
+        self.check_if_ovmodel_is_dynamic(ovmodel, True)
+        size = (self.feature_extractor.size["height"], self.feature_extractor.size["width"])
+        dynamic_shape = [-1, 3, *size]
+        for batch_size in [1, 4]:
+            static_shape = [batch_size] + dynamic_shape[1:]
+            ovmodel.reshape(*static_shape)
+            self.check_if_ovmodel_is_dynamic(ovmodel, False)
+            for input_ in ovmodel.model.inputs:
+                self.assertSequenceEqual(list(input_.get_shape()), static_shape)
+            ovmodel.reshape(*dynamic_shape)
+            self.check_if_ovmodel_is_dynamic(ovmodel, True)
 
 
 QUANTIZATION_CONFIG_FOR_WAV2VEC2 = {
@@ -750,93 +759,21 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
     ),
 }
 
-OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
-    "quan": OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS["quantization"]
-}
 
+class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
+    ovmodel_cls = OVModelForAudioClassification
+    task = "audio-classification"
 
-class OVTrainerAudioClassificationTrainingTest(unittest.TestCase):
     @parameterized.expand(OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS.items())
     def test_training(self, _, desc: OVTrainerTestDescriptor):
-        self.prepare(desc)
-        num_train_epochs = 3
-        train_batch_size = 4
-        total_steps = ceil(len(self.train_dataset) / train_batch_size) * num_train_epochs
-        with tempfile.TemporaryDirectory() as output_dir:
-            self.args = OVTrainingArguments(
-                output_dir=output_dir,
-                num_train_epochs=num_train_epochs,
-                learning_rate=1e-7,
-                do_train=True,
-                do_eval=True,
-                logging_steps=1,
-                per_device_train_batch_size=train_batch_size,
-                per_device_eval_batch_size=1,
-                no_cuda=True,
-                full_determinism=True,
-                remove_unused_columns=False,
-            )
-            self.trainer = OVTrainer(
-                model=self.model,
-                teacher_model=self.teacher_model,
-                args=self.args,
-                ov_config=self.ov_config,
-                task=self.task,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
-                tokenizer=self.feature_extractor,
-                data_collator=self.collate_fn,
-                compute_metrics=self.compute_metric,
-            )
+        self.run_ovtrainer_training_checks(desc)
 
-            trainer = self.trainer
-            movement_controller = trainer._get_compression_controller_by_cls(
-                MovementSparsityController
-            )  # pylint: disable=protected-access
-            if movement_controller is not None:
-                # make sure the binary masks will have many zeros
-                initialize_movement_sparsifier_parameters_by_sparsity(movement_controller, sparsity=0.95)
-
-            # check evaluation can work even before training.
-            metrics = trainer.evaluate()
-            self.assertIn("eval_loss", metrics)
-            self.assertIn("eval_accuracy", metrics)
-
-            # check trainining
-            train_outputs = trainer.train()
-            self.assertIsInstance(train_outputs, TrainOutput)
-            self.assertEqual(train_outputs.global_step, total_steps)
-            self.assertEqual(sorted(desc.compression_metrics), sorted(trainer.compression_metrics.keys()))
-
-            # check model can be saved
-            trainer.save_model()
-            self.assertTrue(Path(output_dir, WEIGHTS_NAME).is_file())
-            self.assertTrue(Path(output_dir, OV_XML_FILE_NAME).is_file())
-
-            # check saved ovmodel IR and output
-            ovmodel = OVModelForAudioClassification.from_pretrained(output_dir)
-            self.check_irmodel_is_dynamic(ovmodel.model)
-            self.check_ovmodel_output_equals_torch_output(ovmodel, trainer.model)
-
-            # check ovmodel quantization ops
-            num_fake_quantize, num_int8 = self.count_quantization_op_number(ovmodel)
-            self.assertEqual(desc.expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(desc.expected_int8, num_int8)
-
-            # check binary mask in sparsity/pruning algorithms
-            state_dict = torch.load(Path(output_dir, WEIGHTS_NAME), map_location="cpu")
-            num_binary_masks = sum(key.endswith("_binary_mask") for key in state_dict)
-            self.assertEqual(desc.expected_binary_masks, num_binary_masks)
-
-    def prepare(self, desc: OVTrainerTestDescriptor):
-        torch.manual_seed(42)
-        self.ov_config = OVConfig()
-        self.ov_config.compression = desc.nncf_compression_config
-        self.task = "audio-classification"
-        self.dataset = load_dataset("superb", "ks")
-        self.num_labels = len(self.dataset["train"].features["label"].names)
+    def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
+        self.dataset = load_dataset("anton-l/superb_dummy", "ks")
+        self.num_labels = len(self.dataset["test"].features["label"].names)
 
         self.feature_extractor = AutoFeatureExtractor.from_pretrained(desc.model_id)
+        self.tokenizer = self.feature_extractor
         self.model = AutoModelForAudioClassification.from_pretrained(desc.model_id, num_labels=self.num_labels)
         self.teacher_model = None
         if desc.teacher_model_id:
@@ -844,66 +781,54 @@ class OVTrainerAudioClassificationTrainingTest(unittest.TestCase):
                 desc.teacher_model_id, num_labels=self.num_labels
             )
 
-        def random_subsample(wav: np.ndarray, max_length: float = 1, sample_rate: int = 16000):
-            """Randomly sample chunks of `max_length` seconds from the input audio"""
-            sample_length = int(round(sample_rate * max_length))
-            if len(wav) <= sample_length:
-                return wav
-            random_offset = random.randint(0, len(wav) - sample_length - 1)
-            return wav[random_offset : random_offset + sample_length]
-
-        def data_transform(examples, max_length=1):
+        def data_transform(examples, max_length: int = 16000):
             sampling_rate = self.feature_extractor.sampling_rate
-            audio = random_subsample(examples["audio"][0]["array"], max_length=max_length, sample_rate=sampling_rate)
-            batch = self.feature_extractor(audio, return_tensors="pt", sampling_rate=sampling_rate)
+            batch = self.feature_extractor(
+                examples["speech"],
+                padding="max_length",
+                max_length=max_length,
+                truncation=True,
+                sampling_rate=sampling_rate,
+                return_tensors="pt",
+            )
             batch["labels"] = examples["label"]
             return batch
 
-        def collate_fn(examples):
-            pixel_values = torch.stack([example["input_values"] for example in examples])
-            labels = torch.tensor([example["labels"] for example in examples])
-            return {"input_values": pixel_values, "labels": labels}
-
-        self.dataset.set_transform(data_transform)
-        self.train_dataset = self.dataset["train"].select(range(8))
-        self.eval_dataset = self.dataset["validation"].select(range(4))
         self.data_transform = data_transform
-        self.collate_fn = collate_fn
-        self.metric = evaluate.load("accuracy")
-        self.compute_metric = lambda p: self.metric.compute(
-            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
-        )
+        self.dataset.set_transform(data_transform)
+        self.train_dataset = self.dataset["test"].select(range(8))
+        self.eval_dataset = self.dataset["test"].select(range(8, 12))
+        self.data_collator = None
 
-    def count_quantization_op_number(self, ovmodel):
-        num_fake_quantize = 0
-        num_int8 = 0
-        for elem in ovmodel.model.get_ops():
-            if "FakeQuantize" in elem.name:
-                num_fake_quantize += 1
-            for i in range(elem.get_output_size()):
-                if "8" in elem.get_output_element_type(i).get_type_name():
-                    num_int8 += 1
-        return num_fake_quantize, num_int8
+    def check_ovmodel_reshaping(self, ovmodel: OVModel):
+        self.check_if_ovmodel_is_dynamic(ovmodel, True)
+        for batch_size in [1, 4]:
+            for seq_len in [12345, 16000]:
+                static_shape = [batch_size, seq_len]
+                ovmodel.reshape(*static_shape)
+                self.check_if_ovmodel_is_dynamic(ovmodel, False)
+                for input_ in ovmodel.model.inputs:
+                    self.assertSequenceEqual(list(input_.get_shape()), static_shape)
+                ovmodel.reshape(-1, -1)
+                self.check_if_ovmodel_is_dynamic(ovmodel, True)
 
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
         for batch_size in [1, 4]:
-            for max_length in [1, 0.2]:
+            for seq_length in [12345, 16000]:
                 self.trainer.args.per_device_eval_batch_size = batch_size
-                dataset = self.eval_dataset.set_transform(partial(self.data_transform, max_length=max_length))
+                dataset = deepcopy(self.eval_dataset)
+                dataset.set_transform(partial(self.data_transform, max_length=seq_length))
                 for inputs in self.trainer.get_eval_dataloader(dataset):
+                    self.assertSequenceEqual(inputs["input_values"].shape, [batch_size, seq_length])
                     ovmodel_outputs = ovmodel(**inputs)
-                    print(inputs["input_values"].shape)
                     self.assertIn("logits", ovmodel_outputs)
                     ovmodel_logits = ovmodel_outputs.logits
-                    torch_logits = torch_model(**inputs).logits
-                    self.assertTrue(
-                        torch.allclose(
-                            torch.softmax(ovmodel_logits, dim=-1),
-                            torch.softmax(torch_logits, dim=-1),
-                            rtol=0.0001,
-                        )
+                    with torch.no_grad():
+                        torch_logits = torch_model(**inputs).logits
+                    torch.testing.assert_close(
+                        torch.softmax(ovmodel_logits, dim=-1),
+                        torch.softmax(torch_logits, dim=-1),
+                        atol=1e-4,
+                        rtol=1e-4,
                     )
-
-    def check_irmodel_is_dynamic(self, irmodel):
-        self.assertTrue(irmodel.is_dynamic())
