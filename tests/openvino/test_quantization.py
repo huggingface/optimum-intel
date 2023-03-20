@@ -27,9 +27,9 @@ from transformers import (
 )
 
 import evaluate
+from optimum.intel import OVQuantizer
 from optimum.intel.openvino.configuration import OVConfig
 from optimum.intel.openvino.modeling import OVModelForQuestionAnswering, OVModelForSequenceClassification
-from optimum.intel import OVQuantizer
 from optimum.intel.openvino.trainer import OVTrainer
 from parameterized import parameterized
 
