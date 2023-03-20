@@ -103,7 +103,7 @@ TRANSLATION_EXAMPLE = r"""
     Example of text generation:
     ```python
     >>> from transformers import {processor_class}
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}")
@@ -116,7 +116,7 @@ TRANSLATION_EXAMPLE = r"""
     Example using `transformers.pipeline`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}")
