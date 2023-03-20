@@ -15,6 +15,7 @@
 import importlib.util
 import operator as op
 import sys
+from collections import OrderedDict
 from typing import Any, List, Union
 
 from packaging.version import Version, parse
@@ -184,7 +185,7 @@ openvino`. Please note that you may need to restart your runtime after installat
 """
 
 NEURAL_COMPRESSOR_IMPORT_ERROR = """
-{0} requires the diffusers library but it was not found in your environment. You can install it with pip: `pip install
+{0} requires the neural-compressor library but it was not found in your environment. You can install it with pip: `pip install
 neural-compressor`. Please note that you may need to restart your runtime after installation.
 """
 

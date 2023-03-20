@@ -35,7 +35,7 @@ else:
     from .ipex import inference_mode
 
 try:
-    if not is_nncf_available():
+    if not (is_openvino_available() and is_nncf_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
     from .utils.dummy_openvino_objects import OVConfig, OVQuantizer, OVTrainer, OVTrainingArguments
@@ -44,7 +44,7 @@ else:
 
 
 try:
-    if not is_diffusers_available():
+    if not (is_openvino_available() and is_diffusers_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
     from .utils.dummy_openvino_objects import OVStableDiffusionPipeline
