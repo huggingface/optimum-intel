@@ -157,7 +157,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         from diffuser import DPMSolverMultistepScheduler
 
         scheduler = DPMSolverMultistepScheduler.from_pretrained(model_id, subfolder="scheduler")
-        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_DIFFUSION_MODEL_ID, compile=False, scheduler=scheduler)
+        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(
+            self.OV_DIFFUSION_MODEL_ID, compile=False, scheduler=scheduler
+        )
         self.assertIsInstance(loaded_pipeline.config, Dict)
         prompt = "sailing ship in storm by Leonardo da Vinci"
         height = 16
