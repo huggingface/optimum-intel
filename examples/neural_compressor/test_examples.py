@@ -56,7 +56,6 @@ def get_results(output_dir):
 
 class TestExamples(unittest.TestCase):
     def test_run_glue(self):
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_glue.py
@@ -83,7 +82,6 @@ class TestExamples(unittest.TestCase):
                 self.assertGreaterEqual(results["eval_accuracy"], 0.70)
 
     def test_run_qa(self):
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_qa.py
@@ -111,7 +109,6 @@ class TestExamples(unittest.TestCase):
                 self.assertGreaterEqual(results["eval_exact_match"], 70)
 
     def test_run_ner(self):
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_ner.py
@@ -141,7 +138,6 @@ class TestExamples(unittest.TestCase):
                 self.assertGreaterEqual(results["eval_recall"], 0.70)
 
     def test_run_swag(self):
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_swag.py

@@ -48,7 +48,7 @@ Note that quantization is currently only supported for CPUs (only CPU backends a
 ```python
 from transformers import AutoModelForQuestionAnswering
 from neural_compressor.config import PostTrainingQuantConfig
-from optimum.intel.neural_compressor import INCQuantizer
+from optimum.intel import INCQuantizer
 
 model_name = "distilbert-base-cased-distilled-squad"
 model = AutoModelForQuestionAnswering.from_pretrained(model_name)
@@ -63,7 +63,7 @@ quantizer.quantize(quantization_config=quantization_config, save_directory=save_
 
 To load a quantized model hosted locally or on the 🤗 hub, you can do as follows :
 ```python
-from optimum.intel.neural_compressor import INCModelForSequenceClassification
+from optimum.intel import INCModelForSequenceClassification
 
 # Load the PyTorch model hosted on the hub
 loaded_model_from_hub = INCModelForSequenceClassification.from_pretrained(
@@ -84,7 +84,7 @@ If you want to load a PyTorch checkpoint, set `from_transformers=True` to conver
 
 ```diff
 - from transformers import AutoModelForSequenceClassification
-+ from optimum.intel.openvino import OVModelForSequenceClassification
++ from optimum.intel import OVModelForSequenceClassification
 from transformers import AutoTokenizer, pipeline
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
@@ -102,7 +102,7 @@ Post-training static quantization introduces an additional calibration step wher
 
 ```python
 from functools import partial
-from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
+from optimum.intel import OVQuantizer, OVModelForSequenceClassification
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
@@ -140,7 +140,7 @@ import numpy as np
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
 - from transformers import Trainer
-+ from optimum.intel.openvino import OVConfig, OVModelForSequenceClassification, OVTrainer
++ from optimum.intel import OVConfig, OVModelForSequenceClassification, OVTrainer
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)    
