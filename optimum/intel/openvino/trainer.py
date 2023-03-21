@@ -715,14 +715,13 @@ class OVTrainer(Trainer):
                     # Reshape back to dynamic shape IR
                     ov_model = self._reshape_ir(ov_model, static_shape=False)
                 except Exception as err:
-                    onnx_path = Path(output_dir, ONNX_WEIGHTS_NAME)
+                    onnx_path = Path(output_dir, ONNX_WEIGHTS_NAME).resolve()
                     if not save_as_external_data:
                         onnx_path.write_bytes(f.getvalue())
-                    logger.warning(
+                    logger.error(
                         f"Error encountered during OpenVINO IR pruning: {err}. {onnx_path} is dumped for debugging. "
-                        "Run continues without saving OpenVINO IR files."
                     )
-                    return
+                    raise
             else:
                 if self._get_compression_controller_by_cls(QuantizationController) is not None:
                     compress_quantize_weights_transformation(ov_model)
