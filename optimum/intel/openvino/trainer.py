@@ -719,7 +719,7 @@ class OVTrainer(Trainer):
                     if not save_as_external_data:
                         onnx_path.write_bytes(f.getvalue())
                     logger.error(
-                        f"Error encountered during OpenVINO IR pruning: {err}. {onnx_path} is dumped for debugging. "
+                        f"Error encountered during OpenVINO IR pruning: {err}. {onnx_path} is dumped for debugging."
                     )
                     raise
             else:
