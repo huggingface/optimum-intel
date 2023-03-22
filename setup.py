@@ -15,7 +15,7 @@ INSTALL_REQUIRE = [
     "optimum>=1.7.0",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
-    "torch<2.0.0",
+    "torch",
     "sentencepiece",
     "scipy",
 ]
@@ -25,10 +25,21 @@ TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate", "diffusers", "
 QUALITY_REQUIRE = ["black==22.3", "isort>=5.5.4"]
 
 EXTRAS_REQUIRE = {
-    "neural-compressor": ["neural-compressor>=2.0.0", "onnx", "onnxruntime"],
-    "openvino": ["openvino>=2023.0.0.dev20230217", "onnx", "onnxruntime"],
+    "neural-compressor": [
+        "neural-compressor>=2.0.0",
+        "onnx",
+        "onnxruntime",
+        "torch<2.0.0", # remove after neural-compressor next release
+        "intel-extension-for-pytorch<2.0.0",
+    ],
+    "openvino": [
+        "openvino>=2023.0.0.dev20230217",
+        "onnx",
+        "onnxruntime",
+        "torch<2.0.0", # remove after optimum next release
+    ],
     "nncf": ["nncf>=2.4.0", "openvino-dev>=2023.0.0.dev20230217"],
-    "ipex": ["intel_extension_for_pytorch"],
+    "ipex": ["intel-extension-for-pytorch"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
