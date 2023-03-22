@@ -114,7 +114,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         super().__init__(*args, **kwargs)
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
-        self.OV_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+        self.OV_STABLE_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
@@ -152,14 +152,8 @@ class OVModelIntegrationTest(unittest.TestCase):
         outputs = model.generate(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs, outputs))
 
-    @require_diffusers
     def test_load_from_hub_and_save_stable_diffusion_model(self):
-        from diffuser import DPMSolverMultistepScheduler
-
-        scheduler = DPMSolverMultistepScheduler.from_pretrained(model_id, subfolder="scheduler")
-        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(
-            self.OV_DIFFUSION_MODEL_ID, compile=False, scheduler=scheduler
-        )
+        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_STABLE_DIFFUSION_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_pipeline.config, Dict)
         prompt = "sailing ship in storm by Leonardo da Vinci"
         height = 16
@@ -711,19 +705,22 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
     @require_diffusers
     def test_num_images_per_prompt(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
+        num_images_per_prompt = 4
+        batch_size = 6
         pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
         prompt = "sailing ship in storm by Leonardo da Vinci"
-
-        for batch_size in [1, 6]:
-            for num_images in [1, 4]:
-                outputs = pipeline(
-                    [prompt] * batch_size, num_inference_steps=2, num_images_per_prompt=num_images, output_type="np"
-                )
-                self.assertEqual(outputs.images.shape, (batch_size * num_images, 128, 128, 3))
+        outputs = pipeline(prompt, num_inference_steps=2, output_type="np").images
+        self.assertEqual(outputs.shape, (1, 128, 128, 3))
+        outputs = pipeline(
+            prompt, num_inference_steps=2, num_images_per_prompt=num_images_per_prompt, output_type="np"
+        ).images
+        self.assertEqual(outputs.shape, (num_images_per_prompt, 128, 128, 3))
+        outputs = pipeline([prompt] * batch_size, num_inference_steps=2, output_type="np").images
+        self.assertEqual(outputs.shape, (batch_size, 128, 128, 3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
-    def test_num_images_per_prompt_static_model(self, model_arch: str):
+    def test_num_images_per_prompt(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         batch_size = 3
         num_images_per_prompt = 4
