@@ -60,15 +60,10 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
 
-from .configuration import IncOptimizedConfig, IncQuantizationConfig
-from .utils import (
-    MIN_QDQ_ONNX_OPSET,
-    ONNX_WEIGHTS_NAME,
-    WEIGHTS_NAME,
-    INCDataLoader,
-    _cfgs_to_fx_cfgs,
-)
 from ..utils.import_utils import _neural_compressor_version, is_neural_compressor_version
+from .configuration import IncOptimizedConfig, IncQuantizationConfig
+from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME, INCDataLoader, _cfgs_to_fx_cfgs
+
 
 logger = logging.getLogger(__name__)
 
