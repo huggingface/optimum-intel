@@ -26,8 +26,6 @@ import torch
 import transformers
 from datasets import Dataset, load_dataset
 from packaging import version
-from torch.quantization import add_observer_, convert
-from torch.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_fx
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import (
     AutoConfig,
@@ -69,21 +67,17 @@ from .utils import (
     WEIGHTS_NAME,
     INCDataLoader,
     _cfgs_to_fx_cfgs,
-    is_torch_less_than_1_13,
 )
-
+from ..utils.import_utils import _neural_compressor_version, is_neural_compressor_version
 
 logger = logging.getLogger(__name__)
 
-_neural_compressor_version = version.parse(version.parse(neural_compressor.__version__).base_version)
+NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.0.0"
 
-# TODO : Replace required version to 2.0.0
-NEURAL_COMPRESSOR_REQUIRED_VERSION = version.parse("1.14.2")
-
-if _neural_compressor_version < NEURAL_COMPRESSOR_REQUIRED_VERSION:
+if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
     raise ImportError(
         f"Found an incompatible version of neural-compressor. Found version {_neural_compressor_version}, "
-        f"but only version {NEURAL_COMPRESSOR_REQUIRED_VERSION} is supported."
+        f"but only version {NEURAL_COMPRESSOR_MINIMUM_VERSION} or higher is supported."
     )
 
 
@@ -371,6 +365,9 @@ def _apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> t
         q_model (`torch.nn.Module`):
             Quantized model.
     """
+    from torch.quantization import add_observer_, convert
+    from torch.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_fx
+
     approach = q_config.get("approach")
     framework = q_config.get("framework")
 
