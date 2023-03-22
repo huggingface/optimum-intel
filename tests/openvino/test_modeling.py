@@ -153,7 +153,12 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.equal(loaded_model_outputs, outputs))
 
     def test_load_from_hub_and_save_stable_diffusion_model(self):
-        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_STABLE_DIFFUSION_MODEL_ID, compile=False)
+        from diffuser import DPMSolverMultistepScheduler
+
+        scheduler = DPMSolverMultistepScheduler.from_pretrained(model_id, subfolder="scheduler")
+        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(
+            self.OV_STABLE_DIFFUSION_MODEL_ID, compile=False, scheduler=scheduler
+        )
         self.assertIsInstance(loaded_pipeline.config, Dict)
         prompt = "sailing ship in storm by Leonardo da Vinci"
         height = 16
