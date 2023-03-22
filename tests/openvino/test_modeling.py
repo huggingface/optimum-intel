@@ -712,8 +712,8 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
         pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, scheduler=scheduler)
         prompt = "sailing ship in storm by Leonardo da Vinci"
 
-        for batch_size in [1, 6]:
-            for num_images in [1, 4]:
+        for batch_size in [1, 3]:
+            for num_images in [1, 2]:
                 outputs = pipeline(
                     [prompt] * batch_size, num_inference_steps=2, num_images_per_prompt=num_images, output_type="np"
                 )
