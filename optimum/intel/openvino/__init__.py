@@ -43,3 +43,25 @@ from .modeling_seq2seq import OVModelForSeq2SeqLM
 
 if is_diffusers_available():
     from .modeling_diffusion import OVStableDiffusionPipeline
+
+
+_TASK_ALIASES = {
+    "text-classification": "sequence-classification",
+    "fill-mask": "masked-lm",
+    "text-generation": "causal-lm",
+    "text2text-generation": "seq2seq-lm",
+    "summarization": "seq2seq-lm",
+    "translation": "seq2seq-lm",
+}
+
+_HEAD_TO_AUTOMODELS = {
+    "masked-lm": "OVModelForMaskedLM",
+    "causal-lm": "OVModelForCausalLM",
+    "seq2seq-lm": "OVModelForSeq2SeqLM",
+    "sequence-classification": "OVModelForSequenceClassification",
+    "token-classification": "OVModelForTokenClassification",
+    "question-answering": "OVModelForQuestionAnswering",
+    "image-classification": "OVModelForImageClassification",
+    "audio-classification": "OVModelForAudioClassification",
+    "stable-diffusion": "OVStableDiffusionPipeline",
+}

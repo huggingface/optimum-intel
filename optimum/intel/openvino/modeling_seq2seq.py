@@ -103,7 +103,7 @@ TRANSLATION_EXAMPLE = r"""
     Example of text generation:
     ```python
     >>> from transformers import {processor_class}
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}")
@@ -116,7 +116,7 @@ TRANSLATION_EXAMPLE = r"""
     Example using `transformers.pipeline`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
     >>> model = {model_class}.from_pretrained("{checkpoint}")
@@ -414,9 +414,11 @@ class OVDecoder:
         self.request.start_async(inputs)
         self.request.wait()
 
-        outputs = {
-            key.get_any_name(): value.data for key, value in zip(self.request.model_outputs, self.request.outputs)
-        }
+        outputs = {}
+        for key, value in zip(self.request.model_outputs, self.request.outputs):
+            output_names = key.get_names()
+            output_name = "logits" if "logits" in output_names else next(iter(output_names))
+            outputs[output_name] = value.data
 
         # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
         # self-attention layer and 2 to the cross-attention layer)

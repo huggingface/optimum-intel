@@ -51,7 +51,6 @@ logger = logging.getLogger(__name__)
 
 
 class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
-
     auto_model_class = StableDiffusionPipeline
     config_name = "model_index.json"
     export_feature = "stable-diffusion"
@@ -102,9 +101,6 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         self.tokenizer = tokenizer
         self.scheduler = scheduler
         self.feature_extractor = feature_extractor
-        self.vae_decoder_request = None
-        self.text_encoder_request = None
-        self.unet_request = None
         self.safety_checker = None
         self.preprocessors = []
 
@@ -204,8 +200,10 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         sub_models = {}
 
         if not os.path.isdir(model_id):
-            allow_patterns = [os.path.join(k, "*") for k in config.keys() if not k.startswith("_")]
-            allow_patterns += list(
+            patterns = set(config.keys())
+            patterns.update({"vae_encoder", "vae_decoder"})
+            allow_patterns = {os.path.join(k, "*") for k in patterns if not k.startswith("_")}
+            allow_patterns.update(
                 {
                     vae_decoder_file_name,
                     text_encoder_file_name,
@@ -460,7 +458,6 @@ class OVModelPart:
 
 class OVModelTextEncoder(OVModelPart):
     def __call__(self, input_ids: np.ndarray):
-
         self._create_inference_request()
 
         inputs = {
@@ -472,7 +469,6 @@ class OVModelTextEncoder(OVModelPart):
 
 class OVModelUnet(OVModelPart):
     def __call__(self, sample: np.ndarray, timestep: np.ndarray, encoder_hidden_states: np.ndarray):
-
         self._create_inference_request()
 
         inputs = {
@@ -487,7 +483,6 @@ class OVModelUnet(OVModelPart):
 
 class OVModelVaeDecoder(OVModelPart):
     def __call__(self, latent_sample: np.ndarray):
-
         self._create_inference_request()
 
         inputs = {
@@ -499,7 +494,6 @@ class OVModelVaeDecoder(OVModelPart):
 
 class OVModelVaeEncoder(OVModelPart):
     def __call__(self, sample: np.ndarray):
-
         self._create_inference_request()
 
         inputs = {

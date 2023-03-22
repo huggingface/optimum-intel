@@ -29,10 +29,15 @@ EXTRAS_REQUIRE = {
         "neural-compressor>=2.0.0",
         "onnx",
         "onnxruntime",
-        "torch<2.0.0",
+        "torch<2.0.0", # remove after neural-compressor next release
         "intel-extension-for-pytorch<2.0.0",
     ],
-    "openvino": ["openvino>=2023.0.0.dev20230217", "onnx", "onnxruntime", "torch<2.0.0"],
+    "openvino": [
+        "openvino>=2023.0.0.dev20230217",
+        "onnx",
+        "onnxruntime",
+        "torch<2.0.0", # remove after optimum next release
+    ],
     "nncf": ["nncf>=2.4.0", "openvino-dev>=2023.0.0.dev20230217"],
     "ipex": ["intel-extension-for-pytorch"],
     "diffusers": ["diffusers"],

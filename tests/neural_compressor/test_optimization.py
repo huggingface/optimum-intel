@@ -42,12 +42,7 @@ from neural_compressor.config import (
     WeightPruningConfig,
 )
 from onnx import load as onnx_load
-from optimum.intel.neural_compressor import (
-    INCModelForQuestionAnswering,
-    INCModelForSequenceClassification,
-    INCQuantizer,
-    INCTrainer,
-)
+from optimum.intel import INCModelForQuestionAnswering, INCModelForSequenceClassification, INCQuantizer, INCTrainer
 from optimum.onnxruntime import ORTModelForQuestionAnswering, ORTModelForSequenceClassification
 
 
