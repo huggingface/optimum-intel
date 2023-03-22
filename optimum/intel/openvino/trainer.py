@@ -715,12 +715,13 @@ class OVTrainer(Trainer):
                     # Reshape back to dynamic shape IR
                     ov_model = self._reshape_ir(ov_model, static_shape=False)
                 except Exception as err:
-                    onnx_path = Path(output_dir, ONNX_WEIGHTS_NAME)
+                    onnx_path = Path(output_dir, ONNX_WEIGHTS_NAME).resolve()
                     if not save_as_external_data:
                         onnx_path.write_bytes(f.getvalue())
-                    logger.warning(
-                        f"Error encountered during IR pruning: {err}. {onnx_path} is dumped for debug. Run continues."
+                    logger.error(
+                        f"Error encountered during OpenVINO IR pruning: {err}. {onnx_path} is dumped for debugging."
                     )
+                    raise
             else:
                 if self._get_compression_controller_by_cls(QuantizationController) is not None:
                     compress_quantize_weights_transformation(ov_model)
@@ -749,9 +750,12 @@ class OVTrainer(Trainer):
 
     def _reshape_ir(self, ov_model: openvino.runtime.Model, static_shape: bool) -> openvino.runtime.Model:
         new_input_cfg = dict()
+        input_name_vs_shape = {item["keyword"]: item["sample_size"] for item in self.ov_config.input_info}
         for input_ in ov_model.inputs:
             if static_shape is True:
-                new_input_cfg[input_.any_name] = PartialShape(list(range(1, len(input_.partial_shape) + 1)))
+                new_input_cfg[input_.any_name] = PartialShape(
+                    [1] + input_name_vs_shape[input_.any_name][1:]
+                )  # use batch size of 1 for static shape IR
             else:
                 new_input_cfg[input_.any_name] = PartialShape([-1] * len(input_.partial_shape))
         ov_model.reshape(new_input_cfg)
