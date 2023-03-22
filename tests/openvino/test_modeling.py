@@ -705,8 +705,11 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_num_images_per_prompt(self, model_arch: str):
+        from diffusers import DPMSolverMultistepScheduler
+
         model_id = MODEL_NAMES[model_arch]
-        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
+        scheduler = DPMSolverMultistepScheduler.from_pretrained(model_id, subfolder="scheduler")
+        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, scheduler=scheduler)
         prompt = "sailing ship in storm by Leonardo da Vinci"
 
         for batch_size in [1, 6]:
