@@ -496,10 +496,10 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
                     with torch.no_grad():
                         torch_logits = torch_model(**inputs).logits
                     torch.testing.assert_close(
-                        torch.softmax(ovmodel_logits, dim=-1),
-                        torch.softmax(torch_logits, dim=-1),
+                        ovmodel_logits,
+                        torch_logits,
+                        atol=1e-3,
                         rtol=1e-4,
-                        atol=1e-4,
                     )
 
     def check_ovmodel_reshaping(self, ovmodel: OVModel):
@@ -644,9 +644,9 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
                 with torch.no_grad():
                     torch_logits = torch_model(**inputs).logits
                 torch.testing.assert_close(
-                    torch.softmax(ovmodel_logits, dim=-1),
-                    torch.softmax(torch_logits, dim=-1),
-                    atol=1e-4,
+                    ovmodel_logits,
+                    torch_logits,
+                    atol=1e-3,
                     rtol=1e-4,
                 )
 
@@ -827,8 +827,8 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
                     with torch.no_grad():
                         torch_logits = torch_model(**inputs).logits
                     torch.testing.assert_close(
-                        torch.softmax(ovmodel_logits, dim=-1),
-                        torch.softmax(torch_logits, dim=-1),
-                        atol=1e-4,
+                        ovmodel_logits,
+                        torch_logits,
+                        atol=1e-3,
                         rtol=1e-4,
                     )
