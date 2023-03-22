@@ -155,7 +155,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_load_from_hub_and_save_stable_diffusion_model(self):
         from diffuser import DPMSolverMultistepScheduler
 
-        scheduler = DPMSolverMultistepScheduler.from_pretrained(model_id, subfolder="scheduler")
+        scheduler = DPMSolverMultistepScheduler.from_pretrained(self.OV_STABLE_DIFFUSION_MODEL_ID, subfolder="scheduler")
         loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(
             self.OV_STABLE_DIFFUSION_MODEL_ID, compile=False, scheduler=scheduler
         )
