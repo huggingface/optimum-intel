@@ -376,7 +376,7 @@ class OVDecoder:
         else:
             self.use_past = False
             self.num_pkv = 4
-    
+
         self.ov_config = ov_config
         self.request = None
 
@@ -453,7 +453,7 @@ class OVDecoder:
                 out_past_key_values[i : i + self.num_pkv] + past_key_values[2 * i + 2 : 2 * i + 2 + self.num_pkv]
                 for i in range(0, len(out_past_key_values), self.num_pkv)
             )
-    
+
         return Seq2SeqLMOutput(logits=logits, past_key_values=out_past_key_values)
 
     def __call__(self, *args, **kwargs):
