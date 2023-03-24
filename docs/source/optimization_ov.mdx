@@ -27,7 +27,7 @@ Here is how to apply static quantization on a fine-tuned DistilBERT:
 ```python
 from functools import partial
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from optimum.intel import OVConfig, OVQuantizer
+from optimum.intel.openvino import OVConfig, OVQuantizer
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)
@@ -83,7 +83,7 @@ from transformers import (
 )
 from datasets import load_dataset
 - from transformers import Trainer
-+ from optimum.intel import OVConfig, OVTrainer, OVModelForSequenceClassification
++ from optimum.intel.openvino import OVConfig, OVTrainer, OVModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)
@@ -168,7 +168,7 @@ Once we have the config ready, we can start develop the training pipeline like t
 
 ```diff
 - from transformers import Trainer, TrainingArguments
-+ from optimum.intel import OVConfig, OVTrainer, OVTrainingArguments
++ from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
 
 # Load teacher model
 + teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_or_path)
@@ -210,7 +210,7 @@ After applying quantization on our model, we can then easily load it with our `O
 
 ```python
 from transformers import pipeline
-from optimum.intel import OVModelForSequenceClassification
+from optimum.intel.openvino import OVModelForSequenceClassification
 
 model_id = "helenai/distilbert-base-uncased-finetuned-sst-2-english-ov-int8"
 ov_model = OVModelForSequenceClassification.from_pretrained(model_id)
