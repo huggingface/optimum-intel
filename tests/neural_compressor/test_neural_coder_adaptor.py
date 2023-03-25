@@ -2,6 +2,8 @@ import contextlib
 import unittest
 from argparse import Namespace
 
+import torch
+
 import requests
 from neural_coder.launcher import Launcher
 from optimum.intel.neural_compressor.neural_coder_adaptor import NeuralCoderAdaptor
@@ -43,6 +45,7 @@ class NeuralCoderAdaptorTest(unittest.TestCase):
         # execute launcher-optimized "run_glue.py" and see if it runs finely
         try:
             Launcher.execute(args, use_modular=True, modular_pattern=modular_pattern, use_inc=False)
+            torch.load("./quantized_model/pytorch_model.bin")
             print("Execution of optimized code has succeeded.")
             execution_status = "pass"
         except Exception as e:
