@@ -1,7 +1,7 @@
 Use Python Launcher CLI to Run Optimum-Intel Optimization with Intel Neural Compressor
 =====
 
-Users can use our Python Launcher CLI design to run the Python model code as it is with automatic enabling of the Optimum-Intel optimization (by Intel Neural Compressor).
+Intel Neural Compressor quantization can be applied on your model through the Optimum Intel command-line:
 
 ## Quick-Start
 
