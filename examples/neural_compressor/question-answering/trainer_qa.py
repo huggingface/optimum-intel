@@ -34,23 +34,25 @@ class QuestionAnsweringINCTrainer(INCTrainer):
         self.post_process_function = post_process_function
 
     def evaluate(self, eval_dataset=None, eval_examples=None, ignore_keys=None, metric_key_prefix: str = "eval"):
-        eval_dataset = self.eval_dataset if eval_dataset is None else eval_dataset
-        eval_dataloader = self.get_eval_dataloader(eval_dataset)
-        eval_examples = self.eval_examples if eval_examples is None else eval_examples
-        if (
-            hasattr(self.model, "model")
-            and hasattr(self.model.model, "config")
-            and getattr(self.model.model.config, "backend", None) == "ipex"
-        ):
+        if self.quantization_config is not None:
+            logger.warning("Evaluation of quantized models is not supported by the CUDA backend.")
+            self.model.to("cpu")
+        if getattr(self.model.config, "backend", None) == "ipex":
             self.args.use_ipex = False
             self.args.bf16 = False
             self.use_cpu_amp = False
-        if hasattr(self.model, "config") and getattr(self.model.config, "torch_dtype", None) == "int8":
-            if self.model.config.framework in ["pytorch", "pytorch_fx"] and self.use_cpu_amp:
-                logger.warn(
-                    f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
-                )
-                self.use_cpu_amp = False
+        if (
+            getattr(self.model.config, "torch_dtype", None) == "int8"
+            and getattr(self.model.config, "framework", None) in {"pytorch", "pytorch_fx"}
+            and self.use_cpu_amp
+        ):
+            logger.warn(
+                f"{self.model.config.framework} quantized model doesn't support BFloat16 input, setting `use_cpu_amp` to False."
+            )
+            self.use_cpu_amp = False
+        eval_dataset = self.eval_dataset if eval_dataset is None else eval_dataset
+        eval_dataloader = self.get_eval_dataloader(eval_dataset)
+        eval_examples = self.eval_examples if eval_examples is None else eval_examples
 
         # Temporarily disable metric computation, we will do it in the loop here.
         compute_metrics = self.compute_metrics
@@ -97,6 +99,9 @@ class QuestionAnsweringINCTrainer(INCTrainer):
         return metrics
 
     def predict(self, predict_dataset, predict_examples, ignore_keys=None, metric_key_prefix: str = "test"):
+        if self.quantization_config is not None:
+            logger.warning("Evaluation of quantized models is not supported by the CUDA backend.")
+            self.model.to("cpu")
         predict_dataloader = self.get_test_dataloader(predict_dataset)
 
         # Temporarily disable metric computation, we will do it in the loop here.

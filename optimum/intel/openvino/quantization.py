@@ -22,7 +22,6 @@ from typing import Callable, Dict, List, Optional, Tuple, Union
 import torch
 import transformers
 from datasets import Dataset, load_dataset
-from packaging import version
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
@@ -40,7 +39,6 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
 
-from ..utils.import_utils import _openvino_version
 from .configuration import OVConfig
 from .utils import (
     MAX_ONNX_OPSET,
@@ -66,18 +64,27 @@ class OVQuantizer(OptimumQuantizer):
     Handle the NNCF quantization process.
     """
 
-    def __init__(self, model: transformers.PreTrainedModel, **kwargs):
+    def __init__(self, model: transformers.PreTrainedModel, task: Optional[str] = None, seed: int = 42, **kwargs):
         """
         Args:
             model (`transformers.PreTrainedModel`):
                 The [PreTrainedModel](https://huggingface.co/docs/transformers/main_classes/model#transformers.PreTrainedModel) to quantize.
+            task (`str`, defaults to None):
+                The task defining the model topology used for the ONNX export.
             seed (`int`, defaults to 42):
                 The random seed to use when shuffling the calibration dataset.
         """
         super().__init__()
         self.model = model
-        self.seed = kwargs.pop("seed", 42)
-        self.feature = kwargs.pop("feature", None)
+        feature = kwargs.pop("feature", None)
+        if feature is not None:
+            logger.warning("`feature` is deprecated and will be removed in a future version. Use `task` instead.")
+            if task is not None and task != feature:
+                logger.warning(
+                    f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export."
+                )
+        self.task = task or feature
+        self.seed = seed
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
         self._export_input_names = [
@@ -118,6 +125,16 @@ class OVQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether or not to remove the columns unused by the model forward method.
+
+        Example:
+        ```python
+        >>> from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
+        >>> from transformers import AutoModelForSequenceClassification
+        >>> model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
+        >>> OVQuantizer.from_pretrained(model, task="text-classification")
+        >>> quantizer.quantize(calibration_dataset=calibration_dataset, save_directory="./quantized_model")
+        >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
+        ```
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
@@ -144,14 +161,14 @@ class OVQuantizer(OptimumQuantizer):
         )
         controller.prepare_for_export()
 
-        self._set_feature()
+        self._set_task()
 
         self.model.config.save_pretrained(save_directory)
         model_type = self.model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",
             model=self.model,
-            task=self.feature,
+            task=self.task,
             model_type=model_type,
         )
         onnx_config = onnx_config_class(self.model.config)
@@ -181,26 +198,8 @@ class OVQuantizer(OptimumQuantizer):
         ov_config: OVConfig,
         f: Union[str, io.BytesIO],
     ):
-        openvino_version = version.parse(version.parse(_openvino_version).base_version)
-        is_openvino_version_greater_2022_2_0 = openvino_version > version.Version("2022.2.0")
-
-        if not is_openvino_version_greater_2022_2_0:
-            if config.DEFAULT_ONNX_OPSET > MAX_ONNX_OPSET_2022_2_0 + 1:
-                if not ov_config.save_onnx_model:
-                    logger.warning(
-                        f"The minimal ONNX opset for the given model architecture is {config.DEFAULT_ONNX_OPSET}. Currently, "
-                        f"some models may not work with the installed version of OpenVINO. You can update OpenVINO "
-                        f"to 2022.3.* version or use ONNX opset version {MAX_ONNX_OPSET_2022_2_0} to resolve the issue."
-                    )
-                else:
-                    logger.warning(
-                        f"The minimal ONNX opset for QDQ format export is {MIN_ONNX_QDQ_OPSET}. Currently, some models"
-                        f"may not work with the installed version of OpenVINO in this opset. You can update OpenVINO "
-                        f"to 2022.3.* version or set `save_onnx_model` to `False`."
-                    )
-        max_onnx_opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
-        opset = max_onnx_opset if is_openvino_version_greater_2022_2_0 else MAX_ONNX_OPSET_2022_2_0
-        opset = opset if ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
+        opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+        opset = opset if not ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
         model_inputs = dict((k, v.to(model.device)) for k, v in model_inputs.items())
         # Create ordered inputs for the ONNX export of NNCFNetwork as keyword arguments are currently not supported
         inputs = tuple([model_inputs.pop(key, None) for key in self._export_input_names if len(model_inputs) != 0])
@@ -220,18 +219,20 @@ class OVQuantizer(OptimumQuantizer):
             )
             model.enable_dynamic_graph_building()
 
-    def _set_feature(self):
-        if self.feature is None:
-            self.feature = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
-            if self.feature in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-                self.feature = "sequence-classification"
-            elif self.feature in ["feature-extraction", "fill-mask"]:
-                self.feature = "default"
-            elif self.feature == "text-generation":
-                self.feature = "causal-lm"
-            elif self.feature is None:
-                raise ValueError("The feature could not be extracted and needs to be specified for the ONNX export.")
-        if self.feature in ["seq2seq-lm", "translation", "summarization"]:
+    def _set_task(self):
+        if self.task is None:
+            self.task = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
+            if self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
+                self.task = "sequence-classification"
+            elif self.task in ["feature-extraction", "fill-mask"]:
+                self.task = "default"
+            elif self.task == "text-generation":
+                self.task = "causal-lm"
+            elif self.task is None:
+                raise ValueError(
+                    "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
+                )
+        if self.task in ["seq2seq-lm", "translation", "summarization"]:
             raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(

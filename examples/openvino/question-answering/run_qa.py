@@ -23,6 +23,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 import datasets
@@ -36,7 +37,6 @@ from transformers import (
     EvalPrediction,
     HfArgumentParser,
     PreTrainedTokenizerFast,
-    TrainingArguments,
     default_data_collator,
     set_seed,
 )
@@ -45,7 +45,9 @@ from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
 import evaluate
-from optimum.intel.openvino import OVConfig
+import jstyleson as json
+from nncf.common.utils.os import safe_open
+from optimum.intel.openvino import OVConfig, OVTrainingArguments
 from trainer_qa import QuestionAnsweringOVTrainer
 from utils_qa import postprocess_qa_predictions
 
@@ -66,6 +68,9 @@ class ModelArguments:
 
     model_name_or_path: str = field(
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
+    )
+    teacher_model_or_path: str = field(
+        default=None, metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"}
     )
     config_name: Optional[str] = field(
         default=None, metadata={"help": "Pretrained config name or path if not the same as model_name"}
@@ -88,6 +93,12 @@ class ModelArguments:
                 "Will use the token generated when running `huggingface-cli login` (necessary to use this script "
                 "with private models)."
             )
+        },
+    )
+    nncf_compression_config: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Path to NNCF configuration .json file for adapting the model to compression-enabled training."
         },
     )
 
@@ -221,7 +232,7 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OVTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -337,6 +348,14 @@ def main():
         revision=model_args.model_revision,
         use_auth_token=True if model_args.use_auth_token else None,
     )
+
+    teacher_model = None
+    if model_args.teacher_model_or_path is not None:
+        teacher_model = AutoModelForQuestionAnswering.from_pretrained(
+            model_args.teacher_model_or_path,
+            from_tf=bool(".ckpt" in model_args.teacher_model_or_path),
+            cache_dir=model_args.cache_dir,
+        )
 
     # Tokenizer check: this script requires a fast tokenizer.
     if not isinstance(tokenizer, PreTrainedTokenizerFast):
@@ -601,13 +620,20 @@ def main():
     def compute_metrics(p: EvalPrediction):
         return metric.compute(predictions=p.predictions, references=p.label_ids)
 
-    ov_config = OVConfig()
+    if model_args.nncf_compression_config is not None:
+        file_path = Path(model_args.nncf_compression_config).resolve()
+        with safe_open(file_path) as f:
+            compression = json.load(f)
+        ov_config = OVConfig(compression=compression)
+    else:
+        ov_config = OVConfig()
 
     # Initialize our Trainer
     trainer = QuestionAnsweringOVTrainer(
         model=model,
+        teacher_model=teacher_model,
         ov_config=ov_config,
-        feature="question-answering",
+        task="question-answering",
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,

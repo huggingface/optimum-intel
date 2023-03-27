@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 import transformers
 from transformers import AutoConfig, PretrainedConfig
@@ -27,7 +27,7 @@ from transformers.onnx.utils import get_preprocessor
 import openvino
 from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
-from openvino._offline_transformations import compress_model_transformation
+from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export
 
@@ -60,15 +60,20 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         decoder: openvino.runtime.Model,
         decoder_with_past: openvino.runtime.Model = None,
         config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         **kwargs
     ):
         self.config = config
         self.use_cache = decoder_with_past is not None
-        self.model_save_dir = kwargs.get("model_save_dir")
-        self._device = kwargs.get("device", "CPU")
-        self.is_dynamic = kwargs.get("dynamic_shapes", True)
+        self.model_save_dir = model_save_dir
+        self._device = device.upper()
+        self.is_dynamic = dynamic_shapes
+        self.ov_config = ov_config if ov_config is not None else {}
         self.preprocessors = kwargs.get("preprocessors", [])
-        self.ov_config = {}
+
         if "GPU" in self._device:
             raise ValueError("Support of dynamic shapes for GPU devices is not yet available.")
         if self.is_dynamic:
@@ -78,9 +83,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.encoder_model = encoder
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
-        self.encoder_request = None
-        self.decoder_request = None
-        self.decoder_with_past_request = None
+
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
         else:
@@ -190,22 +193,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     "will be soon deprecated. Make sure to rename your file to respectively `openvino_encoder_model.xml`, "
                     "`openvino_decoder_model.xml` and `openvino_decoder_with_past_model.xml`"
                 )
-            encoder_bin_file_name = (
-                os.path.join(model_id, encoder_file_name.replace(".xml", ".bin")) if not from_onnx else None
-            )
-            decoder_bin_file_name = (
-                os.path.join(model_id, decoder_file_name.replace(".xml", ".bin")) if not from_onnx else None
-            )
-            decoder_with_past_bin_file_name = (
-                os.path.join(model_id, decoder_with_past_file_name.replace(".xml", ".bin")) if not from_onnx else None
-            )
 
-            encoder = cls.load_model(os.path.join(model_id, encoder_file_name), encoder_bin_file_name)
-            decoder = cls.load_model(os.path.join(model_id, decoder_file_name), decoder_bin_file_name)
+            encoder = cls.load_model(os.path.join(model_id, encoder_file_name))
+            decoder = cls.load_model(os.path.join(model_id, decoder_file_name))
             decoder_with_past = (
-                cls.load_model(os.path.join(model_id, decoder_with_past_file_name), decoder_with_past_bin_file_name)
-                if use_cache
-                else None
+                cls.load_model(os.path.join(model_id, decoder_with_past_file_name)) if use_cache else None
             )
             model_save_dir = Path(model_id)
 
@@ -257,14 +249,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 )
 
             model_save_dir = Path(model_cache_path).parent
-            encoder = cls.load_model(file_names["encoder"], bin_file_name=file_names.pop("encoder_bin", None))
-            decoder = cls.load_model(file_names["decoder"], bin_file_name=file_names.pop("decoder_bin", None))
-            if use_cache:
-                decoder_with_past = cls.load_model(
-                    file_names["decoder_with_past"], bin_file_name=file_names.pop("decoder_with_past_bin", None)
-                )
-            else:
-                decoder_with_past = None
+            encoder = cls.load_model(file_names["encoder"])
+            decoder = cls.load_model(file_names["decoder"])
+            decoder_with_past = cls.load_model(file_names["decoder_with_past"]) if use_cache else None
 
         return cls(
             encoder=encoder,
@@ -284,6 +271,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: Optional[str] = None,
+        subfolder: str = "",
         local_files_only: bool = False,
         task: Optional[str] = None,
         use_cache: bool = True,
@@ -318,17 +306,16 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
-        model = TasksManager.get_model_from_task(
-            task,
-            model_id,
-            revision=revision,
-            cache_dir=cache_dir,
-            config=config,
-            use_auth_token=use_auth_token,
-            local_files_only=local_files_only,
-            force_download=force_download,
-        )
+        model_kwargs = {
+            "revision": revision,
+            "use_auth_token": use_auth_token,
+            "cache_dir": cache_dir,
+            "subfolder": subfolder,
+            "local_files_only": local_files_only,
+            "force_download": force_download,
+        }
 
+        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
         models_and_onnx_configs = get_encoder_decoder_models_for_export(model, onnx_config)
@@ -395,12 +382,12 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        apply_moc_transformations(self.encoder_model)
-        apply_moc_transformations(self.decoder_model)
+        apply_moc_transformations(self.encoder_model, cf=False)
+        apply_moc_transformations(self.decoder_model, cf=False)
         compress_model_transformation(self.encoder_model)
         compress_model_transformation(self.decoder_model)
         if self.use_cache:
-            apply_moc_transformations(self.decoder_with_past_model)
+            apply_moc_transformations(self.decoder_with_past_model, cf=False)
             compress_model_transformation(self.decoder_with_past_model)
         return self
 

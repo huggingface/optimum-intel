@@ -51,6 +51,10 @@ from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfi
 from optimum.intel.neural_compressor import INCModelForSequenceClassification, INCTrainer
 
 
+# Will be removed when neural-compressor next release is out
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.20.0")
 
@@ -460,14 +464,24 @@ def main():
             raise ValueError("--do_train requires a train dataset")
         train_dataset = raw_datasets["train"]
         if data_args.max_train_samples is not None:
-            train_dataset = train_dataset.select(range(data_args.max_train_samples))
+            max_train_samples = min(len(train_dataset), data_args.max_train_samples)
+            train_dataset = train_dataset.select(range(max_train_samples))
 
     if training_args.do_eval:
         if "validation" not in raw_datasets and "validation_matched" not in raw_datasets:
             raise ValueError("--do_eval requires a validation dataset")
         eval_dataset = raw_datasets["validation_matched" if data_args.task_name == "mnli" else "validation"]
         if data_args.max_eval_samples is not None:
-            eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
+            max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
+            eval_dataset = eval_dataset.select(range(max_eval_samples))
+
+    if training_args.do_predict or data_args.task_name is not None or data_args.test_file is not None:
+        if "test" not in raw_datasets and "test_matched" not in raw_datasets:
+            raise ValueError("--do_predict requires a test dataset")
+        predict_dataset = raw_datasets["test_matched" if data_args.task_name == "mnli" else "test"]
+        if data_args.max_predict_samples is not None:
+            max_predict_samples = min(len(predict_dataset), data_args.max_predict_samples)
+            predict_dataset = predict_dataset.select(range(max_predict_samples))
 
     # Log a few random samples from the training set:
     if training_args.do_train:
@@ -584,22 +598,16 @@ def main():
             data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
         )
         metrics["train_samples"] = min(max_train_samples, len(train_dataset))
-
         trainer.save_model()  # Saves the tokenizer too for easy upload
-
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    # Embedding quantization is not supported on CUDA backend
-    if optim_args.apply_quantization and (
-        training_args.do_eval or training_args.do_predict or optim_args.verify_loading
-    ):
-        trainer.model.to("cpu")
-
     if optim_args.apply_quantization and optim_args.verify_loading:
         loaded_model = INCModelForSequenceClassification.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
+        # Quantized models inference is not supported by the CUDA backend
+        trainer.model.to("cpu")
         trainer.model.eval()
         with torch.no_grad():
             original_model_outputs = trainer.model(**tokens)

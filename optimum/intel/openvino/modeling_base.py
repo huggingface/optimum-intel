@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 import transformers
 from transformers import AutoConfig, PretrainedConfig
@@ -71,16 +71,20 @@ class OVBaseModel(OptimizedModel):
         self,
         model: openvino.runtime.Model,
         config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         **kwargs
     ):
         self.config = config
         self.model_save_dir = model_save_dir
-        self._device = kwargs.get("device", "CPU")
-        self.is_dynamic = kwargs.get("dynamic_shapes", True)
-        self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        self._device = device.upper()
+        self.is_dynamic = dynamic_shapes
+        self.ov_config = ov_config if ov_config is not None else {"PERFORMANCE_HINT": "LATENCY"}
         self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
+
         if "GPU" in self._device and self.is_dynamic:
             raise ValueError(
                 "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
@@ -104,17 +108,18 @@ class OVBaseModel(OptimizedModel):
             self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
     @staticmethod
-    def load_model(file_name: Union[str, Path], bin_file_name: Optional[Union[str, Path]] = None):
+    def load_model(file_name: Union[str, Path]):
         """
         Loads the model.
 
         Arguments:
             file_name (`str` or `Path`):
                 The path of the model ONNX or XML file.
-            bin_file_name (`str` or `Path`, *optional*):
-                The path of the model binary file, for OpenVINO IR the weights file is expected to be in the same
-                directory as the .xml file if not provided.
         """
+        if isinstance(file_name, str):
+            file_name = Path(file_name)
+        bin_file_name = file_name.with_suffix(".bin") if file_name.suffix == ".xml" else None
+
         return core.read_model(file_name, bin_file_name)
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
@@ -158,12 +163,12 @@ class OVBaseModel(OptimizedModel):
             use_auth_token (`str` or `bool`):
                 The token to use as HTTP bearer authorization for remote files. Needed to load models from a private
                 repository.
-            revision (`str`):
+            revision (`str`, *optional*):
                 The specific model version to use. It can be a branch name, a tag name, or a commit id.
             cache_dir (`Union[str, Path]`, *optional*):
                 The path to a directory in which a downloaded pretrained model configuration should be cached if the
                 standard cache should not be used.
-            force_download (`bool`, *optional*, defaults to `False`):
+            force_download (`bool`, defaults to `False`):
                 Whether or not to force the (re-)download of the model weights and configuration files, overriding the
                 cached versions if they exist.
             file_name(`str`, *optional*):
@@ -172,7 +177,6 @@ class OVBaseModel(OptimizedModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
-
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
 
@@ -185,8 +189,7 @@ class OVBaseModel(OptimizedModel):
                     "The file names `ov_model.xml` and `ov_model.bin` will be soon deprecated."
                     "Make sure to rename your file to respectively `openvino_model.xml` and `openvino_model.bin`"
                 )
-            bin_file_name = file_name.replace(".xml", ".bin") if not from_onnx else None
-            model = cls.load_model(file_name, bin_file_name)
+            model = cls.load_model(file_name)
             model_save_dir = model_id
         # Download the model from the hub
         else:
@@ -226,8 +229,7 @@ class OVBaseModel(OptimizedModel):
                     "Make sure to rename your file to respectively `openvino_model.xml` and `openvino_model.bin`"
                 )
             model_save_dir = Path(model_cache_path).parent
-            bin_file_name = file_names[1] if not from_onnx else None
-            model = cls.load_model(file_names[0], bin_file_name=bin_file_name)
+            model = cls.load_model(file_names[0])
         return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
 
     @classmethod
@@ -239,6 +241,7 @@ class OVBaseModel(OptimizedModel):
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: Optional[str] = None,
+        subfolder: str = "",
         local_files_only: bool = False,
         task: Optional[str] = None,
         **kwargs,
@@ -264,7 +267,17 @@ class OVBaseModel(OptimizedModel):
         if task is None:
             task = cls._auto_model_to_task(cls.auto_model_class)
 
-        model = TasksManager.get_model_from_task(task, model_id)
+        model_kwargs = {
+            "revision": revision,
+            "use_auth_token": use_auth_token,
+            "cache_dir": cache_dir,
+            "subfolder": subfolder,
+            "local_files_only": local_files_only,
+            "force_download": force_download,
+        }
+
+        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+
         model_type = model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",

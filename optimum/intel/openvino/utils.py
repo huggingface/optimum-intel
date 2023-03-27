@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 
+import numpy as np
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 
@@ -31,6 +32,22 @@ MAX_ONNX_OPSET = 13
 MIN_ONNX_QDQ_OPSET = 13
 
 EXTERNAL_DATA_FORMAT_SIZE_LIMIT = 2 * 1024 * 1024 * 1024
+
+
+OV_TO_NP_TYPE = {
+    "boolean": np.bool_,
+    "i8": np.int8,
+    "u8": np.uint8,
+    "i16": np.int16,
+    "u16": np.uint16,
+    "i32": np.int32,
+    "u32": np.uint32,
+    "i64": np.int64,
+    "u64": np.uint64,
+    "f16": np.float16,
+    "f32": np.float32,
+    "f64": np.float64,
+}
 
 
 def use_external_data_format(num_parameters: int) -> bool:

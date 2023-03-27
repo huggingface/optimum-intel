@@ -16,7 +16,7 @@ Optimum Intel can be used to apply popular compression techniques such as quanti
 
 ## Post-training optimization
 
-Post-training compression techniques such as dynamic and static quantization can be easily applied on your model using our [`IncQuantizer`](https://huggingface.co/docs/optimum/intel_optimization#optimum.intel.neural_compressor.IncQuantizer).
+Post-training compression techniques such as dynamic and static quantization can be easily applied on your model using our [`INCQuantizer`](https://huggingface.co/docs/optimum/intel_optimization#optimum.intel.neural_compressor.IncQuantizer).
 Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in the following examples.
 
 ### Dynamic quantization
@@ -26,7 +26,7 @@ To apply dynamic quantization on a fine-tuned DistilBERT, we first need to creat
 ```python
 from transformers import AutoModelForQuestionAnswering
 from neural_compressor.config import PostTrainingQuantConfig
-from optimum.intel.neural_compressor import INCQuantizer
+from optimum.intel import INCQuantizer
 
 model_name = "distilbert-base-cased-distilled-squad"
 model = AutoModelForQuestionAnswering.from_pretrained(model_name)
@@ -77,7 +77,7 @@ In the same maneer we can apply static quantization, for which we also need to g
 from functools import partial
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from neural_compressor.config import PostTrainingQuantConfig
-from optimum.intel.neural_compressor import INCQuantizer
+from optimum.intel import INCQuantizer
 
 model_name = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_name)
@@ -122,9 +122,9 @@ import evaluate
 import numpy as np
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
--from transformers import Trainer
-+from optimum.intel.neural_compressor import INCModelForSequenceClassification, INCTrainer
-+from neural_compressor import QuantizationAwareTrainingConfig
+- from transformers import Trainer
++ from optimum.intel import INCModelForSequenceClassification, INCTrainer
++ from neural_compressor import QuantizationAwareTrainingConfig
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)
@@ -140,8 +140,8 @@ save_dir = "quantized_model"
 # The configuration detailing the quantization process
 +quantization_config = QuantizationAwareTrainingConfig()
 
--trainer = Trainer(
-+trainer = INCTrainer(
+- trainer = Trainer(
++ trainer = INCTrainer(
     model=model,
 +   quantization_config=quantization_config,
     args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
@@ -156,7 +156,8 @@ train_result = trainer.train()
 metrics = trainer.evaluate()
 trainer.save_model()
 
-+optimized_model = INCModelForSequenceClassification.from_pretrained(save_dir)
+- model = AutoModelForSequenceClassification.from_pretrained(save_dir)
++ model = INCModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
 ### Pruning
@@ -166,21 +167,21 @@ To know more about the different supported methodologies, you can refer to the N
 At the moment, pruning is applied on both the linear and the convolutional layers, and not on other layers such as the embeddings. It's important to mention that the pruning sparsity defined in the configuration will be applied on these layers, and thus will not results in the global model sparsity.
 
 ```diff
--from transformers import Trainer
-+from optimum.intel.neural_compressor import INCTrainer
-+from neural_compressor import WeightPruningConfig
+- from transformers import Trainer
++ from optimum.intel import INCTrainer
++ from neural_compressor import WeightPruningConfig
 
 # The configuration detailing the pruning process
-+pruning_config = WeightPruningConfig(
++ pruning_config = WeightPruningConfig(
 +    pruning_type="magnitude",
 +    start_step=0,
 +    end_step=15,
 +    target_sparsity=0.2,
 +    pruning_scope="local",
-+)
++ )
 
--trainer = Trainer(
-+trainer = INCTrainer(
+- trainer = Trainer(
++ trainer = INCTrainer(
     model=model,
 +   pruning_config=pruning_config,
     args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
@@ -191,7 +192,11 @@ At the moment, pruning is applied on both the linear and the convolutional layer
     data_collator=default_data_collator,
 )
 
-optimized_model = AutoModelForSequenceClassification.from_pretrained(save_dir)
+train_result = trainer.train()
+metrics = trainer.evaluate()
+trainer.save_model()
+
+model = AutoModelForSequenceClassification.from_pretrained(save_dir)
 ```
 ### Knowledge distillation
 
@@ -199,16 +204,16 @@ Knowledge distillation can also be applied in the same maneer.
 To know more about the different supported methodologies, you can refer to the Neural Compressor [documentation](https://github.com/intel/neural-compressor/blob/master/docs/source/distillation.md)
 
 ```diff
--from transformers import Trainer
-+from optimum.intel.neural_compressor import INCTrainer
-+from neural_compressor import DistillationConfig
+- from transformers import Trainer
++ from optimum.intel import INCTrainer
++ from neural_compressor import DistillationConfig
 
-+teacher_model_id = "textattack/bert-base-uncased-SST-2"
-+teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_id)
-+distillation_config = DistillationConfig(teacher_model=teacher_model)
++ teacher_model_id = "textattack/bert-base-uncased-SST-2"
++ teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_id)
++ distillation_config = DistillationConfig(teacher_model=teacher_model)
 
--trainer = Trainer(
-+trainer = INCTrainer(
+- trainer = Trainer(
++ trainer = INCTrainer(
     model=model,
 +   distillation_config=distillation_config,
     args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
@@ -219,6 +224,10 @@ To know more about the different supported methodologies, you can refer to the N
     data_collator=default_data_collator,
 )
 
+train_result = trainer.train()
+metrics = trainer.evaluate()
+trainer.save_model()
+
 model = AutoModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
@@ -227,7 +236,7 @@ model = AutoModelForSequenceClassification.from_pretrained(save_dir)
 To load a quantized model hosted locally or on the 🤗 hub, you must instantiate you model using our [`INCModelForXxx`](https://huggingface.co/docs/optimum/main/intel/reference_inc#optimum.intel.neural_compressor.quantization.INCModel) classes.
 
 ```python
-from optimum.intel.neural_compressor import INCModelForSequenceClassification
+from optimum.intel import INCModelForSequenceClassification
 
 model_name = "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
 model = INCModelForSequenceClassification.from_pretrained(model_name)

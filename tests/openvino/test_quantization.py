@@ -27,10 +27,13 @@ from transformers import (
 )
 
 import evaluate
-from optimum.intel.openvino.configuration import OVConfig
-from optimum.intel.openvino.modeling import OVModelForQuestionAnswering, OVModelForSequenceClassification
-from optimum.intel.openvino.quantization import OVQuantizer
-from optimum.intel.openvino.trainer import OVTrainer
+from optimum.intel import (
+    OVConfig,
+    OVModelForQuestionAnswering,
+    OVModelForSequenceClassification,
+    OVQuantizer,
+    OVTrainer,
+)
 from parameterized import parameterized
 
 
@@ -139,7 +142,7 @@ class OVTrainerTest(unittest.TestCase):
             trainer = OVTrainer(
                 model=model,
                 ov_config=ov_config,
-                feature="sequence-classification",
+                task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
                 train_dataset=train_dataset,
                 eval_dataset=eval_dataset,

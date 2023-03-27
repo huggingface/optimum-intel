@@ -13,8 +13,9 @@
 #  limitations under the License.
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
+import numpy as np
 import torch
 import transformers
 from transformers import (
@@ -60,10 +61,20 @@ MODEL_START_DOCSTRING = r"""
     This model inherits from [`optimum.intel.openvino.modeling.OVBaseModel`]. Check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving)
     Parameters:
-        config (`transformers.PretrainedConfig`): [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig) is the Model configuration class with all the parameters of the model.
-            Initializing with a config file does not load the weights associated with the model, only the
-            configuration. Check out the [`~intel.openvino.modeling.OVBaseModel.from_pretrained`] method to load the model weights.
         model (`openvino.runtime.Model`): is the main class used to run OpenVINO Runtime inference.
+        config (`transformers.PretrainedConfig`): [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig)
+            is the Model configuration class with all the parameters of the model.
+            Initializing with a config file does not load the weights associated with the model, only the configuration.
+            Check out the [`~intel.openvino.modeling.OVBaseModel.from_pretrained`] method to load the model weights.
+        device (`str`, defaults to `"CPU"`):
+            The device type for which the model will be optimized for. The resulting compiled model will contains nodes specific to this device.
+        dynamic_shapes (`bool`, defaults to `True`):
+            All the model's dimension will be set to dynamic when set to `True`. Should be set to `False` for the model to not be dynamically reshaped by default.
+        ov_config (`Optional[Dict]`, defaults to `None`):
+            The dictionnary containing the informations related to the model compilation.
+        compile (`bool`, defaults to `True`):
+            Disable the model compilation during the loading step when set to `False`.
+            Can be useful to avoid unnecessary compilation, in the case where the model needs to be statically reshaped, the device modified or if FP16 conversion is enabled.
 """
 
 INPUTS_DOCSTRING = r"""
@@ -104,7 +115,7 @@ class OVModel(OVBaseModel):
         self.device = torch.device("cpu")
 
     def to(self, device: str):
-        self._device = device
+        self._device = device.upper()
         self.request = None
         return self
 
@@ -116,10 +127,10 @@ SEQUENCE_CLASSIFICATION_EXAMPLE = r"""
     Example of sequence classification using `transformers.pipeline`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
     >>> outputs = pipe("Hello, my dog is cute")
     ```
@@ -149,12 +160,18 @@ class OVModelForSequenceClassification(OVModel):
     )
     def forward(
         self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        token_type_ids: Optional[torch.Tensor] = None,
+        input_ids: Union[torch.Tensor, np.ndarray],
+        attention_mask: Union[torch.Tensor, np.ndarray],
+        token_type_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ):
         self.compile()
+
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = np.array(input_ids)
+            attention_mask = np.array(attention_mask)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -168,7 +185,7 @@ class OVModelForSequenceClassification(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self.device)
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return SequenceClassifierOutput(logits=logits)
 
 
@@ -176,10 +193,10 @@ QUESTION_ANSWERING_EXAMPLE = r"""
     Example of question answering using `transformers.pipeline`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
     >>> question, text = "Who was Jim Henson?", "Jim Henson was a nice puppet"
     >>> outputs = pipe(question, text)
@@ -210,12 +227,18 @@ class OVModelForQuestionAnswering(OVModel):
     )
     def forward(
         self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        token_type_ids: Optional[torch.Tensor] = None,
+        input_ids: Union[torch.Tensor, np.ndarray],
+        attention_mask: Union[torch.Tensor, np.ndarray],
+        token_type_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ):
         self.compile()
+
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = np.array(input_ids)
+            attention_mask = np.array(attention_mask)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -229,8 +252,12 @@ class OVModelForQuestionAnswering(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        start_logits = torch.from_numpy(outputs["start_logits"]).to(self.device)
-        end_logits = torch.from_numpy(outputs["end_logits"]).to(self.device)
+        start_logits = (
+            torch.from_numpy(outputs["start_logits"]).to(self.device) if not np_inputs else outputs["start_logits"]
+        )
+        end_logits = (
+            torch.from_numpy(outputs["end_logits"]).to(self.device) if not np_inputs else outputs["end_logits"]
+        )
         return QuestionAnsweringModelOutput(start_logits=start_logits, end_logits=end_logits)
 
 
@@ -238,10 +265,10 @@ TOKEN_CLASSIFICATION_EXAMPLE = r"""
     Example of token classification using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
     >>> outputs = pipe("My Name is Peter and I live in New York.")
     ```
@@ -271,12 +298,18 @@ class OVModelForTokenClassification(OVModel):
     )
     def forward(
         self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        token_type_ids: Optional[torch.Tensor] = None,
+        input_ids: Union[torch.Tensor, np.ndarray],
+        attention_mask: Union[torch.Tensor, np.ndarray],
+        token_type_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ):
         self.compile()
+
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = np.array(input_ids)
+            attention_mask = np.array(attention_mask)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -290,7 +323,7 @@ class OVModelForTokenClassification(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self.device)
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return TokenClassifierOutput(logits=logits)
 
 
@@ -298,16 +331,22 @@ FEATURE_EXTRACTION_EXAMPLE = r"""
     Example of feature extraction using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
     >>> outputs = pipe("My Name is Peter and I live in New York.")
     ```
 """
 
 
+@add_start_docstrings(
+    """
+    OpenVINO Model with a BaseModelOutput for feature extraction tasks.
+    """,
+    MODEL_START_DOCSTRING,
+)
 class OVModelForFeatureExtraction(OVModel):
     export_feature = "default"
     auto_model_class = AutoModel
@@ -325,12 +364,18 @@ class OVModelForFeatureExtraction(OVModel):
     )
     def forward(
         self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        token_type_ids: Optional[torch.Tensor] = None,
+        input_ids: Union[torch.Tensor, np.ndarray],
+        attention_mask: Union[torch.Tensor, np.ndarray],
+        token_type_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ):
         self.compile()
+
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = np.array(input_ids)
+            attention_mask = np.array(attention_mask)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -344,31 +389,22 @@ class OVModelForFeatureExtraction(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        last_hidden_state = torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
+
+        last_hidden_state = outputs["last_hidden_state"]
+        if not np_inputs:
+            last_hidden_state = torch.from_numpy(last_hidden_state).to(self.device)
+
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
-
-MASKED_LM_EXAMPLE = r"""
-    Example of masked language modeling using `transformers.pipelines`:
-    ```python
-    >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
-
-    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
-    >>> mask_token = tokenizer.mask_token
-    >>> pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
-    >>> outputs = pipe("The goal of life is" + mask_token)
-    ```
-"""
 
 TEXT_GENERATION_EXAMPLE = r"""
     Example of text generation:
     ```python
     >>> from transformers import {processor_class}
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
+
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> inputs = tokenizer("I love this story because", return_tensors="pt")
     >>> gen_tokens = model.generate(**inputs, do_sample=True, temperature=0.9, min_length=20, max_length=20)
     >>> tokenizer.batch_decode(gen_tokens)
@@ -376,9 +412,10 @@ TEXT_GENERATION_EXAMPLE = r"""
     Example using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
+
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> gen_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer)
     >>> text = "I love this story because"
     >>> gen = gen_pipeline(text)
@@ -423,21 +460,21 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
     )
     def forward(
         self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        token_type_ids: Optional[torch.Tensor] = None,
+        input_ids: Union[torch.Tensor, np.ndarray],
+        attention_mask: Union[torch.Tensor, np.ndarray],
+        token_type_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ):
         self.compile()
 
         inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
+            "input_ids": np.array(input_ids),
+            "attention_mask": np.array(attention_mask),
         }
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = np.array(token_type_ids)
 
         # Run inference
         outputs = self.request.infer(inputs)
@@ -491,6 +528,21 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
         )
 
 
+MASKED_LM_EXAMPLE = r"""
+    Example of masked language modeling using `transformers.pipelines`:
+    ```python
+    >>> from transformers import {processor_class}, pipeline
+    >>> from optimum.intel import {model_class}
+
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+    >>> mask_token = tokenizer.mask_token
+    >>> pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
+    >>> outputs = pipe("The goal of life is" + mask_token)
+    ```
+"""
+
+
 @add_start_docstrings(
     """
     OpenVINO Model with a MaskedLMOutput for masked language modeling tasks.
@@ -514,12 +566,18 @@ class OVModelForMaskedLM(OVModel):
     )
     def forward(
         self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        token_type_ids: Optional[torch.Tensor] = None,
+        input_ids: Union[torch.Tensor, np.ndarray],
+        attention_mask: Union[torch.Tensor, np.ndarray],
+        token_type_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ):
         self.compile()
+
+        np_inputs = isinstance(input_ids, np.ndarray)
+        if not np_inputs:
+            input_ids = np.array(input_ids)
+            attention_mask = np.array(attention_mask)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -533,8 +591,7 @@ class OVModelForMaskedLM(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self.device)
-
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return MaskedLMOutput(logits=logits)
 
 
@@ -542,10 +599,10 @@ IMAGE_CLASSIFICATION_EXAMPLE = r"""
     Example of image classification using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> model.reshape(batch_size=1, sequence_length=3, height=224, width=224)
     >>> pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
     >>> url = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -577,10 +634,14 @@ class OVModelForImageClassification(OVModel):
     )
     def forward(
         self,
-        pixel_values: torch.Tensor,
+        pixel_values: Union[torch.Tensor, np.ndarray],
         **kwargs,
     ):
         self.compile()
+
+        np_inputs = isinstance(pixel_values, np.ndarray)
+        if not np_inputs:
+            pixel_values = np.array(pixel_values)
 
         inputs = {
             "pixel_values": pixel_values,
@@ -589,8 +650,7 @@ class OVModelForImageClassification(OVModel):
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self.device)
-
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return ImageClassifierOutput(logits=logits)
 
 
@@ -599,10 +659,10 @@ AUDIO_CLASSIFICATION_EXAMPLE = r"""
     ```python
     >>> from datasets import load_dataset
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
     >>> dataset = load_dataset("superb", "ks", split="test")
     >>> audio_file = dataset[3]["audio"]["array"]
@@ -634,23 +694,27 @@ class OVModelForAudioClassification(OVModel):
     )
     def forward(
         self,
-        input_values: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        input_values: Union[torch.Tensor, np.ndarray],
+        attention_mask: Optional[Union[torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ):
         self.compile()
+
+        np_inputs = isinstance(input_values, np.ndarray)
+        if not np_inputs:
+            input_values = np.array(input_values)
+            attention_mask = np.array(attention_mask) if attention_mask is not None else attention_mask
 
         inputs = {
             "input_values": input_values,
         }
 
-        # Add the token_type_ids when needed
+        # Add the attention_mask when needed
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
         # Run inference
         outputs = self.request.infer(inputs)
         outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self.device)
-
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return SequenceClassifierOutput(logits=logits)

@@ -14,10 +14,13 @@ RUN apt-get update && apt-get install -y \
     libsm6 \
     libxext6
 
-# Need node14 to build doc HTML. Taken from https://askubuntu.com/a/1113339
-RUN curl -sL https://deb.nodesource.com/setup_14.x  | bash -
-RUN apt-get -y install nodejs
-RUN npm install
+# Need node to build doc HTML. Taken from https://stackoverflow.com/a/67491580
+RUN apt-get update && apt-get install -y \
+    software-properties-common \
+    npm
+RUN npm install npm@latest -g && \
+    npm install n -g && \
+    n latest
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip
 RUN python3 -m pip install --no-cache-dir git+https://github.com/huggingface/doc-builder.git

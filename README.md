@@ -14,10 +14,10 @@ Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tool
 
 To install the latest release of 🤗 Optimum Intel with the corresponding required dependencies, you can use `pip` as follows:
 
-| Accelerator                                                                                                      | Installation                                                        |
-|:-----------------------------------------------------------------------------------------------------------------|:--------------------------------------------------------------------|
-| [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install optimum[neural-compressor]`                  |
-| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install optimum[openvino,nncf]`                      |
+| Accelerator                                                                                                      | Installation                                                         |
+|:-----------------------------------------------------------------------------------------------------------------|:---------------------------------------------------------------------|
+| [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install "optimum[neural-compressor]"`                 |
+| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install "optimum[openvino,nncf]"`                     |
 
 We recommend creating a [virtual environment](https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/#creating-a-virtual-environment) and upgrading
 pip with `python -m pip install --upgrade pip`.
@@ -31,7 +31,7 @@ python -m pip install git+https://github.com/huggingface/optimum-intel.git
 or to install from source including dependencies:
 
 ```bash
-python -m pip install git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[extras]
+python -m pip install "optimum-intel[extras]"@git+https://github.com/huggingface/optimum-intel.git
 ```
 
 where `extras` can be one or more of `neural-compressor`, `openvino`, `nncf`.
@@ -48,7 +48,7 @@ Note that quantization is currently only supported for CPUs (only CPU backends a
 ```python
 from transformers import AutoModelForQuestionAnswering
 from neural_compressor.config import PostTrainingQuantConfig
-from optimum.intel.neural_compressor import INCQuantizer
+from optimum.intel import INCQuantizer
 
 model_name = "distilbert-base-cased-distilled-squad"
 model = AutoModelForQuestionAnswering.from_pretrained(model_name)
@@ -63,7 +63,7 @@ quantizer.quantize(quantization_config=quantization_config, save_directory=save_
 
 To load a quantized model hosted locally or on the 🤗 hub, you can do as follows :
 ```python
-from optimum.intel.neural_compressor import INCModelForSequenceClassification
+from optimum.intel import INCModelForSequenceClassification
 
 # Load the PyTorch model hosted on the hub
 loaded_model_from_hub = INCModelForSequenceClassification.from_pretrained(
@@ -91,20 +91,20 @@ Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvi
 #### Inference:
 
 To load a model and run inference with OpenVINO Runtime, you can just replace your `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
-If you want to load a PyTorch checkpoint, set `from_transformers=True` to convert your model to the OpenVINO IR.
+If you want to load a PyTorch checkpoint, set `export=True` to convert your model to the OpenVINO IR.
 
 ```diff
--from transformers import AutoModelForSequenceClassification
-+from optimum.intel.openvino import OVModelForSequenceClassification
+- from transformers import AutoModelForSequenceClassification
++ from optimum.intel import OVModelForSequenceClassification
 from transformers import AutoTokenizer, pipeline
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
--model = AutoModelForSequenceClassification.from_pretrained(model_id)
-+model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
+- model = AutoModelForSequenceClassification.from_pretrained(model_id)
++ model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-pipe_cls = pipeline("text-classification", model=model, tokenizer=tokenizer)
+cls_pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
 text = "He's a dreadful magician."
-outputs = pipe_cls(text)
+outputs = cls_pipe(text)
 ```
 
 #### Post-training static quantization:
@@ -113,7 +113,7 @@ Post-training static quantization introduces an additional calibration step wher
 
 ```python
 from functools import partial
-from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
+from optimum.intel import OVQuantizer, OVModelForSequenceClassification
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
@@ -150,8 +150,8 @@ import evaluate
 import numpy as np
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
--from transformers import Trainer
-+from optimum.intel.openvino import OVConfig, OVModelForSequenceClassification, OVTrainer
+- from transformers import Trainer
++ from optimum.intel import OVConfig, OVModelForSequenceClassification, OVTrainer
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)    
@@ -169,10 +169,10 @@ compute_metrics = lambda p: metric.compute(
 save_dir = "nncf_results"
 
 # Load the default quantization configuration detailing the quantization we wish to apply
-+ov_config = OVConfig()
++ ov_config = OVConfig()
 
--trainer = Trainer(
-+trainer = OVTrainer(
+- trainer = Trainer(
++ trainer = OVTrainer(
     model=model,
     args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
     train_dataset=dataset["train"].select(range(300)),
@@ -181,13 +181,13 @@ save_dir = "nncf_results"
     tokenizer=tokenizer,
     data_collator=default_data_collator,
 +   ov_config=ov_config,
-+   feature="sequence-classification",
++   task="sequence-classification",
 )
 train_result = trainer.train()
 metrics = trainer.evaluate()
 trainer.save_model()
 
-+optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
++ optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
 You can find more examples in the [documentation](https://huggingface.co/docs/optimum/intel/index).

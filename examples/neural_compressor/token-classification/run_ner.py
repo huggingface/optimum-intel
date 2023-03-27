@@ -50,6 +50,10 @@ from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfi
 from optimum.intel.neural_compressor import INCModelForTokenClassification, INCQuantizer, INCTrainer
 
 
+# Will be removed when neural-compressor next release is out
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
 check_min_version("4.20.0")
 
@@ -620,25 +624,19 @@ def main():
         train_result = trainer.train(resume_from_checkpoint=checkpoint)
         metrics = train_result.metrics
         trainer.save_model()  # Saves the tokenizer too for easy upload
-
         max_train_samples = (
             data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
         )
         metrics["train_samples"] = min(max_train_samples, len(train_dataset))
-
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    # Embedding quantization is not supported on CUDA backend
-    if optim_args.apply_quantization and (
-        training_args.do_eval or training_args.do_predict or optim_args.verify_loading
-    ):
-        trainer.model.to("cpu")
-
     if optim_args.apply_quantization and optim_args.verify_loading:
         loaded_model = INCModelForTokenClassification.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
+        # Quantized models inference is not supported by the CUDA backend
+        trainer.model.to("cpu")
         trainer.model.eval()
         with torch.no_grad():
             original_model_outputs = trainer.model(**tokens)

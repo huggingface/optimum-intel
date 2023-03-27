@@ -12,7 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 import torch
 
@@ -44,7 +44,7 @@ class OVConfig(BaseConfig):
 
     def __init__(
         self,
-        compression: Optional[Dict] = None,
+        compression: Union[List[Dict], Dict, None] = None,
         input_info: Optional[List] = None,
         save_onnx_model: bool = False,
         **kwargs,
@@ -67,9 +67,13 @@ class OVConfig(BaseConfig):
         ]
 
     def _enable_standard_onnx_export_option(self):
-        if isinstance(self.compression, dict):
+        # This method depends on self.save_onnx_model.
+        # save_onnx_model is defaulted to false so that the final model output is
+        # in OpenVINO IR to realize performance benefit in OpenVINO runtime.
+        # True value of save_onnx_model will save a model in onnx format.
+        if isinstance(self.compression, dict) and self.compression["algorithm"] == "quantization":
             self.compression["export_to_onnx_standard_ops"] = self.save_onnx_model
         elif isinstance(self.compression, list):
-            for algo_config in self.compression:
-                if "quantization" in algo_config:
-                    self.compression["quantization"]["export_to_onnx_standard_ops"] = self.save_onnx_model
+            for i, algo_config in enumerate(self.compression):
+                if algo_config["algorithm"] == "quantization":
+                    self.compression[i]["export_to_onnx_standard_ops"] = self.save_onnx_model
