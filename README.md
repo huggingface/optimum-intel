@@ -81,7 +81,7 @@ Dynamic quantization and ONNX export can be used through the Optimum Intel comma
 optimum-intel-cli inc quantize run_glue.py --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english --task_name sst2 --do_eval --output_dir result
 ```
 
-For more details, please refer to this [guide](./examples/neural_compressor/launcher/PythonLauncher.md).
+For more details, please refer to this [guide](https://huggingface.co/docs/optimum/main/en/intel/optimization_inc#apply-quantization-using-the-cli).
 
 
 ## OpenVINO

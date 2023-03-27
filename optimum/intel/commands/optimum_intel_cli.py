@@ -1,6 +1,6 @@
 from argparse import ArgumentParser
 
-from .inc import INCCommand
+from .neural_compressor import INCCommand
 
 
 def main():

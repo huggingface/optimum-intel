@@ -15,7 +15,7 @@ class INCCommand(BaseOptimumIntelCLICommand):
         inc_parser = parser.add_parser("inc", help="INC quantize utilities.")
         inc_sub_parsers = inc_parser.add_subparsers()
 
-        quantize_parser = inc_sub_parsers.add_parser("quantize", help="Dynammic quantization for INC models.")
+        quantize_parser = inc_sub_parsers.add_parser("quantize", help="INC dynamic quantization.")
 
         parse_args_inc_quantize(quantize_parser)
 
