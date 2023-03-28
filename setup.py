@@ -12,7 +12,7 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-    "optimum>=1.7.0",
+    "optimum>=1.7.3",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
     "torch",
@@ -32,12 +32,7 @@ EXTRAS_REQUIRE = {
         "torch<2.0.0",  # remove after neural-compressor next release
         "intel-extension-for-pytorch<2.0.0",
     ],
-    "openvino": [
-        "openvino>=2023.0.0.dev20230217",
-        "onnx",
-        "onnxruntime",
-        "torch<2.0.0",  # remove after optimum next release
-    ],
+    "openvino": ["openvino>=2023.0.0.dev20230217", "onnx", "onnxruntime"],
     "nncf": ["nncf>=2.4.0", "openvino-dev>=2023.0.0.dev20230217"],
     "ipex": ["intel-extension-for-pytorch"],
     "diffusers": ["diffusers"],
