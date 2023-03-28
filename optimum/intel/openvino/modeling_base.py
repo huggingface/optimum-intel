@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 import transformers
 from transformers import AutoConfig, PretrainedConfig
@@ -71,16 +71,20 @@ class OVBaseModel(OptimizedModel):
         self,
         model: openvino.runtime.Model,
         config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         **kwargs
     ):
         self.config = config
         self.model_save_dir = model_save_dir
-        self._device = kwargs.get("device", "CPU").upper()
-        self.is_dynamic = kwargs.get("dynamic_shapes", True)
-        self.ov_config = {"PERFORMANCE_HINT": "LATENCY"}
+        self._device = device.upper()
+        self.is_dynamic = dynamic_shapes
+        self.ov_config = ov_config if ov_config is not None else {"PERFORMANCE_HINT": "LATENCY"}
         self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
+
         if "GPU" in self._device and self.is_dynamic:
             raise ValueError(
                 "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
@@ -237,6 +241,7 @@ class OVBaseModel(OptimizedModel):
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: Optional[str] = None,
+        subfolder: str = "",
         local_files_only: bool = False,
         task: Optional[str] = None,
         **kwargs,
@@ -262,7 +267,17 @@ class OVBaseModel(OptimizedModel):
         if task is None:
             task = cls._auto_model_to_task(cls.auto_model_class)
 
-        model = TasksManager.get_model_from_task(task, model_id)
+        model_kwargs = {
+            "revision": revision,
+            "use_auth_token": use_auth_token,
+            "cache_dir": cache_dir,
+            "subfolder": subfolder,
+            "local_files_only": local_files_only,
+            "force_download": force_download,
+        }
+
+        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+
         model_type = model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",

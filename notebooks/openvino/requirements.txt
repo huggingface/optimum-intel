@@ -1,6 +1,7 @@
-git+https://github.com/openvinotoolkit/nncf.git@develop
-git+https://github.com/huggingface/optimum-intel.git
-openvino>=2022.3.0.dev20221125
+optimum-intel[openvino, nncf]
 datasets
 evaluate[evaluator]
 ipywidgets
+pillow
+torchaudio
+

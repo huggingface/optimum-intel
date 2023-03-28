@@ -20,15 +20,16 @@ To load a Transformers model and convert it to the OpenVINO format on-the-fly, y
 Here is an example on how to perform inference with OpenVINO Runtime for a text classification class:
 
 ```diff
--from transformers import AutoModelForSequenceClassification
-+from optimum.intel.openvino import OVModelForSequenceClassification
+- from transformers import AutoModelForSequenceClassification
++ from optimum.intel import OVModelForSequenceClassification
 from transformers import AutoTokenizer, pipeline
+
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
--model = AutoModelForSequenceClassification.from_pretrained(model_id)
-+model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
+- model = AutoModelForSequenceClassification.from_pretrained(model_id)
++ model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 cls_pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
-result = cls_pipe("He's a dreadful magician.")
+outputs = cls_pipe("He's a dreadful magician.")
 
 [{'label': 'NEGATIVE', 'score': 0.9919503927230835}]
 ```
@@ -42,7 +43,7 @@ model.save_pretrained(save_directory)
 tokenizer.save_pretrained(save_directory)
 ```
 
-By default, `OVModelForXxx` support dynamic shapes, enabling inputs of every shapes. To decrease latency, static shapes can be enabled by giving the desired inputs shapes.
+By default, `OVModelForXxx` support dynamic shapes, enabling inputs of every shapes. To speed up inference, static shapes can be enabled by giving the desired inputs shapes.
 
 ```python
 # Fix the batch size to 1 and the sequence length to 9
@@ -69,7 +70,7 @@ When fixing the shapes with the `reshape()` method, inference cannot be performe
 from datasets import load_dataset
 from transformers import AutoTokenizer, pipeline
 from evaluate import evaluator
-from optimum.intel.openvino.modeling import OVModelForQuestionAnswering
+from optimum.intel.openvino import OVModelForQuestionAnswering
 
 model_id = "distilbert-base-cased-distilled-squad"
 model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
@@ -88,7 +89,7 @@ qa_pipe = pipeline(
 metric = task_evaluator.compute(model_or_pipeline=qa_pipe, data=eval_dataset, metric="squad")
 ```
 
-By default the model will be compiled when instantiating our `OVModel`. In the case where the model is reshaped, placed to an other device or if FP16 precision is enabled, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by passing `compile=False` to the `from_pretrained()` method. The model can also be compiled before the first inference with `model.compile()`.
+By default the model will be compiled when instantiating our `OVModel`. In the case where the model is reshaped, placed to an other device or if FP16 precision is enabled, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by setting `compile=False`. The model should also be compiled before the first inference with `model.compile()`.
 
 ```python
 from optimum.intel.openvino import OVModelForSequenceClassification
@@ -97,7 +98,6 @@ model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 # Load the model and disable the model compilation
 model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, compile=False)
 model.half()
-model.to("gpu")
 # Compile the model before the first inference
 model.compile()
 ```
@@ -134,7 +134,15 @@ Stable Diffusion models can also be used when running inference with OpenVINO. W
 are exported to the OpenVINO format, they are decomposed into three components that are later combined during inference:
 - The text encoder
 - The U-NET
+- The VAE encoder
 - The VAE decoder
+
+Make sure you have 🤗 Diffusers installed.
+
+To install `diffusers`:
+```
+pip install diffusers
+```
 
 Here is an example of how you can load an OpenVINO Stable Diffusion model and run inference using OpenVINO Runtime:
 
@@ -174,7 +182,7 @@ stable_diffusion.compile()
 images = stable_diffusion(prompt, height=height, width=width, num_images_per_prompt=num_images_per_prompt).images
 ```
 
-In case you want to change any parameters such as the outputs height or height, you'll need to statically reshape your model once again.
+In case you want to change any parameters such as the outputs height or width, you'll need to statically reshape your model once again.
 
 
 ![img](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/stable_diffusion_v1_5_sail_boat_rembrandt.png)
