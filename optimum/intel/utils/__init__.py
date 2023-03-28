@@ -13,12 +13,16 @@
 #  limitations under the License.
 
 from .import_utils import (
+    _neural_compressor_version,
+    _torch_version,
     compare_versions,
     is_diffusers_available,
     is_ipex_available,
     is_neural_compressor_available,
+    is_neural_compressor_version,
     is_nncf_available,
     is_openvino_available,
+    is_torch_version,
     is_transformers_available,
     is_transformers_version,
 )

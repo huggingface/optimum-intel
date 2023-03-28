@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from .configuration import IncConfig, IncDistillationConfig, IncPruningConfig, IncQuantizationConfig
 from .quantization import (
     INCModel,
     INCModelForCausalLM,
@@ -35,7 +34,6 @@ from .quantization import (
     IncQuantizedModelForVision2Seq,
     IncQuantizedModelForXLNetLM,
     INCQuantizer,
-    IncQuantizer,
 )
-from .trainer import INCTrainer, IncTrainer
+from .trainer import INCTrainer
 from .trainer_seq2seq import INCSeq2SeqTrainer
