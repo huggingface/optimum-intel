@@ -260,3 +260,25 @@ outputs = pipe_cls(text)
 ```
 
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
+
+## Apply quantization using the CLI
+
+Intel Neural Compressor quantization can be applied on your model through the Optimum command-line.
+
+
+You can easily add dynamic quantization on your model without chaning your original script.
+
+For example, if you are running the [`run_glue.py`](https://github.com/huggingface/transformers/blob/v4.26-release/examples/pytorch/text-classification/run_glue.py) script from from HuggingFace Transformers.
+
+
+You can simply replace the following command line:
+
+```bash
+python run_glue.py --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english --task_name sst2 --do_eval --output_dir result
+```
+
+With :
+
+```bash
+optimum-intel-cli inc quantize run_glue.py --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english --task_name sst2 --do_eval --output_dir result
+```

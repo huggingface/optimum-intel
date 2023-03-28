@@ -1,5 +1,7 @@
 from argparse import REMAINDER
 
+from ...neural_compressor.launcher import _quantize
+
 
 def parse_args_inc_quantize(parser):
     parser.add_argument("-o", "--opt", type=str, default="", help="optimization feature to enable")
@@ -27,20 +29,9 @@ def parse_args_inc_quantize(parser):
     parser.add_argument("script_args", nargs=REMAINDER)
 
 
-from neural_coder.launcher import Launcher
-
-from ...neural_compressor.neural_coder_adaptor import NeuralCoderAdaptor
-
-
 class INCQuantizeCommand:
     def __init__(self, args):
         self.args = args
 
     def run(self):
-        modular_pattern = {}
-
-        modular_pattern["pytorch_inc_static_quant_fx"] = NeuralCoderAdaptor.default_quant_static
-        modular_pattern["pytorch_inc_dynamic_quant"] = NeuralCoderAdaptor.default_quant_dynamic
-        modular_pattern["inc_auto"] = NeuralCoderAdaptor.default_quant_dynamic
-
-        Launcher.execute(self.args, use_modular=True, modular_pattern=modular_pattern, use_inc=False)
+        _quantize(self.args)
