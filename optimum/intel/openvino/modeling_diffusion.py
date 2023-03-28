@@ -424,9 +424,8 @@ class OVModelPart:
 
     def _create_inference_request(self):
         if self.request is None:
-            logger.info("Compiling the encoder and creating the inference request ...")
-            compiled_model = core.compile_model(self.model, self.device, self.ov_config)
-            self.request = compiled_model.create_infer_request()
+            logger.info("Compiling the encoder...")
+            self.request = core.compile_model(self.model, self.device, self.ov_config)
 
     @property
     def device(self):
@@ -441,7 +440,7 @@ class OVModelTextEncoder(OVModelPart):
         inputs = {
             "input_ids": input_ids,
         }
-        outputs = self.request.infer(inputs)
+        outputs = self.request(inputs)
         return list(outputs.values())
 
 
@@ -456,7 +455,7 @@ class OVModelUnet(OVModelPart):
             "encoder_hidden_states": encoder_hidden_states,
         }
 
-        outputs = self.request.infer(inputs)
+        outputs = self.request(inputs)
         return list(outputs.values())
 
 
@@ -468,5 +467,5 @@ class OVModelVaeDecoder(OVModelPart):
         inputs = {
             "latent_sample": latent_sample,
         }
-        outputs = self.request.infer(inputs)
+        outputs = self.request(inputs)
         return list(outputs.values())
