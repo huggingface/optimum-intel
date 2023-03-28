@@ -134,8 +134,6 @@ class INCQuantizer(OptimumQuantizer):
         batch_size: int = 8,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
-        activations_dtype: str = "u8",
-        weights_dtype: str = "s8",
         **kwargs,
     ):
         """
@@ -154,10 +152,6 @@ class INCQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether or not to remove the columns unused by the model forward method.
-            activations_dtype (`str`, defaults to `"u8"`):
-                The quantization data types to use for the activations.
-            weights_dtype (`str`, defaults to `"s8"`):
-                The quantization data types to use for the weights.
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
@@ -211,7 +205,7 @@ class INCQuantizer(OptimumQuantizer):
             compressed_model.eval()
             output_onnx_path = save_directory.joinpath(ONNX_WEIGHTS_NAME)
             # Export the compressed model to the ONNX format
-            self._onnx_export(compressed_model, onnx_config, output_onnx_path, activations_dtype, weights_dtype)
+            self._onnx_export(compressed_model, onnx_config, output_onnx_path)
 
         # Save the quantized model
         self._save_pretrained(compressed_model, output_path)
@@ -234,8 +228,6 @@ class INCQuantizer(OptimumQuantizer):
         model: PyTorchModel,
         config: OnnxConfig,
         output_path: Union[str, Path],
-        activations_dtype: str,
-        weights_dtype: str,
     ):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
         dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
@@ -252,7 +244,6 @@ class INCQuantizer(OptimumQuantizer):
             dynamic_axes=dynamic_axes,
             input_names=list(config.inputs.keys()),
             output_names=list(config.outputs.keys()),
-            dtype=(activations_dtype + weights_dtype).upper(),
         )
 
     def _set_task(self):

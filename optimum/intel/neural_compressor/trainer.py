@@ -529,8 +529,6 @@ class INCTrainer(Trainer):
         output_dir: Optional[str] = None,
         _internal_call: bool = False,
         save_onnx_model: Optional[bool] = None,
-        activations_dtype: str = "u8",
-        weights_dtype: str = "s8",
     ):
         """
         Will save the model, so you can reload it using `from_pretrained()`.
@@ -545,8 +543,6 @@ class INCTrainer(Trainer):
             self._save(
                 output_dir=output_dir,
                 save_onnx_model=save_onnx_model,
-                activations_dtype=activations_dtype,
-                weights_dtype=weights_dtype,
             )
 
     def _save(
@@ -554,8 +550,6 @@ class INCTrainer(Trainer):
         output_dir=None,
         state_dict=None,
         save_onnx_model=False,
-        activations_dtype="u8",
-        weights_dtype="s8",
     ):
         # If we are executing this function, we are the process zero, so we don't check for that.
         output_dir = output_dir if output_dir is not None else self.args.output_dir
@@ -605,7 +599,7 @@ class INCTrainer(Trainer):
             self._signature_columns = signature_columns
 
             self.model.eval()
-            self._onnx_export(self.model, onnx_config, output_onnx_path, activations_dtype, weights_dtype)
+            self._onnx_export(self.model, onnx_config, output_onnx_path)
 
         logger.info(f"Model weights saved in {output_model_file}")
 
@@ -617,9 +611,7 @@ class INCTrainer(Trainer):
         elif self.task in ["feature-extraction", "fill-mask"]:
             self.task = "default"
 
-    def _onnx_export(
-        self, model: nn.Module, config: "OnnxConfig", output_path: str, activations_dtype: str, weights_dtype: str
-    ):
+    def _onnx_export(self, model: nn.Module, config: "OnnxConfig", output_path: str):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
         dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
         inputs = config.generate_dummy_inputs(framework="pt")
@@ -637,7 +629,6 @@ class INCTrainer(Trainer):
                 dynamic_axes=dynamic_axes,
                 input_names=list(config.inputs.keys()),
                 output_names=list(config.outputs.keys()),
-                dtype=(activations_dtype + weights_dtype).upper(),
             )
         else:
             torch_to_fp32_onnx(
