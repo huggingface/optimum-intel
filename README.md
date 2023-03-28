@@ -80,7 +80,7 @@ Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvi
 #### Inference:
 
 To load a model and run inference with OpenVINO Runtime, you can just replace your `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
-If you want to load a PyTorch checkpoint, set `from_transformers=True` to convert your model to the OpenVINO IR.
+If you want to load a PyTorch checkpoint, set `export=True` to convert your model to the OpenVINO IR.
 
 ```diff
 - from transformers import AutoModelForSequenceClassification
@@ -89,7 +89,7 @@ from transformers import AutoTokenizer, pipeline
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 - model = AutoModelForSequenceClassification.from_pretrained(model_id)
-+ model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True)
++ model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 cls_pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
 text = "He's a dreadful magician."

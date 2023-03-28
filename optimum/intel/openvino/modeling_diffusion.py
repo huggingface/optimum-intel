@@ -197,7 +197,6 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         model_id = str(model_id)
         sub_models_to_load, _, _ = cls.extract_init_dict(config)
         sub_models_names = set(sub_models_to_load.keys()).intersection({"feature_extractor", "tokenizer", "scheduler"})
-        sub_models = {}
 
         if not os.path.isdir(model_id):
             patterns = set(config.keys())
@@ -231,6 +230,9 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         new_model_save_dir = Path(model_id)
 
         for name in sub_models_names:
+            # Check if the subcomponent needs to be loaded
+            if kwargs.get(name, None) is not None:
+                continue
             library_name, library_classes = sub_models_to_load[name]
             if library_classes is not None:
                 library = importlib.import_module(library_name)
@@ -238,9 +240,9 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
                 load_method = getattr(class_obj, "from_pretrained")
                 # Check if the module is in a subdirectory
                 if (new_model_save_dir / name).is_dir():
-                    sub_models[name] = load_method(new_model_save_dir / name)
+                    kwargs[name] = load_method(new_model_save_dir / name)
                 else:
-                    sub_models[name] = load_method(new_model_save_dir)
+                    kwargs[name] = load_method(new_model_save_dir)
 
         vae_decoder = cls.load_model(
             new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name
@@ -260,9 +262,9 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             text_encoder=text_encoder,
             unet=unet,
             config=config,
-            tokenizer=sub_models["tokenizer"],
-            scheduler=sub_models["scheduler"],
-            feature_extractor=sub_models.pop("feature_extractor", None),
+            tokenizer=kwargs.pop("tokenizer"),
+            scheduler=kwargs.pop("scheduler"),
+            feature_extractor=kwargs.pop("feature_extractor", None),
             vae_encoder=vae_encoder,
             model_save_dir=model_save_dir,
             **kwargs,
@@ -279,6 +281,9 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         cache_dir: Optional[str] = None,
         local_files_only: bool = False,
         task: Optional[str] = None,
+        tokenizer: "CLIPTokenizer" = None,
+        scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"] = None,
+        feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         **kwargs,
     ):
         if task is None:
@@ -303,13 +308,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             os.path.join(DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER, ONNX_WEIGHTS_NAME),
         ]
         models_and_onnx_configs = get_stable_diffusion_models_for_export(model)
-
         model.save_config(save_dir_path)
-        model.tokenizer.save_pretrained(save_dir_path.joinpath("tokenizer"))
-        model.scheduler.save_pretrained(save_dir_path.joinpath("scheduler"))
-        if model.feature_extractor is not None:
-            model.feature_extractor.save_pretrained(save_dir_path.joinpath("feature_extractor"))
-
         export_models(
             models_and_onnx_configs=models_and_onnx_configs,
             output_dir=save_dir_path,
@@ -325,7 +324,10 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             force_download=force_download,
             cache_dir=cache_dir,
             local_files_only=local_files_only,
-            model_save_dir=save_dir,  # important
+            model_save_dir=save_dir,
+            tokenizer=tokenizer or model.tokenizer,
+            scheduler=scheduler or model.scheduler,
+            feature_extractor=feature_extractor or model.feature_extractor,
             **kwargs,
         )
 
