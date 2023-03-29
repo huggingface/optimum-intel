@@ -67,7 +67,7 @@ from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME, INCDataL
 
 logger = logging.getLogger(__name__)
 
-NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.0.0"
+NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
 
 if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
     raise ImportError(

@@ -26,7 +26,7 @@ QUALITY_REQUIRE = ["black==22.3", "isort>=5.5.4"]
 
 EXTRAS_REQUIRE = {
     "neural-compressor": [
-        "neural-compressor>=2.0.0",
+        "neural-compressor>=2.1.0",
         "onnx",
         "onnxruntime",
         "torch<2.0.0",  # remove after neural-compressor next release
