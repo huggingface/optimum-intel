@@ -42,7 +42,13 @@ from neural_compressor.config import (
     WeightPruningConfig,
 )
 from onnx import load as onnx_load
-from optimum.intel import INCModelForQuestionAnswering, INCModelForSequenceClassification, INCQuantizer, INCTrainer
+from optimum.intel import (
+    INCConfig,
+    INCModelForQuestionAnswering,
+    INCModelForSequenceClassification,
+    INCQuantizer,
+    INCTrainer,
+)
 from optimum.onnxruntime import ORTModelForQuestionAnswering, ORTModelForSequenceClassification
 
 
@@ -69,6 +75,7 @@ class QuantizationTest(unittest.TestCase):
             loaded_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_model = onnx_load(os.path.join(tmp_dir, "model.onnx"))
+            inc_config = INCConfig.from_pretrained(tmp_dir)
 
         num_quantized_matmul = 0
         for initializer in onnx_model.graph.initializer:
@@ -114,6 +121,8 @@ class QuantizationTest(unittest.TestCase):
                 save_onnx_model=True,
             )
             loaded_model = INCModelForQuestionAnswering.from_pretrained(tmp_dir)
+            inc_config = INCConfig.from_pretrained(tmp_dir)
+
         quantized_model_metric = eval_fn(loaded_model)
         # Verification accuracy loss is under 5%
         self.assertGreaterEqual(quantized_model_metric, original_model_metric * (1 - tolerance_criterion))
@@ -149,6 +158,7 @@ class QuantizationTest(unittest.TestCase):
             loaded_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_model = onnx_load(os.path.join(tmp_dir, "model.onnx"))
+            inc_config = INCConfig.from_pretrained(tmp_dir)
 
         num_quantized_matmul = 0
         for initializer in onnx_model.graph.initializer:
@@ -192,6 +202,7 @@ class QuantizationTest(unittest.TestCase):
                 save_onnx_model=False,
             )
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
+            inc_config = INCConfig.from_pretrained(tmp_dir)
 
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
@@ -233,6 +244,7 @@ class QuantizationTest(unittest.TestCase):
             loaded_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_model = onnx_load(os.path.join(tmp_dir, "model.onnx"))
+            inc_config = INCConfig.from_pretrained(tmp_dir)
 
         num_quantized_matmul = 0
         for initializer in onnx_model.graph.initializer:
@@ -290,6 +302,7 @@ class QuantizationTest(unittest.TestCase):
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
 
+            inc_config = INCConfig.from_pretrained(tmp_dir)
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_outputs = ort_model(**tokens)
@@ -338,6 +351,8 @@ class PruningTest(unittest.TestCase):
             train_result = trainer.train()
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
+
+            inc_config = INCConfig.from_pretrained(tmp_dir)
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_outputs = ort_model(**tokens)
@@ -380,6 +395,8 @@ class DistillationTest(unittest.TestCase):
             train_result = trainer.train()
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
+
+            inc_config = INCConfig.from_pretrained(tmp_dir)
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_outputs = ort_model(**tokens)
