@@ -96,6 +96,7 @@ except OptionalDependencyNotAvailable:
     ]
 else:
     _import_structure["neural_compressor"] = [
+        "INCConfig",
         "INCModelForCausalLM",
         "INCModelForMaskedLM",
         "INCModelForMultipleChoice",
@@ -107,7 +108,6 @@ else:
         "INCQuantizer",
         "INCSeq2SeqTrainer",
         "INCTrainer",
-        "INCConfig",
     ]
 
 
@@ -161,6 +161,7 @@ if TYPE_CHECKING:
         from .utils.dummy_neural_compressor_objects import *
     else:
         from .neural_compressor import (
+            INCConfig,
             INCModel,
             INCModelForCausalLM,
             INCModelForMaskedLM,
@@ -173,7 +174,6 @@ if TYPE_CHECKING:
             INCQuantizer,
             INCSeq2SeqTrainer,
             INCTrainer,
-            INCConfig,
         )
 else:
     import sys

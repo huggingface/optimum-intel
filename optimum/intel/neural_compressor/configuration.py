@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Union
 
 import torch
 
-from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig, WeightPruningConfig, WeightPruningConfig, DistillationConfig
+from neural_compressor.conf.pythonic_config import DistillationConfig, WeightPruningConfig, _BaseQuantizationConfig
 from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import _neural_compressor_version, _torch_version
@@ -83,8 +83,8 @@ class INCConfig(BaseConfig):
             criterion = next(iter(config.criterion.values()))
             config = {
                 "teacher_model_name_or_path": config.teacher_model.config._name_or_path,
-                "temperature" : criterion.temperature,
-                "loss_types" : criterion.loss_types,
-                "loss_weights" : criterion.loss_weights,
+                "temperature": criterion.temperature,
+                "loss_types": criterion.loss_types,
+                "loss_weights": criterion.loss_weights,
             }
         return config
