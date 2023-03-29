@@ -66,6 +66,7 @@ from neural_compressor.model.torch_model import PyTorchModel
 from optimum.exporters import TasksManager
 
 from ..utils.import_utils import is_neural_compressor_version
+from .configuration import INCConfig
 from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 
 
@@ -155,6 +156,13 @@ class INCTrainer(Trainer):
             if isinstance(callback, DistillationCallbacks):
                 self.distillation_callback = callback
                 break
+
+        self.inc_config = INCConfig(
+            quantization=self.quantization_config,
+            pruning=self.pruning_config,
+            distillation=self.distillation_config,
+            save_onnx_model=save_onnx_model,
+        )
 
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
@@ -600,6 +608,9 @@ class INCTrainer(Trainer):
 
             self.model.eval()
             self._onnx_export(self.model, onnx_config, output_onnx_path)
+
+        self.inc_config.save_onnx_model = save_onnx_model
+        self.inc_config.save_pretrained(output_dir)
 
         logger.info(f"Model weights saved in {output_model_file}")
 

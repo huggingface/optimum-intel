@@ -107,6 +107,7 @@ else:
         "INCQuantizer",
         "INCSeq2SeqTrainer",
         "INCTrainer",
+        "INCConfig",
     ]
 
 
@@ -172,6 +173,7 @@ if TYPE_CHECKING:
             INCQuantizer,
             INCSeq2SeqTrainer,
             INCTrainer,
+            INCConfig,
         )
 else:
     import sys

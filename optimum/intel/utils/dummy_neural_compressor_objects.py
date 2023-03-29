@@ -145,3 +145,14 @@ class INCTrainer(metaclass=DummyObject):
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["neural_compressor"])
+
+
+class INCConfig(metaclass=DummyObject):
+    _backends = ["neural_compressor"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["neural_compressor"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["neural_compressor"])

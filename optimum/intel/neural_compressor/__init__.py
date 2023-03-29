@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from .configuration import INCConfig
 from .quantization import (
     INCModel,
     INCModelForCausalLM,
@@ -23,16 +24,6 @@ from .quantization import (
     INCModelForTokenClassification,
     INCModelForVision2Seq,
     INCQuantizationMode,
-    IncQuantizedModel,
-    IncQuantizedModelForCausalLM,
-    IncQuantizedModelForMaskedLM,
-    IncQuantizedModelForMultipleChoice,
-    IncQuantizedModelForQuestionAnswering,
-    IncQuantizedModelForSeq2SeqLM,
-    IncQuantizedModelForSequenceClassification,
-    IncQuantizedModelForTokenClassification,
-    IncQuantizedModelForVision2Seq,
-    IncQuantizedModelForXLNetLM,
     INCQuantizer,
 )
 from .trainer import INCTrainer
