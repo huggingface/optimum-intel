@@ -90,7 +90,7 @@ TRAINING_EXAMPLE_DESCRIPTORS = {
         args=[
             "--model_name_or_path",
             "hf-internal-testing/tiny-bert",
-            "--teacher_model_or_path",
+            "--teacher_model_name_or_path",
             "hf-internal-testing/tiny-bert",
             "--nncf_compression_config",
             "./configs/bert-base-jpqd.json",
