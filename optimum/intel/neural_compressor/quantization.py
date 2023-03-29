@@ -67,7 +67,7 @@ from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME, INCDataL
 
 logger = logging.getLogger(__name__)
 
-NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.0.0"
+NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
 
 if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
     raise ImportError(
@@ -112,7 +112,7 @@ class INCQuantizer(OptimumQuantizer):
         """
         super().__init__()
         self._original_model = model
-        self.eval_fn = eval_fn
+        self.eval_fn = eval_fn if eval_fn is not None else lambda model: 1
         self.calibration_fn = calibration_fn
         self.task = task
         self.seed = seed

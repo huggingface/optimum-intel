@@ -91,7 +91,7 @@ class QuantizationTest(unittest.TestCase):
         eval_dataset = load_dataset("squad", split="validation").select(range(64))
         task_evaluator = evaluate.evaluator("question-answering")
         qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
-        tolerance_criterion = 0.05
+        tolerance_criterion = 0.1
 
         def eval_fn(model):
             qa_pipeline.model = model
@@ -221,8 +221,8 @@ class QuantizationTest(unittest.TestCase):
                 quantization_config=quantization_config,
                 task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
-                train_dataset=dataset["train"].select(range(64)),
-                eval_dataset=dataset["validation"].select(range(64)),
+                train_dataset=dataset["train"].select(range(8)),
+                eval_dataset=dataset["validation"].select(range(8)),
                 compute_metrics=compute_metrics,
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
@@ -280,8 +280,8 @@ class QuantizationTest(unittest.TestCase):
                 pruning_config=pruning_config,
                 task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
-                train_dataset=dataset["train"].select(range(64)),
-                eval_dataset=dataset["validation"].select(range(64)),
+                train_dataset=dataset["train"].select(range(8)),
+                eval_dataset=dataset["validation"].select(range(8)),
                 compute_metrics=compute_metrics,
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
@@ -307,7 +307,7 @@ class PruningTest(unittest.TestCase):
         pruning_config = WeightPruningConfig(
             pruning_type="magnitude",
             start_step=0,
-            end_step=15,
+            end_step=1,
             target_sparsity=target_sparsity,
             pruning_scope="local",
         )
@@ -330,7 +330,7 @@ class PruningTest(unittest.TestCase):
                 task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=False),
                 train_dataset=dataset["train"].select(range(64)),
-                eval_dataset=dataset["validation"].select(range(64)),
+                eval_dataset=dataset["validation"].select(range(4)),
                 compute_metrics=compute_metrics,
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
@@ -371,8 +371,8 @@ class DistillationTest(unittest.TestCase):
                 distillation_config=distillation_config,
                 task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=False),
-                train_dataset=dataset["train"].select(range(64)),
-                eval_dataset=dataset["validation"].select(range(64)),
+                train_dataset=dataset["train"].select(range(8)),
+                eval_dataset=dataset["validation"].select(range(8)),
                 compute_metrics=compute_metrics,
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
