@@ -379,16 +379,23 @@ class OVDecoder:
     ) -> Seq2SeqLMOutput:
         self._compile()
         # Model inputs
-        inputs = {"input_ids": input_ids}
+        inputs = {}
 
         if past_key_values is not None:
             # Flatten the past_key_values
-            past_key_values = [past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer]
+            past_key_values = tuple(
+                past_key_value
+                for pkv_per_layer in past_key_values
+                for past_key_value in pkv_per_layer
+            )
+
             # Add the past_key_values to the decoder inputs
             inputs = {
                 input_name: past_key_value
                 for input_name, past_key_value in zip(self.key_value_input_names, past_key_values)
             }
+
+        inputs["input_ids"] = input_ids
 
         # Add the encoder_attention_mask inputs when needed
         if "encoder_attention_mask" in self.input_names and encoder_attention_mask is not None:
@@ -405,9 +412,9 @@ class OVDecoder:
         # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
         # self-attention layer and 2 to the cross-attention layer)
         out_past_key_values = tuple(
-            torch.from_numpy(outputs[key]).to(self.device)
+            torch.from_numpy(outputs[next(iter(key))]).to(self.device)
             for key in outputs.names()
-            if ("key_values" in key or "present" in key)
+            if ("key_values" in next(iter(key)) or "present" in next(iter(key)))
         )
 
         # Tuple of tuple of length `n_layers`, with each tuple of length equal to:
