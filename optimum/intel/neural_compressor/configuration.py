@@ -67,13 +67,13 @@ class INCConfig(BaseConfig):
             weight_compression = config.weight_compression
             config = {
                 "approach": weight_compression.pruning_type,
-                "target_sparsity": weight_compression.target_sparsity,
                 "pattern": weight_compression.pattern,
-                "start_step": weight_compression.start_step,
-                "end_step": weight_compression.end_step,
-                "scope": weight_compression.pruning_scope,
+                "sparsity": weight_compression.target_sparsity,
+                # "operators": weight_compression.pruning_op_types,
+                # "start_step": weight_compression.start_step,
+                # "end_step": weight_compression.end_step,
+                # "scope": weight_compression.pruning_scope,
                 # "frequency": weight_compression.pruning_frequency,
-                "op_types": weight_compression.pruning_op_types,
             }
         return config
 
@@ -84,7 +84,7 @@ class INCConfig(BaseConfig):
             config = {
                 "teacher_model_name_or_path": config.teacher_model.config._name_or_path,
                 "temperature": criterion.temperature,
-                "loss_types": criterion.loss_types,
-                "loss_weights": criterion.loss_weights,
+                # "loss_types": criterion.loss_types,
+                # "loss_weights": criterion.loss_weights,
             }
         return config

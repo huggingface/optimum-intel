@@ -609,6 +609,8 @@ class INCTrainer(Trainer):
             self.model.eval()
             self._onnx_export(self.model, onnx_config, output_onnx_path)
 
+        if self.pruning_config is not None:
+            self.inc_config.pruning["sparsity"] = round(self.get_model_sparsity(), 2)
         self.inc_config.save_onnx_model = save_onnx_model
         self.inc_config.save_pretrained(output_dir)
 
