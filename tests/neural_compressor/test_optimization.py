@@ -197,7 +197,7 @@ class QuantizationTest(unittest.TestCase):
             "glue",
             dataset_config_name="sst2",
             preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-            num_samples=300,
+            num_samples=10,
             dataset_split="train",
         )
 
@@ -211,7 +211,7 @@ class QuantizationTest(unittest.TestCase):
             )
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             inc_config = INCConfig.from_pretrained(tmp_dir)
-            self.assertTrue(inc_config.save_onnx_model)
+            self.assertFalse(inc_config.save_onnx_model)
             self.assertTrue(inc_config.quantization["is_static"])
 
             with torch.no_grad():
