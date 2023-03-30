@@ -109,6 +109,9 @@ else:
         "INCSeq2SeqTrainer",
         "INCTrainer",
     ]
+    _import_structure["utils.modeling"] = [
+        "AutoModelForGeneration",
+    ]
 
 
 if TYPE_CHECKING:

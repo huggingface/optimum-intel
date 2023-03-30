@@ -38,7 +38,7 @@ from transformers import (
     XLNetTokenizer,
 )
 
-from optimum.intel.ipex.modeling import IPEXModelForCausalLM
+from optimum.intel import AutoModelForGeneration
 
 
 logging.basicConfig(
@@ -224,7 +224,7 @@ def main():
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
 
     if args.jit:
-        model = IPEXModelForCausalLM.from_pretrained(args.model_name_or_path, export=True)
+        model = AutoModelForGeneration.from_pretrained(args.model_name_or_path, torchscript=True)
     else:
         model = model_class.from_pretrained(args.model_name_or_path)
 
