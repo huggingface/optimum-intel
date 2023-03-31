@@ -16,6 +16,7 @@ import copy
 import inspect
 import logging
 import os
+import sys
 import warnings
 from enum import Enum
 from itertools import chain
@@ -60,8 +61,13 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
 
-from ..utils.import_utils import _neural_compressor_version, is_neural_compressor_version
-from .configuration import IncOptimizedConfig, IncQuantizationConfig
+from ..utils.import_utils import (
+    _neural_compressor_version,
+    _torch_version,
+    is_neural_compressor_version,
+    is_torch_version,
+)
+from .configuration import INCConfig
 from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME, INCDataLoader, _cfgs_to_fx_cfgs
 
 
@@ -162,6 +168,8 @@ class INCQuantizer(OptimumQuantizer):
         if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
             if calibration_dataset is None:
                 raise ValueError("Post-training static quantization needs a calibration dataset.")
+
+            quantization_config.calibration_sampling_size = len(calibration_dataset)
             calibration_dataloader = self._get_calibration_dataloader(
                 calibration_dataset=calibration_dataset,
                 batch_size=batch_size,
@@ -209,7 +217,8 @@ class INCQuantizer(OptimumQuantizer):
 
         # Save the quantized model
         self._save_pretrained(compressed_model, output_path)
-        # TODO : Save quantization_config
+        quantization_config = INCConfig(quantization=quantization_config, save_onnx_model=save_onnx_model)
+        quantization_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: Union[PyTorchModel, IPEXModel], output_path: str):
@@ -531,6 +540,15 @@ class INCModel:
 
                     raise EnvironmentError(msg)
 
+        msg = None
+        try:
+            inc_config = INCConfig.from_pretrained(model_name_or_path)
+            if not is_torch_version("==", inc_config.torch_version):
+                msg = f"Quantized model was obtained with torch version {inc_config.torch_version} but {_torch_version} was found."
+                logger.warning(f"{msg}")
+        except Exception as e:
+            logger.info(f"Couldn't verify torch version.")
+
         if getattr(config, "backend", None) == "ipex":
             # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.
             # return load(state_dict_path)
@@ -542,7 +560,12 @@ class INCModel:
         state_dict = torch.load(state_dict_path, map_location="cpu")
 
         if "best_configure" in state_dict and state_dict["best_configure"] is not None:
-            model = load(state_dict_path, model)
+            try:
+                model = load(state_dict_path, model)
+            except Exception as e:
+                if msg is not None:
+                    e.args += (msg,)
+                raise
 
         return model.eval()
 
