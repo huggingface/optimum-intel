@@ -85,11 +85,6 @@ class OVBaseModel(OptimizedModel):
         self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
 
-        if "GPU" in self._device and self.is_dynamic:
-            raise ValueError(
-                "Support of dynamic shapes for GPU devices is not yet available. Set `dynamic_shapes` to `False` to continue."
-            )
-
         if self.is_dynamic:
             height = -1 if self.export_feature == "image-classification" else None
             width = -1 if self.export_feature == "image-classification" else None
@@ -363,7 +358,7 @@ class OVBaseModel(OptimizedModel):
 
     def half(self):
         """
-        Converts all the model weights to FP16 for more efficient inference on GPU.
+        Converts all the model weights to FP16
         """
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)
