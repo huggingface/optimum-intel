@@ -74,13 +74,6 @@ loaded_model_from_hub = INCModelForSequenceClassification.from_pretrained(
 
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
-#### Apply dynamic quantization on your model using the CLI
-
-Dynamic quantization and ONNX export can be used through the Optimum Intel command-line:
-
-```bash
-optimum-intel-cli inc quantize run_glue.py --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english --task_name sst2 --do_eval --output_dir result
-```
 
 For more details, please refer to this [guide](https://huggingface.co/docs/optimum/main/en/intel/optimization_inc#apply-quantization-using-the-cli).
 
