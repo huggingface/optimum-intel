@@ -15,9 +15,10 @@ limitations under the License.
 -->
 
 # 🤗 Optimum Intel Notebooks
-🤗[Optimum Intel](https://github.com/huggingface/optimum-intel)  is the interface between the 🤗 [Transformers](https://github.com/huggingface/transformers) library and the different tools and libraries provided by Intel to accelerate end-to-end pipelines on Intel architectures.
 
-You can find here a list of the notebooks, leveraging the usage of the Optimum Intel library for different tools and libraries provided by Intel:
+🤗 [Optimum Intel](https://github.com/huggingface/optimum-intel) is the interface between the [Transformers](https://github.com/huggingface/transformers) and [Diffusers](https://github.com/huggingface/diffusers) libraries and the different tools and libraries provided by Intel to accelerate end-to-end pipelines on Intel architectures.
+
+You can find here a list of the notebooks, leveraging the usage of the Optimum Intel library for different tools and libraries provided by Intel :
 
 * [OpenVINO](https://github.com/huggingface/optimum-intel/tree/main/notebooks/openvino)
 * [Neural Compresor](https://github.com/huggingface/optimum-intel/tree/main/notebooks/neural_compressor)

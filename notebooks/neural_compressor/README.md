@@ -1,6 +1,6 @@
 # 🤗 Optimum Neural Compressor Notebooks
 
-You can find here a list of the notebooks for the Neural Compressor integration in 🤗 Optimum.
+You can find here a list of the notebooks for the Neural Compressor integration in 🤗 Optimum :
 
 
 | Notebook     |      Description      |   |   |
