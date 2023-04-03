@@ -15,7 +15,6 @@ INSTALL_REQUIRE = [
     "optimum>=1.7.3",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
-    "torch",
     "sentencepiece",
     "scipy",
 ]
