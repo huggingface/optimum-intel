@@ -30,9 +30,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install torch==1.13.0 intel-extension-for-pytorch==1.13.0
-        pip freeze
         pip install .[ipex,tests]
+        pip install torch==1.13.0 intel-extension-for-pytorch==1.13.0
         pip freeze
     - name: Test with Pytest
       run: |
