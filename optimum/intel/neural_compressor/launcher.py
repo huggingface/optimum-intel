@@ -3,12 +3,11 @@ from neural_coder.launcher import Launcher
 from .neural_coder_adaptor import NeuralCoderAdaptor
 
 
-args = Launcher.parse_args()
+def _quantize(args):
+    modular_pattern = {
+        "pytorch_inc_static_quant_fx": NeuralCoderAdaptor.default_quant_static,
+        "pytorch_inc_dynamic_quant": NeuralCoderAdaptor.default_quant_dynamic,
+        "inc_auto": NeuralCoderAdaptor.default_quant_dynamic,
+    }
 
-modular_pattern = {}
-
-modular_pattern["pytorch_inc_static_quant_fx"] = NeuralCoderAdaptor.default_quant_static
-modular_pattern["pytorch_inc_dynamic_quant"] = NeuralCoderAdaptor.default_quant_dynamic
-modular_pattern["inc_auto"] = NeuralCoderAdaptor.default_quant_dynamic
-
-Launcher.execute(args, use_modular=True, modular_pattern=modular_pattern)
+    Launcher.execute(args, use_modular=True, modular_pattern=modular_pattern, use_inc=False)

@@ -61,7 +61,7 @@ TASK_NAME=sst2
 python run_glue.py \
     --model_name_or_path bert-base-uncased \
     --task_name $TASK_NAME \
-    --teacher_model_or_path yoshitomo-matsubara/bert-large-uncased-sst2 \
+    --teacher_model_name_or_path yoshitomo-matsubara/bert-large-uncased-sst2 \
     --nncf_compression_config ./configs/bert-base-jpqd.json \
     --distillation_weight 0.9 \
     --output_dir /tmp/jpqd-bert-base-ft-$TASK_NAME \

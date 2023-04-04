@@ -61,10 +61,20 @@ MODEL_START_DOCSTRING = r"""
     This model inherits from [`optimum.intel.openvino.modeling.OVBaseModel`]. Check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving)
     Parameters:
-        config (`transformers.PretrainedConfig`): [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig) is the Model configuration class with all the parameters of the model.
-            Initializing with a config file does not load the weights associated with the model, only the
-            configuration. Check out the [`~intel.openvino.modeling.OVBaseModel.from_pretrained`] method to load the model weights.
         model (`openvino.runtime.Model`): is the main class used to run OpenVINO Runtime inference.
+        config (`transformers.PretrainedConfig`): [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig)
+            is the Model configuration class with all the parameters of the model.
+            Initializing with a config file does not load the weights associated with the model, only the configuration.
+            Check out the [`~intel.openvino.modeling.OVBaseModel.from_pretrained`] method to load the model weights.
+        device (`str`, defaults to `"CPU"`):
+            The device type for which the model will be optimized for. The resulting compiled model will contains nodes specific to this device.
+        dynamic_shapes (`bool`, defaults to `True`):
+            All the model's dimension will be set to dynamic when set to `True`. Should be set to `False` for the model to not be dynamically reshaped by default.
+        ov_config (`Optional[Dict]`, defaults to `None`):
+            The dictionnary containing the informations related to the model compilation.
+        compile (`bool`, defaults to `True`):
+            Disable the model compilation during the loading step when set to `False`.
+            Can be useful to avoid unnecessary compilation, in the case where the model needs to be statically reshaped, the device modified or if FP16 conversion is enabled.
 """
 
 INPUTS_DOCSTRING = r"""
@@ -117,10 +127,10 @@ SEQUENCE_CLASSIFICATION_EXAMPLE = r"""
     Example of sequence classification using `transformers.pipeline`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
     >>> outputs = pipe("Hello, my dog is cute")
     ```
@@ -183,10 +193,10 @@ QUESTION_ANSWERING_EXAMPLE = r"""
     Example of question answering using `transformers.pipeline`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
     >>> question, text = "Who was Jim Henson?", "Jim Henson was a nice puppet"
     >>> outputs = pipe(question, text)
@@ -255,10 +265,10 @@ TOKEN_CLASSIFICATION_EXAMPLE = r"""
     Example of token classification using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
     >>> outputs = pipe("My Name is Peter and I live in New York.")
     ```
@@ -321,16 +331,22 @@ FEATURE_EXTRACTION_EXAMPLE = r"""
     Example of feature extraction using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
     >>> outputs = pipe("My Name is Peter and I live in New York.")
     ```
 """
 
 
+@add_start_docstrings(
+    """
+    OpenVINO Model with a BaseModelOutput for feature extraction tasks.
+    """,
+    MODEL_START_DOCSTRING,
+)
 class OVModelForFeatureExtraction(OVModel):
     export_feature = "default"
     auto_model_class = AutoModel
@@ -381,27 +397,14 @@ class OVModelForFeatureExtraction(OVModel):
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
 
-MASKED_LM_EXAMPLE = r"""
-    Example of masked language modeling using `transformers.pipelines`:
-    ```python
-    >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
-
-    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
-    >>> mask_token = tokenizer.mask_token
-    >>> pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
-    >>> outputs = pipe("The goal of life is" + mask_token)
-    ```
-"""
-
 TEXT_GENERATION_EXAMPLE = r"""
     Example of text generation:
     ```python
     >>> from transformers import {processor_class}
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
+
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> inputs = tokenizer("I love this story because", return_tensors="pt")
     >>> gen_tokens = model.generate(**inputs, do_sample=True, temperature=0.9, min_length=20, max_length=20)
     >>> tokenizer.batch_decode(gen_tokens)
@@ -409,9 +412,10 @@ TEXT_GENERATION_EXAMPLE = r"""
     Example using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
+
     >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> gen_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer)
     >>> text = "I love this story because"
     >>> gen = gen_pipeline(text)
@@ -524,6 +528,21 @@ class OVModelForCausalLM(OVModel, GenerationMixin):
         )
 
 
+MASKED_LM_EXAMPLE = r"""
+    Example of masked language modeling using `transformers.pipelines`:
+    ```python
+    >>> from transformers import {processor_class}, pipeline
+    >>> from optimum.intel import {model_class}
+
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+    >>> mask_token = tokenizer.mask_token
+    >>> pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
+    >>> outputs = pipe("The goal of life is" + mask_token)
+    ```
+"""
+
+
 @add_start_docstrings(
     """
     OpenVINO Model with a MaskedLMOutput for masked language modeling tasks.
@@ -580,10 +599,10 @@ IMAGE_CLASSIFICATION_EXAMPLE = r"""
     Example of image classification using `transformers.pipelines`:
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> model.reshape(batch_size=1, sequence_length=3, height=224, width=224)
     >>> pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
     >>> url = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -640,10 +659,10 @@ AUDIO_CLASSIFICATION_EXAMPLE = r"""
     ```python
     >>> from datasets import load_dataset
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
 
     >>> preprocessor = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", from_transformers=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
     >>> pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
     >>> dataset = load_dataset("superb", "ks", split="test")
     >>> audio_file = dataset[3]["audio"]["array"]

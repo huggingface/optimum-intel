@@ -72,11 +72,18 @@ Apart from optimizing a model after training like post-training quantization abo
 
 QAT simulates the effects of quantization during training, in order to alleviate its effects on the model's accuracy. It is recommended in the case where post-training quantization results in high accuracy degradation. Here is an example on how to fine-tune a DistilBERT on the sst-2 task while applying quantization aware training (QAT).
 
-```python
+```diff
 import evaluate
 import numpy as np
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    TrainingArguments,
+    default_data_collator,
+)
 from datasets import load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
+- from transformers import Trainer
++ from optimum.intel.openvino import OVConfig, OVTrainer, OVModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)
@@ -85,21 +92,19 @@ tokenizer = AutoTokenizer.from_pretrained(model_id)
 save_dir = "qat_model"
 dataset = load_dataset("glue", "sst2")
 dataset = dataset.map(
-    lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
+    lambda examples: tokenizer(examples["sentence"], padding=True), batched=True
 )
 metric = evaluate.load("glue", "sst2")
-compute_metrics = lambda p: metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
-```
 
-```diff
--from transformers import Trainer
-+from optimum.intel.openvino.trainer import OVConfig, OVTrainer
+def compute_metrics(eval_preds):
+    preds = np.argmax(eval_preds.predictions, axis=1)
+    return metric.compute(predictions=preds, references=eval_preds.label_ids)
 
 # Load the default quantization configuration detailing the quantization we wish to apply
-+ov_config = OVConfig()
++ ov_config = OVConfig()
 
--trainer = Trainer(
-+trainer = OVTrainer(
+- trainer = Trainer(
++ trainer = OVTrainer(
     model=model,
     args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
     train_dataset=dataset["train"].select(range(300)),
@@ -116,6 +121,10 @@ train_result = trainer.train()
 metrics = trainer.evaluate()
 # Export the quantized model to OpenVINO IR format and save it
 trainer.save_model()
+
+# Load the resulting quantized model
+- model = AutoModelForSequenceClassification.from_pretrained(save_dir)
++ model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
 
@@ -158,20 +167,20 @@ compression_config = [
 Once we have the config ready, we can start develop the training pipeline like the snippet below. Since we are customizing joint compression with config above, notice that `OVConfig` is initialized with config dictionary (JSON parsing to python dictionary is skipped for brevity). As for distillation, users are required to load the teacher model, it is just like a normal model loading with transformers API. `OVTrainingArguments` extends transformers' `TrainingArguments` with distillation hyperparameters, i.e. distillation weightage and temperature for ease of use. The snippet below shows how we load a teacher model and create training arguments with `OVTrainingArguments`. Subsequently, the teacher model, with the instantiated `OVConfig` and `OVTrainingArguments` are fed to `OVTrainer`. Voila! that is all we need, the rest of the pipeline is identical to native transformers training.
 
 ```diff
--from optimum.intel.openvino.trainer import OVConfig, OVTrainer
-+from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
+- from transformers import Trainer, TrainingArguments
++ from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
 
 # Load teacher model
-+teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_or_path)
++ teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_or_path)
 
--ov_config = OVConfig()
-+ov_config = OVConfig(compression=compression_config)
+- ov_config = OVConfig()
++ ov_config = OVConfig(compression=compression_config)
 
 trainer = OVTrainer(
     model=model,
 +   teacher_model=teacher_model,
--    args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
-+    args=OVTrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True, distillation_temperature=3, distillation_weight=0.9),
+-   args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
++   args=OVTrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True, distillation_temperature=3, distillation_weight=0.9),
     train_dataset=dataset["train"].select(range(300)),
     eval_dataset=dataset["validation"],
     compute_metrics=compute_metrics,
@@ -204,15 +213,11 @@ from transformers import pipeline
 from optimum.intel.openvino import OVModelForSequenceClassification
 
 model_id = "helenai/distilbert-base-uncased-finetuned-sst-2-english-ov-int8"
-
 ov_model = OVModelForSequenceClassification.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-
 cls_pipe = pipeline("text-classification", model=ov_model, tokenizer=tokenizer)
-
 text = "He's a dreadful magician."
 outputs = cls_pipe(text)
 
-# print(output)
-# [{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
+[{'label': 'NEGATIVE', 'score': 0.9840195178985596}]
 ```

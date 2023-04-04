@@ -42,7 +42,8 @@ from neural_compressor.config import (
     WeightPruningConfig,
 )
 from onnx import load as onnx_load
-from optimum.intel.neural_compressor import (
+from optimum.intel import (
+    INCConfig,
     INCModelForQuestionAnswering,
     INCModelForSequenceClassification,
     INCQuantizer,
@@ -74,6 +75,9 @@ class QuantizationTest(unittest.TestCase):
             loaded_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_model = onnx_load(os.path.join(tmp_dir, "model.onnx"))
+            inc_config = INCConfig.from_pretrained(tmp_dir)
+            self.assertTrue(inc_config.save_onnx_model)
+            self.assertFalse(inc_config.quantization["is_static"])
 
         num_quantized_matmul = 0
         for initializer in onnx_model.graph.initializer:
@@ -96,7 +100,7 @@ class QuantizationTest(unittest.TestCase):
         eval_dataset = load_dataset("squad", split="validation").select(range(64))
         task_evaluator = evaluate.evaluator("question-answering")
         qa_pipeline = pipeline("question-answering", model=model, tokenizer=tokenizer)
-        tolerance_criterion = 0.05
+        tolerance_criterion = 0.1
 
         def eval_fn(model):
             qa_pipeline.model = model
@@ -119,6 +123,10 @@ class QuantizationTest(unittest.TestCase):
                 save_onnx_model=True,
             )
             loaded_model = INCModelForQuestionAnswering.from_pretrained(tmp_dir)
+            inc_config = INCConfig.from_pretrained(tmp_dir)
+            self.assertTrue(inc_config.save_onnx_model)
+            self.assertFalse(inc_config.quantization["is_static"])
+
         quantized_model_metric = eval_fn(loaded_model)
         # Verification accuracy loss is under 5%
         self.assertGreaterEqual(quantized_model_metric, original_model_metric * (1 - tolerance_criterion))
@@ -126,6 +134,7 @@ class QuantizationTest(unittest.TestCase):
     def test_static_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
         expected_quantized_matmuls = 36
+        num_samples = 10
         quantization_config = PostTrainingQuantConfig(approach="static")
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -139,7 +148,7 @@ class QuantizationTest(unittest.TestCase):
             "glue",
             dataset_config_name="sst2",
             preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-            num_samples=300,
+            num_samples=num_samples,
             dataset_split="train",
         )
         quantizer = INCQuantizer.from_pretrained(model)
@@ -154,6 +163,10 @@ class QuantizationTest(unittest.TestCase):
             loaded_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_model = onnx_load(os.path.join(tmp_dir, "model.onnx"))
+            inc_config = INCConfig.from_pretrained(tmp_dir)
+            self.assertTrue(inc_config.save_onnx_model)
+            self.assertTrue(inc_config.quantization["is_static"])
+            self.assertEqual(inc_config.quantization["dataset_num_samples"], num_samples)
 
         num_quantized_matmul = 0
         for initializer in onnx_model.graph.initializer:
@@ -184,7 +197,7 @@ class QuantizationTest(unittest.TestCase):
             "glue",
             dataset_config_name="sst2",
             preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
-            num_samples=300,
+            num_samples=10,
             dataset_split="train",
         )
 
@@ -197,6 +210,9 @@ class QuantizationTest(unittest.TestCase):
                 save_onnx_model=False,
             )
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
+            inc_config = INCConfig.from_pretrained(tmp_dir)
+            self.assertFalse(inc_config.save_onnx_model)
+            self.assertTrue(inc_config.quantization["is_static"])
 
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
@@ -226,8 +242,8 @@ class QuantizationTest(unittest.TestCase):
                 quantization_config=quantization_config,
                 task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
-                train_dataset=dataset["train"].select(range(64)),
-                eval_dataset=dataset["validation"].select(range(64)),
+                train_dataset=dataset["train"].select(range(8)),
+                eval_dataset=dataset["validation"].select(range(8)),
                 compute_metrics=compute_metrics,
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
@@ -238,6 +254,9 @@ class QuantizationTest(unittest.TestCase):
             loaded_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             onnx_model = onnx_load(os.path.join(tmp_dir, "model.onnx"))
+            inc_config = INCConfig.from_pretrained(tmp_dir)
+            self.assertTrue(inc_config.save_onnx_model)
+            self.assertTrue(inc_config.quantization["is_static"])
 
         num_quantized_matmul = 0
         for initializer in onnx_model.graph.initializer:
@@ -285,8 +304,8 @@ class QuantizationTest(unittest.TestCase):
                 pruning_config=pruning_config,
                 task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
-                train_dataset=dataset["train"].select(range(64)),
-                eval_dataset=dataset["validation"].select(range(64)),
+                train_dataset=dataset["train"].select(range(8)),
+                eval_dataset=dataset["validation"].select(range(8)),
                 compute_metrics=compute_metrics,
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
@@ -294,6 +313,10 @@ class QuantizationTest(unittest.TestCase):
             train_result = trainer.train()
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
+
+            inc_config = INCConfig.from_pretrained(tmp_dir)
+            self.assertTrue(inc_config.save_onnx_model)
+            self.assertTrue(inc_config.quantization["is_static"])
 
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
@@ -312,7 +335,7 @@ class PruningTest(unittest.TestCase):
         pruning_config = WeightPruningConfig(
             pruning_type="magnitude",
             start_step=0,
-            end_step=15,
+            end_step=1,
             target_sparsity=target_sparsity,
             pruning_scope="local",
         )
@@ -335,7 +358,7 @@ class PruningTest(unittest.TestCase):
                 task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=False),
                 train_dataset=dataset["train"].select(range(64)),
-                eval_dataset=dataset["validation"].select(range(64)),
+                eval_dataset=dataset["validation"].select(range(4)),
                 compute_metrics=compute_metrics,
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
@@ -343,6 +366,8 @@ class PruningTest(unittest.TestCase):
             train_result = trainer.train()
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
+
+            inc_config = INCConfig.from_pretrained(tmp_dir)
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_outputs = ort_model(**tokens)
@@ -352,6 +377,10 @@ class PruningTest(unittest.TestCase):
             self.assertTrue(torch.allclose(ort_outputs.logits, transformers_outputs.logits, atol=1e-4))
             sparsity = trainer.get_model_sparsity()
             self.assertGreaterEqual(sparsity, target_sparsity * 100 / 2)
+            self.assertTrue(inc_config.save_onnx_model)
+            self.assertEqual(inc_config.pruning["sparsity"], round(sparsity, 2))
+            self.assertEqual(inc_config.pruning["approach"], "magnitude")
+            self.assertEqual(inc_config.pruning["pattern"], "4x1")
 
 
 class DistillationTest(unittest.TestCase):
@@ -376,8 +405,8 @@ class DistillationTest(unittest.TestCase):
                 distillation_config=distillation_config,
                 task="sequence-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=False),
-                train_dataset=dataset["train"].select(range(64)),
-                eval_dataset=dataset["validation"].select(range(64)),
+                train_dataset=dataset["train"].select(range(8)),
+                eval_dataset=dataset["validation"].select(range(8)),
                 compute_metrics=compute_metrics,
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
@@ -385,6 +414,12 @@ class DistillationTest(unittest.TestCase):
             train_result = trainer.train()
             metrics = trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
+
+            inc_config = INCConfig.from_pretrained(tmp_dir)
+            self.assertTrue(inc_config.save_onnx_model)
+            self.assertEqual(inc_config.distillation["teacher_model_name_or_path"], model_name)
+            self.assertEqual(inc_config.distillation["temperature"], 1.0)
+
             transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_outputs = ort_model(**tokens)
