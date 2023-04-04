@@ -1,7 +1,7 @@
 class NeuralCoderAdaptor:
     """API design adaption for Neural Coder"""
 
-    default_quant_dynamic = f"""\
+    default_quant_dynamic = """\
 def eval_func(model):
     EVAL_FUNC_LINES
 from neural_compressor.config import PostTrainingQuantConfig
@@ -13,7 +13,7 @@ MODEL_NAME = quantizer._quantized_model
 MODEL_NAME.eval()
 """
 
-    default_quant_static = f"""\
+    default_quant_static = """\
 def eval_func(model):
     EVAL_FUNC_LINES
 from neural_compressor.config import PostTrainingQuantConfig

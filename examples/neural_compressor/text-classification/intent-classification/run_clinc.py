@@ -29,18 +29,19 @@ import datasets
 import numpy as np
 import torch
 import transformers
-from datasets import load_dataset, load_metric
-from sklearn.linear_model import LogisticRegression
-from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
+from datasets import load_dataset
+from neural_compressor import (
+    DistillationConfig,
+    PostTrainingQuantConfig,
+    QuantizationAwareTrainingConfig,
+    WeightPruningConfig,
+)
 from transformers import (
     AutoConfig,
     AutoModel,
     AutoTokenizer,
     DataCollatorWithPadding,
-    EvalPrediction,
     HfArgumentParser,
-    PretrainedConfig,
     PreTrainedModel,
     TrainingArguments,
     default_data_collator,
@@ -50,12 +51,6 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from neural_compressor import (
-    DistillationConfig,
-    PostTrainingQuantConfig,
-    QuantizationAwareTrainingConfig,
-    WeightPruningConfig,
-)
 from optimum.intel.neural_compressor import INCModel, INCQuantizer, INCTrainer
 
 

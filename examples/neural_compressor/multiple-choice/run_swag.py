@@ -29,12 +29,12 @@ import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
+from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
 from transformers import (
     AutoConfig,
     AutoModelForMultipleChoice,
     AutoTokenizer,
     HfArgumentParser,
-    PreTrainedModel,
     TrainingArguments,
     default_data_collator,
     set_seed,
@@ -45,7 +45,6 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
 from optimum.intel.neural_compressor import INCModelForMultipleChoice, INCTrainer
 
 
@@ -548,14 +547,14 @@ def main():
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
-    kwargs = dict(
-        finetuned_from=model_args.model_name_or_path,
-        tasks="multiple-choice",
-        dataset_tags="swag",
-        dataset_args="regular",
-        dataset="SWAG",
-        language="en",
-    )
+    kwargs = {
+        "finetuned_from": model_args.model_name_or_path,
+        "tasks": "multiple-choice",
+        "dataset_tags": "swag",
+        "dataset_args": "regular",
+        "dataset": "SWAG",
+        "language": "en",
+    }
 
     if training_args.push_to_hub:
         trainer.push_to_hub(**kwargs)

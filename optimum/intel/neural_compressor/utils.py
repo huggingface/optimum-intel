@@ -18,10 +18,9 @@ from collections import UserDict
 from typing import Dict
 
 import torch
+from neural_compressor.utils.pytorch import load
 from packaging import version
 from torch.utils.data import DataLoader
-
-from neural_compressor.utils.pytorch import load
 
 
 logger = logging.getLogger(__name__)
@@ -72,7 +71,7 @@ def _cfgs_to_fx_cfgs(op_cfgs: Dict, observer_type: str = "post_training_static_q
 
         fx_op_cfgs = QConfigMapping()
     else:
-        fx_op_cfgs = dict()
+        fx_op_cfgs = {}
         op_tuple_cfg_list = []
     for key, value in op_cfgs.items():
         if key == "default_qconfig":

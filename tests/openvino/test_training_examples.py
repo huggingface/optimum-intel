@@ -23,9 +23,9 @@ from typing import List, Union
 
 import torch
 import torch.cuda
+from parameterized import parameterized
 
 from optimum.intel.openvino.utils import OV_XML_FILE_NAME
-from parameterized import parameterized
 
 
 PROJECT_ROOT = Path(__file__).parents[2]

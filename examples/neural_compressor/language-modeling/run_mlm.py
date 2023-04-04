@@ -29,9 +29,16 @@ from itertools import chain
 from typing import Optional
 
 import datasets
+import evaluate
 import torch
 import transformers
 from datasets import load_dataset
+from neural_compressor import (
+    DistillationConfig,
+    PostTrainingQuantConfig,
+    QuantizationAwareTrainingConfig,
+    WeightPruningConfig,
+)
 from transformers import (
     CONFIG_MAPPING,
     MODEL_FOR_MASKED_LM_MAPPING,
@@ -48,13 +55,6 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-import evaluate
-from neural_compressor import (
-    DistillationConfig,
-    PostTrainingQuantConfig,
-    QuantizationAwareTrainingConfig,
-    WeightPruningConfig,
-)
 from optimum.intel.neural_compressor import INCModelForMaskedLM, INCQuantizer, INCTrainer
 
 

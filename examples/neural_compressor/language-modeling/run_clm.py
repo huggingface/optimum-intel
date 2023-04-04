@@ -29,9 +29,16 @@ from itertools import chain
 from typing import Optional
 
 import datasets
+import evaluate
 import torch
 import transformers
 from datasets import load_dataset
+from neural_compressor import (
+    DistillationConfig,
+    PostTrainingQuantConfig,
+    QuantizationAwareTrainingConfig,
+    WeightPruningConfig,
+)
 from transformers import (
     CONFIG_MAPPING,
     MODEL_FOR_CAUSAL_LM_MAPPING,
@@ -49,13 +56,6 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-import evaluate
-from neural_compressor import (
-    DistillationConfig,
-    PostTrainingQuantConfig,
-    QuantizationAwareTrainingConfig,
-    WeightPruningConfig,
-)
 from optimum.intel.neural_compressor import INCModelForCausalLM, INCQuantizer, INCTrainer
 
 
@@ -441,7 +441,7 @@ def main():
         )
     else:
         model = AutoModelForCausalLM.from_config(config)
-        n_params = sum(dict((p.data_ptr(), p.numel()) for p in model.parameters()).values())
+        n_params = sum({p.data_ptr(): p.numel() for p in model.parameters()}.values())
         logger.info(f"Training new model from scratch - Total size={n_params/2**20:.2f}M params")
 
     # We resize the embeddings only when necessary to avoid index errors. If you are creating a model from scratch
