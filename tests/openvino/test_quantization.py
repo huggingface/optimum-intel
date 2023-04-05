@@ -134,6 +134,7 @@ class OVTrainerTest(unittest.TestCase):
         train_dataset = dataset["train"].select(range(16))
         eval_dataset = dataset["validation"].select(range(16))
         metric = evaluate.load("glue", "sst2")
+
         def compute_metrics(p):
             return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
 

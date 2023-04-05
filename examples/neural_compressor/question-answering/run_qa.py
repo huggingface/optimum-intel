@@ -552,8 +552,10 @@ def main():
         )
         teacher_model_qa = QAModel(teacher_model)
         teacher_model_qa = accelerator.prepare(teacher_model_qa)
+
         def num_param(model):
             return sum(p.numel() for p in model.parameters())
+
         logger.info(
             "***** Number of teacher model parameters: {:.2f}M *****".format(num_param(teacher_model_qa) / 10**6)
         )
