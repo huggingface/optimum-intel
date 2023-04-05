@@ -20,7 +20,7 @@ import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
-from typing import Callable, ClassVar, Dict, Optional, Union
+from typing import TYPE_CHECKING, Callable, ClassVar, Dict, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
@@ -65,6 +65,10 @@ from ..utils.import_utils import (
 )
 from .configuration import INCConfig
 from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME, INCDataLoader, _cfgs_to_fx_cfgs
+
+
+if TYPE_CHECKING:
+    from neural_compressor.config import PostTrainingQuantConfig
 
 
 logger = logging.getLogger(__name__)

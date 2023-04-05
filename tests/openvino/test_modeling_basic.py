@@ -14,7 +14,9 @@ import unittest
 from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline
 
-from optimum.intel.openvino import *
+from optimum.intel import (
+    OVModelForSequenceClassification,
+)
 
 
 # Make sure that common architectures are used in combination with common tasks

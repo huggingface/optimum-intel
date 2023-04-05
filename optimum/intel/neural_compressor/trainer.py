@@ -69,8 +69,15 @@ from .configuration import INCConfig
 from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 
 
+if is_apex_available():
+    from apex import amp
+
+if is_sagemaker_mp_enabled():
+    import smdistributed.modelparallel.torch as smp
+
+
 if TYPE_CHECKING:
-    pass
+    from optimum.exporters.onnx import OnnxConfig
 
 
 __version__ = "4.22.2"

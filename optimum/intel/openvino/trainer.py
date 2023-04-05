@@ -79,7 +79,6 @@ from transformers.utils import (
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
-from optimum.utils import logging
 
 from .configuration import OVConfig
 from .quantization import OVDataLoader
