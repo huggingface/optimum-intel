@@ -206,7 +206,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             encoder_outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
 
         # Decode
-        if past_key_values is None or self.decoder_with_past is None:
+        if self.decoder_with_past is None:
             decoder_outputs = self.decoder(
                 input_ids=decoder_input_ids,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
@@ -405,6 +405,14 @@ class OVDecoder:
                 input_name: Tensor(past_key_value, shared_memory=True)
                 for input_name, past_key_value in zip(self.key_value_input_names, past_key_values)
             }
+        else:
+            shape_input_ids = input_ids.shape
+            for input_name in self.key_value_input_names:
+                model_inputs = self.model.input(input_name)
+                shape = model_inputs.get_partial_shape()
+                shape[0] = shape_input_ids[0]
+                shape[2] = shape_input_ids[1]
+                inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
 
         # Check if inputs are c-like, if not - convert them
         input_ids = _contiguous_helper(np.array(input_ids))
