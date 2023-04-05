@@ -60,7 +60,7 @@ from transformers.trainer_utils import (
     speed_metrics,
 )
 from transformers.training_args import TrainingArguments
-from transformers.utils import is_sagemaker_mp_enabled, logging
+from transformers.utils import is_apex_available, is_sagemaker_mp_enabled, logging
 
 from optimum.exporters import TasksManager
 

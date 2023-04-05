@@ -520,7 +520,7 @@ def main():
             use_auth_token=True if model_args.use_auth_token else None,
         )
 
-        tokenizer = AutoTokenizer.from_pretrained(
+        teacher_tokenizer = AutoTokenizer.from_pretrained(
             optim_args.teacher_model_name_or_path,
             cache_dir=model_args.cache_dir,
             use_fast=model_args.use_fast_tokenizer,
