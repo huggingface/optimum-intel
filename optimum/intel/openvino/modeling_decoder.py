@@ -13,50 +13,31 @@
 #  limitations under the License.
 
 import logging
-import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
 
+import numpy as np
 import openvino
 import torch
-from huggingface_hub import hf_hub_download
-from huggingface_hub.utils import EntryNotFoundError
-from transformers import PretrainedConfig
+from openvino.runtime import Core, Tensor
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    PretrainedConfig,
+)
 from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export, get_decoder_models_for_export
+from optimum.exporters.onnx import export_models, get_decoder_models_for_export
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 from .utils import (
-    ONNX_DECODER_NAME,
-    ONNX_DECODER_WITH_PAST_NAME,
-    ONNX_ENCODER_NAME,
     ONNX_WEIGHTS_NAME,
-    OV_XML_FILE_NAME,
-    OV_DECODER_NAME,
-    OV_DECODER_WITH_PAST_NAME,
-    OV_ENCODER_NAME,
 )
 
-import numpy as np
-import transformers
-from transformers import (
-    AutoConfig,
-    AutoModel,
-    AutoModelForAudioClassification,
-    AutoModelForCausalLM,
-    AutoModelForImageClassification,
-    AutoModelForMaskedLM,
-    AutoModelForQuestionAnswering,
-    AutoModelForSequenceClassification,
-    AutoModelForTokenClassification,
-)
-
-from openvino.runtime import Core, Tensor
 
 if is_transformers_version("<", "4.25.0"):
     from transformers.generation_utils import GenerationMixin
@@ -71,6 +52,7 @@ core = Core()
 
 def _contiguous_helper(tensor: np.ndarray) -> np.ndarray:
     return tensor if tensor.flags["C_CONTIGUOUS"] else np.ascontiguousarray(tensor)
+
 
 @add_start_docstrings(
     """
@@ -117,59 +99,8 @@ class OVBaseDecoderModel(OVBaseModel):
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
 
-
     def compile(self):
         self.decoder._create_inference_request()
-
-
-    @classmethod
-    def _from_pretrained(
-        cls,
-        model_id: Union[str, Path],
-        config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: Optional[str] = None,
-        model_file_name: Optional[str] = None,
-        local_files_only: bool = False,
-        use_cache: bool = True,
-        from_onnx: bool = False,
-        **kwargs,
-    ):
-        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
-        model_file_name = model_file_name or default_file_name
-
-        # Load model from a local directory
-        if os.path.isdir(model_id):
-            model = cls.load_model(os.path.join(model_id, model_file_name))
-            model_save_dir = Path(model_id)
-
-        # Load model from hub
-        else:
-            model_file_names = {"model": model_file_name}
-            # If not ONNX then OpenVINO IR : adds binary files
-            if not from_onnx:
-                for key in list(model_file_names.keys()):
-                    model_file_names[key + "_bin"] = model_file_names[key].replace(".xml", ".bin")
-            file_names = model_file_names.copy()
-
-            for name, file_name in model_file_names.items():
-                model_cache_path = hf_hub_download(
-                    repo_id=model_id,
-                    filename=file_name,
-                    use_auth_token=use_auth_token,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
-                )
-                file_names[name] = model_cache_path
-
-            model_save_dir = Path(model_cache_path).parent
-            model = cls.load_model(file_names["model"])
-
-        return cls(model=model, config=config, model_save_dir=model_save_dir, **kwargs)
 
     @classmethod
     def _from_transformers(
@@ -187,7 +118,7 @@ class OVBaseDecoderModel(OVBaseModel):
         **kwargs,
     ):
         model_file_name = ONNX_WEIGHTS_NAME
-    
+
         if task is None:
             task = cls._auto_model_to_task(cls.auto_model_class)
 
@@ -220,13 +151,12 @@ class OVBaseDecoderModel(OVBaseModel):
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
-            use_cache=use_cache,
             from_onnx=True,
             use_auth_token=use_auth_token,
             revision=revision,
             force_download=force_download,
             cache_dir=cache_dir,
-            model_file_name=model_file_name,
+            file_name=model_file_name,
             local_files_only=local_files_only,
             **kwargs,
         )
@@ -243,14 +173,12 @@ class OVBaseDecoderModel(OVBaseModel):
         model.reshape(shapes)
         return model
 
-
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes currently not supported.")
         return self
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
-
 
 
 class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
@@ -264,7 +192,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
-
         if self.use_cache and past_key_values is not None:
             input_ids = input_ids[:, -1:]
 
@@ -309,7 +236,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
 
 class OVDecoder:
-
     def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict, use_cache: bool):
         self.model = model
         self._device = device
@@ -329,7 +255,6 @@ class OVDecoder:
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
     ) -> CausalLMOutputWithPast:
-
         self._create_inference_request()
 
         inputs = {}
@@ -373,12 +298,16 @@ class OVDecoder:
 
         if self.use_cache:
             # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
-            past_key_values = tuple(torch.from_numpy(outputs[key]).to(self.device) for key in self.key_value_output_names)
+            past_key_values = tuple(
+                torch.from_numpy(outputs[key]).to(self.device) for key in self.key_value_output_names
+            )
             # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
-            past_key_values = tuple(past_key_values[i : i + self.num_pkv] for i in range(0, len(past_key_values), self.num_pkv))
+            past_key_values = tuple(
+                past_key_values[i : i + self.num_pkv] for i in range(0, len(past_key_values), self.num_pkv)
+            )
         else:
             past_key_values = None
-        
+
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
     def __call__(self, *args, **kwargs):
