@@ -25,15 +25,15 @@ import sys
 import time
 
 import torch
-from PIL import Image
-from torch.utils.data import DataLoader, Dataset
-
 from accelerate.utils import set_seed
 from diffusers import StableDiffusionPipeline
 from neural_compressor import PostTrainingQuantConfig
+from PIL import Image
+from pytorch_fid import fid_score
+from torch.utils.data import Dataset
+
 from optimum.intel.neural_compressor import INCQuantizer
 from optimum.intel.neural_compressor.utils import load_quantized_model
-from pytorch_fid import fid_score
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -147,7 +147,7 @@ def benchmark(pipeline, generator):
         for i in range(total):
             prompt = "a photo of an astronaut riding a horse on mars"
             start2 = time.time()
-            images = pipeline(prompt, guidance_scale=7.5, num_inference_steps=50, generator=generator).images
+            pipeline(prompt, guidance_scale=7.5, num_inference_steps=50, generator=generator).images
             end2 = time.time()
             if i >= warmup:
                 total_time += end2 - start2
@@ -270,7 +270,7 @@ def main():
         if result_loaded_model != result_optimized_model:
             logger.error("The quantized model was not successfully loaded.")
         else:
-            logger.info(f"The quantized model was successfully loaded.")
+            logger.info("The quantized model was successfully loaded.")
 
     if args.benchmark and args.int8:
         print("====int8 inference====")

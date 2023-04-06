@@ -25,13 +25,16 @@ from math import ceil
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
+import cpuinfo
+import evaluate
 import numpy as np
 import torch
 from datasets import load_dataset
+from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
+from parameterized import parameterized
 from transformers import (
     AutoFeatureExtractor,
     AutoImageProcessor,
-    AutoModel,
     AutoModelForAudioClassification,
     AutoModelForImageClassification,
     AutoModelForSequenceClassification,
@@ -41,9 +44,6 @@ from transformers import (
 from transformers.trainer_utils import EvalPrediction, TrainOutput
 from transformers.utils import WEIGHTS_NAME
 
-import cpuinfo
-import evaluate
-from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
 from optimum.intel.openvino import OVTrainingArguments
 from optimum.intel.openvino.configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
 from optimum.intel.openvino.modeling import (
@@ -54,7 +54,6 @@ from optimum.intel.openvino.modeling import (
 )
 from optimum.intel.openvino.trainer import OVTrainer
 from optimum.intel.openvino.utils import OV_XML_FILE_NAME
-from parameterized import parameterized
 
 
 def initialize_movement_sparsifier_parameters_by_sparsity(

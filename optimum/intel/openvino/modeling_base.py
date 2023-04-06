@@ -18,16 +18,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
-import transformers
-from transformers import AutoConfig, PretrainedConfig
-from transformers.file_utils import add_start_docstrings, default_cache_path
-from transformers.onnx.utils import get_preprocessor
-
 import openvino
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from openvino.runtime import Core
+from transformers import PretrainedConfig
+from transformers.file_utils import add_start_docstrings
+
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
 from optimum.modeling_base import OptimizedModel
@@ -75,7 +73,7 @@ class OVBaseModel(OptimizedModel):
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        **kwargs
+        **kwargs,
     ):
         self.config = config
         self.model_save_dir = model_save_dir

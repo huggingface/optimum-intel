@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 import requests
+
 from optimum.intel.neural_compressor.neural_coder_adaptor import NeuralCoderAdaptor
 
 

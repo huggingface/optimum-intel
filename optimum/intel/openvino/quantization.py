@@ -17,16 +17,12 @@ import io
 import logging
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, Optional, Tuple, Union
 
+import openvino
 import torch
 import transformers
 from datasets import Dataset, load_dataset
-from torch.onnx import export as onnx_export
-from torch.utils.data import DataLoader, RandomSampler
-from transformers import DataCollator, PreTrainedModel, default_data_collator
-
-import openvino
 from huggingface_hub import HfApi
 from nncf import NNCFConfig
 from nncf.torch import create_compressed_model, register_default_init_args
@@ -35,6 +31,10 @@ from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
+from torch.onnx import export as onnx_export
+from torch.utils.data import DataLoader, RandomSampler
+from transformers import DataCollator, PreTrainedModel, default_data_collator
+
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
@@ -42,7 +42,6 @@ from optimum.quantization_base import OptimumQuantizer
 from .configuration import OVConfig
 from .utils import (
     MAX_ONNX_OPSET,
-    MAX_ONNX_OPSET_2022_2_0,
     MIN_ONNX_QDQ_OPSET,
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
@@ -200,7 +199,7 @@ class OVQuantizer(OptimumQuantizer):
     ):
         opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = opset if not ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
-        model_inputs = dict((k, v.to(model.device)) for k, v in model_inputs.items())
+        model_inputs = {k: v.to(model.device) for k, v in model_inputs.items()}
         # Create ordered inputs for the ONNX export of NNCFNetwork as keyword arguments are currently not supported
         inputs = tuple([model_inputs.pop(key, None) for key in self._export_input_names if len(model_inputs) != 0])
 
@@ -213,7 +212,7 @@ class OVQuantizer(OptimumQuantizer):
                 f=f,
                 input_names=list(config.inputs.keys()),
                 output_names=list(config.outputs.keys()),
-                dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
+                dynamic_axes=dict(chain(config.inputs.items(), config.outputs.items())),
                 do_constant_folding=True,
                 opset_version=opset,
             )
@@ -233,7 +232,7 @@ class OVQuantizer(OptimumQuantizer):
                     "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
                 )
         if self.task in ["seq2seq-lm", "translation", "summarization"]:
-            raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
+            raise ValueError("Seq2Seq models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(
         self,

@@ -17,22 +17,10 @@ import tempfile
 import unittest
 from functools import partial
 
+import evaluate
 import numpy as np
 import torch
 from datasets import load_dataset
-from transformers import (
-    AutoModelForQuestionAnswering,
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    BertForSequenceClassification,
-    EvalPrediction,
-    TrainingArguments,
-    default_data_collator,
-    pipeline,
-    set_seed,
-)
-
-import evaluate
 from neural_compressor.config import (
     AccuracyCriterion,
     DistillationConfig,
@@ -42,6 +30,17 @@ from neural_compressor.config import (
     WeightPruningConfig,
 )
 from onnx import load as onnx_load
+from transformers import (
+    AutoModelForQuestionAnswering,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    EvalPrediction,
+    TrainingArguments,
+    default_data_collator,
+    pipeline,
+    set_seed,
+)
+
 from optimum.intel import (
     INCConfig,
     INCModelForQuestionAnswering,
@@ -49,7 +48,7 @@ from optimum.intel import (
     INCQuantizer,
     INCTrainer,
 )
-from optimum.onnxruntime import ORTModelForQuestionAnswering, ORTModelForSequenceClassification
+from optimum.onnxruntime import ORTModelForSequenceClassification
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -113,7 +112,7 @@ class QuantizationTest(unittest.TestCase):
         quantization_config = PostTrainingQuantConfig(
             approach="dynamic", accuracy_criterion=accuracy_criterion, tuning_criterion=tuning_criterion
         )
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        tokenizer("This is a sample input", return_tensors="pt")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantizer = INCQuantizer.from_pretrained(model, eval_fn=eval_fn)
@@ -248,8 +247,8 @@ class QuantizationTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
-            train_result = trainer.train()
-            metrics = trainer.evaluate()
+            trainer.train()
+            trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
             loaded_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
             ort_model = ORTModelForSequenceClassification.from_pretrained(tmp_dir)
@@ -310,8 +309,8 @@ class QuantizationTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
-            train_result = trainer.train()
-            metrics = trainer.evaluate()
+            trainer.train()
+            trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
 
             inc_config = INCConfig.from_pretrained(tmp_dir)
@@ -323,7 +322,7 @@ class QuantizationTest(unittest.TestCase):
             ort_outputs = ort_model(**tokens)
             self.assertTrue("logits" in ort_outputs)
             with torch.no_grad():
-                transformers_outputs = transformers_model(**tokens)
+                transformers_model(**tokens)
             # self.assertTrue(torch.allclose(ort_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
 
@@ -363,8 +362,8 @@ class PruningTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
-            train_result = trainer.train()
-            metrics = trainer.evaluate()
+            trainer.train()
+            trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
 
             inc_config = INCConfig.from_pretrained(tmp_dir)
@@ -411,8 +410,8 @@ class DistillationTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
-            train_result = trainer.train()
-            metrics = trainer.evaluate()
+            trainer.train()
+            trainer.evaluate()
             trainer.save_model(save_onnx_model=True)
 
             inc_config = INCConfig.from_pretrained(tmp_dir)

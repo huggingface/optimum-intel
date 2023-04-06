@@ -12,31 +12,20 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import os
-import tempfile
 import unittest
 
 import torch
+from parameterized import parameterized
 
 # TODO : add more tasks
 from transformers import (
-    AutoFeatureExtractor,
-    AutoModel,
-    AutoModelForAudioClassification,
-    AutoModelForCausalLM,
-    AutoModelForImageClassification,
-    AutoModelForMaskedLM,
-    AutoModelForQuestionAnswering,
-    AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoTokenizer,
     pipeline,
 )
 
-from evaluate import evaluator
 from optimum.intel import inference_mode as ipex_inference_mode
-from parameterized import parameterized
 
 
 MODEL_NAMES = {

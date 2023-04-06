@@ -20,8 +20,11 @@ import unittest
 from typing import Dict
 
 import numpy as np
+import requests
 import torch
 from datasets import load_dataset
+from evaluate import evaluator
+from parameterized import parameterized
 from PIL import Image
 from transformers import (
     AutoFeatureExtractor,
@@ -40,8 +43,6 @@ from transformers import (
     set_seed,
 )
 
-import requests
-from evaluate import evaluator
 from optimum.intel.openvino import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
@@ -66,14 +67,12 @@ from optimum.intel.openvino.modeling_diffusion import (
 )
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.utils import (
-    CONFIG_NAME,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 from optimum.utils.testing_utils import require_diffusers
-from parameterized import parameterized
 
 
 MODEL_NAMES = {
@@ -401,7 +400,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer(f"This is a sample", return_tensors="pt")
+        tokens = tokenizer("This is a sample", return_tensors="pt")
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
@@ -417,7 +416,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-        outputs = pipe(f"This is a sample", max_length=10)
+        outputs = pipe("This is a sample", max_length=10)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(["This is a sample" in item["generated_text"] for item in outputs]))
         gc.collect()

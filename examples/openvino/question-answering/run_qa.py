@@ -27,8 +27,12 @@ from pathlib import Path
 from typing import Optional
 
 import datasets
+import evaluate
+import jstyleson as json
 import transformers
 from datasets import load_dataset
+from nncf.common.utils.os import safe_open
+from trainer_qa import QuestionAnsweringOVTrainer
 from transformers import (
     AutoConfig,
     AutoModelForQuestionAnswering,
@@ -43,13 +47,9 @@ from transformers import (
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
-
-import evaluate
-import jstyleson as json
-from nncf.common.utils.os import safe_open
-from optimum.intel.openvino import OVConfig, OVTrainingArguments
-from trainer_qa import QuestionAnsweringOVTrainer
 from utils_qa import postprocess_qa_predictions
+
+from optimum.intel.openvino import OVConfig, OVTrainingArguments
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
