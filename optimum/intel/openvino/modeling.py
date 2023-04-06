@@ -422,6 +422,7 @@ TEXT_GENERATION_EXAMPLE = r"""
 """
 
 
+# TODO : remove
 @add_start_docstrings(
     """
     OpenVINO Model with a causal language modeling head on top (linear layer with weights tied to the input

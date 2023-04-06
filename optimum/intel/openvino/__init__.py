@@ -28,7 +28,6 @@ if is_nncf_available():
 
 from .modeling import (
     OVModelForAudioClassification,
-    OVModelForCausalLM,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
@@ -36,6 +35,7 @@ from .modeling import (
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
 )
+from .modeling_decoder import OVModelForCausalLM
 from .modeling_seq2seq import OVModelForSeq2SeqLM
 
 

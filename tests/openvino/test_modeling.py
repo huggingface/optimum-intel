@@ -413,7 +413,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True)
+        model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         outputs = pipe("This is a sample", max_length=10)
