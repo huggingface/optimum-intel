@@ -346,7 +346,7 @@ class OVDecoder:
                 for input_name, past_key_value in zip(self.key_value_input_names, past_key_values)
             }
 
-        # Create fake pkv for decoder_with_past
+        # Create fake past_key_values for decoder_with_past first generation step
         elif self.use_cache:
             shape_input_ids = input_ids.shape
             for input_name in self.key_value_input_names:
@@ -366,12 +366,9 @@ class OVDecoder:
         self.request.start_async(inputs)
         self.request.wait()
 
-        outputs = {}
-        for key, value in zip(self.request.model_outputs, self.request.outputs):
-            output_names = key.get_names()
-            output_name = "logits" if "logits" in output_names else next(iter(output_names))
-            outputs[output_name] = value.data
-
+        outputs = {
+            key.get_any_name(): value.data for key, value in zip(self.request.model_outputs, self.request.outputs)
+        }
         logits = torch.from_numpy(outputs["logits"]).to(self.device)
 
         if self.use_cache:
