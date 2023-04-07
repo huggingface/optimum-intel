@@ -13,7 +13,7 @@
 #  limitations under the License.
 
 import logging
-from typing import Any, Dict, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 import openvino
@@ -23,7 +23,6 @@ from transformers import (
     AutoConfig,
     AutoModel,
     AutoModelForAudioClassification,
-    AutoModelForCausalLM,
     AutoModelForImageClassification,
     AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
@@ -33,7 +32,6 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import (
     BaseModelOutput,
-    CausalLMOutputWithCrossAttentions,
     ImageClassifierOutput,
     MaskedLMOutput,
     QuestionAnsweringModelOutput,
@@ -41,14 +39,8 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
 )
 
-from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 
-
-if is_transformers_version("<", "4.25.0"):
-    from transformers.generation_utils import GenerationMixin
-else:
-    from transformers.generation import GenerationMixin
 
 logger = logging.getLogger(__name__)
 

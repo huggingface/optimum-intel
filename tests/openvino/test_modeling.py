@@ -150,7 +150,6 @@ class OVModelIntegrationTest(unittest.TestCase):
         outputs = model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
 
-
     def test_load_from_hub_and_save_seq2seq_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID)
         tokens = tokenizer("This is a sample input", return_tensors="pt")

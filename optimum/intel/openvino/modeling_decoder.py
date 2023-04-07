@@ -22,16 +22,16 @@ import openvino
 import torch
 from openvino.runtime import Core, Tensor
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
-from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
+from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
 
 from ..utils.import_utils import is_transformers_version
+from .modeling import INPUTS_DOCSTRING, MODEL_START_DOCSTRING
 from .modeling_base import OVBaseModel
 from .utils import ONNX_WEIGHTS_NAME
-from .modeling import MODEL_START_DOCSTRING, INPUTS_DOCSTRING
 
 
 if is_transformers_version("<", "4.25.0"):
