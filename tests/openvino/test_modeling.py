@@ -112,6 +112,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
+        self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
         self.OV_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
 
@@ -131,6 +132,24 @@ class OVModelIntegrationTest(unittest.TestCase):
 
         outputs = model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+
+    def test_load_from_hub_and_save_decoder_model(self):
+        tokenizer = AutoTokenizer.from_pretrained(self.OV_DECODER_MODEL_ID)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        loaded_model = OVModelForCausalLM.from_pretrained(self.OV_DECODER_MODEL_ID)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        loaded_model_outputs = loaded_model(**tokens)
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertTrue(OV_XML_FILE_NAME in folder_contents)
+            self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
+            model = OVModelForCausalLM.from_pretrained(tmpdirname)
+
+        outputs = model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+
 
     def test_load_from_hub_and_save_seq2seq_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID)
@@ -394,7 +413,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt2",
         "gpt_neo",
         "gpt_neox",
-        # TODO : Add
+        ## TODO :
         # "gptj",
         # "bloom",
     )
