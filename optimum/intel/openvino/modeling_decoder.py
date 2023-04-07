@@ -21,11 +21,7 @@ import numpy as np
 import openvino
 import torch
 from openvino.runtime import Core, Tensor
-from transformers import (
-    AutoConfig,
-    AutoModelForCausalLM,
-    PretrainedConfig,
-)
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
