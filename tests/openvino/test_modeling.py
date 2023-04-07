@@ -78,8 +78,12 @@ from optimum.utils.testing_utils import require_diffusers
 MODEL_NAMES = {
     "bart": "hf-internal-testing/tiny-random-bart",
     "bert": "hf-internal-testing/tiny-random-bert",
+    "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
+    "gptj": "hf-internal-testing/tiny-random-GPTJModel",
+    "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
+    "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
