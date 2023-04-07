@@ -22,8 +22,8 @@ import openvino
 import torch
 from openvino.runtime import Core, Tensor
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
-from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
@@ -31,6 +31,7 @@ from optimum.exporters.onnx import export
 from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 from .utils import ONNX_WEIGHTS_NAME
+from .modeling import MODEL_START_DOCSTRING, INPUTS_DOCSTRING
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -42,6 +43,32 @@ else:
 logger = logging.getLogger(__name__)
 
 core = Core()
+
+
+TEXT_GENERATION_EXAMPLE = r"""
+    Example of text generation:
+    ```python
+    >>> from transformers import {processor_class}
+    >>> from optimum.intel import {model_class}
+
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+    >>> inputs = tokenizer("I love this story because", return_tensors="pt")
+    >>> gen_tokens = model.generate(**inputs, do_sample=True, temperature=0.9, min_length=20, max_length=20)
+    >>> tokenizer.batch_decode(gen_tokens)
+    ```
+    Example using `transformers.pipelines`:
+    ```python
+    >>> from transformers import {processor_class}, pipeline
+    >>> from optimum.intel import {model_class}
+
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+    >>> gen_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    >>> text = "I love this story because"
+    >>> gen = gen_pipeline(text)
+    ```
+"""
 
 
 def _contiguous_helper(tensor: np.ndarray) -> np.ndarray:
@@ -159,17 +186,32 @@ class OVBaseDecoderModel(OVBaseModel):
         return model
 
     def reshape(self, batch_size: int, sequence_length: int):
-        logger.warning("Static shapes currently not supported.")
+        logger.warning("Static shapes are not supported for causal language model.")
         return self
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
 
 
+@add_start_docstrings(
+    """
+    OpenVINO Model with a causal language modeling head on top (linear layer with weights tied to the input
+    embeddings).
+    """,
+    MODEL_START_DOCSTRING,
+)
 class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     export_feature = "causal-lm"
     auto_model_class = AutoModelForCausalLM
 
+    @add_start_docstrings_to_model_forward(
+        INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        + TEXT_GENERATION_EXAMPLE.format(
+            processor_class=_TOKENIZER_FOR_DOC,
+            model_class="OVModelForCausalLM",
+            checkpoint="gpt2",
+        )
+    )
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -299,7 +341,6 @@ class OVDecoder:
         return self.forward(*args, **kwargs)
 
     def _create_inference_request(self):
-        # TODO : remove
         if self.request is None:
             logger.info("Compiling the decoder and creating the inference request ...")
             compiled_model = core.compile_model(self.model, self._device, self.ov_config)
