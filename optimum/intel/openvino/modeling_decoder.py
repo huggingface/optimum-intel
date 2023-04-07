@@ -30,13 +30,11 @@ from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import export_models, get_decoder_models_for_export
+from optimum.exporters.onnx import export
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
-from .utils import (
-    ONNX_WEIGHTS_NAME,
-)
+from .utils import ONNX_WEIGHTS_NAME
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -135,18 +133,9 @@ class OVBaseDecoderModel(OVBaseModel):
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
-        models_and_onnx_configs = get_decoder_models_for_export(model, onnx_config)
 
-        # TODO : modify export
-        if use_cache:
-            models_and_onnx_configs.pop("decoder_model")
-
-        export_models(
-            models_and_onnx_configs=models_and_onnx_configs,
-            opset=onnx_config.DEFAULT_ONNX_OPSET,
-            output_dir=save_dir_path,
-            output_names=[model_file_name],
-        )
+        # Export the model to the ONNX format
+        export(model=model, config=onnx_config, output=save_dir_path / model_file_name)
 
         return cls._from_pretrained(
             model_id=save_dir_path,
@@ -271,7 +260,7 @@ class OVDecoder:
                 for input_name, past_key_value in zip(self.key_value_input_names, past_key_values)
             }
 
-        # Create fake past_key_values for decoder_with_past first generation step
+        # Create empty past_key_values for decoder_with_past first generation step
         elif self.use_cache:
             shape_input_ids = input_ids.shape
             for input_name in self.key_value_input_names:
