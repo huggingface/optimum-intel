@@ -29,7 +29,7 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
 
 from ..utils.import_utils import is_transformers_version
-from .modeling import INPUTS_DOCSTRING, MODEL_START_DOCSTRING
+from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING
 from .modeling_base import OVBaseModel
 from .utils import ONNX_WEIGHTS_NAME
 
