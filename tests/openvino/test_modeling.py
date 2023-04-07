@@ -390,7 +390,16 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("gpt2",)
+    SUPPORTED_ARCHITECTURES = (
+        "gpt2",
+        "gpt_neo",
+        "gpt_neox",
+        # TODO : Add
+        # "gptj",
+        # "bloom",
+    )
+    GENERATION_LENGTH = 100
+    SPEEDUP_CACHE = 1.2
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -420,6 +429,35 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(["This is a sample" in item["generated_text"] for item in outputs]))
         gc.collect()
+
+    def test_compare_with_and_without_past_key_values(self):
+        model_id = MODEL_NAMES["gpt2"]
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+
+        model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        # Warmup
+        _ = model_with_pkv.generate(**tokens)
+        with Timer() as with_pkv_timer:
+            outputs_model_with_pkv = model_with_pkv.generate(
+                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+
+        model_without_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
+        # Warmup
+        _ = model_without_pkv.generate(**tokens)
+        with Timer() as without_pkv_timer:
+            outputs_model_without_pkv = model_without_pkv.generate(
+                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+        self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
+        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
+        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
+        self.assertTrue(
+            without_pkv_timer.elapsed / with_pkv_timer.elapsed > self.SPEEDUP_CACHE,
+            f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
+            f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
+        )
 
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
