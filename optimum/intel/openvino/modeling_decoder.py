@@ -263,7 +263,7 @@ class OVDecoder:
                 model_inputs = self.model.input(input_name)
                 shape = model_inputs.get_partial_shape()
                 shape[0] = shape_input_ids[0]
-                shape[2] = shape_input_ids[1]
+                shape[2] = 0
                 inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
 
         inputs["input_ids"] = np.array(input_ids)
