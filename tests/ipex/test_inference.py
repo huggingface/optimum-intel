@@ -80,7 +80,7 @@ class IPEXIntegrationTest(unittest.TestCase):
     @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
     def test_text_generation_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16, return_dict=False)
+        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32, return_dict=False)
         model = model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "DeepSpeed is a machine learning framework for deep neural networks and deep reinforcement learning. It is written in C++ and is available for Linux, Mac OS X,"
