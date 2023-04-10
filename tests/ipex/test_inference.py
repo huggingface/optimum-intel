@@ -19,6 +19,7 @@ from parameterized import parameterized
 
 # TODO : add more tasks
 from transformers import (
+    AutoModelForCausalLM,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoTokenizer,
@@ -32,27 +33,40 @@ MODEL_NAMES = {
     "bert": "hf-internal-testing/tiny-random-bert",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "roberta": "hf-internal-testing/tiny-random-roberta",
+    "bloom": "hf-internal-testing/tiny-random-bloom",
+    "gptj": "hf-internal-testing/tiny-random-gptj",
+    "gpt2": "hf-internal-testing/tiny-random-gpt2",
+    "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
+    "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
 }
 
-_TASK_TO_AUTOMODELS = {
+_CLASSIFICATION_TASK_TO_AUTOMODELS = {
     "text-classification": AutoModelForSequenceClassification,
     "token-classification": AutoModelForTokenClassification,
 }
 
 
 class IPEXIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = (
+    CLASSIFICATION_SUPPORTED_ARCHITECTURES = (
         "bert",
         "distilbert",
         "roberta",
     )
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_pipeline_classification_inference(self, model_arch):
+    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
+        "bloom",
+        "gptj",
+        "gpt2",
+        "gpt_neo",
+        "gpt_neox",
+    )
+
+    @parameterized.expand(CLASSIFICATION_SUPPORTED_ARCHITECTURES)
+    def test_classification_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
-        for task, auto_model_class in _TASK_TO_AUTOMODELS.items():
+        for task, auto_model_class in _CLASSIFICATION_TASK_TO_AUTOMODELS.items():
             model = auto_model_class.from_pretrained(model_id)
             pipe = pipeline(task, model=model, tokenizer=tokenizer)
 
@@ -62,3 +76,19 @@ class IPEXIntegrationTest(unittest.TestCase):
                 outputs_ipex = ipex_pipe(inputs)
 
             self.assertEqual(outputs[0]["score"], outputs_ipex[0]["score"])
+
+    @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
+    def test_text_generation_pipeline_inference(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16, return_dict=False)
+        model = model.eval()
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs = "DeepSpeed is a machine learning framework for deep neural networks and deep reinforcement learning. It is written in C++ and is available for Linux, Mac OS X,"
+        text_generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
+        with torch.inference_mode():
+            output = text_generator(inputs)
+        with ipex_inference_mode(
+            text_generator, dtype=model.config.torch_dtype, verbose=False, jit=True
+        ) as ipex_text_generator:
+            output_ipex = ipex_text_generator(inputs)
+        self.assertEqual(output[0]["generated_text"], output_ipex[0]["generated_text"])

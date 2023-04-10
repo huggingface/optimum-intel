@@ -1,19 +1,15 @@
 import inspect
 import logging
-import re
-from dataclasses import dataclass
-from typing import Optional, Tuple, Union
+from typing import Tuple, Union
 
 import torch
 from torch import nn
 from transformers import GenerationMixin, PreTrainedModel, add_start_docstrings
-from transformers.modeling_outputs import CausalLMOutput, CausalLMOutputWithPast, Seq2SeqLMOutput
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.pipelines import Pipeline
-from transformers.utils import ModelOutput, is_ipex_available
+from transformers.utils import is_ipex_available
 
-from optimum.exporters.onnx import OnnxConfig
 from optimum.exporters.tasks import TasksManager
-from optimum.utils import DummyPastKeyValuesGenerator, NormalizedConfigManager, NormalizedTextConfig
 
 from ..utils.constant import _TASK_ALIASES
 
@@ -190,7 +186,6 @@ class inference_mode:
                                 if self._model.tokenizer is not None and self._jit:
                                     try:
                                         jit_inputs = prepare_jit_inputs(self._model.model, self._model.task)
-                                        torch._C._jit_set_profiling_mode(False)
                                         model = torch.jit.trace(model, jit_inputs, strict=False)
                                         model = torch.jit.freeze(model)
                                         model(*jit_inputs)
@@ -198,7 +193,7 @@ class inference_mode:
                                     except Exception as e:
                                         logger.warning(f"failed to use PyTorch jit mode due to: {e}.")
                                 # Patching model with the new one
-                                if "generation" in self._model.task:
+                                if "text-generation" in self._model.task:
                                     self._model.model = _ModelGenerationWrapper(model, self._original)
                                 else:
                                     self._model.model = _ModelFallbackWrapper(model, self._original)
