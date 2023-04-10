@@ -494,6 +494,7 @@ def main():
         tokenizer = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer")
 
     # Load models and create wrapper for stable diffusion
+    noise_scheduler = DDPMScheduler.from_config(args.pretrained_model_name_or_path, subfolder="scheduler")
     text_encoder = CLIPTextModel.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="text_encoder",
@@ -509,10 +510,6 @@ def main():
         subfolder="unet",
         revision=args.revision,
     )
-
-    scheduler = PNDMScheduler.from_config("CompVis/stable-diffusion-v1-4", subfolder="scheduler")
-    safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
-    feature_extractor = CLIPFeatureExtractor.from_pretrained("openai/clip-vit-base-patch32")
 
     train_unet = False
     # Freeze vae and unet
@@ -567,8 +564,6 @@ def main():
         weight_decay=args.adam_weight_decay,
         eps=args.adam_epsilon,
     )
-
-    noise_scheduler = DDPMScheduler.from_config(args.pretrained_model_name_or_path, subfolder="scheduler")
 
     train_dataset = TextualInversionDataset(
         data_root=args.train_data_dir,
@@ -958,14 +953,12 @@ def main():
     templates = imagenet_style_templates_small if args.learnable_property == "style" else imagenet_templates_small
     prompt = templates[0].format(args.placeholder_token)
     if accelerator.is_main_process:
-        pipeline = StableDiffusionPipeline(
+        pipeline = StableDiffusionPipeline.from_pretrained(
+            args.pretrained_model_name_or_path,
             text_encoder=accelerator.unwrap_model(text_encoder),
             vae=vae,
             unet=accelerator.unwrap_model(unet),
             tokenizer=tokenizer,
-            scheduler=scheduler,
-            safety_checker=safety_checker,
-            feature_extractor=feature_extractor,
         )
         pipeline.save_pretrained(args.output_dir)
         pipeline = pipeline.to(unet.device)
