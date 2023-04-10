@@ -4,10 +4,9 @@ import os
 
 import torch
 from PIL import Image
-from transformers import CLIPFeatureExtractor, CLIPTextModel, CLIPTokenizer
+from transformers import CLIPTextModel, CLIPTokenizer
 
-from diffusers import AutoencoderKL, PNDMScheduler, StableDiffusionPipeline, UNet2DConditionModel
-from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
+from diffusers import AutoencoderKL, StableDiffusionPipeline, UNet2DConditionModel
 from neural_compressor.utils.pytorch import load
 
 
