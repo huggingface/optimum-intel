@@ -25,6 +25,10 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 import datasets
 import torch
 import torch.distributed as dist
+from neural_compressor import training
+from neural_compressor.compression import DistillationCallbacks
+from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
+from neural_compressor.experimental.export import torch_to_fp32_onnx, torch_to_int8_onnx
 
 # from packaging import version
 from torch import nn
@@ -56,13 +60,8 @@ from transformers.trainer_utils import (
     speed_metrics,
 )
 from transformers.training_args import TrainingArguments
-from transformers.utils import is_sagemaker_mp_enabled, logging
+from transformers.utils import is_apex_available, is_sagemaker_mp_enabled, logging
 
-from neural_compressor import training
-from neural_compressor.compression import DistillationCallbacks
-from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
-from neural_compressor.experimental.export import torch_to_fp32_onnx, torch_to_int8_onnx
-from neural_compressor.model.torch_model import PyTorchModel
 from optimum.exporters import TasksManager
 
 from ..utils.import_utils import is_neural_compressor_version
@@ -70,8 +69,15 @@ from .configuration import INCConfig
 from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 
 
+if is_apex_available():
+    from apex import amp
+
+if is_sagemaker_mp_enabled():
+    import smdistributed.modelparallel.torch as smp
+
+
 if TYPE_CHECKING:
-    import optuna
+    from optimum.exporters.onnx import OnnxConfig
 
 
 __version__ = "4.22.2"
@@ -626,10 +632,10 @@ class INCTrainer(Trainer):
 
     def _onnx_export(self, model: nn.Module, config: "OnnxConfig", output_path: str):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
-        dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
+        dynamic_axes = dict(chain(config.inputs.items(), config.outputs.items()))
         inputs = config.generate_dummy_inputs(framework="pt")
         device = model.device
-        inputs = dict((k, v.to(device)) for k, v in inputs.items())
+        inputs = {k: v.to(device) for k, v in inputs.items()}
 
         if self.dtype == "int8":
             torch_to_int8_onnx(
@@ -672,7 +678,7 @@ class INCTrainer(Trainer):
                 " you can safely ignore this message."
             )
 
-        columns = [k for k in signature_columns if k in dataset.column_names]
+        [k for k in signature_columns if k in dataset.column_names]
 
         return dataset.remove_columns(ignored_columns)
 
@@ -743,12 +749,12 @@ class INCTrainer(Trainer):
         elif isinstance(data, (tuple, list)):
             return type(data)(self._prepare_input(v) for v in data)
         elif isinstance(data, torch.Tensor):
-            kwargs = dict(device=self.model.device)
+            kwargs = {"device": self.model.device}
             if self.deepspeed and data.dtype != torch.int64:
                 # NLP models inputs are int64 and those get adjusted to the right dtype of the
                 # embedding. Other models such as wav2vec2's inputs are already float and thus
                 # may need special handling to match the dtypes of the model
-                kwargs.update(dict(dtype=self.args.hf_deepspeed_config.dtype()))
+                kwargs.update({"dtype": self.args.hf_deepspeed_config.dtype()})
             return data.to(**kwargs)
         return data
 

@@ -16,7 +16,7 @@ import importlib.util
 import operator as op
 import sys
 from collections import OrderedDict
-from typing import Any, List, Union
+from typing import Union
 
 from packaging.version import Version, parse
 
@@ -183,27 +183,27 @@ def is_torch_version(operation: str, version: str):
 
 
 DIFFUSERS_IMPORT_ERROR = """
-{0} requires the diffusers library but it was not found in your environment. You can install it with pip: 
+{0} requires the diffusers library but it was not found in your environment. You can install it with pip:
 `pip install diffusers`. Please note that you may need to restart your runtime after installation.
 """
 
 IPEX_IMPORT_ERROR = """
-{0} requires the ipex library but it was not found in your environment. You can install it with pip: 
+{0} requires the ipex library but it was not found in your environment. You can install it with pip:
 `pip install intel_extension_for_pytorch`. Please note that you may need to restart your runtime after installation.
 """
 
 NNCF_IMPORT_ERROR = """
-{0} requires the nncf library but it was not found in your environment. You can install it with pip: 
+{0} requires the nncf library but it was not found in your environment. You can install it with pip:
 `pip install nncf`. Please note that you may need to restart your runtime after installation.
 """
 
 OPENVINO_IMPORT_ERROR = """
-{0} requires the openvino library but it was not found in your environment. You can install it with pip: 
+{0} requires the openvino library but it was not found in your environment. You can install it with pip:
 `pip install openvino`. Please note that you may need to restart your runtime after installation.
 """
 
 NEURAL_COMPRESSOR_IMPORT_ERROR = """
-{0} requires the neural-compressor library but it was not found in your environment. You can install it with pip: 
+{0} requires the neural-compressor library but it was not found in your environment. You can install it with pip:
 `pip install neural-compressor`. Please note that you may need to restart your runtime after installation.
 """
 

@@ -26,17 +26,18 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
+import evaluate
 import numpy as np
 import torch
 import transformers
 from datasets import ClassLabel, load_dataset
+from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
 from transformers import (
     AutoConfig,
     AutoModelForTokenClassification,
     AutoTokenizer,
     DataCollatorForTokenClassification,
     HfArgumentParser,
-    PreTrainedModel,
     PreTrainedTokenizerFast,
     TrainingArguments,
     set_seed,
@@ -45,9 +46,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-import evaluate
-from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
-from optimum.intel.neural_compressor import INCModelForTokenClassification, INCQuantizer, INCTrainer
+from optimum.intel.neural_compressor import INCModelForTokenClassification, INCTrainer
 
 
 # Will be removed when neural-compressor next release is out

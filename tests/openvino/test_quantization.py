@@ -16,8 +16,10 @@ import tempfile
 import unittest
 from functools import partial
 
+import evaluate
 import numpy as np
 from datasets import load_dataset
+from parameterized import parameterized
 from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
@@ -26,7 +28,6 @@ from transformers import (
     default_data_collator,
 )
 
-import evaluate
 from optimum.intel import (
     OVConfig,
     OVModelForQuestionAnswering,
@@ -34,7 +35,6 @@ from optimum.intel import (
     OVQuantizer,
     OVTrainer,
 )
-from parameterized import parameterized
 
 
 class OVQuantizerTest(unittest.TestCase):
@@ -110,7 +110,7 @@ class OVQuantizerQATest(unittest.TestCase):
             tokens = tokenizer.encode_plus(
                 "This is a sample question", "This is a sample context", add_special_tokens=True, return_tensors="pt"
             )
-            outputs = model(**tokens, return_dict=True)
+            model(**tokens, return_dict=True)
 
             # Test loading model a second time to catch issues with caching
             try:
@@ -134,9 +134,9 @@ class OVTrainerTest(unittest.TestCase):
         train_dataset = dataset["train"].select(range(16))
         eval_dataset = dataset["validation"].select(range(16))
         metric = evaluate.load("glue", "sst2")
-        compute_metrics = lambda p: metric.compute(
-            predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
-        )
+
+        def compute_metrics(p):
+            return metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             trainer = OVTrainer(
@@ -150,8 +150,8 @@ class OVTrainerTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
-            train_result = trainer.train()
-            metrics = trainer.evaluate()
+            trainer.train()
+            trainer.evaluate()
             trainer.save_model()
 
             model = OVModelForSequenceClassification.from_pretrained(tmp_dir)

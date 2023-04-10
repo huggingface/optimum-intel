@@ -25,12 +25,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
+import evaluate
 import numpy as np
 import torch
 import transformers
+from accelerate import Accelerator
 from datasets import load_dataset
+from neural_compressor import PostTrainingQuantConfig
 from torch.utils.data.dataloader import DataLoader
-from tqdm.auto import tqdm
 from transformers import (
     AutoConfig,
     AutoModelForQuestionAnswering,
@@ -38,7 +40,6 @@ from transformers import (
     DataCollatorWithPadding,
     EvalPrediction,
     HfArgumentParser,
-    PreTrainedModel,
     PreTrainedTokenizerFast,
     TrainingArguments,
     default_data_collator,
@@ -46,12 +47,9 @@ from transformers import (
 )
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
-
-import evaluate
-from accelerate import Accelerator
-from neural_compressor import PostTrainingQuantConfig
-from optimum.intel.neural_compressor import INCModelForQuestionAnswering, INCQuantizer
 from utils_qa import postprocess_qa_predictions
+
+from optimum.intel.neural_compressor import INCModelForQuestionAnswering, INCQuantizer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""

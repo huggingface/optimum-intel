@@ -26,10 +26,12 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
-import numpy as np
+import evaluate
 import torch
 import transformers
+from accelerate import Accelerator
 from datasets import ClassLabel, load_dataset
+from neural_compressor import PostTrainingQuantConfig
 from torch.utils.data import DataLoader
 from transformers import (
     AutoConfig,
@@ -37,7 +39,6 @@ from transformers import (
     AutoTokenizer,
     DataCollatorForTokenClassification,
     HfArgumentParser,
-    PreTrainedModel,
     PreTrainedTokenizerFast,
     TrainingArguments,
     set_seed,
@@ -45,9 +46,6 @@ from transformers import (
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-import evaluate
-from accelerate import Accelerator
-from neural_compressor import PostTrainingQuantConfig
 from optimum.intel.neural_compressor import INCModelForTokenClassification, INCQuantizer
 
 
