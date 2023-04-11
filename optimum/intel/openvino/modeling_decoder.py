@@ -27,6 +27,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
+from optimum.utils import NormalizedConfig, NormalizedConfigManager
 
 from ..utils.import_utils import is_transformers_version
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING
@@ -95,16 +96,15 @@ class OVBaseDecoderModel(OVBaseModel):
         self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs)
         self.model_save_dir = model_save_dir
         self._device = device.upper()
-        self.is_dynamic = dynamic_shapes
+        self.is_dynamic = True
         self.ov_config = ov_config if ov_config is not None else {}
         self.preprocessors = kwargs.get("preprocessors", [])
-        if self.is_dynamic:
-            model = self._reshape(model, -1, -1)
-        self.model = model
+        self.model = self._reshape(model, -1, -1)
         self.device = torch.device("cpu")
         self.main_input_name = "input_ids"
         enable_compilation = kwargs.get("compile", True)
-        self.decoder = OVDecoder(self.model, self._device, self.ov_config, self.use_cache)
+        normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
+        self.decoder = OVDecoder(self.model, self._device, self.use_cache, self.ov_config, normalized_config)
 
         if enable_compilation:
             self.compile()
@@ -119,6 +119,11 @@ class OVBaseDecoderModel(OVBaseModel):
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
+
+        if not dynamic_shapes:
+            logger.warning(
+                "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model and will be ignored."
+            )
 
     def compile(self):
         self.decoder._create_inference_request()
@@ -178,8 +183,12 @@ class OVBaseDecoderModel(OVBaseModel):
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
             shapes[inputs][0] = -1
-            if inputs.get_any_name().startswith("past_key_values"):
-                shapes[inputs][2] = -1
+            input_name = inputs.get_any_name()
+            if input_name.startswith("past_key_values"):
+                if len(inputs.partial_shape) == 3 and input_name.endswith("value"):
+                    shapes[inputs][1] = -1
+                else:
+                    shapes[inputs][2] = -1
             else:
                 shapes[inputs][1] = -1
         model.reshape(shapes)
@@ -263,7 +272,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
 
 class OVDecoder:
-    def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict, use_cache: bool):
+    def __init__(
+        self, model: openvino.runtime.Model, device: str, use_cache: bool, ov_config: Dict, config: NormalizedConfig
+    ):
         self.model = model
         self._device = device
         self.device = torch.device("cpu")
@@ -274,6 +285,7 @@ class OVDecoder:
         self.use_cache = use_cache
         self.num_pkv = 2
         self.ov_config = ov_config
+        self.config = config
         self.request = None
 
     def forward(
@@ -301,11 +313,15 @@ class OVDecoder:
         # Create empty past_key_values for decoder_with_past first generation step
         elif self.use_cache:
             shape_input_ids = input_ids.shape
+            num_attention_heads = self.config.num_attention_heads if self.config.config.model_type == "bloom" else 1
             for input_name in self.key_value_input_names:
                 model_inputs = self.model.input(input_name)
                 shape = model_inputs.get_partial_shape()
-                shape[0] = shape_input_ids[0]
-                shape[2] = 0
+                shape[0] = shape_input_ids[0] * num_attention_heads
+                if shape[2].is_dynamic:
+                    shape[2] = 0
+                if shape[1].is_dynamic:
+                    shape[1] = 0
                 inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
 
         inputs["input_ids"] = np.array(input_ids)

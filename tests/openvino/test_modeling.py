@@ -413,12 +413,10 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
+        "bloom",
         "gpt2",
         "gpt_neo",
         "gpt_neox",
-        ## TODO :
-        # "gptj",
-        # "bloom",
     )
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.2
