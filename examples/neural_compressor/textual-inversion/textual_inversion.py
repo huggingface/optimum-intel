@@ -1,4 +1,5 @@
 import argparse
+import copy
 import itertools
 import math
 import os
@@ -16,7 +17,11 @@ from accelerate.utils import set_seed
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.optimization import get_scheduler
 from huggingface_hub import HfFolder, Repository, whoami
+from neural_compressor import QuantizationAwareTrainingConfig
+from neural_compressor.config import DistillationConfig, IntermediateLayersKnowledgeDistillationLossConfig
+from neural_compressor.training import prepare_compression
 from neural_compressor.utils import logger
+from neural_compressor.utils.pytorch import load
 from packaging import version
 from PIL import Image
 from torch.utils.data import Dataset
@@ -734,20 +739,18 @@ def main():
     if not train_unet:
         text_encoder = train_func(text_encoder)
     else:
-        import copy
-
         model = copy.deepcopy(unet)
         confs = []
         if args.do_quantization:
-            from neural_compressor import QuantizationAwareTrainingConfig
-
             q_conf = QuantizationAwareTrainingConfig()
             confs.append(q_conf)
 
         if args.do_distillation:
             teacher_model = copy.deepcopy(model)
+
             def attention_fetcher(x):
                 return x.sample
+
             layer_mappings = [
                 [
                     [
@@ -929,7 +932,6 @@ def main():
                     "or modify the layer_mappings variable to fit your model."
                     f"\nDefault layer_mappings are as such:\n{layer_mappings}"
                 )
-            from neural_compressor.config import DistillationConfig, IntermediateLayersKnowledgeDistillationLossConfig
 
             distillation_criterion = IntermediateLayersKnowledgeDistillationLossConfig(
                 layer_mappings=layer_mappings,
@@ -939,8 +941,6 @@ def main():
             )
             d_conf = DistillationConfig(teacher_model=teacher_model, criterion=distillation_criterion)
             confs.append(d_conf)
-
-        from neural_compressor.training import prepare_compression
 
         compression_manager = prepare_compression(model, confs)
         compression_manager.callbacks.on_train_begin()
@@ -995,8 +995,6 @@ def main():
 
     if args.do_quantization and args.verify_loading:
         # Load the model obtained after Intel Neural Compressor quantization
-        from neural_compressor.utils.pytorch import load
-
         loaded_model = load(args.output_dir, model=unet)
         loaded_model.eval()
 
