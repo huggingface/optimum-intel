@@ -1,0 +1,7 @@
+diffusers
+accelerate
+torchvision
+transformers
+ftfy
+tensorboard
+modelcards
