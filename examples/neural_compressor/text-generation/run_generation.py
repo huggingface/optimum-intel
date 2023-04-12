@@ -38,7 +38,7 @@ from transformers import (
     XLNetLMHeadModel,
     XLNetTokenizer,
 )
-
+from optimum.intel.neural_compressor.modeling import INCModelForGeneration
 
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -196,7 +196,10 @@ def main():
         action="store_true",
         help="Whether to use 16-bit (mixed) precision (through NVIDIA apex) instead of 32-bit",
     )
+    parser.add_argument("--jit", action="store_true", help="Whether or not to use jit trace to accelerate inference")
+    parser.add_argument("--output_dir", type=str, default="Output directory where to save the resulting model")
     args = parser.parse_args()
+
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.n_gpu = 0 if args.no_cuda else torch.cuda.device_count()
@@ -213,7 +216,13 @@ def main():
         raise KeyError("the model {} you specified is not supported. You are welcome to add it and open a PR :)")
 
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
-    model = model_class.from_pretrained(args.model_name_or_path)
+
+    if args.jit:
+        model = INCModelForGeneration.from_pretrained(args.model_name_or_path, export=True)
+        model.save_pretrained(args.output_dir)
+    else:
+        model = model_class.from_pretrained(args.model_name_or_path)
+
     model.to(args.device)
 
     if args.fp16:
@@ -247,6 +256,17 @@ def main():
         input_ids = None
     else:
         input_ids = encoded_prompt
+
+    def generate_dummy_inputs(model):
+        task = TasksManager.infer_task_from_model(model)
+        if model.config.use_cache:
+            task += "-with-past"
+        onnx_config_class = TasksManager.get_exporter_config_constructor(exporter="onnx", model=model, task=task)
+        onnx_config = onnx_config_class(model.config)
+        inputs = onnx_config.generate_dummy_inputs(framework="pt")
+        signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
+
+        return {key: inputs[key] for key in signature.parameters if inputs.get(key, None) is not None}
 
     output_sequences = model.generate(
         input_ids=input_ids,
