@@ -121,7 +121,7 @@ class OVBaseDecoderModel(OVBaseModel):
         self.auto_model_class.register(AutoConfig, self.__class__)
 
         use_cache = kwargs.pop("use_cache", True)
-        if not (use_cache ^ self.use_cache):
+        if use_cache ^ self.use_cache:
             raise ValueError(
                 f"`use_cache` was set to `{use_cache}` but the loaded model only supports `use_cache={self.use_cache}`. "
                 f"Please load your current model with `use_cache={self.use_cache}` or export the original model "
