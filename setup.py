@@ -12,7 +12,7 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-    "optimum>=1.7.3",
+    "optimum @ git+https://github.com/huggingface/optimum.git",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
     "sentencepiece",
@@ -69,5 +69,5 @@ setup(
     extras_require=EXTRAS_REQUIRE,
     include_package_data=True,
     zip_safe=False,
-    entry_points={"console_scripts": ["optimum-intel-cli = optimum.intel.commands.optimum_intel_cli:main"]},
+    entry_points={"console_scripts": ["optimum-cli=optimum.commands.optimum_cli:main"]},
 )

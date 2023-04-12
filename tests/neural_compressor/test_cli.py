@@ -26,10 +26,12 @@ class NeuralCoderAdaptorTest(unittest.TestCase):
             f.write(r.content)
             f.close()
 
-            # First export a tiny encoder, decoder only and encoder-decoder
             export_commands = [
-                f"optimum-intel-cli inc quantize {script_path} --model_name_or_path bert-base-cased --task_name mrpc --do_eval --output_dir {tempdir}/bert",
-                f"optimum-intel-cli inc quantize {script_path} --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english --task_name sst2 --do_eval --output_dir {tempdir}/distilbert",
+                # f"optimum-cli inc quantize --model hf-internal-testing/tiny-random-bert {tempdir}/bert",
+                # f"optimum-cli inc quantize --model hf-internal-testing/tiny-random-gpt2 {tempdir}/gpt2",
+                # f"optimum-cli inc quantize --model hf-internal-testing/tiny-random-t5 {tempdir}/t5",
+                f"optimum-cli inc quantize {script_path} --model_name_or_path hf-internal-testing/tiny-random-bert --task_name mrpc --do_eval --output_dir {tempdir}/bert_mrpc",
+                f"optimum-cli inc quantize {script_path} --model_name_or_path hf-internal-testing/tiny-random-distilbert --task_name sst2 --do_eval --output_dir {tempdir}/distilbert_sst2",
             ]
 
             for export in export_commands:
