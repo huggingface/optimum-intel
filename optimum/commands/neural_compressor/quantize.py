@@ -13,10 +13,10 @@
 # limitations under the License.
 
 import sys
-from argparse import REMAINDER
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from ...intel.neural_compressor.launcher import _quantize
+from ...exporters import TasksManager
 from ..base import BaseOptimumCLICommand, CommandInfo
 
 
@@ -25,29 +25,30 @@ if TYPE_CHECKING:
 
 
 def parse_args_inc_quantize(parser: "ArgumentParser"):
-    parser.add_argument("-o", "--opt", type=str, default="", help="optimization feature to enable")
-
-    parser.add_argument("-a", "--approach", type=str, default="auto", help="quantization approach (strategy)")
-
-    parser.add_argument("--config", type=str, default="", help="quantization configuration file path")
-
-    parser.add_argument(
-        "-b", "--bench", default=False, action="store_true", help="conduct auto_quant benchmark instead of enable"
+    required_group = parser.add_argument_group("Required arguments")
+    required_group.add_argument(
+        "--model",
+        type=Path,
+        required=True,
+        help="Path to the repository where the model to quantize is located.",
+    )
+    required_group.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        required=True,
+        help="Path to the directory where to store generated quantized model.",
     )
 
-    parser.add_argument(
-        "-e", "--enable", default=False, action="store_true", help="only do enable, not overwrite or run program"
+    optional_group = parser.add_argument_group("Optional arguments")
+    optional_group.add_argument(
+        "--task",
+        default="auto",
+        help=(
+            "The task to export the model for. If not specified, the task will be auto-inferred based on the model. Available tasks depend on the model, but are among:"
+            f" {str(list(TasksManager._TASKS_TO_AUTOMODELS.keys()))}."
+        ),
     )
-
-    # positional
-    parser.add_argument(
-        "script",
-        type=str,
-        help="The full path to the script to be launched. " "followed by all the arguments for the script",
-    )
-
-    # script args
-    parser.add_argument("script_args", nargs=REMAINDER)
 
 
 class INCQuantizeCommand(BaseOptimumCLICommand):
@@ -69,4 +70,28 @@ class INCQuantizeCommand(BaseOptimumCLICommand):
         return parse_args_inc_quantize(parser)
 
     def run(self):
-        _quantize(self.args)
+        from neural_compressor.config import PostTrainingQuantConfig
+
+        from ...intel.neural_compressor import INCQuantizer
+
+        save_dir = self.args.output
+        model_id = self.args.model
+        task = self.args.task
+
+        if save_dir == model_id:
+            raise ValueError("The output directory must be different than the directory hosting the model.")
+
+        if task == "auto":
+            try:
+                task = TasksManager.infer_task_from_model(model_id)
+            except Exception as e:
+                return (
+                    f"### Error: {e}. Please pass explicitely the task as it could not be infered.",
+                    None,
+                )
+
+        model = TasksManager.get_model_from_task(task, model_id)
+
+        quantization_config = PostTrainingQuantConfig(approach="dynamic")
+        quantizer = INCQuantizer.from_pretrained(model)
+        quantizer.quantize(quantization_config=quantization_config, save_directory=save_dir)
