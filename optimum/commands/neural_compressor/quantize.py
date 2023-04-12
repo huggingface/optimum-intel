@@ -16,7 +16,7 @@ import sys
 from argparse import REMAINDER
 from typing import TYPE_CHECKING, Optional
 
-from ...neural_compressor.launcher import _quantize
+from ...intel.neural_compressor.launcher import _quantize
 from ..base import BaseOptimumCLICommand, CommandInfo
 
 
