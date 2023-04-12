@@ -16,7 +16,7 @@ limitations under the License.
 
 # Optimization
 
-🤗 Optimum Intel provides an `optimum.openvino` package that enables you to apply a variety of model compression methods such as quantization, pruning, on many models hosted on the 🤗 hub using the [NNCF](https://docs.openvino.ai/2022.1/docs_nncf_introduction.html) framework.
+🤗 Optimum Intel provides an `openvino` package that enables you to apply a variety of model compression methods such as quantization, pruning, on many models hosted on the 🤗 hub using the [NNCF](https://docs.openvino.ai/2022.1/docs_nncf_introduction.html) framework.
 
 
 ## Post-training optimization
@@ -27,7 +27,7 @@ Here is how to apply static quantization on a fine-tuned DistilBERT:
 ```python
 from functools import partial
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from optimum.intel.openvino import OVConfig, OVQuantizer
+from optimum.intel import OVConfig, OVQuantizer
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)
@@ -83,7 +83,7 @@ from transformers import (
 )
 from datasets import load_dataset
 - from transformers import Trainer
-+ from optimum.intel.openvino.trainer import OVConfig, OVTrainer, OVModelForSequenceClassification
++ from optimum.intel import OVConfig, OVTrainer, OVModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = AutoModelForSequenceClassification.from_pretrained(model_id)
@@ -167,8 +167,8 @@ compression_config = [
 Once we have the config ready, we can start develop the training pipeline like the snippet below. Since we are customizing joint compression with config above, notice that `OVConfig` is initialized with config dictionary (JSON parsing to python dictionary is skipped for brevity). As for distillation, users are required to load the teacher model, it is just like a normal model loading with transformers API. `OVTrainingArguments` extends transformers' `TrainingArguments` with distillation hyperparameters, i.e. distillation weightage and temperature for ease of use. The snippet below shows how we load a teacher model and create training arguments with `OVTrainingArguments`. Subsequently, the teacher model, with the instantiated `OVConfig` and `OVTrainingArguments` are fed to `OVTrainer`. Voila! that is all we need, the rest of the pipeline is identical to native transformers training.
 
 ```diff
-- from optimum.intel.openvino.trainer import OVConfig, OVTrainer
-+ from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
+- from transformers import Trainer, TrainingArguments
++ from optimum.intel import OVConfig, OVTrainer, OVTrainingArguments
 
 # Load teacher model
 + teacher_model = AutoModelForSequenceClassification.from_pretrained(teacher_model_or_path)
@@ -210,7 +210,7 @@ After applying quantization on our model, we can then easily load it with our `O
 
 ```python
 from transformers import pipeline
-from optimum.intel.openvino import OVModelForSequenceClassification
+from optimum.intel import OVModelForSequenceClassification
 
 model_id = "helenai/distilbert-base-uncased-finetuned-sst-2-english-ov-int8"
 ov_model = OVModelForSequenceClassification.from_pretrained(model_id)

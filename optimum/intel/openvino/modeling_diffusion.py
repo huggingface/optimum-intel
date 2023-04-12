@@ -20,21 +20,19 @@ from tempfile import TemporaryDirectory
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
-from transformers import CLIPFeatureExtractor, CLIPTokenizer
-
 import openvino
 from diffusers import DDIMScheduler, LMSDiscreteScheduler, PNDMScheduler, StableDiffusionPipeline
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME
 from huggingface_hub import snapshot_download
 from openvino._offline_transformations import compress_model_transformation
-from openvino.offline_transformations import compress_model_transformation
 from openvino.runtime import Core
+from transformers import CLIPFeatureExtractor, CLIPTokenizer
+
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export_models, get_stable_diffusion_models_for_export
 from optimum.pipelines.diffusers.pipeline_stable_diffusion import StableDiffusionPipelineMixin
 from optimum.utils import (
-    CONFIG_NAME,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
@@ -64,6 +62,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         tokenizer: "CLIPTokenizer",
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"],
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
+        vae_encoder: Optional[openvino.runtime.Model] = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
         compile: bool = True,
@@ -92,12 +91,14 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             self,
             {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_UNET_SUBFOLDER)},
         )
+        vae_ov_config = {
+            **self.ov_config,
+            "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER),
+        }
+        self.vae_encoder = OVModelVaeEncoder(vae_encoder, self, vae_ov_config) if vae_encoder is not None else None
         self.tokenizer = tokenizer
         self.scheduler = scheduler
         self.feature_extractor = feature_extractor
-        self.vae_decoder_request = None
-        self.text_encoder_request = None
-        self.unet_request = None
         self.safety_checker = None
         self.preprocessors = []
 
@@ -111,9 +112,13 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER: self.text_encoder,
             DIFFUSION_MODEL_UNET_SUBFOLDER: self.unet,
             DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER: self.vae_decoder,
+            DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER: self.vae_encoder,
         }
         for name in sub_models.keys():
-            self._internal_dict[name] = ("optimum", sub_models[name].__class__.__name__)
+            self._internal_dict[name] = (
+                ("optimum", sub_models[name].__class__.__name__) if sub_models[name] is not None else (None, None)
+            )
+
         self._internal_dict.pop("vae", None)
 
     def _save_pretrained(
@@ -122,6 +127,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         vae_decoder_file_name: str = OV_XML_FILE_NAME,
         text_encoder_file_name: str = OV_XML_FILE_NAME,
         unet_file_name: str = OV_XML_FILE_NAME,
+        vae_encoder_file_name: str = OV_XML_FILE_NAME,
         **kwargs,
     ):
         """
@@ -131,14 +137,17 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         Arguments:
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
-            vae_decoder_file_name (`str`, defaults to `optimum.intel.utils.ONNX_WEIGHTS_NAME`):
+            vae_decoder_file_name (`str`, defaults to `optimum.intel.openvino.utils.OV_XML_FILE_NAME`):
                 The VAE decoder model file name. Overwrites the default file name and allows one to save the VAE decoder model
                 with a different name.
-            text_encoder_file_name (`str`, defaults to `optimum.onnxruntime.utils.ONNX_WEIGHTS_NAME`):
+            text_encoder_file_name (`str`, defaults to `optimum.intel.openvino.utils.OV_XML_FILE_NAME`):
                 The text encoder model file name. Overwrites the default file name and allows one to save the text encoder model
                 with a different name.
-            unet_file_name (`str`, defaults to `optimum.onnxruntime.ONNX_WEIGHTS_NAME`):
+            unet_file_name (`str`, defaults to `optimum.intel.openvino.utils.OV_XML_FILE_NAME`):
                 The U-NET model file name. Overwrites the default file name and allows one to save the U-NET model
+                with a different name.
+            vae_encoder_file_name (`str`, defaults to `optimum.intel.openvino.utils.OV_XML_FILE_NAME`):
+                The VAE encoder model file name. Overwrites the default file name and allows one to save the VAE decoder model
                 with a different name.
         """
         save_directory = Path(save_directory)
@@ -147,6 +156,11 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             self.text_encoder.model: save_directory / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
             self.unet.model: save_directory / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name,
         }
+        if self.vae_encoder is not None:
+            src_to_dst_file[self.vae_encoder.model] = (
+                save_directory / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name
+            )
+
         for src_file, dst_path in src_to_dst_file.items():
             dst_path.parent.mkdir(parents=True, exist_ok=True)
             openvino.runtime.serialize(src_file, str(dst_path), str(dst_path.with_suffix(".bin")))
@@ -167,6 +181,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         vae_decoder_file_name: Optional[str] = None,
         text_encoder_file_name: Optional[str] = None,
         unet_file_name: Optional[str] = None,
+        vae_encoder_file_name: Optional[str] = None,
         local_files_only: bool = False,
         from_onnx: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
@@ -176,21 +191,25 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         vae_decoder_file_name = vae_decoder_file_name or default_file_name
         text_encoder_file_name = text_encoder_file_name or default_file_name
         unet_file_name = unet_file_name or default_file_name
+        vae_encoder_file_name = vae_encoder_file_name or default_file_name
         model_id = str(model_id)
         sub_models_to_load, _, _ = cls.extract_init_dict(config)
         sub_models_names = set(sub_models_to_load.keys()).intersection({"feature_extractor", "tokenizer", "scheduler"})
-        sub_models = {}
 
         if not os.path.isdir(model_id):
-            allow_patterns = [os.path.join(k, "*") for k in config.keys() if not k.startswith("_")]
-            allow_patterns += list(
+            patterns = set(config.keys())
+            patterns.update({"vae_encoder", "vae_decoder"})
+            allow_patterns = {os.path.join(k, "*") for k in patterns if not k.startswith("_")}
+            allow_patterns.update(
                 {
                     vae_decoder_file_name,
                     text_encoder_file_name,
                     unet_file_name,
+                    vae_encoder_file_name,
                     vae_decoder_file_name.replace(".xml", ".bin"),
-                    vae_decoder_file_name.replace(".xml", ".bin"),
+                    text_encoder_file_name.replace(".xml", ".bin"),
                     unet_file_name.replace(".xml", ".bin"),
+                    vae_encoder_file_name.replace(".xml", ".bin"),
                     SCHEDULER_CONFIG_NAME,
                     CONFIG_NAME,
                     cls.config_name,
@@ -209,6 +228,9 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         new_model_save_dir = Path(model_id)
 
         for name in sub_models_names:
+            # Check if the subcomponent needs to be loaded
+            if kwargs.get(name, None) is not None:
+                continue
             library_name, library_classes = sub_models_to_load[name]
             if library_classes is not None:
                 library = importlib.import_module(library_name)
@@ -216,9 +238,9 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
                 load_method = getattr(class_obj, "from_pretrained")
                 # Check if the module is in a subdirectory
                 if (new_model_save_dir / name).is_dir():
-                    sub_models[name] = load_method(new_model_save_dir / name)
+                    kwargs[name] = load_method(new_model_save_dir / name)
                 else:
-                    sub_models[name] = load_method(new_model_save_dir)
+                    kwargs[name] = load_method(new_model_save_dir)
 
         vae_decoder = cls.load_model(
             new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name
@@ -227,6 +249,8 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name
         )
         unet = cls.load_model(new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name)
+        vae_encoder_path = new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name
+        vae_encoder = cls.load_model(vae_encoder_path) if vae_encoder_path.is_file() else None
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
@@ -236,9 +260,10 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             text_encoder=text_encoder,
             unet=unet,
             config=config,
-            tokenizer=sub_models["tokenizer"],
-            scheduler=sub_models["scheduler"],
-            feature_extractor=sub_models.pop("feature_extractor", None),
+            tokenizer=kwargs.pop("tokenizer"),
+            scheduler=kwargs.pop("scheduler"),
+            feature_extractor=kwargs.pop("feature_extractor", None),
+            vae_encoder=vae_encoder,
             model_save_dir=model_save_dir,
             **kwargs,
         )
@@ -254,6 +279,9 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         cache_dir: Optional[str] = None,
         local_files_only: bool = False,
         task: Optional[str] = None,
+        tokenizer: "CLIPTokenizer" = None,
+        scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"] = None,
+        feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         **kwargs,
     ):
         if task is None:
@@ -278,13 +306,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             os.path.join(DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER, ONNX_WEIGHTS_NAME),
         ]
         models_and_onnx_configs = get_stable_diffusion_models_for_export(model)
-
         model.save_config(save_dir_path)
-        model.tokenizer.save_pretrained(save_dir_path.joinpath("tokenizer"))
-        model.scheduler.save_pretrained(save_dir_path.joinpath("scheduler"))
-        if model.feature_extractor is not None:
-            model.feature_extractor.save_pretrained(save_dir_path.joinpath("feature_extractor"))
-
         export_models(
             models_and_onnx_configs=models_and_onnx_configs,
             output_dir=save_dir_path,
@@ -300,7 +322,10 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             force_download=force_download,
             cache_dir=cache_dir,
             local_files_only=local_files_only,
-            model_save_dir=save_dir,  # important
+            model_save_dir=save_dir,
+            tokenizer=tokenizer or model.tokenizer,
+            scheduler=scheduler or model.scheduler,
+            feature_extractor=feature_extractor or model.feature_extractor,
             **kwargs,
         )
 
@@ -462,6 +487,17 @@ class OVModelVaeDecoder(OVModelPart):
 
         inputs = {
             "latent_sample": latent_sample,
+        }
+        outputs = self.request.infer(inputs)
+        return list(outputs.values())
+
+
+class OVModelVaeEncoder(OVModelPart):
+    def __call__(self, sample: np.ndarray):
+        self._create_inference_request()
+
+        inputs = {
+            "sample": sample,
         }
         outputs = self.request.infer(inputs)
         return list(outputs.values())

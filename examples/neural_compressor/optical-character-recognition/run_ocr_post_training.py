@@ -5,16 +5,16 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+import evaluate
 import pandas as pd
 import torch
 import transformers
+from neural_compressor import PostTrainingQuantConfig
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from transformers import HfArgumentParser, TrainingArguments, TrOCRProcessor, VisionEncoderDecoderModel
 from transformers.utils import check_min_version
 
-import evaluate
-from neural_compressor import PostTrainingQuantConfig
 from optimum.intel.neural_compressor import INCModelForVision2Seq, INCQuantizer
 
 
@@ -284,7 +284,7 @@ def main():
             if result_loaded_model != result_optimized_model:
                 logger.error("The quantized model was not successfully loaded.")
             else:
-                logger.info(f"The quantized model was successfully loaded.")
+                logger.info("The quantized model was successfully loaded.")
 
 
 def _mp_fn(index):

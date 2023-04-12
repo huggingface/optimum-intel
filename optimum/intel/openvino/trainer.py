@@ -23,9 +23,29 @@ from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Type, Union
 
+import openvino
+import openvino.runtime
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from nncf import NNCFConfig
+from nncf.common.logging.logger import nncf_logger, set_log_level
+from nncf.common.utils.tensorboard import prepare_for_tensorboard
+from nncf.config.structures import BNAdaptationInitArgs, QuantizationRangeInitArgs
+from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
+from nncf.experimental.torch.sparsity.movement.scheduler import MovementSchedulerStage
+from nncf.torch import create_compressed_model
+from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
+from nncf.torch.compression_method_api import PTCompressionAlgorithmController
+from nncf.torch.nncf_network import NNCFNetwork
+from nncf.torch.quantization.algo import QuantizationController
+from openvino._offline_transformations import compress_quantize_weights_transformation
+from openvino.runtime import Core, PartialShape, serialize
+from openvino.tools.mo.back.offline_transformations import (
+    apply_fused_names_cleanup,
+    apply_moc_transformations,
+    apply_user_transformations,
+)
 from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
@@ -51,43 +71,20 @@ from transformers.trainer_utils import (
 )
 from transformers.utils import (
     WEIGHTS_NAME,
-    TensorType,
     is_apex_available,
     is_sagemaker_mp_enabled,
     is_torch_tpu_available,
     logging,
 )
 
-import openvino
-import openvino.runtime
-from nncf import NNCFConfig
-from nncf.common.logging.logger import nncf_logger, set_log_level
-from nncf.common.utils.tensorboard import prepare_for_tensorboard
-from nncf.config.structures import BNAdaptationInitArgs, QuantizationRangeInitArgs
-from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
-from nncf.experimental.torch.sparsity.movement.scheduler import MovementSchedulerStage
-from nncf.torch import create_compressed_model
-from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
-from nncf.torch.compression_method_api import PTCompressionAlgorithmController
-from nncf.torch.nncf_network import NNCFNetwork
-from nncf.torch.quantization.algo import QuantizationController
-from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core, PartialShape, serialize
-from openvino.tools.mo.back.offline_transformations import (
-    apply_fused_names_cleanup,
-    apply_moc_transformations,
-    apply_user_transformations,
-)
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
-from optimum.utils import logging
 
 from .configuration import OVConfig
 from .quantization import OVDataLoader
 from .training_args import OVTrainingArguments
 from .utils import (
     MAX_ONNX_OPSET,
-    MAX_ONNX_OPSET_2022_2_0,
     MIN_ONNX_QDQ_OPSET,
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
@@ -715,12 +712,13 @@ class OVTrainer(Trainer):
                     # Reshape back to dynamic shape IR
                     ov_model = self._reshape_ir(ov_model, static_shape=False)
                 except Exception as err:
-                    onnx_path = Path(output_dir, ONNX_WEIGHTS_NAME)
+                    onnx_path = Path(output_dir, ONNX_WEIGHTS_NAME).resolve()
                     if not save_as_external_data:
                         onnx_path.write_bytes(f.getvalue())
-                    logger.warning(
-                        f"Error encountered during IR pruning: {err}. {onnx_path} is dumped for debug. Run continues."
+                    logger.error(
+                        f"Error encountered during OpenVINO IR pruning: {err}. {onnx_path} is dumped for debugging."
                     )
+                    raise
             else:
                 if self._get_compression_controller_by_cls(QuantizationController) is not None:
                     compress_quantize_weights_transformation(ov_model)
@@ -748,10 +746,13 @@ class OVTrainer(Trainer):
         )
 
     def _reshape_ir(self, ov_model: openvino.runtime.Model, static_shape: bool) -> openvino.runtime.Model:
-        new_input_cfg = dict()
+        new_input_cfg = {}
+        input_name_vs_shape = {item["keyword"]: item["sample_size"] for item in self.ov_config.input_info}
         for input_ in ov_model.inputs:
             if static_shape is True:
-                new_input_cfg[input_.any_name] = PartialShape(list(range(1, len(input_.partial_shape) + 1)))
+                new_input_cfg[input_.any_name] = PartialShape(
+                    [1] + input_name_vs_shape[input_.any_name][1:]
+                )  # use batch size of 1 for static shape IR
             else:
                 new_input_cfg[input_.any_name] = PartialShape([-1] * len(input_.partial_shape))
         ov_model.reshape(new_input_cfg)
@@ -770,7 +771,7 @@ class OVTrainer(Trainer):
         opset = opset if not ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
         model_inputs = config.generate_dummy_inputs(framework="pt")
         device = model.device
-        model_inputs = dict((k, v.to(device)) for k, v in model_inputs.items())
+        model_inputs = {k: v.to(device) for k, v in model_inputs.items()}
         self._set_signature_columns_if_needed()  # find model input names needed in ONNX export
         # Create ordered inputs for the ONNX export of NNCFNetwork as keyword arguments are currently not supported
         inputs = tuple([model_inputs.pop(key, None) for key in self._signature_columns if len(model_inputs) != 0])
@@ -785,7 +786,7 @@ class OVTrainer(Trainer):
                 f=f,
                 input_names=list(config.inputs.keys()),
                 output_names=list(config.outputs.keys()),
-                dynamic_axes={name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())},
+                dynamic_axes=dict(chain(config.inputs.items(), config.outputs.items())),
                 do_constant_folding=True,
                 opset_version=opset,
             )

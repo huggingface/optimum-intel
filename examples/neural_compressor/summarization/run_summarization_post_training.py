@@ -25,11 +25,15 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
+import evaluate
 import nltk  # Here to have a nice missing dependency error message early on
 import numpy as np
 import torch
 import transformers
+from accelerate import Accelerator
 from datasets import load_dataset
+from filelock import FileLock
+from neural_compressor import PostTrainingQuantConfig
 from torch.utils.data import DataLoader
 from transformers import (
     AutoConfig,
@@ -41,17 +45,12 @@ from transformers import (
     MBart50TokenizerFast,
     MBartTokenizer,
     MBartTokenizerFast,
-    PreTrainedModel,
     Seq2SeqTrainingArguments,
     set_seed,
 )
 from transformers.utils import check_min_version, is_offline_mode
 from transformers.utils.versions import require_version
 
-import evaluate
-from accelerate import Accelerator
-from filelock import FileLock
-from neural_compressor import PostTrainingQuantConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
 from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCQuantizer
 
 
@@ -663,7 +662,6 @@ def main():
                 logger.warning("The quantized model was not successfully loaded.")
 
     # Evaluation
-    results = {}
     max_length = (
         training_args.generation_max_length
         if training_args.generation_max_length is not None

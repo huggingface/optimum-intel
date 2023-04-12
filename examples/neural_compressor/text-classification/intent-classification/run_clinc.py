@@ -29,18 +29,19 @@ import datasets
 import numpy as np
 import torch
 import transformers
-from datasets import load_dataset, load_metric
-from sklearn.linear_model import LogisticRegression
-from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
+from datasets import load_dataset
+from neural_compressor import (
+    DistillationConfig,
+    PostTrainingQuantConfig,
+    QuantizationAwareTrainingConfig,
+    WeightPruningConfig,
+)
 from transformers import (
     AutoConfig,
     AutoModel,
     AutoTokenizer,
     DataCollatorWithPadding,
-    EvalPrediction,
     HfArgumentParser,
-    PretrainedConfig,
     PreTrainedModel,
     TrainingArguments,
     default_data_collator,
@@ -50,12 +51,6 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from neural_compressor import (
-    DistillationConfig,
-    PostTrainingQuantConfig,
-    QuantizationAwareTrainingConfig,
-    WeightPruningConfig,
-)
 from optimum.intel.neural_compressor import INCModel, INCQuantizer, INCTrainer
 
 
@@ -280,29 +275,6 @@ class SetFitModel(torch.nn.Module):
         return sentence_embeddings
 
 
-class SetFitModelTraining(torch.nn.Module):
-    def __init__(self, model, tokenizer):
-        super().__init__()
-        self.model = SetFitModel(model)
-        self.tokenizer = tokenizer
-        if hasattr(model, "config"):
-            self.config = model.config
-
-    def forward(self, sentences=None, *args, **kwargs):
-        if not (isinstance(sentences, (tuple, list)) and len(sentences) == 2):
-            raise ValueError("sentences should be a tuple or a list with 2 sentences string.")
-        inputs = self.tokenizer(
-            sentences[0] + sentences[1],
-            padding=padding,
-            max_length=max_seq_length,
-            truncation=True,
-            return_tensors="pt",
-        )
-        embeddings = self.model(**inputs)
-        length = len(embeddings) // 2
-        return {"logits": torch.cosine_similarity(embeddings[:length], embeddings[length:]), "loss": 0}
-
-
 def main():
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
@@ -424,6 +396,28 @@ def main():
         # We will pad later, dynamically at batch creation, to the max sequence length in each batch
         padding = False
 
+    class SetFitModelTraining(torch.nn.Module):
+        def __init__(self, model, tokenizer):
+            super().__init__()
+            self.model = SetFitModel(model)
+            self.tokenizer = tokenizer
+            if hasattr(model, "config"):
+                self.config = model.config
+
+        def forward(self, sentences=None, *args, **kwargs):
+            if not (isinstance(sentences, (tuple, list)) and len(sentences) == 2):
+                raise ValueError("sentences should be a tuple or a list with 2 sentences string.")
+            inputs = self.tokenizer(
+                sentences[0] + sentences[1],
+                padding=padding,
+                max_length=max_seq_length,
+                truncation=True,
+                return_tensors="pt",
+            )
+            embeddings = self.model(**inputs)
+            length = len(embeddings) // 2
+            return {"logits": torch.cosine_similarity(embeddings[:length], embeddings[length:]), "loss": 0}
+
     if data_args.max_seq_length > tokenizer.model_max_length:
         logger.warning(
             f"The max_seq_length passed ({data_args.max_seq_length}) is larger than the maximum length for the"
@@ -526,8 +520,14 @@ def main():
             use_auth_token=True if model_args.use_auth_token else None,
         )
 
-        teacher_model = SetFitModelTraining(teacher_model, teacher_tokenizer)
+        teacher_tokenizer = AutoTokenizer.from_pretrained(
+            optim_args.teacher_model_name_or_path,
+            cache_dir=model_args.cache_dir,
+            use_fast=model_args.use_fast_tokenizer,
+            use_auth_token=True if model_args.use_auth_token else None,
+        )
 
+        teacher_model = SetFitModelTraining(teacher_model, teacher_tokenizer)
         teacher_model.to(training_args.device)
 
         teacher_tokenizer = AutoTokenizer.from_pretrained(optim_args.teacher_model_name_or_path, use_fast=True)

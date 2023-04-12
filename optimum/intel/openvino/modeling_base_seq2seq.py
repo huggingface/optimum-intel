@@ -18,16 +18,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
-import transformers
-from transformers import AutoConfig, PretrainedConfig
-from transformers.file_utils import add_start_docstrings, default_cache_path
-from transformers.onnx import FeaturesManager, export
-from transformers.onnx.utils import get_preprocessor
-
 import openvino
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
-from openvino._offline_transformations import compress_model_transformation
+from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
+from transformers import PretrainedConfig
+from transformers.file_utils import add_start_docstrings
+
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export
 
@@ -64,7 +61,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        **kwargs
+        **kwargs,
     ):
         self.config = config
         self.use_cache = decoder_with_past is not None
@@ -83,9 +80,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.encoder_model = encoder
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
-        self.encoder_request = None
-        self.decoder_request = None
-        self.decoder_with_past_request = None
+
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
         else:
@@ -99,7 +94,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         encoder_file_name: Optional[str] = None,
         decoder_file_name: Optional[str] = None,
         decoder_with_past_file_name: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
@@ -384,12 +379,12 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        apply_moc_transformations(self.encoder_model)
-        apply_moc_transformations(self.decoder_model)
+        apply_moc_transformations(self.encoder_model, cf=False)
+        apply_moc_transformations(self.decoder_model, cf=False)
         compress_model_transformation(self.encoder_model)
         compress_model_transformation(self.decoder_model)
         if self.use_cache:
-            apply_moc_transformations(self.decoder_with_past_model)
+            apply_moc_transformations(self.decoder_with_past_model, cf=False)
             compress_model_transformation(self.decoder_with_past_model)
         return self
 

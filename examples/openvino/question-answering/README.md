@@ -60,7 +60,7 @@ To run the JPQD example, please install optimum-intel from source. This command 
 python run_qa.py \
     --model_name_or_path bert-base-uncased \
     --dataset_name squad \
-    --teacher_model_or_path bert-large-uncased-whole-word-masking-finetuned-squad \
+    --teacher_model_name_or_path bert-large-uncased-whole-word-masking-finetuned-squad \
     --distillation_weight 0.9 \
     --do_eval \
     --fp16 \

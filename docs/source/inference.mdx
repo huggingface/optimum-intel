@@ -21,7 +21,7 @@ Here is an example on how to perform inference with OpenVINO Runtime for a text 
 
 ```diff
 - from transformers import AutoModelForSequenceClassification
-+ from optimum.intel.openvino import OVModelForSequenceClassification
++ from optimum.intel import OVModelForSequenceClassification
 from transformers import AutoTokenizer, pipeline
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
@@ -70,7 +70,7 @@ When fixing the shapes with the `reshape()` method, inference cannot be performe
 from datasets import load_dataset
 from transformers import AutoTokenizer, pipeline
 from evaluate import evaluator
-from optimum.intel.openvino.modeling import OVModelForQuestionAnswering
+from optimum.intel import OVModelForQuestionAnswering
 
 model_id = "distilbert-base-cased-distilled-squad"
 model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
@@ -92,7 +92,7 @@ metric = task_evaluator.compute(model_or_pipeline=qa_pipe, data=eval_dataset, me
 By default the model will be compiled when instantiating our `OVModel`. In the case where the model is reshaped, placed to an other device or if FP16 precision is enabled, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by setting `compile=False`. The model should also be compiled before the first inference with `model.compile()`.
 
 ```python
-from optimum.intel.openvino import OVModelForSequenceClassification
+from optimum.intel import OVModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 # Load the model and disable the model compilation
@@ -111,7 +111,7 @@ Here is an example on how you can run inference for a translation task using an 
 
 ```python
 from transformers import AutoTokenizer, pipeline
-from optimum.intel.openvino import OVModelForSeq2SeqLM
+from optimum.intel import OVModelForSeq2SeqLM
 
 model_id = "t5-small"
 model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
@@ -134,6 +134,7 @@ Stable Diffusion models can also be used when running inference with OpenVINO. W
 are exported to the OpenVINO format, they are decomposed into three components that are later combined during inference:
 - The text encoder
 - The U-NET
+- The VAE encoder
 - The VAE decoder
 
 Make sure you have 🤗 Diffusers installed.
@@ -146,7 +147,7 @@ pip install diffusers
 Here is an example of how you can load an OpenVINO Stable Diffusion model and run inference using OpenVINO Runtime:
 
 ```python
-from optimum.intel.openvino import OVStableDiffusionPipeline
+from optimum.intel import OVStableDiffusionPipeline
 
 model_id = "echarlaix/stable-diffusion-v1-5-openvino"
 stable_diffusion = OVStableDiffusionPipeline.from_pretrained(model_id)

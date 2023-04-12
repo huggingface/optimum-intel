@@ -20,8 +20,11 @@ import unittest
 from typing import Dict
 
 import numpy as np
+import requests
 import torch
 from datasets import load_dataset
+from evaluate import evaluator
+from parameterized import parameterized
 from PIL import Image
 from transformers import (
     AutoFeatureExtractor,
@@ -40,8 +43,6 @@ from transformers import (
     set_seed,
 )
 
-import requests
-from evaluate import evaluator
 from optimum.intel.openvino import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
@@ -58,16 +59,20 @@ from optimum.intel.openvino import (
     OVModelForTokenClassification,
     OVStableDiffusionPipeline,
 )
-from optimum.intel.openvino.modeling_diffusion import OVModelTextEncoder, OVModelUnet, OVModelVaeDecoder
+from optimum.intel.openvino.modeling_diffusion import (
+    OVModelTextEncoder,
+    OVModelUnet,
+    OVModelVaeDecoder,
+    OVModelVaeEncoder,
+)
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.utils import (
-    CONFIG_NAME,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
+    DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 from optimum.utils.testing_utils import require_diffusers
-from parameterized import parameterized
 
 
 MODEL_NAMES = {
@@ -108,7 +113,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         super().__init__(*args, **kwargs)
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
-        self.OV_STABLE_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+        self.OV_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
@@ -146,8 +151,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         outputs = model.generate(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs, outputs))
 
+    @require_diffusers
     def test_load_from_hub_and_save_stable_diffusion_model(self):
-        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_STABLE_DIFFUSION_MODEL_ID, compile=False)
+        loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_DIFFUSION_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_pipeline.config, Dict)
         prompt = "sailing ship in storm by Leonardo da Vinci"
         height = 16
@@ -164,6 +170,7 @@ class OVModelIntegrationTest(unittest.TestCase):
             for subfoler in {
                 DIFFUSION_MODEL_UNET_SUBFOLDER,
                 DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+                DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
                 DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
             }:
                 folder_contents = os.listdir(os.path.join(tmpdirname, subfoler))
@@ -393,7 +400,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer(f"This is a sample", return_tensors="pt")
+        tokens = tokenizer("This is a sample", return_tensors="pt")
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
@@ -409,7 +416,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-        outputs = pipe(f"This is a sample", max_length=10)
+        outputs = pipe("This is a sample", max_length=10)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(["This is a sample" in item["generated_text"] for item in outputs]))
         gc.collect()
@@ -509,11 +516,11 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=False)
+        ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
 
         self.assertIsInstance(ov_model.encoder, OVEncoder)
         self.assertIsInstance(ov_model.decoder, OVDecoder)
-        # self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
+        self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
 
         transformers_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
@@ -536,8 +543,11 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, compile=False)
+        model.half()
+        model.to("cpu")
+        model.compile()
 
         # Text2Text generation
         pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
@@ -565,7 +575,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
@@ -655,6 +665,7 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         ov_pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, compile=False)
         self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
+        self.assertIsInstance(ov_pipeline.vae_encoder, OVModelVaeEncoder)
         self.assertIsInstance(ov_pipeline.vae_decoder, OVModelVaeDecoder)
         self.assertIsInstance(ov_pipeline.unet, OVModelUnet)
         self.assertIsInstance(ov_pipeline.config, Dict)
@@ -693,23 +704,23 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_num_images_per_prompt(self, model_arch: str):
+        from diffusers import DPMSolverMultistepScheduler
+
         model_id = MODEL_NAMES[model_arch]
-        num_images_per_prompt = 4
-        batch_size = 6
-        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
+        scheduler = DPMSolverMultistepScheduler.from_pretrained(model_id, subfolder="scheduler")
+        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, scheduler=scheduler)
         prompt = "sailing ship in storm by Leonardo da Vinci"
-        outputs = pipeline(prompt, num_inference_steps=2, output_type="np").images
-        self.assertEqual(outputs.shape, (1, 128, 128, 3))
-        outputs = pipeline(
-            prompt, num_inference_steps=2, num_images_per_prompt=num_images_per_prompt, output_type="np"
-        ).images
-        self.assertEqual(outputs.shape, (num_images_per_prompt, 128, 128, 3))
-        outputs = pipeline([prompt] * batch_size, num_inference_steps=2, output_type="np").images
-        self.assertEqual(outputs.shape, (batch_size, 128, 128, 3))
+
+        for batch_size in [1, 3]:
+            for num_images in [1, 2]:
+                outputs = pipeline(
+                    [prompt] * batch_size, num_inference_steps=2, num_images_per_prompt=num_images, output_type="np"
+                )
+                self.assertEqual(outputs.images.shape, (batch_size * num_images, 128, 128, 3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
-    def test_num_images_per_prompt(self, model_arch: str):
+    def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         batch_size = 3
         num_images_per_prompt = 4
