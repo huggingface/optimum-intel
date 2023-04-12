@@ -3,11 +3,10 @@ import math
 import os
 
 import torch
-from PIL import Image
-from transformers import CLIPTextModel, CLIPTokenizer
-
 from diffusers import AutoencoderKL, StableDiffusionPipeline, UNet2DConditionModel
 from neural_compressor.utils.pytorch import load
+from PIL import Image
+from transformers import CLIPTextModel, CLIPTokenizer
 
 
 def parse_args():

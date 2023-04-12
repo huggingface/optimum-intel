@@ -11,19 +11,18 @@ import PIL
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
-from packaging import version
-from PIL import Image
-from torch.utils.data import Dataset
-from torchvision import transforms
-from tqdm.auto import tqdm
-from transformers import CLIPTextModel, CLIPTokenizer
-
 from accelerate import Accelerator
 from accelerate.utils import set_seed
 from diffusers import AutoencoderKL, DDPMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.optimization import get_scheduler
 from huggingface_hub import HfFolder, Repository, whoami
 from neural_compressor.utils import logger
+from packaging import version
+from PIL import Image
+from torch.utils.data import Dataset
+from torchvision import transforms
+from tqdm.auto import tqdm
+from transformers import CLIPTextModel, CLIPTokenizer
 
 
 if version.parse(version.parse(PIL.__version__).base_version) >= version.parse("9.1.0"):
@@ -747,7 +746,8 @@ def main():
 
         if args.do_distillation:
             teacher_model = copy.deepcopy(model)
-            attention_fetcher = lambda x: x.sample
+            def attention_fetcher(x):
+                return x.sample
             layer_mappings = [
                 [
                     [
@@ -922,7 +922,7 @@ def main():
                 ],
             ]
             layer_names = [layer_mapping[0][0] for layer_mapping in layer_mappings]
-            if not set(layer_names).issubset(set([n[0] for n in model.named_modules()])):
+            if not set(layer_names).issubset({n[0] for n in model.named_modules()}):
                 raise ValueError(
                     "Provided model is not compatible with the default layer_mappings, "
                     'please use the model fine-tuned from "CompVis/stable-diffusion-v1-4", '
@@ -1008,7 +1008,7 @@ def main():
         if loaded_model_images != optimized_model_images:
             logger.info("The quantized model was not successfully loaded.")
         else:
-            logger.info(f"The quantized model was successfully loaded.")
+            logger.info("The quantized model was successfully loaded.")
 
 
 if __name__ == "__main__":
