@@ -125,7 +125,7 @@ class OVBaseDecoderModel(OVBaseModel):
             raise ValueError(
                 f"`use_cache` was set to `{use_cache}` but the loaded model only supports `use_cache={self.use_cache}`. "
                 f"Please load your current model with `use_cache={self.use_cache}` or export the original model "
-                "once again with `use_cache={use_cache}` when calling the `from_pretrained` method. "
+                f"once again with `use_cache={use_cache}` when calling the `from_pretrained` method. "
                 "To export your model, simply set `export=True`."
             )
 
