@@ -23,7 +23,7 @@ class NeuralCoderAdaptorTest(unittest.TestCase):
             # f.close()
 
             export_commands = [
-                f"optimum-cli inc quantize --model hf-internal-testing/tiny-random-bert --output {tempdir}/bert --task masked-lm",
+                f"optimum-cli inc quantize --model hf-internal-testing/tiny-random-bert --output {tempdir}/bert --task fill-mask",
                 f"optimum-cli inc quantize --model hf-internal-testing/tiny-random-distilbert --output {tempdir}/distilbert --task text-classification",
                 f"optimum-cli inc quantize --model hf-internal-testing/tiny-random-gpt2 --output {tempdir}/gpt2 --task text-generation",
                 # f"optimum-cli inc quantize {script_path} --model_name_or_path hf-internal-testing/tiny-random-bert --task_name mrpc --do_eval --output_dir {tempdir}/bert_mrpc",
