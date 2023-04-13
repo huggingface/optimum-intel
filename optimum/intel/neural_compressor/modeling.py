@@ -12,25 +12,23 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import inspect
 import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Dict, Optional, Union
+from typing import Optional, Tuple, Union
 
+import torch
 from huggingface_hub import hf_hub_download
-from huggingface_hub.utils import EntryNotFoundError
-from transformers import PretrainedConfig
-from transformers.file_utils import add_start_docstrings
+from transformers import AutoModelForCausalLM, PretrainedConfig
+from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import export
 from optimum.modeling_base import OptimizedModel
-from optimum.exporters.onnx import export_models, get_decoder_models_for_export
 
-from ..utils.import_utils import is_transformers_version
-WEIGHTS_NAME = "pytorch_model.bin"
-WEIGHTS_PAST_NAME = "pytorch_model_with_past.bin"
+from ..utils.import_utils import is_torch_version, is_transformers_version
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -38,45 +36,65 @@ if is_transformers_version("<", "4.25.0"):
 else:
     from transformers.generation import GenerationMixin
 
-core = Core()
 
 logger = logging.getLogger(__name__)
 
-class INCModelForGeneration(OptimizedModel):
-    export_feature = "causal-lm"
+
+class INCModelForGeneration(OptimizedModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
+    export_feature = "causal-lm"
+    main_input_name = "input_ids"
 
     def __init__(
         self,
         model,
-        model_with_past = None,
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        use_cache: bool = False,
         **kwargs,
     ):
         self.model = model
-        self.model_with_past = model_with_past
-
         self.config = config
         self.model_save_dir = model_save_dir
+        self.preprocessors = kwargs.get("preprocessors", [])
+        self.use_cache = use_cache
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
         else:
             from transformers import GenerationConfig
 
-            self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
+            self.generation_config = GenerationConfig.from_model_config(config)
 
     @staticmethod
     def load_model(file_name: Union[str, Path]):
-        if isinstance(file_name, str):
-            file_name = Path(file_name)
-        return None
+        model = torch.jit.load(file_name)
+        torch.jit.freeze(model.eval())
+        return model
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
         torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
-        if self.model_with_past is not None:    
-            torch.jit.save(self.model_with_past, os.path.join(save_directory, WEIGHTS_PAST_NAME))
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        **kwargs,
+    ) -> CausalLMOutputWithPast:
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        if self.use_cache and past_key_values is not None:
+            input_ids = input_ids[:, -1:]
+            # TODO : add pkv to inputs
+
+        outputs = self.model(**inputs)
+
+        past_key_values = outputs[1] if self.use_cache else None
+        return CausalLMOutputWithPast(logits=outputs[0], past_key_values=past_key_values)
 
     @classmethod
     def _from_pretrained(
@@ -87,12 +105,40 @@ class INCModelForGeneration(OptimizedModel):
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
         cache_dir: Optional[str] = None,
-        file_name: Optional[str] = None,
+        file_name: Optional[str] = WEIGHTS_NAME,
         local_files_only: bool = False,
+        use_cache: bool = False,
         **kwargs,
     ):
-        # TODO : downloads and load the model subcomponent 
-        return cls(model, model_with_past, config=config, model_save_dir=model_save_dir, **kwargs)
+        # Load the model from local directory
+        if os.path.isdir(model_id):
+            file_name = os.path.join(model_id, file_name)
+            model = cls.load_model(file_name)
+            model_save_dir = model_id
+        # Download the model from the hub
+        else:
+            model_cache_path = hf_hub_download(
+                repo_id=model_id,
+                filename=file_name,
+                use_auth_token=use_auth_token,
+                revision=revision,
+                cache_dir=cache_dir,
+                force_download=force_download,
+                local_files_only=local_files_only,
+            )
+            model_save_dir = Path(model_cache_path).parent
+            model = cls.load_model(model_cache_path)
+
+        # IPEX jit model need 2 iterations to convert model to int8 model
+        onnx_config_class = TasksManager.get_exporter_config_constructor(
+            model_type=config.model_type, exporter="onnx", task=cls.export_feature
+        )
+        onnx_config = onnx_config_class(config, use_past=use_cache)
+        model_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+        for i in range(2):
+            model(**model_inputs)
+
+        return cls(model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
 
     @classmethod
     def _from_transformers(
@@ -105,9 +151,12 @@ class INCModelForGeneration(OptimizedModel):
         cache_dir: Optional[str] = None,
         subfolder: str = "",
         local_files_only: bool = False,
-        use_cache: bool = True,
+        use_cache: bool = False,
         **kwargs,
     ):
+        if is_torch_version("<", "2.0.0"):
+            raise ImportError("`torch>=2.0.0` is needed to trace your model")
+
         task = cls.export_feature
 
         model_kwargs = {
@@ -121,32 +170,16 @@ class INCModelForGeneration(OptimizedModel):
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         model.config.return_dict = False
-        signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
-
-
-        # onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        # onnx_config = onnx_config_class(model.config, use_past=use_cache)
-        # models_and_onnx_configs = get_decoder_models_for_export(model, onnx_config)
-
-
+        inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
         onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_class(model.config)
-        dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-        model_inputs = {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
-        input_key_list = model_inputs.keys()
-        inputs = tuple(model_inputs.values())
+        onnx_config = onnx_config_class(model.config, use_past=use_cache)
+        model_inputs = onnx_config.generate_dummy_inputs(framework="pt")
 
-        traced_model = torch.jit.trace(model, example_inputs=inputs, strict=False)
+        traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs)
         traced_model = torch.jit.freeze(traced_model.eval())
-        # Only for IPEX int8 jit model, IPEX jit model need 2 iterations to convert model to int8 model
-        for i in range(2):
-            traced_model(*inputs)
-
-        torch.jit.save(traced_model, os.path.join(save_dir_path, WEIGHTS_NAME))
-
-        # TODO : add use_cache
-        # if use_cache:
-        # torch.jit.save(model_with_past, os.path.join(save_dir_path, WEIGHTS_PAST_NAME))
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
+        torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
 
         return cls._from_pretrained(
             model_id=save_dir_path,
@@ -160,11 +193,27 @@ class INCModelForGeneration(OptimizedModel):
             **kwargs,
         )
 
-    def forward(self, *args, **kwargs):
-        # TODO : add
-        raise NotImplementedError
-
     def can_generate(self) -> bool:
         if isinstance(self, GenerationMixin):
             return True
         return False
+
+    @property
+    def device(self) -> torch.device:
+        return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+    def to(self, device: Union[torch.device, str, int]):
+        self.model.to(device)
+        return self
+
+    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
+        past_key_values = past_key_values or kwargs.get("past", None)
+        return {
+            "input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "use_cache": self.use_cache,
+            "position_ids": None,
+            "attention_mask": kwargs.get("attention_mask", None),
+            "token_type_ids": None,
+        }
