@@ -20,21 +20,19 @@ from tempfile import TemporaryDirectory
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
-from transformers import CLIPFeatureExtractor, CLIPTokenizer
-
 import openvino
 from diffusers import DDIMScheduler, LMSDiscreteScheduler, PNDMScheduler, StableDiffusionPipeline
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME
 from huggingface_hub import snapshot_download
 from openvino._offline_transformations import compress_model_transformation
-from openvino.offline_transformations import compress_model_transformation
 from openvino.runtime import Core
+from transformers import CLIPFeatureExtractor, CLIPTokenizer
+
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export_models, get_stable_diffusion_models_for_export
 from optimum.pipelines.diffusers.pipeline_stable_diffusion import StableDiffusionPipelineMixin
 from optimum.utils import (
-    CONFIG_NAME,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,

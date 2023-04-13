@@ -12,205 +12,78 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import logging
-import os
-from functools import reduce
-from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Dict, Optional, Union
 
-from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
+from neural_compressor.conf.pythonic_config import DistillationConfig, WeightPruningConfig, _BaseQuantizationConfig
 
-import yaml
-from huggingface_hub import hf_hub_download
-from neural_compressor.conf.config import Conf, Distillation_Conf, Pruning_Conf, Quantization_Conf
-from optimum.intel.neural_compressor.utils import CONFIG_NAME
+from optimum.configuration_utils import BaseConfig
+
+from ..utils.import_utils import _neural_compressor_version, _torch_version
 
 
-logger = logging.getLogger(__name__)
+_quantization_model = {
+    "post_training_dynamic_quant": "dynamic",
+    "post_training_static_quant": "static",
+    "quant_aware_training": "aware_training",
+}
 
 
-class IncConfig:
-    CONFIG_NAME = "best_configure.yml"
+class INCConfig(BaseConfig):
+    CONFIG_NAME = "inc_config.json"
+    FULL_CONFIGURATION_FILE = "inc_config.json"
 
-    def __init__(self, config_path: str):
-        """
-        Args:
-            config_path (`str`):
-                Path to the YAML configuration file used to control the tuning behavior.
-        Returns:
-            config: IncConfig object.
-        """
+    def __init__(
+        self,
+        quantization: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
+        pruning: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
+        distillation: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
+        save_onnx_model: bool = False,
+        **kwargs,
+    ):
+        super().__init__()
+        self.torch_version = _torch_version
+        self.neural_compressor_version = _neural_compressor_version
+        self.quantization = self._create_quantization_config(quantization) or {}
+        self.pruning = self._create_pruning_config(pruning) or {}
+        self.distillation = self._create_distillation_config(distillation) or {}
+        self.save_onnx_model = save_onnx_model
 
-        self.path = config_path
-        self.config = Conf(config_path)
-        self.usr_cfg = self.config.usr_cfg
-
-    def get_config(self, keys: str):
-        return reduce(lambda d, key: d.get(key) if d else None, keys.split("."), self.usr_cfg)
-
-    def set_config(self, keys: str, value: Any):
-        d = self.usr_cfg
-        keys = keys.split(".")
-        for key in keys[:-1]:
-            d = d.setdefault(key, {})
-        d[keys[-1]] = value
-
-    def set_tolerance(self, tolerance_criterion: Union[int, float]):
-        if not isinstance(tolerance_criterion, (int, float)):
-            raise TypeError(
-                f"Supported type for performance tolerance are int and float, got {type(tolerance_criterion)}"
-            )
-        if "absolute" in self.get_config("tuning.accuracy_criterion"):
-            self.set_config("tuning.accuracy_criterion.absolute", tolerance_criterion)
-        else:
-            if not -1 < tolerance_criterion < 1:
-                raise ValueError("Relative performance tolerance must not be <=-1 or >=1.")
-            self.set_config("tuning.accuracy_criterion.relative", tolerance_criterion)
-
-    @classmethod
-    def from_pretrained(cls, config_name_or_path: str, config_file_name: Optional[str] = None, **kwargs):
-        """
-        Instantiate an IncConfig object from a configuration file which can either be hosted on
-        huggingface.co or from a local directory path.
-
-        Args:
-            config_name_or_path (`str`):
-                Repository name in the Hugging Face Hub or path to a local directory containing the configuration file.
-            config_file_name (`str`, *optional*):
-                Name of the configuration file.
-            cache_dir (`str`, *optional*):
-                Path to a directory in which a downloaded configuration should be cached if the standard cache should
-                not be used.
-            force_download (`bool`, *optional*, defaults to `False`):
-                Whether or not to force to (re-)download the configuration files and override the cached versions if
-                they exist.
-            resume_download (`bool`, *optional*, defaults to `False`):
-                Whether or not to delete incompletely received file. Attempts to resume the download if such a file
-                exists.
-            revision(`str`, *optional*):
-                The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a
-                git-based system for storing models and other artifacts on huggingface.co, so ``revision`` can be any
-                identifier allowed by git.
-        Returns:
-            config: IncConfig object.
-        """
-
-        cache_dir = kwargs.get("cache_dir", None)
-        force_download = kwargs.get("force_download", False)
-        resume_download = kwargs.get("resume_download", False)
-        revision = kwargs.get("revision", None)
-
-        config_file_name = config_file_name if config_file_name is not None else cls.CONFIG_NAME
-
-        if os.path.isdir(config_name_or_path):
-            config_file = os.path.join(config_name_or_path, config_file_name)
-        elif os.path.isfile(config_name_or_path):
-            config_file = config_name_or_path
-        else:
-            local_files_only = False
-            if is_offline_mode():
-                logger.info("Offline mode: forcing local_files_only=True")
-                local_files_only = True
-            if cache_dir is None:
-                cache_dir = TRANSFORMERS_CACHE
-            if isinstance(cache_dir, Path):
-                cache_dir = str(cache_dir)
-            try:
-                config_file = hf_hub_download(
-                    repo_id=config_name_or_path,
-                    filename=config_file_name,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    resume_download=resume_download,
-                    local_files_only=local_files_only,
-                )
-            except EnvironmentError as err:
-                logger.error(err)
-                msg = (
-                    f"Can't load config for '{config_name_or_path}'. Make sure that:\n\n"
-                    f"-'{config_name_or_path}' is a correct model identifier listed on 'https://huggingface.co/models'\n\n"
-                    f"-or '{config_name_or_path}' is a correct path to a directory containing a {config_file_name} file\n\n"
-                )
-
-                if revision is not None:
-                    msg += (
-                        f"- or '{revision}' is a valid git identifier (branch name, a tag name, or a commit id) that "
-                        f"exists for this model name as listed on its model page on 'https://huggingface.co/models'\n\n"
-                    )
-
-                raise EnvironmentError(msg)
-        config = cls(config_file)
-
+    @staticmethod
+    def _create_quantization_config(config: Union[Dict, _BaseQuantizationConfig]):
+        # TODO : add activations_dtype and weights_dtype
+        if isinstance(config, _BaseQuantizationConfig):
+            approach = _quantization_model[config.approach]
+            config = {
+                "is_static": approach != "dynamic",
+                "dataset_num_samples": config.calibration_sampling_size[0] if approach == "static" else None,
+                # "approach" : approach,
+            }
         return config
 
-
-class IncOptimizedConfig(IncConfig):
-    def __init__(self, config_path: str):
-        """
-        Args:
-            config_path (`str`):
-                Path to the YAML configuration file used to control the tuning behavior.
-        """
-
-        self.path = config_path
-        self.config = self._read_config()
-        self.usr_cfg = self.config
-
-    def _read_config(self):
-        with open(self.path, "r") as f:
-            try:
-                config = yaml.load(f, Loader=yaml.Loader)
-            except yaml.YAMLError as err:
-                logger.error(err)
-
+    @staticmethod
+    def _create_pruning_config(config: Union[Dict, WeightPruningConfig]):
+        if isinstance(config, WeightPruningConfig):
+            weight_compression = config.weight_compression
+            config = {
+                "approach": weight_compression.pruning_type,
+                "pattern": weight_compression.pattern,
+                "sparsity": weight_compression.target_sparsity,
+                # "operators": weight_compression.pruning_op_types,
+                # "start_step": weight_compression.start_step,
+                # "end_step": weight_compression.end_step,
+                # "scope": weight_compression.pruning_scope,
+                # "frequency": weight_compression.pruning_frequency,
+            }
         return config
 
-
-class IncQuantizationConfig(IncConfig):
-    CONFIG_NAME = "quantization.yml"
-
-    def __init__(self, config_path: str):
-        """
-        The configuration describing the quantization process.
-
-        Args:
-            config_path (`str`):
-                Path to the YAML configuration file used to control the tuning behavior.
-        """
-
-        self.path = config_path
-        self.config = Quantization_Conf(config_path)
-        self.usr_cfg = self.config.usr_cfg
-
-
-class IncPruningConfig(IncConfig):
-    CONFIG_NAME = "prune.yml"
-
-    def __init__(self, config_path: str):
-        """
-        The configuration describing the pruning process.
-
-        Args:
-            config_path (`str`):
-                Path to the YAML configuration file used to control the tuning behavior.
-        """
-
-        self.path = config_path
-        self.config = Pruning_Conf(config_path)
-        self.usr_cfg = self.config.usr_cfg
-
-
-class IncDistillationConfig(IncConfig):
-    CONFIG_NAME = "distillation.yml"
-
-    def __init__(self, config_path: str):
-        """
-        Args:
-            config_path (:obj:`str`):
-                Path to the YAML configuration file used to control the tuning behavior.
-        """
-
-        self.path = config_path
-        self.config = Distillation_Conf(config_path)
-        self.usr_cfg = self.config.usr_cfg
+    @staticmethod
+    def _create_distillation_config(config: Union[Dict, DistillationConfig]):
+        if isinstance(config, DistillationConfig):
+            criterion = next(iter(config.criterion.values()))
+            config = {
+                "teacher_model_name_or_path": config.teacher_model.config._name_or_path,
+                "temperature": criterion.temperature,
+                # "loss_types": criterion.loss_types,
+                # "loss_weights": criterion.loss_weights,
+            }
+        return config

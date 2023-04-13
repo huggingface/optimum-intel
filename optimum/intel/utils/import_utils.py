@@ -16,7 +16,7 @@ import importlib.util
 import operator as op
 import sys
 from collections import OrderedDict
-from typing import Any, List, Union
+from typing import Union
 
 from packaging.version import Version, parse
 
@@ -37,6 +37,15 @@ if _transformers_available:
         _transformers_version = importlib_metadata.version("transformers")
     except importlib_metadata.PackageNotFoundError:
         _transformers_available = False
+
+
+_torch_available = importlib.util.find_spec("torch") is not None
+_torch_version = "N/A"
+if _torch_available:
+    try:
+        _torch_version = importlib_metadata.version("torch")
+    except importlib_metadata.PackageNotFoundError:
+        _torch_available = False
 
 
 _neural_compressor_available = importlib.util.find_spec("neural_compressor") is not None
@@ -164,29 +173,38 @@ def is_diffusers_version(operation: str, version: str):
     return compare_versions(parse(_diffusers_version), operation, version)
 
 
+def is_torch_version(operation: str, version: str):
+    """
+    Compare the current torch version to a given reference with an operation.
+    """
+    if not _torch_available:
+        return False
+    return compare_versions(parse(_torch_version), operation, version)
+
+
 DIFFUSERS_IMPORT_ERROR = """
-{0} requires the diffusers library but it was not found in your environment. You can install it with pip: `pip install
-diffusers`. Please note that you may need to restart your runtime after installation.
+{0} requires the diffusers library but it was not found in your environment. You can install it with pip:
+`pip install diffusers`. Please note that you may need to restart your runtime after installation.
 """
 
 IPEX_IMPORT_ERROR = """
-{0} requires the ipex library but it was not found in your environment. You can install it with pip: `pip install
-intel_extension_for_pytorch`. Please note that you may need to restart your runtime after installation.
+{0} requires the ipex library but it was not found in your environment. You can install it with pip:
+`pip install intel_extension_for_pytorch`. Please note that you may need to restart your runtime after installation.
 """
 
 NNCF_IMPORT_ERROR = """
-{0} requires the nncf library but it was not found in your environment. You can install it with pip: `pip install
-nncf`. Please note that you may need to restart your runtime after installation.
+{0} requires the nncf library but it was not found in your environment. You can install it with pip:
+`pip install nncf`. Please note that you may need to restart your runtime after installation.
 """
 
 OPENVINO_IMPORT_ERROR = """
-{0} requires the openvino library but it was not found in your environment. You can install it with pip: `pip install
-openvino`. Please note that you may need to restart your runtime after installation.
+{0} requires the openvino library but it was not found in your environment. You can install it with pip:
+`pip install openvino`. Please note that you may need to restart your runtime after installation.
 """
 
 NEURAL_COMPRESSOR_IMPORT_ERROR = """
-{0} requires the neural-compressor library but it was not found in your environment. You can install it with pip: `pip install
-neural-compressor`. Please note that you may need to restart your runtime after installation.
+{0} requires the neural-compressor library but it was not found in your environment. You can install it with pip:
+`pip install neural-compressor`. Please note that you may need to restart your runtime after installation.
 """
 
 BACKENDS_MAPPING = OrderedDict(

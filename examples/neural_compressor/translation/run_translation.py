@@ -25,22 +25,22 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
+import evaluate
 import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
+from neural_compressor import QuantizationAwareTrainingConfig, WeightPruningConfig
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
     AutoTokenizer,
-    DataCollatorForSeq2Seq,
     HfArgumentParser,
     M2M100Tokenizer,
     MBart50Tokenizer,
     MBart50TokenizerFast,
     MBartTokenizer,
     MBartTokenizerFast,
-    PreTrainedModel,
     Seq2SeqTrainingArguments,
     default_data_collator,
     set_seed,
@@ -49,8 +49,6 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-import evaluate
-from neural_compressor import QuantizationAwareTrainingConfig, WeightPruningConfig
 from optimum.intel.neural_compressor import INCModelForSeq2SeqLM, INCSeq2SeqTrainer
 
 
@@ -510,7 +508,7 @@ def main():
         max_train_samples = (
             data_args.max_train_samples if data_args.max_train_samples is not None else len(train_dataset)
         )
-        train_samples = min(max_train_samples, len(train_dataset))
+        min(max_train_samples, len(train_dataset))
 
     if training_args.do_eval:
         max_target_length = data_args.val_max_target_length
@@ -652,7 +650,6 @@ def main():
                 logger.warning("The quantized model was not successfully loaded.")
 
     # Evaluation
-    results = {}
     max_length = (
         training_args.generation_max_length
         if training_args.generation_max_length is not None

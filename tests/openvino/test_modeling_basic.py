@@ -4,18 +4,29 @@ The goal of the test in this file is to test that basic functionality of optimum
 - Do inference with appropriate pipeline
 - Save the model to disk
 
-This test is meant to run quickly with tiny test models. More extensive tests are in 
+This test is meant to run quickly with tiny test models. More extensive tests are in
 test_modeling.py.
 """
+# ruff: noqa
 
 import gc
 import unittest
 
+from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline
 
-from huggingface_hub import HfApi
-from optimum.intel.openvino import *
-from parameterized import parameterized
+from optimum.intel import (
+    OVModelForAudioClassification,
+    OVModelForCausalLM,
+    OVModelForFeatureExtraction,
+    OVModelForImageClassification,
+    OVModelForMaskedLM,
+    OVModelForQuestionAnswering,
+    OVModelForSeq2SeqLM,
+    OVModelForSequenceClassification,
+    OVModelForTokenClassification,
+    OVStableDiffusionPipeline,
+)
 
 
 # Make sure that common architectures are used in combination with common tasks

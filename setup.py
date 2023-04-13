@@ -15,18 +15,17 @@ INSTALL_REQUIRE = [
     "optimum>=1.7.3",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
-    "torch",
     "sentencepiece",
     "scipy",
 ]
 
 TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate", "diffusers", "py-cpuinfo"]
 
-QUALITY_REQUIRE = ["black==22.3", "isort>=5.5.4"]
+QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
 
 EXTRAS_REQUIRE = {
     "neural-compressor": [
-        "neural-compressor>=2.0.0",
+        "neural-compressor>=2.1.0",
         "onnx",
         "onnxruntime",
         "torch<2.0.0",  # remove after neural-compressor next release
@@ -70,4 +69,5 @@ setup(
     extras_require=EXTRAS_REQUIRE,
     include_package_data=True,
     zip_safe=False,
+    entry_points={"console_scripts": ["optimum-intel-cli = optimum.intel.commands.optimum_intel_cli:main"]},
 )

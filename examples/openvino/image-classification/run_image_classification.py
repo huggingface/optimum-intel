@@ -20,12 +20,16 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
+import evaluate
+import jstyleson as json
 import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
+from nncf.common.utils.os import safe_open
 from PIL import Image
 from torchvision.transforms import (
     CenterCrop,
@@ -42,15 +46,13 @@ from transformers import (
     AutoFeatureExtractor,
     AutoModelForImageClassification,
     HfArgumentParser,
-    TrainingArguments,
     set_seed,
 )
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-import evaluate
-from optimum.intel.openvino import OVConfig, OVTrainer
+from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
 
 
 logger = logging.getLogger(__name__)
@@ -128,6 +130,12 @@ class ModelArguments:
         default="google/vit-base-patch16-224-in21k",
         metadata={"help": "Path to pretrained model or model identifier from huggingface.co/models"},
     )
+    teacher_model_name_or_path: str = field(
+        default=None,
+        metadata={
+            "help": "Path to pretrained model or model identifier from huggingface.co/models as teacher model in distillation."
+        },
+    )
     model_type: Optional[str] = field(
         default=None,
         metadata={"help": "If training from scratch, pass a model type from the list: " + ", ".join(MODEL_TYPES)},
@@ -156,6 +164,12 @@ class ModelArguments:
         default=False,
         metadata={"help": "Will enable to load a pretrained model whose head dimensions are different."},
     )
+    nncf_compression_config: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Path to NNCF configuration .json file for adapting the model to compression-enabled training."
+        },
+    )
 
 
 def collate_fn(examples):
@@ -169,7 +183,7 @@ def main():
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, OVTrainingArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
@@ -251,7 +265,7 @@ def main():
     # Prepare label mappings.
     # We'll include these in the model's config to get human readable labels in the Inference API.
     labels = dataset["train"].features["labels"].names
-    label2id, id2label = dict(), dict()
+    label2id, id2label = {}, {}
     for i, label in enumerate(labels):
         label2id[label] = str(i)
         id2label[str(i)] = label
@@ -284,6 +298,15 @@ def main():
         use_auth_token=True if model_args.use_auth_token else None,
         ignore_mismatched_sizes=model_args.ignore_mismatched_sizes,
     )
+
+    teacher_model = None
+    if model_args.teacher_model_name_or_path is not None:
+        teacher_model = AutoModelForImageClassification.from_pretrained(
+            model_args.teacher_model_name_or_path,
+            from_tf=bool(".ckpt" in model_args.teacher_model_name_or_path),
+            cache_dir=model_args.cache_dir,
+        )
+
     feature_extractor = AutoFeatureExtractor.from_pretrained(
         model_args.feature_extractor_name or model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
@@ -292,10 +315,17 @@ def main():
     )
 
     # Define torchvision transforms to be applied to each image.
+    if isinstance(feature_extractor.size, dict):
+        if "shortest_edge" in feature_extractor.size:
+            size = feature_extractor.size["shortest_edge"]
+        else:
+            size = (feature_extractor.size["height"], feature_extractor.size["width"])
+    else:
+        size = feature_extractor.size
     normalize = Normalize(mean=feature_extractor.image_mean, std=feature_extractor.image_std)
     _train_transforms = Compose(
         [
-            RandomResizedCrop(feature_extractor.size),
+            RandomResizedCrop(size),
             RandomHorizontalFlip(),
             ToTensor(),
             normalize,
@@ -303,8 +333,8 @@ def main():
     )
     _val_transforms = Compose(
         [
-            Resize(feature_extractor.size),
-            CenterCrop(feature_extractor.size),
+            Resize(size),
+            CenterCrop(size),
             ToTensor(),
             normalize,
         ]
@@ -342,11 +372,18 @@ def main():
         # Set the validation transforms
         dataset["validation"].set_transform(val_transforms)
 
-    ov_config = OVConfig()
+    if model_args.nncf_compression_config is not None:
+        file_path = Path(model_args.nncf_compression_config).resolve()
+        with safe_open(file_path) as f:
+            compression = json.load(f)
+        ov_config = OVConfig(compression=compression)
+    else:
+        ov_config = OVConfig()
 
     # Initalize our trainer
     trainer = OVTrainer(
         model=model,
+        teacher_model=teacher_model,
         ov_config=ov_config,
         task="image-classification",
         args=training_args,

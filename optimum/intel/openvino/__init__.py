@@ -12,8 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import importlib.util
-
 from ..utils.import_utils import is_diffusers_available, is_nncf_available
 from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 
@@ -30,7 +28,6 @@ if is_nncf_available():
 
 from .modeling import (
     OVModelForAudioClassification,
-    OVModelForCausalLM,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
@@ -38,30 +35,9 @@ from .modeling import (
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
 )
+from .modeling_decoder import OVModelForCausalLM
 from .modeling_seq2seq import OVModelForSeq2SeqLM
 
 
 if is_diffusers_available():
     from .modeling_diffusion import OVStableDiffusionPipeline
-
-
-_TASK_ALIASES = {
-    "text-classification": "sequence-classification",
-    "fill-mask": "masked-lm",
-    "text-generation": "causal-lm",
-    "text2text-generation": "seq2seq-lm",
-    "summarization": "seq2seq-lm",
-    "translation": "seq2seq-lm",
-}
-
-_HEAD_TO_AUTOMODELS = {
-    "masked-lm": "OVModelForMaskedLM",
-    "causal-lm": "OVModelForCausalLM",
-    "seq2seq-lm": "OVModelForSeq2SeqLM",
-    "sequence-classification": "OVModelForSequenceClassification",
-    "token-classification": "OVModelForTokenClassification",
-    "question-answering": "OVModelForQuestionAnswering",
-    "image-classification": "OVModelForImageClassification",
-    "audio-classification": "OVModelForAudioClassification",
-    "stable-diffusion": "OVStableDiffusionPipeline",
-}

@@ -17,14 +17,13 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import numpy as np
+import openvino
 import torch
 import transformers
+from openvino.runtime import Core, Tensor
 from transformers import AutoConfig, AutoModelForSeq2SeqLM
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
-
-import openvino
-from openvino.runtime import Core, Tensor
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
@@ -142,7 +141,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         decoder: openvino.runtime.Model,
         decoder_with_past: openvino.runtime.Model = None,
         config: transformers.PretrainedConfig = None,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(
             encoder=encoder, decoder=decoder, decoder_with_past=decoder_with_past, config=config, **kwargs
@@ -228,7 +227,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         cross_attn_head_mask=None,
         use_cache=None,
         encoder_outputs=None,
-        **kwargs
+        **kwargs,
     ) -> Dict:
         return {
             "decoder_input_ids": input_ids,

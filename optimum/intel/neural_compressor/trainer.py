@@ -19,11 +19,16 @@ import sys
 import time
 import warnings
 from collections.abc import Mapping
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import datasets
 import torch
 import torch.distributed as dist
+from neural_compressor import training
+from neural_compressor.compression import DistillationCallbacks
+from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
+from neural_compressor.experimental.export import torch_to_fp32_onnx, torch_to_int8_onnx
 
 # from packaging import version
 from torch import nn
@@ -32,51 +37,53 @@ from torch.utils.data.dataloader import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 from transformers import Trainer
+from transformers.data.data_collator import DataCollator
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 from transformers.deepspeed import deepspeed_init
 from transformers.file_utils import WEIGHTS_NAME
 
 # Integrations must be imported before ML frameworks:
 from transformers.integrations import hp_params
-from transformers.modeling_utils import get_parameter_dtype, unwrap_model
+from transformers.modeling_utils import PreTrainedModel, get_parameter_dtype, unwrap_model
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
 from transformers.pytorch_utils import is_torch_less_than_1_11
+from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer import TRAINER_STATE_NAME
-from transformers.trainer_callback import TrainerState
+from transformers.trainer_callback import TrainerCallback, TrainerState
 from transformers.trainer_pt_utils import IterableDatasetShard
-from transformers.trainer_utils import HPSearchBackend, ShardedDDPOption, TrainOutput, has_length, speed_metrics
-from transformers.utils import is_sagemaker_mp_enabled, logging
+from transformers.trainer_utils import (
+    EvalPrediction,
+    HPSearchBackend,
+    ShardedDDPOption,
+    TrainOutput,
+    has_length,
+    speed_metrics,
+)
+from transformers.training_args import TrainingArguments
+from transformers.utils import is_apex_available, is_sagemaker_mp_enabled, logging
 
-from neural_compressor.experimental.export import torch_to_fp32_onnx, torch_to_int8_onnx
+from optimum.exporters import TasksManager
 
 from ..utils.import_utils import is_neural_compressor_version
+from .configuration import INCConfig
 from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 
 
+if is_apex_available():
+    from apex import amp
+
+if is_sagemaker_mp_enabled():
+    import smdistributed.modelparallel.torch as smp
+
+
 if TYPE_CHECKING:
-    import optuna
+    from optimum.exporters.onnx import OnnxConfig
 
 
 __version__ = "4.22.2"
 
 
 logger = logging.get_logger(__name__)
-
-
-from itertools import chain
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
-
-from transformers.data.data_collator import DataCollator
-from transformers.modeling_utils import PreTrainedModel
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
-from transformers.trainer_callback import TrainerCallback
-from transformers.trainer_utils import EvalPrediction
-from transformers.training_args import TrainingArguments
-
-from neural_compressor import training
-from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
-from neural_compressor.model.torch_model import PyTorchModel
-from optimum.exporters import TasksManager
 
 
 class INCTrainer(Trainer):
@@ -129,6 +136,7 @@ class INCTrainer(Trainer):
         self.pruning_config = pruning_config
         self.distillation_config = distillation_config
         self._compression_manager = None
+        self.distillation_callback = None
         self.save_onnx_model = save_onnx_model
 
         # Attach dtype and architecture to the config
@@ -149,6 +157,18 @@ class INCTrainer(Trainer):
             self._compression_manager = training.prepare_compression(self.model, confs=inc_config)
             self.model = self._compression_manager.model.model
             self.model_wrapped = self.model
+
+        for callback in self._compression_manager.callbacks.callbacks_list:
+            if isinstance(callback, DistillationCallbacks):
+                self.distillation_callback = callback
+                break
+
+        self.inc_config = INCConfig(
+            quantization=self.quantization_config,
+            pruning=self.pruning_config,
+            distillation=self.distillation_config,
+            save_onnx_model=save_onnx_model,
+        )
 
     def _inner_training_loop(
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
@@ -518,7 +538,12 @@ class INCTrainer(Trainer):
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
 
-    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False, save_onnx_model=None):
+    def save_model(
+        self,
+        output_dir: Optional[str] = None,
+        _internal_call: bool = False,
+        save_onnx_model: Optional[bool] = None,
+    ):
         """
         Will save the model, so you can reload it using `from_pretrained()`.
         Will only save from the main process.
@@ -529,9 +554,17 @@ class INCTrainer(Trainer):
             output_dir = self.args.output_dir
 
         if self.args.should_save:
-            self._save(output_dir=output_dir, save_onnx_model=save_onnx_model)
+            self._save(
+                output_dir=output_dir,
+                save_onnx_model=save_onnx_model,
+            )
 
-    def _save(self, output_dir: Optional[str] = None, state_dict=None, save_onnx_model=False):
+    def _save(
+        self,
+        output_dir=None,
+        state_dict=None,
+        save_onnx_model=False,
+    ):
         # If we are executing this function, we are the process zero, so we don't check for that.
         output_dir = output_dir if output_dir is not None else self.args.output_dir
 
@@ -582,6 +615,11 @@ class INCTrainer(Trainer):
             self.model.eval()
             self._onnx_export(self.model, onnx_config, output_onnx_path)
 
+        if self.pruning_config is not None:
+            self.inc_config.pruning["sparsity"] = round(self.get_model_sparsity(), 2)
+        self.inc_config.save_onnx_model = save_onnx_model
+        self.inc_config.save_pretrained(output_dir)
+
         logger.info(f"Model weights saved in {output_model_file}")
 
     def _set_task(self):
@@ -594,10 +632,10 @@ class INCTrainer(Trainer):
 
     def _onnx_export(self, model: nn.Module, config: "OnnxConfig", output_path: str):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
-        dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
+        dynamic_axes = dict(chain(config.inputs.items(), config.outputs.items()))
         inputs = config.generate_dummy_inputs(framework="pt")
         device = model.device
-        inputs = dict((k, v.to(device)) for k, v in inputs.items())
+        inputs = {k: v.to(device) for k, v in inputs.items()}
 
         if self.dtype == "int8":
             torch_to_int8_onnx(
@@ -640,7 +678,7 @@ class INCTrainer(Trainer):
                 " you can safely ignore this message."
             )
 
-        columns = [k for k in signature_columns if k in dataset.column_names]
+        [k for k in signature_columns if k in dataset.column_names]
 
         return dataset.remove_columns(ignored_columns)
 
@@ -689,11 +727,11 @@ class INCTrainer(Trainer):
                 teacher_outputs = self.distillation_config.teacher_model(**inputs)
                 teacher_outputs = self._get_logits(teacher_outputs)
 
-            if teacher_outputs is not None:
+            if teacher_outputs is not None and self.distillation_callback is not None:
                 distillation_loss = self.compute_distillation_loss(student_outputs, teacher_outputs)
-                loss *= self._compression_manager.callbacks.callbacks.criterion.loss_weights[0]
-                loss += distillation_loss * self._compression_manager.callbacks.callbacks.criterion.loss_weights[1]
-                loss /= sum(self._compression_manager.callbacks.callbacks.criterion.loss_weights)
+                loss *= self.distillation_callback.criterion.loss_weights[0]
+                loss += distillation_loss * self.distillation_callback.criterion.loss_weights[1]
+                loss /= sum(self.distillation_callback.criterion.loss_weights)
 
                 if isinstance(outputs, dict):
                     outputs["loss"] = loss
@@ -711,12 +749,12 @@ class INCTrainer(Trainer):
         elif isinstance(data, (tuple, list)):
             return type(data)(self._prepare_input(v) for v in data)
         elif isinstance(data, torch.Tensor):
-            kwargs = dict(device=self.model.device)
+            kwargs = {"device": self.model.device}
             if self.deepspeed and data.dtype != torch.int64:
                 # NLP models inputs are int64 and those get adjusted to the right dtype of the
                 # embedding. Other models such as wav2vec2's inputs are already float and thus
                 # may need special handling to match the dtypes of the model
-                kwargs.update(dict(dtype=self.args.hf_deepspeed_config.dtype()))
+                kwargs.update({"dtype": self.args.hf_deepspeed_config.dtype()})
             return data.to(**kwargs)
         return data
 
@@ -730,13 +768,11 @@ class INCTrainer(Trainer):
         How the distillation loss is computed given the student and teacher outputs.
         """
         distillation_loss = None
-        temperature = self._compression_manager.callbacks.callbacks.criterion.temperature
+        temperature = self.distillation_callback.criterion.temperature
         for student_output, teacher_output in zip(student_outputs, teacher_outputs):
             student_output = student_output / temperature
             teacher_output = teacher_output / temperature
-            loss = self._compression_manager.callbacks.callbacks.criterion.teacher_student_loss_cal(
-                student_output, teacher_output
-            )
+            loss = self.distillation_callback.criterion.teacher_student_loss_cal(student_output, teacher_output)
             distillation_loss = loss if distillation_loss is None else distillation_loss + loss
         distillation_loss *= temperature**2
         return distillation_loss

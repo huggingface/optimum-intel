@@ -182,7 +182,7 @@ class TestExamples(unittest.TestCase):
                 --max_eval_samples 50
                 --max_train_samples 4
                 --num_train_epoch 2
-                --learning_rate 1e-10 
+                --learning_rate 1e-10
                 --verify_loading
                 --output_dir {tmp_dir}
                 """.split()
@@ -212,7 +212,7 @@ class TestExamples(unittest.TestCase):
                 --max_eval_samples 50
                 --max_train_samples 4
                 --num_train_epoch 2
-                --learning_rate 1e-10 
+                --learning_rate 1e-10
                 --verify_loading
                 --output_dir {tmp_dir}
                 """.split()
