@@ -16,7 +16,7 @@ limitations under the License.
 
 ## Language generation
 
-Based on the script [`run_generation.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/text-generation/run_generation.py).
+Based on the script [`run_generation.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/ipex/text-generation/run_generation.py).
 
 Conditional text generation using the auto-regressive models sucha s : GPT, GPT-2, Transformer-XL, XLNet, CTRL. By setting `--jit` an instance of `torch.jit.ScriptModule` will be created and used to perform generation.
 Example usage:

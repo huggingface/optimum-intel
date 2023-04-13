@@ -38,7 +38,7 @@ from transformers import (
     XLNetTokenizer,
 )
 
-from optimum.intel.neural_compressor.modeling import INCModelForGeneration
+from optimum.intel.ipex.modeling import IPEXModelForGeneration
 
 
 logging.basicConfig(
