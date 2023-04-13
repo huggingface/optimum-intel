@@ -50,13 +50,14 @@ class INCModelForGeneration(OptimizedModel, GenerationMixin):
         model,
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        use_cache: bool = False,
+        use_cache: bool = True,
         **kwargs,
     ):
         self.model = model
         self.config = config
         self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
+        self.model_inputs = kwargs.get("model_inputs")
         self.use_cache = use_cache
 
         if is_transformers_version("<=", "4.25.1"):
@@ -83,18 +84,29 @@ class INCModelForGeneration(OptimizedModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         inputs = {
-            "input_ids": input_ids,
             "attention_mask": attention_mask,
         }
 
-        if self.use_cache and past_key_values is not None:
-            input_ids = input_ids[:, -1:]
-            # TODO : add pkv to inputs
+        if self.use_cache:
+            if past_key_values is not None:
+                input_ids = input_ids[:, -1:]
+            else:
+                dummy_past_key_values = self.model_inputs["past_key_values"]
+                nb_layer = len(dummy_past_key_values)
+                nb_pkv = len(dummy_past_key_values[0])
+                new_shape = list(dummy_past_key_values[0][0].shape)
+                new_shape[2] = 0
+                new_shape[0] = input_ids.shape[0]
+                empty_tensor = torch.empty(size=new_shape)
+                past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(nb_layer))
+
+            inputs["past_key_values"] = past_key_values
+
+        inputs["input_ids"] = input_ids
 
         outputs = self.model(**inputs)
 
-        past_key_values = outputs[1] if self.use_cache else None
-        return CausalLMOutputWithPast(logits=outputs[0], past_key_values=past_key_values)
+        return CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
 
     @classmethod
     def _from_pretrained(
@@ -107,7 +119,7 @@ class INCModelForGeneration(OptimizedModel, GenerationMixin):
         cache_dir: Optional[str] = None,
         file_name: Optional[str] = WEIGHTS_NAME,
         local_files_only: bool = False,
-        use_cache: bool = False,
+        use_cache: bool = True,
         **kwargs,
     ):
         # Load the model from local directory
@@ -138,7 +150,14 @@ class INCModelForGeneration(OptimizedModel, GenerationMixin):
         for i in range(2):
             model(**model_inputs)
 
-        return cls(model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
+        return cls(
+            model,
+            config=config,
+            model_save_dir=model_save_dir,
+            use_cache=use_cache,
+            model_inputs=model_inputs,
+            **kwargs,
+        )
 
     @classmethod
     def _from_transformers(
@@ -151,14 +170,13 @@ class INCModelForGeneration(OptimizedModel, GenerationMixin):
         cache_dir: Optional[str] = None,
         subfolder: str = "",
         local_files_only: bool = False,
-        use_cache: bool = False,
+        use_cache: bool = True,
         **kwargs,
     ):
         if is_torch_version("<", "2.0.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
         task = cls.export_feature
-
         model_kwargs = {
             "revision": revision,
             "use_auth_token": use_auth_token,
@@ -170,12 +188,18 @@ class INCModelForGeneration(OptimizedModel, GenerationMixin):
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         model.config.return_dict = False
-        inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
+        signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
         onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_class(model.config, use_past=use_cache)
-        model_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+        dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+        model_inputs = {
+            key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None
+        }
 
-        traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs)
+        if use_cache:
+            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()))
+        else:
+            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs)
         traced_model = torch.jit.freeze(traced_model.eval())
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
