@@ -260,3 +260,16 @@ outputs = pipe_cls(text)
 ```
 
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
+
+
+
+## Apply quantization using the CLI
+
+Intel Neural Compressor dynamic quantization can be applied on your model through the Optimum command-line.
+
+You can easily add dynamic quantization on your model by using the following command line:
+
+```bash
+optimum-cli inc quantize --model distilbert-base-uncased-finetuned-sst-2-english --task text-classification --output ./quantized
+```
+
