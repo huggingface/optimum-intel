@@ -383,9 +383,7 @@ class OVDecoder:
         if past_key_values is not None:
             # Flatten the past_key_values
             past_key_values = tuple(
-                past_key_value
-                for pkv_per_layer in past_key_values
-                for past_key_value in pkv_per_layer
+                past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
             )
 
             # Add the past_key_values to the decoder inputs
