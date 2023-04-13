@@ -16,11 +16,10 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-import numpy as np
 import openvino
 import torch
 import transformers
-from openvino.runtime import Core, Tensor
+from openvino.runtime import Core
 from transformers import AutoConfig, AutoModelForSeq2SeqLM
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
@@ -387,10 +386,7 @@ class OVDecoder:
             )
 
             # Add the past_key_values to the decoder inputs
-            inputs = {
-                input_name: past_key_value
-                for input_name, past_key_value in zip(self.key_value_input_names, past_key_values)
-            }
+            inputs = dict(zip(self.key_value_input_names, past_key_values))
 
         inputs["input_ids"] = input_ids
 
