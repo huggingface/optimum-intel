@@ -40,7 +40,7 @@ else:
 logger = logging.getLogger(__name__)
 
 
-class IPEXModelForGeneration(OptimizedModel, GenerationMixin):
+class IPEXModelForCausalLM(OptimizedModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "causal-lm"
     main_input_name = "input_ids"
