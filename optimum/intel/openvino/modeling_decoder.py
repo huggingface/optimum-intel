@@ -120,6 +120,15 @@ class OVBaseDecoderModel(OVBaseModel):
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
 
+        use_cache = kwargs.pop("use_cache", True)
+        if use_cache ^ self.use_cache:
+            raise ValueError(
+                f"`use_cache` was set to `{use_cache}` but the loaded model only supports `use_cache={self.use_cache}`. "
+                f"Please load your current model with `use_cache={self.use_cache}` or export the original model "
+                f"once again with `use_cache={use_cache}` when calling the `from_pretrained` method. "
+                "To export your model, simply set `export=True`."
+            )
+
         if not dynamic_shapes:
             logger.warning(
                 "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model and will be ignored."
@@ -175,6 +184,7 @@ class OVBaseDecoderModel(OVBaseModel):
             cache_dir=cache_dir,
             file_name=model_file_name,
             local_files_only=local_files_only,
+            use_cache=use_cache,
             **kwargs,
         )
 
