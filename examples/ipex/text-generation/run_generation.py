@@ -224,7 +224,7 @@ def main():
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
 
     if args.jit:
-        model = INCModelForGeneration.from_pretrained(args.model_name_or_path, export=True)
+        model = IPEXModelForGeneration.from_pretrained(args.model_name_or_path, export=True)
     else:
         model = model_class.from_pretrained(args.model_name_or_path)
 
