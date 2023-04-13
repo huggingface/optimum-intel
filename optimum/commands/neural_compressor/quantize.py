@@ -83,7 +83,7 @@ class INCQuantizeCommand(BaseOptimumCLICommand):
 
         if task == "auto":
             try:
-                task = TasksManager.infer_task_from_model(model_id)
+                task = TasksManager.infer_task_from_model(str(model_id))
             except Exception as e:
                 return (
                     f"### Error: {e}. Please pass explicitely the task as it could not be infered.",
