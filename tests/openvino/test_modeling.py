@@ -465,6 +465,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(outputs, torch.Tensor)
         self.assertEqual(outputs.shape[0], 3)
 
+    def test_model_and_decoder_same_device(self):
+        model_id = MODEL_NAMES["gpt2"]
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True)
+        model.to("TEST")
+        self.assertEqual(model._device, model.decoder._device)
+        self.assertEqual(model.decoder._device, "TEST")
+
     def test_compare_with_and_without_past_key_values(self):
         model_id = MODEL_NAMES["gpt2"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
