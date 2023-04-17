@@ -174,7 +174,20 @@ class OVBaseDecoderModel(OVModel):
             **kwargs,
         )
 
-    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, *args, **kwargs):
+    def _reshape(
+        self,
+        model: openvino.runtime.Model,
+        batch_size: int,
+        sequence_length: int,
+        height: int = None,
+        width: int = None,
+    ):
+        if height is not None:
+            logger.warning(f"`height` set to `{height}` will be ignored during reshaping operation.")
+
+        if width is not None:
+            logger.warning(f"`width` set to `{width}` will be ignored during reshaping operation.")
+
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
