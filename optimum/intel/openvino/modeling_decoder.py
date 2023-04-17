@@ -220,7 +220,7 @@ class OVBaseDecoderModel(OVBaseModel):
     MODEL_START_DOCSTRING,
 )
 class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
-    export_feature = "causal-lm"
+    export_feature = "text-generation"
     auto_model_class = AutoModelForCausalLM
 
     @add_start_docstrings_to_model_forward(

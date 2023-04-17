@@ -80,6 +80,7 @@ from transformers.utils import (
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 
+from ..utils.constant import _TASK_ALIASES
 from .configuration import OVConfig
 from .quantization import OVDataLoader
 from .training_args import OVTrainingArguments
@@ -658,8 +659,9 @@ class OVTrainer(Trainer):
         if not isinstance(self.model, PreTrainedModel):
             unwrapped_model = unwrap_model(self.model)
             if isinstance(unwrapped_model, NNCFNetwork):
-                unwrapped_model = unwrapped_model.get_nncf_wrapped_model()
-            is_pretrained_model = isinstance(unwrapped_model, PreTrainedModel)
+                is_pretrained_model = isinstance(unwrapped_model.get_nncf_wrapped_model(), PreTrainedModel)
+            else:
+                is_pretrained_model = isinstance(unwrapped_model, PreTrainedModel)
             if state_dict is None:
                 state_dict = self.model.state_dict()
             if is_pretrained_model:
@@ -690,7 +692,10 @@ class OVTrainer(Trainer):
                 task=self.task,
                 model_type=model_type,
             )
+
             onnx_config = onnx_config_class(self.model.config)
+
+            onnx_config = onnx_config_class(self.model.config, use_past=True)
 
             num_parameters = self.model.num_parameters()
             save_as_external_data = use_external_data_format(num_parameters) or self.ov_config.save_onnx_model
@@ -760,10 +765,7 @@ class OVTrainer(Trainer):
     def _set_task(self):
         if self.task is None:
             raise ValueError("The model task defining the model topology needs to be specified for the ONNX export.")
-        elif self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-            self.task = "sequence-classification"
-        elif self.task in ["feature-extraction", "fill-mask"]:
-            self.task = "default"
+        self.task = _TASK_ALIASES.get(self.task, self.task)
 
     def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, ov_config: OVConfig, f: Union[str, io.BytesIO]):
         opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)

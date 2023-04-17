@@ -113,7 +113,7 @@ def compute_metrics(eval_preds):
     tokenizer=tokenizer,
     data_collator=default_data_collator,
 +   ov_config=ov_config,
-+   task="sequence-classification",
++   task="text-classification",
 )
 
 # Train the model while applying quantization
@@ -187,7 +187,7 @@ trainer = OVTrainer(
     tokenizer=tokenizer,
     data_collator=default_data_collator,
 +   ov_config=ov_config,
-    task="sequence-classification",
+    task="text-classification",
 )
 
 # Train the model like usual, internally the training is applied with pruning, quantization and distillation

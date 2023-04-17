@@ -39,6 +39,7 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
 
+from ..utils.constant import _TASK_ALIASES
 from .configuration import OVConfig
 from .utils import (
     MAX_ONNX_OPSET,
@@ -221,17 +222,14 @@ class OVQuantizer(OptimumQuantizer):
     def _set_task(self):
         if self.task is None:
             self.task = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
-            if self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-                self.task = "sequence-classification"
-            elif self.task in ["feature-extraction", "fill-mask"]:
-                self.task = "default"
-            elif self.task == "text-generation":
-                self.task = "causal-lm"
-            elif self.task is None:
+            if self.task is None:
                 raise ValueError(
                     "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
                 )
-        if self.task in ["seq2seq-lm", "translation", "summarization"]:
+
+        self.task = _TASK_ALIASES.get(self.task, self.task)
+
+        if self.task == "text2text-generation":
             raise ValueError("Seq2Seq models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(

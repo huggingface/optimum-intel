@@ -175,7 +175,7 @@ save_dir = "nncf_results"
     tokenizer=tokenizer,
     data_collator=default_data_collator,
 +   ov_config=ov_config,
-+   task="sequence-classification",
++   task="text-classification",
 )
 train_result = trainer.train()
 metrics = trainer.evaluate()

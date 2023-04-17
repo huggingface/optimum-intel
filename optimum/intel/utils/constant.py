@@ -13,6 +13,18 @@
 #  limitations under the License.
 
 _TASK_ALIASES = {
+    "sequence-classification": "text-classification",
+    "sentiment-analysis": "text-classification",
+    "zero-shot-classification": "text-classification",
+    "default": "feature-extraction",
+    "masked-lm": "fill-mask",
+    "causal-lm": "text-generation",
+    "seq2seq-lm": "text2text-generation",
+    "summarization": "text2text-generation",
+    "translation": "text2text-generation",
+}
+
+_TASK_LEGACY = {
     "text-classification": "sequence-classification",
     "fill-mask": "masked-lm",
     "text-generation": "causal-lm",
