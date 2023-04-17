@@ -443,9 +443,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
-        model.to("cpu")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True, use_cache=False, compile=False)
+        model.to("cpu")
+        model.half()
+        model.compile()
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         outputs = pipe("This is a sample", max_length=10)
         self.assertEqual(pipe.device, model.device)
@@ -456,7 +458,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_multiple_inputs(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = OVModelForCausalLM.from_pretrained(model_id, export=True)
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=False)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
@@ -469,8 +471,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES["gpt2"]
         model = OVModelForCausalLM.from_pretrained(model_id, export=True)
         model.to("TEST")
-        self.assertEqual(model._device, model.decoder._device)
-        self.assertEqual(model.decoder._device, "TEST")
+        self.assertEqual(model._device, "TEST")
+        # Verify that request is being reset
+        self.assertEqual(model.request, None)
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = MODEL_NAMES["gpt2"]
