@@ -694,9 +694,6 @@ class OVTrainer(Trainer):
             )
 
             onnx_config = onnx_config_class(self.model.config)
-
-            onnx_config = onnx_config_class(self.model.config, use_past=True)
-
             num_parameters = self.model.num_parameters()
             save_as_external_data = use_external_data_format(num_parameters) or self.ov_config.save_onnx_model
             f = io.BytesIO() if not save_as_external_data else os.path.join(output_dir, ONNX_WEIGHTS_NAME)
