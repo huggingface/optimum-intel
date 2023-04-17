@@ -215,7 +215,7 @@ class OVBaseDecoderModel(OVBaseModel):
         """
         self._device = device.upper()
         self.decoder._device = device.upper()
-        self.request = None
+        self.decoder.request = None
         return self
 
     def forward(self, *args, **kwargs):
