@@ -658,9 +658,8 @@ class OVTrainer(Trainer):
         if not isinstance(self.model, PreTrainedModel):
             unwrapped_model = unwrap_model(self.model)
             if isinstance(unwrapped_model, NNCFNetwork):
-                is_pretrained_model = isinstance(unwrapped_model.get_nncf_wrapped_model(), PreTrainedModel)
-            else:
-                is_pretrained_model = isinstance(unwrapped_model, PreTrainedModel)
+                unwrapped_model = unwrapped_model.get_nncf_wrapped_model()
+            is_pretrained_model = isinstance(unwrapped_model, PreTrainedModel)
             if state_dict is None:
                 state_dict = self.model.state_dict()
             if is_pretrained_model:
