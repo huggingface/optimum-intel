@@ -444,6 +444,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
+        model.to("cpu")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         outputs = pipe("This is a sample", max_length=10)
@@ -463,6 +464,13 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         outputs = model.generate(**tokens, max_new_tokens=20, num_beams=2)
         self.assertIsInstance(outputs, torch.Tensor)
         self.assertEqual(outputs.shape[0], 3)
+
+    def test_model_and_decoder_same_device(self):
+        model_id = MODEL_NAMES["gpt2"]
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True)
+        model.to("TEST")
+        self.assertEqual(model._device, model.decoder._device)
+        self.assertEqual(model.decoder._device, "TEST")
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = MODEL_NAMES["gpt2"]

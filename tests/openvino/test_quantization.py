@@ -150,6 +150,7 @@ class OVTrainerTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
+            self.assertEqual(trainer.task, "text-classification")
             trainer.train()
             trainer.evaluate()
             trainer.save_model()

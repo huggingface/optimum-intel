@@ -239,7 +239,7 @@ class QuantizationTest(unittest.TestCase):
             trainer = INCTrainer(
                 model=model,
                 quantization_config=quantization_config,
-                task="sequence-classification",
+                task="text-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
                 train_dataset=dataset["train"].select(range(8)),
                 eval_dataset=dataset["validation"].select(range(8)),
@@ -354,7 +354,7 @@ class PruningTest(unittest.TestCase):
             trainer = INCTrainer(
                 model=model,
                 pruning_config=pruning_config,
-                task="sequence-classification",
+                task="text-classification",
                 args=TrainingArguments(tmp_dir, num_train_epochs=2.0, do_train=True, do_eval=False),
                 train_dataset=dataset["train"].select(range(64)),
                 eval_dataset=dataset["validation"].select(range(4)),
@@ -410,6 +410,8 @@ class DistillationTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
+            trainer._set_task()
+            self.assertEqual(trainer.task, "text-classification")
             trainer.train()
             trainer.evaluate()
             trainer.save_model(save_onnx_model=True)

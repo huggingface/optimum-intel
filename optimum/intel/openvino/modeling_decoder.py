@@ -208,6 +208,16 @@ class OVBaseDecoderModel(OVBaseModel):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
 
+    def to(self, device: str):
+        """
+        Use the specified `device` for inference. For example: "cpu" or "gpu". `device` can
+        be in upper or lower case. To speed up first inference, call `.compile()` after `.to()`.
+        """
+        self._device = device.upper()
+        self.decoder._device = device.upper()
+        self.decoder.request = None
+        return self
+
     def forward(self, *args, **kwargs):
         raise NotImplementedError
 
@@ -220,7 +230,7 @@ class OVBaseDecoderModel(OVBaseModel):
     MODEL_START_DOCSTRING,
 )
 class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
-    export_feature = "causal-lm"
+    export_feature = "text-generation"
     auto_model_class = AutoModelForCausalLM
 
     @add_start_docstrings_to_model_forward(

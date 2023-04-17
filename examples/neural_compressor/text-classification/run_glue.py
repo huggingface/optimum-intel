@@ -572,7 +572,7 @@ def main():
     # Initialize our Trainer
     trainer = INCTrainer(
         model=model,
-        task="sequence-classification",
+        task="text-classification",
         quantization_config=quantization_config,
         pruning_config=pruning_config,
         distillation_config=distillation_config,
