@@ -258,7 +258,7 @@ class INCQuantizer(OptimumQuantizer):
 
     def _set_task(self):
         if self.task is None:
-            self.task = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
+            self.task = HfApi().model_info(self._original_model.config._name_or_path).pipeline_tag
             if self.task is None:
                 raise ValueError(
                     "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
