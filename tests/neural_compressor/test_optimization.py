@@ -410,6 +410,7 @@ class DistillationTest(unittest.TestCase):
                 tokenizer=tokenizer,
                 data_collator=default_data_collator,
             )
+            trainer._set_task()
             self.assertEqual(trainer.task, "text-classification")
             trainer.train()
             trainer.evaluate()
