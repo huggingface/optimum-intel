@@ -72,6 +72,14 @@ loaded_model_from_hub = INCModelForSequenceClassification.from_pretrained(
 )
 ```
 
+#### Apply dynamic quantization on your model using the CLI
+
+Dynamic quantization can be used through the Optimum Intel command-line:
+
+```bash
+optimum-cli inc quantize --model distilbert-base-cased-distilled-squad --output ./quantized_distilbert
+```
+
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
 
