@@ -307,11 +307,8 @@ class OVBaseModel(OptimizedModel):
     def compile(self):
         if self.request is None:
             logger.info("Compiling the model and creating the inference request ...")
-            # Only enable CACHE_DIR for GPU because CACHE_DIR fails with some INT8 models on CPU with 2022.3
-            ov_config = self.ov_config.copy()
-            if self._device == "GPU":
-                cache_dir = Path(self.model_save_dir).joinpath("model_cache")
-                ov_config["CACHE_DIR"] = str(cache_dir)
+            cache_dir = Path(self.model_save_dir).joinpath("model_cache")
+            ov_config = {**self.ov_config, "CACHE_DIR": str(cache_dir)}
             compiled_model = core.compile_model(self.model, self._device, ov_config)
             self.request = compiled_model.create_infer_request()
 

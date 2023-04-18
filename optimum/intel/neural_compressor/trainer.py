@@ -64,6 +64,7 @@ from transformers.utils import is_apex_available, is_sagemaker_mp_enabled, loggi
 
 from optimum.exporters import TasksManager
 
+from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_neural_compressor_version
 from .configuration import INCConfig
 from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
@@ -625,10 +626,7 @@ class INCTrainer(Trainer):
     def _set_task(self):
         if self.task is None:
             raise ValueError("The model task defining the model topology needs to be specified for the ONNX export.")
-        elif self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-            self.task = "sequence-classification"
-        elif self.task in ["feature-extraction", "fill-mask"]:
-            self.task = "default"
+        self.task = _TASK_ALIASES.get(self.task, self.task)
 
     def _onnx_export(self, model: nn.Module, config: "OnnxConfig", output_path: str):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
