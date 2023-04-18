@@ -109,8 +109,8 @@ else:
         "INCSeq2SeqTrainer",
         "INCTrainer",
     ]
-    _import_structure["utils.modeling"] = [
-        "AutoModelForGeneration",
+    _import_structure["generation.modeling"] = [
+        "TracedModelForGeneration",
     ]
 
 

@@ -14,13 +14,13 @@
 
 import inspect
 import logging
-import numpy as np
 import os
-import torch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import List, Optional, Tuple, Union
 
+import numpy as np
+import torch
 from huggingface_hub import hf_hub_download
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -30,7 +30,7 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils.input_generators import DummyInputGenerator, check_framework_is_available
 
-from .import_utils import is_torch_version, is_transformers_version
+from ..utils.import_utils import is_torch_version, is_transformers_version
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -95,14 +95,15 @@ def random_float_tensor(shape: List[int], min_value: float = 0, max_value: float
     else:
         return np.random.uniform(low=min_value, high=max_value, size=shape).astype(np.float32)
 
+
 # For fix the accuracy issue due to trace the model with dummy data.
 DummyInputGenerator.random_int_tensor = random_int_tensor
 DummyInputGenerator.random_float_tensor = random_float_tensor
 
 
-class AutoModelForGeneration(OptimizedModel, GenerationMixin):
+class TracedModelForGeneration(OptimizedModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
-    export_feature = "causal-lm"
+    export_feature = "text-generation"
     main_input_name = "input_ids"
 
     def __init__(
@@ -130,10 +131,6 @@ class AutoModelForGeneration(OptimizedModel, GenerationMixin):
         model = torch.jit.load(file_name)
         torch.jit.freeze(model.eval())
         return model
-
-    def set_traced_model(self, traced_model):
-        self.model = traced_model
-        self.config.torchscript = True
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
         if self.config.torchscript:
@@ -194,6 +191,17 @@ class AutoModelForGeneration(OptimizedModel, GenerationMixin):
     ):
         to_torchscript = kwargs.pop("torchscript", False)
         if config.torchscript:
+            task = cls.export_feature
+            model_kwargs = {
+                "revision": revision,
+                "use_auth_token": use_auth_token,
+                "cache_dir": cache_dir,
+                "subfolder": "",
+                "local_files_only": local_files_only,
+                "force_download": force_download,
+            }
+
+            model = TasksManager.get_model_from_task(task, "../../ipex/text-generation/model", **model_kwargs)
             # Load the model from local directory
             if os.path.isdir(model_id):
                 file_name = os.path.join(model_id, file_name)

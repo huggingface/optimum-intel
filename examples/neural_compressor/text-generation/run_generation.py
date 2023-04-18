@@ -30,11 +30,9 @@ from transformers import (
     CTRLTokenizer,
     GPT2LMHeadModel,
     GPT2Tokenizer,
-    GPTJForCausalLM,
-    OPTForCausalLM,
 )
 
-from optimum.intel import AutoModelForGeneration
+from optimum.intel import TracedModelForGeneration
 
 
 logging.basicConfig(
@@ -229,13 +227,18 @@ def main():
 
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
     # model = model_class.from_pretrained(args.model_name_or_path)
-    model = AutoModelForGeneration.from_pretrained(args.model_name_or_path, torchscript=True if args.jit else False)
+    model = TracedModelForGeneration.from_pretrained(args.model_name_or_path, torchscript=True if args.jit else False)
     model.to(args.device)
 
     if args.fp16:
         model.half()
 
-    args.length = adjust_length_to_model(args.length, max_sequence_length=model.config.max_position_embeddings if hasattr(model.config, "max_position_embeddings") else 0)
+    args.length = adjust_length_to_model(
+        args.length,
+        max_sequence_length=model.config.max_position_embeddings
+        if hasattr(model.config, "max_position_embeddings")
+        else 0,
+    )
     logger.info(args)
 
     prompt_text = args.prompt if args.prompt else input("Model prompt >>> ")
