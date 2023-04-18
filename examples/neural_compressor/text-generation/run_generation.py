@@ -32,7 +32,7 @@ from transformers import (
     GPT2Tokenizer,
 )
 
-from optimum.intel import TracedModelForGeneration
+from optimum.intel import TracedModelForCausalLM
 
 
 logging.basicConfig(
@@ -227,7 +227,7 @@ def main():
 
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
     # model = model_class.from_pretrained(args.model_name_or_path)
-    model = TracedModelForGeneration.from_pretrained(args.model_name_or_path, torchscript=True if args.jit else False)
+    model = TracedModelForCausalLM.from_pretrained(args.model_name_or_path, torchscript=True if args.jit else False)
     model.to(args.device)
 
     if args.fp16:

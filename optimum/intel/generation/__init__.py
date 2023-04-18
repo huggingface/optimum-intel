@@ -13,4 +13,4 @@
 #  limitations under the License.
 
 
-from .modeling import TracedModelForGeneration
+from .modeling import TracedModelForCausalLM

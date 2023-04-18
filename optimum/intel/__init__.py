@@ -110,7 +110,7 @@ else:
         "INCTrainer",
     ]
     _import_structure["generation.modeling"] = [
-        "TracedModelForGeneration",
+        "TracedModelForCausalLM",
     ]
 
 

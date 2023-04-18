@@ -101,7 +101,7 @@ DummyInputGenerator.random_int_tensor = random_int_tensor
 DummyInputGenerator.random_float_tensor = random_float_tensor
 
 
-class TracedModelForGeneration(OptimizedModel, GenerationMixin):
+class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
     main_input_name = "input_ids"
