@@ -650,4 +650,3 @@ class IncQuantizedModelForXLNetLM(IncQuantizedModel):
 
 class IncQuantizedModelForVision2Seq(IncQuantizedModel):
     TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq
-
