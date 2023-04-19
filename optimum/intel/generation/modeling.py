@@ -15,11 +15,10 @@
 import inspect
 import logging
 import os
+import torch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
-
-import torch
 from huggingface_hub import hf_hub_download
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -40,9 +39,9 @@ else:
 logger = logging.getLogger(__name__)
 
 
-class IPEXModelForCausalLM(OptimizedModel, GenerationMixin):
+class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
-    export_feature = "causal-lm"
+    export_feature = "text-generation"
     main_input_name = "input_ids"
 
     def __init__(
@@ -88,9 +87,7 @@ class IPEXModelForCausalLM(OptimizedModel, GenerationMixin):
         }
 
         if self.use_cache:
-            if past_key_values is not None:
-                input_ids = input_ids[:, -1:]
-            else:
+            if past_key_values is None:
                 dummy_past_key_values = self.model_inputs["past_key_values"]
                 nb_layer = len(dummy_past_key_values)
                 nb_pkv = len(dummy_past_key_values[0])
@@ -122,6 +119,9 @@ class IPEXModelForCausalLM(OptimizedModel, GenerationMixin):
         use_cache: bool = True,
         **kwargs,
     ):
+        if not config.torchscript:
+            raise ValueError("The model is not the script model, please check it!")
+
         # Load the model from local directory
         if os.path.isdir(model_id):
             file_name = os.path.join(model_id, file_name)
@@ -204,6 +204,7 @@ class IPEXModelForCausalLM(OptimizedModel, GenerationMixin):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
+        config.torchscript = True
 
         return cls._from_pretrained(
             model_id=save_dir_path,
@@ -233,6 +234,9 @@ class IPEXModelForCausalLM(OptimizedModel, GenerationMixin):
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
         past_key_values = past_key_values or kwargs.get("past", None)
+        if self.use_cache:
+            if past_key_values is not None:
+                input_ids = input_ids[:, -1:]
         return {
             "input_ids": input_ids,
             "past_key_values": past_key_values,

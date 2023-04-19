@@ -109,6 +109,9 @@ else:
         "INCSeq2SeqTrainer",
         "INCTrainer",
     ]
+    _import_structure["generation.modeling"] = [
+        "TracedModelForCausalLM",
+    ]
 
 
 if TYPE_CHECKING:
