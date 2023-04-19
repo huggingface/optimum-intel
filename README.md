@@ -43,24 +43,12 @@ where `extras` can be one or more of `neural-compressor`, `openvino`, `nncf`.
 
 #### Dynamic quantization:
 
-Here is an example on how to apply dynamic quantization on a DistilBERT fine-tuned on the SQuAD1.0 dataset.
-Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in this example.
+Dynamic quantization can be used through the Optimum command-line interface:
 
-```python
-from transformers import AutoModelForQuestionAnswering
-from neural_compressor.config import PostTrainingQuantConfig
-from optimum.intel import INCQuantizer
-
-model_name = "distilbert-base-cased-distilled-squad"
-model = AutoModelForQuestionAnswering.from_pretrained(model_name)
-# The directory where the quantized model will be saved
-save_dir = "quantized_model"
-# Load the quantization configuration detailing the quantization we wish to apply
-quantization_config = PostTrainingQuantConfig(approach="dynamic")
-quantizer = INCQuantizer.from_pretrained(model)
-# Apply dynamic quantization and save the resulting model
-quantizer.quantize(quantization_config=quantization_config, save_directory=save_dir)
+```bash
+optimum-cli inc quantize --model distilbert-base-cased-distilled-squad --output ./quantized_distilbert
 ```
+Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in this example.
 
 To load a quantized model hosted locally or on the 🤗 hub, you can do as follows :
 ```python
@@ -72,16 +60,7 @@ loaded_model_from_hub = INCModelForSequenceClassification.from_pretrained(
 )
 ```
 
-#### Apply dynamic quantization on your model using the CLI
-
-Dynamic quantization can be used through the Optimum Intel command-line:
-
-```bash
-optimum-cli inc quantize --model distilbert-base-cased-distilled-squad --output ./quantized_distilbert
-```
-
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
-
 
 For more details, please refer to this [guide](https://huggingface.co/docs/optimum/main/en/intel/optimization_inc#apply-quantization-using-the-cli).
 
