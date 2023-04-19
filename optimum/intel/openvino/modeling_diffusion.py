@@ -25,8 +25,7 @@ from diffusers import DDIMScheduler, LMSDiscreteScheduler, PNDMScheduler, Stable
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME
 from huggingface_hub import snapshot_download
-from openvino._offline_transformations import compress_model_transformation
-from openvino._offline_transformations import apply_moc_transformations
+from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
 
