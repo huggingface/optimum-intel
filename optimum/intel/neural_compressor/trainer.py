@@ -811,10 +811,3 @@ class INCTrainer(Trainer):
             sparsity = self._compression_manager.model.report_sparsity()[-1]
         return sparsity
 
-
-class IncTrainer(INCTrainer):
-    # Warning at import time
-    warnings.warn(
-        "The class `IncTrainer` has been depreciated and will be removed in optimum-intel v1.7, please use "
-        "`INCTrainer` instead.",
-    )
