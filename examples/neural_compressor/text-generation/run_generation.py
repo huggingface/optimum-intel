@@ -38,7 +38,7 @@ from transformers import (
     XLNetTokenizer,
 )
 
-from optimum.intel import TracedModelForCausalLM
+from optimum.intel.generation.modeling import TracedModelForCausalLM
 
 
 logging.basicConfig(
