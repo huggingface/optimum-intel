@@ -15,20 +15,17 @@
 import inspect
 import logging
 import os
+import torch
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import List, Optional, Tuple, Union
-
-import numpy as np
-import torch
+from typing import Optional, Tuple, Union
 from huggingface_hub import hf_hub_download
-from transformers import AutoModelForCausalLM, PretrainedConfig
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, add_start_docstrings
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.utils import WEIGHTS_NAME, is_tf_available
+from transformers.utils import WEIGHTS_NAME, CONFIG_NAME
 
 from optimum.exporters import TasksManager
-from optimum.modeling_base import OptimizedModel
-from optimum.utils.input_generators import DummyInputGenerator, check_framework_is_available
+from optimum.modeling_base import OptimizedModel, FROM_PRETRAINED_START_DOCSTRING
 
 from ..utils.import_utils import is_torch_version, is_transformers_version
 
@@ -39,66 +36,7 @@ else:
     from transformers.generation import GenerationMixin
 
 
-if is_tf_available():
-    import tensorflow as tf
-
-
 logger = logging.getLogger(__name__)
-
-
-@staticmethod
-@check_framework_is_available
-def random_int_tensor(shape: List[int], max_value: int, min_value: int = 0, framework: str = "pt"):
-    """
-    Generates a tensor of random integers in the [min_value, max_value) range.
-    Args:
-        shape (`List[int]`):
-            The shape of the random tensor.
-        max_value (`int`):
-            The maximum value allowed.
-        min_value (`int`, *optional*, defaults to 0):
-            The minimum value allowed.
-        framework (`str`, *optional*, defaults to `"pt"`):
-            The requested framework.
-    Returns:
-        A random tensor in the requested framework.
-    """
-    if framework == "pt":
-        return torch.from_numpy(np.random.randint(min_value, high=max_value, size=shape, dtype=int))
-    elif framework == "tf":
-        return tf.random.uniform(shape, minval=min_value, maxval=max_value, dtype=tf.int64)
-    else:
-        return np.random.randint(min_value, high=max_value, size=shape, dtype=np.int64)
-
-
-@staticmethod
-@check_framework_is_available
-def random_float_tensor(shape: List[int], min_value: float = 0, max_value: float = 1, framework: str = "pt"):
-    """
-    Generates a tensor of random floats in the [min_value, max_value) range.
-    Args:
-        shape (`List[int]`):
-            The shape of the random tensor.
-        min_value (`float`, *optional*, defaults to 0):
-            The minimum value allowed.
-        max_value (`float`, *optional*, defaults to 1):
-            The maximum value allowed.
-        framework (`str`, *optional*, defaults to `"pt"`):
-            The requested framework.
-    Returns:
-        A random tensor in the requested framework.
-    """
-    if framework == "pt":
-        return torch.from_numpy(np.random.random(shape).astype(np.float32))
-    elif framework == "tf":
-        return tf.random.uniform(shape, minval=min_value, maxval=max_value, dtype=tf.float32)
-    else:
-        return np.random.uniform(low=min_value, high=max_value, size=shape).astype(np.float32)
-
-
-# For fix the accuracy issue due to trace the model with dummy data.
-DummyInputGenerator.random_int_tensor = random_int_tensor
-DummyInputGenerator.random_float_tensor = random_float_tensor
 
 
 class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
@@ -110,13 +48,15 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         self,
         model,
         config: PretrainedConfig = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
         **kwargs,
     ):
         self.model = model
         self.config = config
+        self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
-        self.model_inputs = kwargs.get("model_inputs", None)
+        self.model_inputs = kwargs.get("model_inputs")
         self.use_cache = use_cache
 
         if is_transformers_version("<=", "4.25.1"):
@@ -133,10 +73,7 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         return model
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
-        if self.config.torchscript:
-            torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
-        else:
-            self.model.save_pretrained(save_directory=save_directory)
+        torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
 
     def forward(
         self,
@@ -145,35 +82,116 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
-        if self.config.torchscript:
-            inputs = {
-                "attention_mask": attention_mask,
-            }
+        inputs = {
+            "attention_mask": attention_mask,
+        }
 
-            if self.use_cache:
-                if past_key_values is None:
-                    dummy_past_key_values = self.model_inputs["past_key_values"]
-                    nb_layer = len(dummy_past_key_values)
-                    nb_pkv = len(dummy_past_key_values[0])
-                    new_shape = list(dummy_past_key_values[0][0].shape)
-                    new_shape[2] = 0
-                    new_shape[0] = input_ids.shape[0]
-                    empty_tensor = torch.empty(size=new_shape)
-                    past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(nb_layer))
+        if self.use_cache:
+            if past_key_values is None:
+                dummy_past_key_values = self.model_inputs["past_key_values"]
+                nb_layer = len(dummy_past_key_values)
+                nb_pkv = len(dummy_past_key_values[0])
+                new_shape = list(dummy_past_key_values[0][0].shape)
+                new_shape[2] = 0
+                new_shape[0] = input_ids.shape[0]
+                empty_tensor = torch.empty(size=new_shape)
+                past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(nb_layer))
 
-                inputs["past_key_values"] = past_key_values
+            inputs["past_key_values"] = past_key_values
 
-            inputs["input_ids"] = input_ids
+        inputs["input_ids"] = input_ids
 
-            outputs = self.model(**inputs)
-            return CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
-        else:
-            return self.model.forward(
-                input_ids=input_ids,
-                past_key_values=past_key_values,
-                attention_mask=attention_mask,
-                **kwargs,
+        outputs = self.model(**inputs)
+
+        return CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
+
+    @classmethod
+    @add_start_docstrings(FROM_PRETRAINED_START_DOCSTRING)
+    def from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        export: bool = False,
+        force_download: bool = False,
+        use_auth_token: Optional[str] = None,
+        cache_dir: Optional[str] = None,
+        subfolder: str = "",
+        config: Optional["PretrainedConfig"] = None,
+        local_files_only: bool = False,
+        trust_remote_code: bool = False,
+        revision: Optional[str] = None,
+        **kwargs,
+    ) -> "OptimizedModel":
+        """
+        Returns:
+            `OptimizedModel`: The loaded optimized model.
+        """
+        if isinstance(model_id, Path):
+            model_id = model_id.as_posix()
+
+        from_transformers = kwargs.pop("from_transformers", None)
+        if from_transformers is not None:
+            logger.warning(
+                "The argument `from_transformers` is deprecated, and will be removed in optimum 2.0.  Use `export` instead"
             )
+            export = from_transformers
+
+        if isinstance(model_id, str) and len(model_id.split("@")) == 2:
+            if revision is not None:
+                logger.warning(
+                    f"The argument `revision` was set to {revision} but will be ignored for {model_id.split('@')[1]}"
+                )
+            model_id, revision = model_id.split("@")
+
+        if config is None:
+            if os.path.isdir(os.path.join(model_id, subfolder)) and cls.config_name == CONFIG_NAME:
+                if CONFIG_NAME in os.listdir(os.path.join(model_id, subfolder)):
+                    config = AutoConfig.from_pretrained(os.path.join(model_id, subfolder, CONFIG_NAME))
+                elif CONFIG_NAME in os.listdir(model_id):
+                    config = AutoConfig.from_pretrained(os.path.join(model_id, CONFIG_NAME))
+                    logger.info(
+                        f"config.json not found in the specified subfolder {subfolder}. Using the top level config.json."
+                    )
+                else:
+                    raise OSError(f"config.json not found in {model_id} local folder")
+            else:
+                config = cls._load_config(
+                    model_id,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    use_auth_token=use_auth_token,
+                    force_download=force_download,
+                    subfolder=subfolder,
+                )
+        elif isinstance(config, (str, os.PathLike)):
+            config = cls._load_config(
+                config,
+                revision=revision,
+                cache_dir=cache_dir,
+                use_auth_token=use_auth_token,
+                force_download=force_download,
+                subfolder=subfolder,
+            )
+
+        if not export and trust_remote_code:
+            logger.warning(
+                "The argument `trust_remote_code` is to be used along with export=True. It will be ignored."
+            )
+        elif export and trust_remote_code is None:
+            trust_remote_code = False
+
+        from_pretrained_method = cls._from_transformers if export else cls._from_pretrained
+        return from_pretrained_method(
+            model_id=model_id,
+            config=config,
+            revision=revision,
+            cache_dir=cache_dir,
+            force_download=force_download,
+            use_auth_token=use_auth_token,
+            subfolder=subfolder,
+            local_files_only=local_files_only,
+            trust_remote_code=trust_remote_code,
+            **kwargs,
+        )
 
     @classmethod
     def _from_pretrained(
@@ -189,73 +207,44 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         use_cache: bool = True,
         **kwargs,
     ):
-        to_torchscript = kwargs.pop("torchscript", False)
-        if config.torchscript:
-            task = cls.export_feature
-            model_kwargs = {
-                "revision": revision,
-                "use_auth_token": use_auth_token,
-                "cache_dir": cache_dir,
-                "subfolder": "",
-                "local_files_only": local_files_only,
-                "force_download": force_download,
-            }
+        if not config.torchscript:
+            raise ValueError("The model is not the script model, please check it!")
 
-            model = TasksManager.get_model_from_task(task, "../../ipex/text-generation/model", **model_kwargs)
-            # Load the model from local directory
-            if os.path.isdir(model_id):
-                file_name = os.path.join(model_id, file_name)
-                model = cls.load_model(file_name)
-            # Download the model from the hub
-            else:
-                model_cache_path = hf_hub_download(
-                    repo_id=model_id,
-                    filename=file_name,
-                    use_auth_token=use_auth_token,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
-                )
-                model = cls.load_model(model_cache_path)
-
-            # Only for IPEX, IPEX jit model need 2 iterations to convert model to int8 model
-            onnx_config_class = TasksManager.get_exporter_config_constructor(
-                model_type=config.model_type, exporter="onnx", task=cls.export_feature
-            )
-            onnx_config = onnx_config_class(config, use_past=use_cache)
-            model_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-            for i in range(2):
-                model(**model_inputs)
-        elif not to_torchscript:
-            task = cls.export_feature
-            subfolder = kwargs.pop("subfolder", "")
-            model_kwargs = {
-                "revision": revision,
-                "use_auth_token": use_auth_token,
-                "cache_dir": cache_dir,
-                "subfolder": subfolder,
-                "local_files_only": local_files_only,
-                "force_download": force_download,
-            }
-            model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-            model_inputs = None
+        # Load the model from local directory
+        if os.path.isdir(model_id):
+            file_name = os.path.join(model_id, file_name)
+            model = cls.load_model(file_name)
+            model_save_dir = model_id
+        # The model_id is the TorchScript model
+        elif isinstance(model_id, torch.jit.RecursiveScriptModule):
+            model = model_id
+        # Download the model from the hub
         else:
-            return cls._from_transformers(
-                model_id=model_id,
-                config=config,
+            model_cache_path = hf_hub_download(
+                repo_id=model_id,
+                filename=file_name,
                 use_auth_token=use_auth_token,
                 revision=revision,
-                force_download=force_download,
                 cache_dir=cache_dir,
+                force_download=force_download,
                 local_files_only=local_files_only,
-                use_cache=use_cache,
-                **kwargs,
             )
+            model_save_dir = Path(model_cache_path).parent
+            model = cls.load_model(model_cache_path)
+
+        # IPEX jit model need 2 iterations to convert model to int8 model
+        onnx_config_class = TasksManager.get_exporter_config_constructor(
+            model_type=config.model_type, exporter="onnx", task=cls.export_feature
+        )
+        onnx_config = onnx_config_class(config, use_past=use_cache)
+        model_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+        for i in range(2):
+            model(**model_inputs)
 
         return cls(
             model,
             config=config,
+            model_save_dir=model_save_dir,
             use_cache=use_cache,
             model_inputs=model_inputs,
             **kwargs,
@@ -288,12 +277,19 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
             "force_download": force_download,
         }
 
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        model.config.return_dict = False
+        if isinstance(model_id, str):
+            model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+            model.config.return_dict = False
+        elif isinstance(model_id, torch.nn.Module):
+            model = model_id
+            model.config = config
+            model.config.return_dict = False
+        else:
+            raise ValueError("model_id should be path of model or model name in huggingface hub or a torch.nn.Module.")
         signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
         onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_class(model.config, use_past=use_cache)
-        dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt", batch_size=1)
+        dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
         model_inputs = {
             key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None
         }

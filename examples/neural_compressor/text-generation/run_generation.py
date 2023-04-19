@@ -24,12 +24,18 @@ import logging
 import numpy as np
 import torch
 from transformers import (
-    BloomForCausalLM,
-    BloomTokenizerFast,
     CTRLLMHeadModel,
     CTRLTokenizer,
     GPT2LMHeadModel,
     GPT2Tokenizer,
+    OpenAIGPTLMHeadModel,
+    OpenAIGPTTokenizer,
+    TransfoXLLMHeadModel,
+    TransfoXLTokenizer,
+    XLMTokenizer,
+    XLMWithLMHeadModel,
+    XLNetLMHeadModel,
+    XLNetTokenizer,
 )
 
 from optimum.intel import TracedModelForCausalLM
@@ -47,14 +53,11 @@ MAX_LENGTH = int(10000)  # Hardcoded max length to avoid infinite loop
 MODEL_CLASSES = {
     "gpt2": (GPT2LMHeadModel, GPT2Tokenizer),
     "ctrl": (CTRLLMHeadModel, CTRLTokenizer),
-    "bloom": (BloomForCausalLM, BloomTokenizerFast),
-    # TODO:
-    # "gptj": (GPTJForCausalLM, GPT2Tokenizer),
-    # "opt": (OPTForCausalLM, GPT2Tokenizer),
-    # "openai-gpt": (OpenAIGPTLMHeadModel, OpenAIGPTTokenizer),
-    # "transfo-xl": (TransfoXLLMHeadModel, TransfoXLTokenizer),
+    "openai-gpt": (OpenAIGPTLMHeadModel, OpenAIGPTTokenizer),
+    "xlnet": (XLNetLMHeadModel, XLNetTokenizer),
+    "transfo-xl": (TransfoXLLMHeadModel, TransfoXLTokenizer),
+    "xlm": (XLMWithLMHeadModel, XLMTokenizer),
 }
-
 
 # Padding text to help Transformer-XL and XLNet with short prompts as proposed by Aman Rusia
 # in https://github.com/rusiaaman/XLNet-gen#methodology
@@ -134,6 +137,7 @@ def prepare_transfoxl_input(args, _, tokenizer, prompt_text):
 PREPROCESSING_FUNCTIONS = {
     "ctrl": prepare_ctrl_input,
     "xlm": prepare_xlm_input,
+    "xlnet": prepare_xlnet_input,
     "transfo-xl": prepare_transfoxl_input,
 }
 
@@ -146,20 +150,6 @@ def adjust_length_to_model(length, max_sequence_length):
     elif length < 0:
         length = MAX_LENGTH  # avoid infinite loop
     return length
-
-
-def zeros_like(inputs):
-    ret = []
-    for tensor in inputs:
-        if isinstance(tensor, torch.Tensor):
-            zero_tensor = torch.zeros_like(tensor)
-        elif isinstance(tensor, tuple) or isinstance(tensor, list):
-            zero_tensor = zeros_like(tensor)
-        else:
-            assert False, "Please ensure the inputs is the tuple or list of tensors!"
-        ret.append(zero_tensor)
-
-    return tuple(ret)
 
 
 def main():
@@ -208,7 +198,13 @@ def main():
         help="Whether to use 16-bit (mixed) precision (through NVIDIA apex) instead of 32-bit",
     )
     parser.add_argument("--jit", action="store_true", help="Whether or not to use jit trace to accelerate inference")
-    parser.add_argument("--output_dir", type=str, default="output_dir")
+
+    parser.add_argument(
+        "--output_dir",
+        default=None,
+        type=str,
+        help="Output directory where to save the resulting model",
+    )
     args = parser.parse_args()
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -226,12 +222,17 @@ def main():
         raise KeyError("the model {} you specified is not supported. You are welcome to add it and open a PR :)")
 
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
-    # model = model_class.from_pretrained(args.model_name_or_path)
-    model = TracedModelForCausalLM.from_pretrained(args.model_name_or_path, torchscript=True if args.jit else False)
-    model.to(args.device)
 
-    if args.fp16:
-        model.half()
+    if args.jit:
+        model = TracedModelForCausalLM.from_pretrained(args.model_name_or_path, export=True)
+    else:
+        model = model_class.from_pretrained(args.model_name_or_path)
+
+    if args.output_dir is not None and args.jit:
+        model.save_pretrained(args.output_dir)
+        tokenizer.save_pretrained(args.output_dir)
+
+    model.to(args.device)
 
     args.length = adjust_length_to_model(
         args.length,
@@ -267,11 +268,6 @@ def main():
     else:
         input_ids = encoded_prompt
 
-    if args.jit:
-        model.save_pretrained(args.output_dir)
-        tokenizer.save_pretrained(args.output_dir)
-
-    print("=== start generate ===")
     output_sequences = model.generate(
         input_ids=input_ids,
         max_length=args.length + len(encoded_prompt[0]),
