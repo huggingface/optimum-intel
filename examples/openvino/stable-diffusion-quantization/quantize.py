@@ -548,7 +548,7 @@ def export_to_openvino(pipeline, onnx_dir, save_dir):
     
 class UnetInitDataset(torch.utils.data.Dataset):
     def __init__(self, data):
-        super().__init__(self)
+        super().__init__()
         self.init_data = data
     def __len__(self): return len(self.init_data)
     def __getitem__(self, index): 
@@ -583,7 +583,7 @@ def prepare_nncf_init_data(pipeline, dataloader, args):
             nncf_init_data.append((torch.squeeze(noisy_latents).to("cpu"), torch.squeeze(timesteps).to("cpu"), torch.squeeze(encoder_hidden_states).to("cpu"), 0))
     return nncf_init_data
 
-
+# The config should work for Stable Diffusion v1.4-2.1
 def get_nncf_config(pipeline, dataloader, args):
     text_encoder = pipeline.text_encoder
     unet = pipeline.unet
@@ -642,6 +642,7 @@ def get_nncf_config(pipeline, dataloader, args):
     
     nncf_config = NNCFConfig.from_dict(nncf_config_dict)
     nncf_config = register_default_init_args(nncf_config, UnetInitDataLoader(dataloader))
+    return nncf_config
     
 
 def main():
@@ -821,9 +822,9 @@ def main():
     nncf_config = get_nncf_config(pipeline, init_dataloader, args)
     
     # Quantize the model and initialize quantizer using init data
-    compression_ctrl_unet, unet = create_compressed_model(unet, nncf_config)
+    compression_controller, unet = create_compressed_model(unet, nncf_config)
     
-    statistics_unet = compression_ctrl_unet.statistics()
+    statistics_unet = compression_controller.statistics()
     logger.info(statistics_unet.to_str())
     
     del nncf_init_data, init_dataloader
@@ -911,13 +912,10 @@ def main():
 
     for epoch in range(args.num_train_epochs):
         train_loss = 0.0
-        compression_ctrl_unet.scheduler.epoch_step()
+        compression_controller.scheduler.epoch_step()
 
-        compression_scheduler_unet = compression_ctrl_unet.scheduler
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
-                compression_scheduler_unet.step()
-
                 # Convert images to latent space
                 latents = vae.encode(batch["pixel_values"].to(weight_dtype)).latent_dist.sample()
                 latents = latents * 0.18215
@@ -944,7 +942,7 @@ def main():
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
 
-                compression_loss_unet = compression_ctrl_unet.loss()
+                compression_loss_unet = compression_controller.loss()
                 loss = loss + compression_loss_unet
 
                 # Backpropagate
@@ -969,7 +967,6 @@ def main():
 
             if global_step >= args.max_train_steps:
                 break
-        statistics_unet = compression_ctrl_unet.statistics()
 
     # Create the pipeline using the trained modules and save it.
     accelerator.wait_for_everyone()
@@ -983,7 +980,8 @@ def main():
 
     accelerator.end_training()
     
-    export_unet = compression_ctrl_unet.strip(do_copy=False)
+    # Export optimized pipline to OpenVINO
+    export_unet = compression_controller.strip(do_copy=False)
     export_pipeline = StableDiffusionPipeline(
         text_encoder=text_encoder,
         vae=vae,
