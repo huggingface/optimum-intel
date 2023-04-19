@@ -43,8 +43,7 @@ where `extras` can be one or more of `neural-compressor`, `openvino`, `nncf`.
 
 #### Dynamic quantization:
 
-Dynamic quantization can be used through the Optimum command-line interface.
-Here is an example on how to apply dynamic quantization on a DistilBERT fine-tuned on the SQuAD1.0 dataset.
+Dynamic quantization can be used through the Optimum command-line interface:
 
 ```bash
 optimum-cli inc quantize --model distilbert-base-cased-distilled-squad --output ./quantized_distilbert
