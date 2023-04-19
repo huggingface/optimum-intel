@@ -62,7 +62,6 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         self.use_cache = use_cache
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.model.to(self._device)
-        self.model_inputs = kwargs.pop("model_inputs") if self.use_cache else None
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
 
         if is_transformers_version("<=", "4.25.1"):
@@ -100,34 +99,26 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
             if past_key_values is not None:
                 input_ids = input_ids[:, -1:]
             else:
-                dummy_past_key_values = self.model_inputs["past_key_values"]
-                nb_layer = len(dummy_past_key_values)
-                nb_pkv = len(dummy_past_key_values[0])
+                nb_pkv = 2
+                num_layers = self.normalized_config.num_layers
+                num_attention_heads = self.normalized_config.num_attention_heads
+                hidden_size = self.normalized_config.hidden_size
+                d_k = hidden_size // num_attention_heads
 
                 if self.config.model_type != "bloom":
-                    new_shape = list(dummy_past_key_values[0][0].shape)
-                    new_shape[2] = 0
-                    new_shape[0] = input_ids.shape[0]
+                    new_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
                     empty_tensor = torch.empty(size=new_shape)
-                    past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(nb_layer))
+                    past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
+                    pkv = tuple(empty_tensor for _ in range(nb_pkv))
                 else:
                     pkv = ()
-                    num_attention_heads = (
-                        self.normalized_config.num_attention_heads if self.config.model_type == "bloom" else 1
-                    )
-                    hidden_size = self.normalized_config.hidden_size if self.config.model_type == "bloom" else 1
-                    d_k = hidden_size // num_attention_heads
                     for nb_pkv in range(nb_pkv):
-                        new_shape = list(dummy_past_key_values[0][0].shape)
-                        new_shape[0] = input_ids.shape[0] * num_attention_heads
                         if nb_pkv % 2 == 0:
-                            new_shape[1] = d_k
-                            new_shape[2] = 0
+                            new_shape = [input_ids.shape[0] * num_attention_heads, d_k, 0]
                         else:
-                            new_shape[1] = 0
-                            new_shape[2] = d_k
+                            new_shape = [input_ids.shape[0] * num_attention_heads, 0, d_k]
                         pkv = pkv + (torch.empty(size=new_shape),)
-                    past_key_values = tuple(tuple(pkv) for _ in range(nb_layer))
+                past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
             inputs["past_key_values"] = past_key_values
 
         inputs["input_ids"] = input_ids
@@ -187,7 +178,6 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
             config=config,
             model_save_dir=model_save_dir,
             use_cache=use_cache,
-            model_inputs=model_inputs,
             **kwargs,
         )
 
