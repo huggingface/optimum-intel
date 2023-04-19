@@ -20,12 +20,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
 from huggingface_hub import hf_hub_download
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, add_start_docstrings
+from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.utils import WEIGHTS_NAME, CONFIG_NAME
+from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
-from optimum.modeling_base import OptimizedModel, FROM_PRETRAINED_START_DOCSTRING
+from optimum.modeling_base import OptimizedModel
 
 from ..utils.import_utils import is_torch_version, is_transformers_version
 
@@ -106,94 +106,6 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         return CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
 
     @classmethod
-    @add_start_docstrings(FROM_PRETRAINED_START_DOCSTRING)
-    def from_pretrained(
-        cls,
-        model_id: Union[str, Path],
-        export: bool = False,
-        force_download: bool = False,
-        use_auth_token: Optional[str] = None,
-        cache_dir: Optional[str] = None,
-        subfolder: str = "",
-        config: Optional["PretrainedConfig"] = None,
-        local_files_only: bool = False,
-        trust_remote_code: bool = False,
-        revision: Optional[str] = None,
-        **kwargs,
-    ) -> "OptimizedModel":
-        """
-        Returns:
-            `OptimizedModel`: The loaded optimized model.
-        """
-        if isinstance(model_id, Path):
-            model_id = model_id.as_posix()
-
-        from_transformers = kwargs.pop("from_transformers", None)
-        if from_transformers is not None:
-            logger.warning(
-                "The argument `from_transformers` is deprecated, and will be removed in optimum 2.0.  Use `export` instead"
-            )
-            export = from_transformers
-
-        if isinstance(model_id, str) and len(model_id.split("@")) == 2:
-            if revision is not None:
-                logger.warning(
-                    f"The argument `revision` was set to {revision} but will be ignored for {model_id.split('@')[1]}"
-                )
-            model_id, revision = model_id.split("@")
-
-        if config is None:
-            if os.path.isdir(os.path.join(model_id, subfolder)) and cls.config_name == CONFIG_NAME:
-                if CONFIG_NAME in os.listdir(os.path.join(model_id, subfolder)):
-                    config = AutoConfig.from_pretrained(os.path.join(model_id, subfolder, CONFIG_NAME))
-                elif CONFIG_NAME in os.listdir(model_id):
-                    config = AutoConfig.from_pretrained(os.path.join(model_id, CONFIG_NAME))
-                    logger.info(
-                        f"config.json not found in the specified subfolder {subfolder}. Using the top level config.json."
-                    )
-                else:
-                    raise OSError(f"config.json not found in {model_id} local folder")
-            else:
-                config = cls._load_config(
-                    model_id,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    use_auth_token=use_auth_token,
-                    force_download=force_download,
-                    subfolder=subfolder,
-                )
-        elif isinstance(config, (str, os.PathLike)):
-            config = cls._load_config(
-                config,
-                revision=revision,
-                cache_dir=cache_dir,
-                use_auth_token=use_auth_token,
-                force_download=force_download,
-                subfolder=subfolder,
-            )
-
-        if not export and trust_remote_code:
-            logger.warning(
-                "The argument `trust_remote_code` is to be used along with export=True. It will be ignored."
-            )
-        elif export and trust_remote_code is None:
-            trust_remote_code = False
-
-        from_pretrained_method = cls._from_transformers if export else cls._from_pretrained
-        return from_pretrained_method(
-            model_id=model_id,
-            config=config,
-            revision=revision,
-            cache_dir=cache_dir,
-            force_download=force_download,
-            use_auth_token=use_auth_token,
-            subfolder=subfolder,
-            local_files_only=local_files_only,
-            trust_remote_code=trust_remote_code,
-            **kwargs,
-        )
-
-    @classmethod
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
@@ -215,9 +127,6 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
             file_name = os.path.join(model_id, file_name)
             model = cls.load_model(file_name)
             model_save_dir = model_id
-        # The model_id is the TorchScript model
-        elif isinstance(model_id, torch.jit.RecursiveScriptModule):
-            model = model_id
         # Download the model from the hub
         else:
             model_cache_path = hf_hub_download(
@@ -277,15 +186,8 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
             "force_download": force_download,
         }
 
-        if isinstance(model_id, str):
-            model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-            model.config.return_dict = False
-        elif isinstance(model_id, torch.nn.Module):
-            model = model_id
-            model.config = config
-            model.config.return_dict = False
-        else:
-            raise ValueError("model_id should be path of model or model name in huggingface hub or a torch.nn.Module.")
+        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+        model.config.return_dict = False
         signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
         onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_class(model.config, use_past=use_cache)
@@ -304,11 +206,15 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
         config.torchscript = True
 
-        return cls(
-            traced_model,
+        return cls._from_pretrained(
+            model_id=save_dir_path,
             config=config,
             use_cache=use_cache,
-            model_inputs=model_inputs,
+            use_auth_token=use_auth_token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
             **kwargs,
         )
 
