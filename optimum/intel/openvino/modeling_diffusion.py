@@ -28,7 +28,7 @@ from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME
 from huggingface_hub import snapshot_download
 from openvino._offline_transformations import compress_model_transformation
-from openvino.offline_transformations import compress_model_transformation
+from openvino._offline_transformations import apply_moc_transformations
 from openvino.runtime import Core
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export_models, get_stable_diffusion_models_for_export
@@ -165,7 +165,8 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
 
         for src_file, dst_path in src_to_dst_file.items():
             dst_path.parent.mkdir(parents=True, exist_ok=True)
-            openvino.runtime.serialize(src_file, str(dst_path), str(dst_path.with_suffix(".bin")))
+            apply_moc_transformations(src_file, cf=False)
+            openvino.runtime.serialize(src_file, str(dst_path))
 
         self.tokenizer.save_pretrained(save_directory.joinpath("tokenizer"))
         self.scheduler.save_pretrained(save_directory.joinpath("scheduler"))

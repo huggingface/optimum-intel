@@ -113,9 +113,13 @@ class OVBaseModel(OptimizedModel):
         """
         if isinstance(file_name, str):
             file_name = Path(file_name)
-        bin_file_name = file_name.with_suffix(".bin") if file_name.suffix == ".xml" else None
 
-        return core.read_model(file_name, bin_file_name)
+        model = core.read_model(file_name)
+
+        if file_name.suffix == ".onnx":
+            apply_moc_transformations(model, cf=False)
+
+        return core.read_model(file_name)
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
         """
