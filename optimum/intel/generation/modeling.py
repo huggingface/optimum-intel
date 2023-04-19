@@ -92,13 +92,12 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         inputs = {
+            "input_ids": input_ids,
             "attention_mask": attention_mask,
         }
 
         if self.use_cache:
-            if past_key_values is not None:
-                input_ids = input_ids[:, -1:]
-            else:
+            if past_key_values is None:
                 nb_pkv = 2
                 num_layers = self.normalized_config.num_layers
                 num_attention_heads = self.normalized_config.num_attention_heads
@@ -119,9 +118,8 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
                             new_shape = [input_ids.shape[0] * num_attention_heads, 0, d_k]
                         pkv = pkv + (torch.empty(size=new_shape),)
                 past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
-            inputs["past_key_values"] = past_key_values
 
-        inputs["input_ids"] = input_ids
+            inputs["past_key_values"] = past_key_values
         outputs = self.model(**inputs)
 
         return CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
@@ -255,6 +253,9 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
         past_key_values = past_key_values or kwargs.get("past", None)
+
+        if self.use_cache and past_key_values is not None:
+            input_ids = input_ids[:, -1:]
 
         # `past_key_values` may be in the stardard format (e.g. in contrastive search), converts to bloom's format if needed
         if past_key_values is not None and self.config.model_type == "bloom":
