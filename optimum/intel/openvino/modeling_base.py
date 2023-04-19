@@ -18,16 +18,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
-import transformers
-from transformers import AutoConfig, PretrainedConfig
-from transformers.file_utils import add_start_docstrings, default_cache_path
-from transformers.onnx.utils import get_preprocessor
-
 import openvino
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from openvino.runtime import Core
+from transformers import PretrainedConfig
+from transformers.file_utils import add_start_docstrings
+
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
 from optimum.modeling_base import OptimizedModel
@@ -75,7 +73,7 @@ class OVBaseModel(OptimizedModel):
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        **kwargs
+        **kwargs,
     ):
         self.config = config
         self.model_save_dir = model_save_dir
@@ -313,11 +311,8 @@ class OVBaseModel(OptimizedModel):
     def compile(self):
         if self.request is None:
             logger.info("Compiling the model and creating the inference request ...")
-            # Only enable CACHE_DIR for GPU because CACHE_DIR fails with some INT8 models on CPU with 2022.3
-            ov_config = self.ov_config.copy()
-            if self._device == "GPU":
-                cache_dir = Path(self.model_save_dir).joinpath("model_cache")
-                ov_config["CACHE_DIR"] = str(cache_dir)
+            cache_dir = Path(self.model_save_dir).joinpath("model_cache")
+            ov_config = {**self.ov_config, "CACHE_DIR": str(cache_dir)}
             compiled_model = core.compile_model(self.model, self._device, ov_config)
             self.request = compiled_model.create_infer_request()
 

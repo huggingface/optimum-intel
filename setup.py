@@ -12,7 +12,7 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-    "optimum>=1.7.3",
+    "optimum>=1.8.0",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
     "sentencepiece",
@@ -21,7 +21,7 @@ INSTALL_REQUIRE = [
 
 TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate", "diffusers", "py-cpuinfo"]
 
-QUALITY_REQUIRE = ["black==22.3", "isort>=5.5.4"]
+QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
 
 EXTRAS_REQUIRE = {
     "neural-compressor": [
@@ -69,5 +69,5 @@ setup(
     extras_require=EXTRAS_REQUIRE,
     include_package_data=True,
     zip_safe=False,
-    entry_points={"console_scripts": ["optimum-intel-cli = optimum.intel.commands.optimum_intel_cli:main"]},
+    entry_points={"console_scripts": ["optimum-cli=optimum.commands.optimum_cli:main"]},
 )

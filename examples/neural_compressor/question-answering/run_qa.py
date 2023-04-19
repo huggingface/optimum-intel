@@ -25,12 +25,16 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
+import evaluate
 import numpy as np
 import torch
 import transformers
+from accelerate import Accelerator
 from datasets import load_dataset
+from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
+from trainer_qa import QuestionAnsweringINCTrainer
 from transformers import (
     AutoConfig,
     AutoModelForQuestionAnswering,
@@ -38,7 +42,6 @@ from transformers import (
     DataCollatorWithPadding,
     EvalPrediction,
     HfArgumentParser,
-    PreTrainedModel,
     PreTrainedTokenizerFast,
     TrainingArguments,
     default_data_collator,
@@ -47,13 +50,9 @@ from transformers import (
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
-
-import evaluate
-from accelerate import Accelerator
-from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
-from optimum.intel.neural_compressor import INCModelForQuestionAnswering
-from trainer_qa import QuestionAnsweringINCTrainer
 from utils_qa import postprocess_qa_predictions
+
+from optimum.intel.neural_compressor import INCModelForQuestionAnswering
 
 
 # Will be removed when neural-compressor next release is out
@@ -553,7 +552,10 @@ def main():
         )
         teacher_model_qa = QAModel(teacher_model)
         teacher_model_qa = accelerator.prepare(teacher_model_qa)
-        num_param = lambda model: sum(p.numel() for p in model.parameters())
+
+        def num_param(model):
+            return sum(p.numel() for p in model.parameters())
+
         logger.info(
             "***** Number of teacher model parameters: {:.2f}M *****".format(num_param(teacher_model_qa) / 10**6)
         )
@@ -662,9 +664,33 @@ def main():
                 load_from_cache_file=not data_args.overwrite_cache,
                 desc="Running tokenizer on validation dataset",
             )
+
         if data_args.max_eval_samples is not None:
             # During Feature creation dataset samples might increase, we will select required samples again
-            eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
+            max_eval_samples = min(len(eval_dataset), data_args.max_eval_samples)
+            eval_dataset = eval_dataset.select(range(max_eval_samples))
+
+    if training_args.do_predict:
+        if "test" not in raw_datasets:
+            raise ValueError("--do_predict requires a test dataset")
+        predict_examples = raw_datasets["test"]
+        if data_args.max_predict_samples is not None:
+            # We will select sample from whole data
+            predict_examples = predict_examples.select(range(data_args.max_predict_samples))
+        # Predict Feature Creation
+        with training_args.main_process_first(desc="prediction dataset map pre-processing"):
+            predict_dataset = predict_examples.map(
+                prepare_validation_features,
+                batched=True,
+                num_proc=data_args.preprocessing_num_workers,
+                remove_columns=column_names,
+                load_from_cache_file=not data_args.overwrite_cache,
+                desc="Running tokenizer on prediction dataset",
+            )
+        if data_args.max_predict_samples is not None:
+            # During Feature creation dataset samples might increase, we will select required samples again
+            max_predict_samples = min(len(predict_dataset), data_args.max_predict_samples)
+            predict_dataset = predict_dataset.select(range(max_predict_samples))
 
     # Post-processing:
     def post_processing_function(examples, features, predictions, stage="eval"):

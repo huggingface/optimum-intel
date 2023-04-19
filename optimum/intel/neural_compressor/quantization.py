@@ -16,17 +16,20 @@ import copy
 import inspect
 import logging
 import os
-import sys
 import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
-from typing import Callable, ClassVar, Dict, Optional, Union
+from typing import TYPE_CHECKING, Callable, ClassVar, Dict, Optional, Union
 
 import torch
-import transformers
 from datasets import Dataset, load_dataset
-from packaging import version
+from huggingface_hub import HfApi, hf_hub_download
+from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
+from neural_compressor.experimental.export import torch_to_int8_onnx
+from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
+from neural_compressor.quantization import fit
+from neural_compressor.utils.pytorch import load
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import (
     AutoConfig,
@@ -50,17 +53,11 @@ from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
 from transformers.utils.generic import ContextManagers
 
-import neural_compressor
-from huggingface_hub import HfApi, hf_hub_download
-from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
-from neural_compressor.experimental.export import torch_to_int8_onnx
-from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
-from neural_compressor.quantization import fit
-from neural_compressor.utils.pytorch import load
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
 
+from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import (
     _neural_compressor_version,
     _torch_version,
@@ -69,6 +66,10 @@ from ..utils.import_utils import (
 )
 from .configuration import INCConfig
 from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME, INCDataLoader, _cfgs_to_fx_cfgs
+
+
+if TYPE_CHECKING:
+    from neural_compressor.config import PostTrainingQuantConfig
 
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ class INCQuantizationMode(Enum):
     AWARE_TRAINING = "quant_aware_training"
 
 
-SUPPORTED_QUANT_MODE = set([approach.value for approach in INCQuantizationMode])
+SUPPORTED_QUANT_MODE = {approach.value for approach in INCQuantizationMode}
 
 
 class INCQuantizer(OptimumQuantizer):
@@ -239,10 +240,10 @@ class INCQuantizer(OptimumQuantizer):
         output_path: Union[str, Path],
     ):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
-        dynamic_axes = {name: axes for name, axes in chain(config.inputs.items(), config.outputs.items())}
+        dynamic_axes = dict(chain(config.inputs.items(), config.outputs.items()))
         inputs = config.generate_dummy_inputs(framework="pt")
         device = model.model.device
-        inputs = dict((k, v.to(device)) for k, v in inputs.items())
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         torch_to_int8_onnx(
             fp32_model=self._original_model.to(device),
             int8_model=model.model,
@@ -258,16 +259,15 @@ class INCQuantizer(OptimumQuantizer):
     def _set_task(self):
         if self.task is None:
             self.task = HfApi().model_info(self._original_model.config._name_or_path).pipeline_tag
-            if self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-                self.task = "sequence-classification"
-            elif self.task in ["feature-extraction", "fill-mask"]:
-                self.task = "default"
-            elif self.task is None:
+            if self.task is None:
                 raise ValueError(
                     "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
                 )
-        if self.task in ["seq2seq-lm", "translation", "summarization"]:
-            raise ValueError(f"Seq2Seq models are currently not supported for post-training static quantization.")
+
+        self.task = _TASK_ALIASES.get(self.task, self.task)
+
+        if self.task == "text2text-generation":
+            raise ValueError("Seq2Seq models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(
         self,
@@ -546,8 +546,8 @@ class INCModel:
             if not is_torch_version("==", inc_config.torch_version):
                 msg = f"Quantized model was obtained with torch version {inc_config.torch_version} but {_torch_version} was found."
                 logger.warning(f"{msg}")
-        except Exception as e:
-            logger.info(f"Couldn't verify torch version.")
+        except Exception:
+            logger.info("Couldn't verify torch version.")
 
         if getattr(config, "backend", None) == "ipex":
             # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.

@@ -25,9 +25,12 @@ from pathlib import Path
 from typing import Optional
 
 import datasets
+import evaluate
+import jstyleson as json
 import numpy as np
 import transformers
 from datasets import load_dataset
+from nncf.common.utils.os import safe_open
 from transformers import (
     AutoConfig,
     AutoModelForSequenceClassification,
@@ -36,8 +39,6 @@ from transformers import (
     EvalPrediction,
     HfArgumentParser,
     PretrainedConfig,
-    Trainer,
-    TrainingArguments,
     default_data_collator,
     set_seed,
 )
@@ -45,9 +46,6 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-import evaluate
-import jstyleson as json
-from nncf.common.utils.os import safe_open
 from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
 
 
@@ -431,12 +429,12 @@ def main():
     ):
         # Some have all caps in their config, some don't.
         label_name_to_id = {k.lower(): v for k, v in model.config.label2id.items()}
-        if list(sorted(label_name_to_id.keys())) == list(sorted(label_list)):
+        if sorted(label_name_to_id.keys()) == sorted(label_list):
             label_to_id = {i: int(label_name_to_id[label_list[i]]) for i in range(num_labels)}
         else:
             logger.warning(
                 "Your model seems to have been trained with labels, but they don't match the dataset: ",
-                f"model labels: {list(sorted(label_name_to_id.keys()))}, dataset labels: {list(sorted(label_list))}."
+                f"model labels: {sorted(label_name_to_id.keys())}, dataset labels: {sorted(label_list)}."
                 "\nIgnoring the model labels as a result.",
             )
     elif data_args.task_name is None and not is_regression:
@@ -548,7 +546,7 @@ def main():
         model=model,
         teacher_model=teacher_model,
         ov_config=ov_config,
-        task="sequence-classification",
+        task="text-classification",
         args=training_args,
         train_dataset=train_dataset if training_args.do_train else None,
         eval_dataset=eval_dataset if training_args.do_eval else None,

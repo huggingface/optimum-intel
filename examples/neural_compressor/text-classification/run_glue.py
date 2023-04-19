@@ -25,10 +25,12 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import datasets
+import evaluate
 import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
+from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
 from transformers import (
     AutoConfig,
     AutoModelForSequenceClassification,
@@ -37,7 +39,6 @@ from transformers import (
     EvalPrediction,
     HfArgumentParser,
     PretrainedConfig,
-    PreTrainedModel,
     TrainingArguments,
     default_data_collator,
     set_seed,
@@ -46,8 +47,6 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-import evaluate
-from neural_compressor import DistillationConfig, QuantizationAwareTrainingConfig, WeightPruningConfig
 from optimum.intel.neural_compressor import INCModelForSequenceClassification, INCTrainer
 
 
@@ -421,12 +420,12 @@ def main():
     ):
         # Some have all caps in their config, some don't.
         label_name_to_id = {k.lower(): v for k, v in model.config.label2id.items()}
-        if list(sorted(label_name_to_id.keys())) == list(sorted(label_list)):
+        if sorted(label_name_to_id.keys()) == sorted(label_list):
             label_to_id = {i: int(label_name_to_id[label_list[i]]) for i in range(num_labels)}
         else:
             logger.warning(
                 "Your model seems to have been trained with labels, but they don't match the dataset: ",
-                f"model labels: {list(sorted(label_name_to_id.keys()))}, dataset labels: {list(sorted(label_list))}."
+                f"model labels: {sorted(label_name_to_id.keys())}, dataset labels: {sorted(label_list)}."
                 "\nIgnoring the model labels as a result.",
             )
     elif data_args.task_name is None and not is_regression:
@@ -573,7 +572,7 @@ def main():
     # Initialize our Trainer
     trainer = INCTrainer(
         model=model,
-        task="sequence-classification",
+        task="text-classification",
         quantization_config=quantization_config,
         pruning_config=pruning_config,
         distillation_config=distillation_config,

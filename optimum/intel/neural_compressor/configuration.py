@@ -12,11 +12,10 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from typing import Dict, List, Optional, Union
-
-import torch
+from typing import Dict, Optional, Union
 
 from neural_compressor.conf.pythonic_config import DistillationConfig, WeightPruningConfig, _BaseQuantizationConfig
+
 from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import _neural_compressor_version, _torch_version

@@ -23,10 +23,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import evaluate
+import jstyleson as json
 import numpy as np
 import torch
 import transformers
 from datasets import load_dataset
+from nncf.common.utils.os import safe_open
 from PIL import Image
 from torchvision.transforms import (
     CenterCrop,
@@ -49,9 +52,6 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
-import evaluate
-import jstyleson as json
-from nncf.common.utils.os import safe_open
 from optimum.intel.openvino import OVConfig, OVTrainer, OVTrainingArguments
 
 
@@ -265,7 +265,7 @@ def main():
     # Prepare label mappings.
     # We'll include these in the model's config to get human readable labels in the Inference API.
     labels = dataset["train"].features["labels"].names
-    label2id, id2label = dict(), dict()
+    label2id, id2label = {}, {}
     for i, label in enumerate(labels):
         label2id[label] = str(i)
         id2label[str(i)] = label
