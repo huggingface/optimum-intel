@@ -46,6 +46,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import set_seed
 from datasets import load_dataset
 from diffusers import DiffusionPipeline, StableDiffusionPipeline
+from diffusers import DDPMScheduler, DDIMScheduler, LMSDiscreteScheduler
 from diffusers.optimization import get_scheduler
 from huggingface_hub import HfFolder, Repository, whoami
 from torchvision import transforms
@@ -248,13 +249,6 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--validation_prompts",
-        type=str,
-        default=None,
-        nargs="+",
-        help=("A set of prompts evaluated every `--validation_epochs` and logged to `--report_to`."),
-    )
-    parser.add_argument(
         "--output_dir",
         type=str,
         default="sd-model-quantized",
@@ -274,6 +268,39 @@ def parse_args():
         help=(
             "The resolution for input images, all the images in the train/validation dataset will be resized to this"
             " resolution"
+        ),
+    )
+    parser.add_argument(
+        "--noise_scheduler",
+        type=str,
+        default=None,
+        choices=["DDIM", "DDPM", "LMSDiscrete"],
+        help="The noise scheduler for the Diffusion pipiline used for training.",
+    )
+    parser.add_argument(
+        "--beta_start",
+        type=float,
+        default=0.00085,
+        help="Beta min value for noise scheduler.",
+    )
+    parser.add_argument(
+        "--beta_end",
+        type=float,
+        default=0.012,
+        help="BetaMax value for noise scheduler.",
+    )
+    parser.add_argument(
+        "--beta_schedule",
+        type=str,
+        default="scaled_linear",
+        help="Beta schedule type",
+    )
+    parser.add_argument(
+        "--noise_schedule_steps",
+        type=int,
+        default=1000,
+        help=(
+            "The noise scheduler max train timestemps"
         ),
     )
     parser.add_argument(
@@ -449,25 +476,6 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
-    )
-    parser.add_argument("--noise_offset", type=float, default=0, help="The scale of noise offset.")
-    parser.add_argument(
-        "--validation_epochs",
-        type=int,
-        default=5,
-        help="Run validation every X epochs.",
-    )
-    parser.add_argument(
-        "--tracker_project_name",
-        type=str,
-        default="text2image-fine-tune",
-        help=(
-            "The `project_name` argument passed to Accelerator.init_trackers for"
-            " more information see https://huggingface.co/docs/accelerate/v0.17.0/en/package_reference/accelerator#accelerate.Accelerator"
-        ),
-    )
-    parser.add_argument(
         "--opt_init_steps",
         type=int,
         default=300,
@@ -503,6 +511,23 @@ def parse_args():
     if args.non_ema_revision is None:
         args.non_ema_revision = args.revision
     return args
+
+def get_noise_scheduler(args):
+    scheduler_args = {
+        "beta_start": args.beta_start,
+        "beta_end": args.beta_end,
+        "beta_schedule": args.beta_schedule,
+        "num_train_timesteps": args.noise_schedule_steps
+    }
+    if args.noise_scheduler == "DDIM":
+        noise_scheduler = DDIMScheduler(**scheduler_args)
+    elif args.noise_scheduler == "DDPM":
+        noise_scheduler = DDPMScheduler(**scheduler_args)
+    elif args.noise_scheduler == "LMSDiscrete":
+        noise_scheduler = LMSDiscreteScheduler(**scheduler_args)
+    else:
+        raise ValueError(f"Unknown noise schedule {args.noise_schedule}")
+    return noise_scheduler
 
 
 def export_to_onnx(pipeline, save_dir):
@@ -694,6 +719,8 @@ def main():
     vae = pipeline.vae
     unet = pipeline.unet
     noise_scheduler = pipeline.scheduler
+    if args.noise_scheduler:
+        noise_scheduler = get_noise_scheduler(args)
 
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
@@ -987,7 +1014,7 @@ def main():
         vae=vae,
         unet = export_unet,
         tokenizer=tokenizer,
-        scheduler=pipeline.scheduler,
+        scheduler=noise_scheduler,
         safety_checker=pipeline.safety_checker,
         feature_extractor=pipeline.feature_extractor,
     )
