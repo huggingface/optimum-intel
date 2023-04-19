@@ -113,11 +113,10 @@ class OVBaseModel(OptimizedModel):
             file_name = Path(file_name)
 
         model = core.read_model(file_name)
-
         if file_name.suffix == ".onnx":
             apply_moc_transformations(model, cf=False)
 
-        return core.read_model(file_name)
+        return model
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
         """
