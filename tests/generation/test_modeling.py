@@ -102,7 +102,7 @@ class ModelingIntegrationTest(unittest.TestCase):
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device="cpu")
         outputs = pipe("This is a sample", max_length=10)
         self.assertEqual(pipe.device, model.device)
-        self.assertTrue(all(["This is a sample" in item["generated_text"] for item in outputs]))
+        self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_multiple_inputs(self, model_arch):
