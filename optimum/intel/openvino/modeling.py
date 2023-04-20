@@ -13,7 +13,7 @@
 #  limitations under the License.
 
 import logging
-from typing import Any, Dict, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 import openvino
@@ -23,7 +23,6 @@ from transformers import (
     AutoConfig,
     AutoModel,
     AutoModelForAudioClassification,
-    AutoModelForCausalLM,
     AutoModelForImageClassification,
     AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
@@ -33,7 +32,6 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import (
     BaseModelOutput,
-    CausalLMOutputWithCrossAttentions,
     ImageClassifierOutput,
     MaskedLMOutput,
     QuestionAnsweringModelOutput,
@@ -41,14 +39,8 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
 )
 
-from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 
-
-if is_transformers_version("<", "4.25.0"):
-    from transformers.generation_utils import GenerationMixin
-else:
-    from transformers.generation import GenerationMixin
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +106,10 @@ class OVModel(OVBaseModel):
         self.device = torch.device("cpu")
 
     def to(self, device: str):
+        """
+        Use the specified `device` for inference. For example: "cpu" or "gpu". `device` can
+        be in upper or lower case. To speed up first inference, call `.compile()` after `.to()`.
+        """
         self._device = device.upper()
         self.request = None
         return self
@@ -143,7 +139,7 @@ SEQUENCE_CLASSIFICATION_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForSequenceClassification(OVModel):
-    export_feature = "sequence-classification"
+    export_feature = "text-classification"
     auto_model_class = AutoModelForSequenceClassification
 
     def __init__(self, model=None, config=None, **kwargs):
@@ -347,7 +343,7 @@ FEATURE_EXTRACTION_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForFeatureExtraction(OVModel):
-    export_feature = "default"
+    export_feature = "feature-extraction"
     auto_model_class = AutoModel
 
     def __init__(self, model=None, config=None, **kwargs):
@@ -396,137 +392,6 @@ class OVModelForFeatureExtraction(OVModel):
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
 
-TEXT_GENERATION_EXAMPLE = r"""
-    Example of text generation:
-    ```python
-    >>> from transformers import {processor_class}
-    >>> from optimum.intel import {model_class}
-
-    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
-    >>> inputs = tokenizer("I love this story because", return_tensors="pt")
-    >>> gen_tokens = model.generate(**inputs, do_sample=True, temperature=0.9, min_length=20, max_length=20)
-    >>> tokenizer.batch_decode(gen_tokens)
-    ```
-    Example using `transformers.pipelines`:
-    ```python
-    >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel import {model_class}
-
-    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
-    >>> gen_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer)
-    >>> text = "I love this story because"
-    >>> gen = gen_pipeline(text)
-    ```
-"""
-
-
-@add_start_docstrings(
-    """
-    OpenVINO Model with a causal language modeling head on top (linear layer with weights tied to the input
-    embeddings).
-    """,
-    MODEL_START_DOCSTRING,
-)
-class OVModelForCausalLM(OVModel, GenerationMixin):
-    """
-    Causal LM model for OpenVINO.
-    """
-
-    export_feature = "causal-lm"
-    auto_model_class = AutoModelForCausalLM
-
-    def __init__(self, model=None, config=None, **kwargs):
-        super().__init__(model, config, **kwargs)
-        self.main_input_name = "input_ids"
-
-    def prepare_inputs_for_generation(self, input_ids: torch.LongTensor, **kwargs) -> Dict[str, Any]:
-        inputs = {"input_ids": input_ids}
-        if kwargs.get("attention_mask", None) is not None:
-            inputs["attention_mask"] = kwargs["attention_mask"]
-        if kwargs.get("token_type_ids") is not None:
-            inputs["token_type_ids"] = kwargs["token_type_ids"]
-        return inputs
-
-    @add_start_docstrings_to_model_forward(
-        INPUTS_DOCSTRING.format("batch_size, sequence_length")
-        + TEXT_GENERATION_EXAMPLE.format(
-            processor_class=_TOKENIZER_FOR_DOC,
-            model_class="OVModelForCausalLM",
-            checkpoint="gpt2",
-        )
-    )
-    def forward(
-        self,
-        input_ids: Union[torch.Tensor, np.ndarray],
-        attention_mask: Union[torch.Tensor, np.ndarray],
-        token_type_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
-        **kwargs,
-    ):
-        self.compile()
-
-        inputs = {
-            "input_ids": np.array(input_ids),
-            "attention_mask": np.array(attention_mask),
-        }
-
-        # Add the token_type_ids when needed
-        if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = np.array(token_type_ids)
-
-        # Run inference
-        outputs = self.request.infer(inputs)
-        outputs = {key.get_any_name(): value for key, value in outputs.items()}
-        logits = torch.from_numpy(outputs["logits"]).to(self.device)
-
-        return CausalLMOutputWithCrossAttentions(logits=logits)
-
-    # Adapted from https://github.com/huggingface/transformers/blob/99289c08a1b16a805dd4ee46de029e9fd23cba3d/src/transformers/generation_utils.py#L490
-    def _prepare_attention_mask_for_generation(
-        self,
-        inputs: torch.Tensor,
-        pad_token_id: int,
-        eos_token_id: int,
-    ) -> torch.LongTensor:
-        """
-        Overrides the base method of `GenerationMixin` to ensure input IDs and
-        attention mask are on the same device.
-        """
-        is_input_ids = len(inputs.shape) == 2 and inputs.dtype in [torch.int, torch.long]
-        is_pad_token_in_inputs = (pad_token_id is not None) and (pad_token_id in inputs)
-        is_pad_token_not_equal_to_eos_token_id = (eos_token_id is None) or (
-            (eos_token_id is not None) and (pad_token_id != eos_token_id)
-        )
-        # Check if input is input_ids and padded -> only then is attention_mask defined
-        if is_input_ids and is_pad_token_in_inputs and is_pad_token_not_equal_to_eos_token_id:
-            return inputs.ne(pad_token_id).long()
-        else:
-            # Ensure attention mask is on the same device as the input IDs
-            return torch.ones(inputs.shape[:2], dtype=torch.long, device=inputs.device)
-
-    def _reshape(
-        self,
-        model: openvino.runtime.Model,
-        batch_size: int,
-        sequence_length: int,
-        height: int = None,
-        width: int = None,
-    ):
-        if batch_size != -1 or sequence_length != -1:
-            logger.warning("Static shapes are not supported for causal language model.")
-            batch_size = -1
-            sequence_length = -1
-
-        return super()._reshape(
-            model=model,
-            batch_size=batch_size,
-            sequence_length=sequence_length,
-            height=height,
-            width=width,
-        )
-
-
 MASKED_LM_EXAMPLE = r"""
     Example of masked language modeling using `transformers.pipelines`:
     ```python
@@ -549,7 +414,7 @@ MASKED_LM_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForMaskedLM(OVModel):
-    export_feature = "masked-lm"
+    export_feature = "fill-mask"
     auto_model_class = AutoModelForMaskedLM
 
     def __init__(self, model=None, config=None, **kwargs):

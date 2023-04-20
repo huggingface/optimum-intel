@@ -78,8 +78,12 @@ from optimum.utils.testing_utils import require_diffusers
 MODEL_NAMES = {
     "bart": "hf-internal-testing/tiny-random-bart",
     "bert": "hf-internal-testing/tiny-random-bert",
+    "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
+    "gptj": "hf-internal-testing/tiny-random-GPTJModel",
+    "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
+    "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
@@ -112,6 +116,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
+        self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
         self.OV_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
 
@@ -128,6 +133,23 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
             model = OVModelForSequenceClassification.from_pretrained(tmpdirname)
+
+        outputs = model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+
+    def test_load_from_hub_and_save_decoder_model(self):
+        tokenizer = AutoTokenizer.from_pretrained(self.OV_DECODER_MODEL_ID)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        loaded_model = OVModelForCausalLM.from_pretrained(self.OV_DECODER_MODEL_ID, use_cache=True)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        loaded_model_outputs = loaded_model(**tokens)
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            loaded_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertTrue(OV_XML_FILE_NAME in folder_contents)
+            self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
+            model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=True)
 
         outputs = model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
@@ -390,7 +412,14 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("gpt2",)
+    SUPPORTED_ARCHITECTURES = (
+        "bloom",
+        "gpt2",
+        "gpt_neo",
+        "gpt_neox",
+    )
+    GENERATION_LENGTH = 100
+    SPEEDUP_CACHE = 1.2
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -407,19 +436,73 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        atol = 1e-1 if model_arch == "bloom" else 1e-4
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=atol))
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True, use_cache=False, compile=False)
+        model.to("cpu")
+        model.half()
+        model.compile()
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         outputs = pipe("This is a sample", max_length=10)
         self.assertEqual(pipe.device, model.device)
-        self.assertTrue(all(["This is a sample" in item["generated_text"] for item in outputs]))
+        self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
         gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_multiple_inputs(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=False)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
+        tokens = tokenizer(texts, padding=True, return_tensors="pt")
+        outputs = model.generate(**tokens, max_new_tokens=20, num_beams=2)
+        self.assertIsInstance(outputs, torch.Tensor)
+        self.assertEqual(outputs.shape[0], 3)
+
+    def test_model_and_decoder_same_device(self):
+        model_id = MODEL_NAMES["gpt2"]
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True)
+        model.to("TEST")
+        self.assertEqual(model._device, "TEST")
+        # Verify that request is being reset
+        self.assertEqual(model.request, None)
+
+    def test_compare_with_and_without_past_key_values(self):
+        model_id = MODEL_NAMES["gpt2"]
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+
+        model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        # Warmup
+        _ = model_with_pkv.generate(**tokens)
+        with Timer() as with_pkv_timer:
+            outputs_model_with_pkv = model_with_pkv.generate(
+                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+
+        model_without_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
+        # Warmup
+        _ = model_without_pkv.generate(**tokens)
+        with Timer() as without_pkv_timer:
+            outputs_model_without_pkv = model_without_pkv.generate(
+                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+        self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
+        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
+        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
+        self.assertTrue(
+            without_pkv_timer.elapsed / with_pkv_timer.elapsed > self.SPEEDUP_CACHE,
+            f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
+            f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
+        )
 
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
