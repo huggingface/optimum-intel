@@ -17,7 +17,6 @@ import math
 import os
 import sys
 import time
-import warnings
 from collections.abc import Mapping
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
@@ -810,11 +809,3 @@ class INCTrainer(Trainer):
         if self._compression_manager is not None:
             sparsity = self._compression_manager.model.report_sparsity()[-1]
         return sparsity
-
-
-class IncTrainer(INCTrainer):
-    # Warning at import time
-    warnings.warn(
-        "The class `IncTrainer` has been depreciated and will be removed in optimum-intel v1.7, please use "
-        "`INCTrainer` instead.",
-    )

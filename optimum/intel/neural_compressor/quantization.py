@@ -650,11 +650,3 @@ class IncQuantizedModelForXLNetLM(IncQuantizedModel):
 
 class IncQuantizedModelForVision2Seq(IncQuantizedModel):
     TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq
-
-
-class IncQuantizer(INCQuantizer):
-    # Warning at import time
-    warnings.warn(
-        "The class `IncQuantizer` has been depreciated and will be removed in optimum-intel v1.7, please use "
-        "`INCQuantizer` instead.",
-    )
