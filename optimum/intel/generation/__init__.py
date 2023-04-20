@@ -13,4 +13,4 @@
 #  limitations under the License.
 
 
-from .modeling import TorchScriptModelForCausalLM
+from .modeling import TSModelForCausalLM

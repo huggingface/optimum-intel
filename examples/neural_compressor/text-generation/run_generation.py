@@ -38,7 +38,7 @@ from transformers import (
     XLNetTokenizer,
 )
 
-from optimum.intel.generation.modeling import TorchScriptModelForCausalLM
+from optimum.intel.generation.modeling import TSModelForCausalLM
 
 
 logging.basicConfig(
@@ -224,7 +224,7 @@ def main():
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
 
     if args.jit:
-        model = TorchScriptModelForCausalLM.from_pretrained(args.model_name_or_path, export=True)
+        model = TSModelForCausalLM.from_pretrained(args.model_name_or_path, export=True)
     else:
         model = model_class.from_pretrained(args.model_name_or_path)
 

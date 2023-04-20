@@ -41,7 +41,7 @@ else:
 logger = logging.getLogger(__name__)
 
 
-class TorchScriptModelForCausalLM(OptimizedModel, GenerationMixin):
+class TSModelForCausalLM(OptimizedModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
     main_input_name = "input_ids"
