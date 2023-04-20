@@ -1,5 +1,5 @@
 <!---
-Copyright 2020 The HuggingFace Team. All rights reserved.
+Copyright 2023 The HuggingFace Team. All rights reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ limitations under the License.
 
 Based on the script [`run_generation.py`](https://github.com/huggingface/transformers/blob/main/examples/pytorch/text-generation/run_generation.py).
 
-The original generation task only supported the PyTorch eager model. By calling the class:TracedModelForCausalLM, we can now support the jit model for generation tasks.
+The original generation task only supported the PyTorch eager model. By calling the `TracedModelForCausalLM` class, we can now support a TorchScript model for generation tasks.
 
 Example usage:
 

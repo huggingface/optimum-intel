@@ -1,4 +1,4 @@
-#  Copyright 2022 The HuggingFace Team. All rights reserved.
+#  Copyright 2023 The HuggingFace Team. All rights reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -15,17 +15,19 @@
 import inspect
 import logging
 import os
-import torch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
+
+import torch
 from huggingface_hub import hf_hub_download
-from transformers import AutoModelForCausalLM, PretrainedConfig
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
+from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_torch_version, is_transformers_version
 
@@ -43,6 +45,7 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
     main_input_name = "input_ids"
+    base_model_prefix = "torch_script_model"
 
     def __init__(
         self,
@@ -56,8 +59,10 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         self.config = config
         self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
-        self.model_inputs = kwargs.get("model_inputs")
         self.use_cache = use_cache
+        self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.model.to(self._device)
+        self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
@@ -65,6 +70,10 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
             from transformers import GenerationConfig
 
             self.generation_config = GenerationConfig.from_model_config(config)
+
+        # Avoid warnings when creating a transformers pipeline
+        AutoConfig.register(self.base_model_prefix, AutoConfig)
+        self.auto_model_class.register(AutoConfig, self.__class__)
 
     @staticmethod
     def load_model(file_name: Union[str, Path]):
@@ -83,24 +92,34 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         inputs = {
+            "input_ids": input_ids,
             "attention_mask": attention_mask,
         }
 
         if self.use_cache:
             if past_key_values is None:
-                dummy_past_key_values = self.model_inputs["past_key_values"]
-                nb_layer = len(dummy_past_key_values)
-                nb_pkv = len(dummy_past_key_values[0])
-                new_shape = list(dummy_past_key_values[0][0].shape)
-                new_shape[2] = 0
-                new_shape[0] = input_ids.shape[0]
-                empty_tensor = torch.empty(size=new_shape)
-                past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(nb_layer))
+                nb_pkv = 2
+                num_layers = self.normalized_config.num_layers
+                num_attention_heads = self.normalized_config.num_attention_heads
+                hidden_size = self.normalized_config.hidden_size
+                d_k = hidden_size // num_attention_heads
+
+                if self.config.model_type != "bloom":
+                    new_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
+                    empty_tensor = torch.empty(size=new_shape)
+                    past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
+                    pkv = tuple(empty_tensor for _ in range(nb_pkv))
+                else:
+                    pkv = ()
+                    for nb_pkv in range(nb_pkv):
+                        if nb_pkv % 2 == 0:
+                            new_shape = [input_ids.shape[0] * num_attention_heads, d_k, 0]
+                        else:
+                            new_shape = [input_ids.shape[0] * num_attention_heads, 0, d_k]
+                        pkv = pkv + (torch.empty(size=new_shape),)
+                past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
 
             inputs["past_key_values"] = past_key_values
-
-        inputs["input_ids"] = input_ids
-
         outputs = self.model(**inputs)
 
         return CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
@@ -119,8 +138,8 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         use_cache: bool = True,
         **kwargs,
     ):
-        if not config.torchscript:
-            raise ValueError("The model is not the script model, please check it!")
+        if not getattr(config, "torchscript", False):
+            raise ValueError("`torchscript` should be set to True to load TorchScript model")
 
         # Load the model from local directory
         if os.path.isdir(model_id):
@@ -143,7 +162,9 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
 
         # IPEX jit model need 2 iterations to convert model to int8 model
         onnx_config_class = TasksManager.get_exporter_config_constructor(
-            model_type=config.model_type, exporter="onnx", task=cls.export_feature
+            model_type=config.model_type.replace("_", "-"),
+            exporter="onnx",
+            task=cls.export_feature,
         )
         onnx_config = onnx_config_class(config, use_past=use_cache)
         model_inputs = onnx_config.generate_dummy_inputs(framework="pt")
@@ -155,7 +176,6 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
             config=config,
             model_save_dir=model_save_dir,
             use_cache=use_cache,
-            model_inputs=model_inputs,
             **kwargs,
         )
 
@@ -219,24 +239,29 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
         )
 
     def can_generate(self) -> bool:
-        if isinstance(self, GenerationMixin):
-            return True
-        return False
+        return True
 
     @property
     def device(self) -> torch.device:
-        return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        return self._device
 
-    def to(self, device: Union[torch.device, str, int]):
-        self.model.to(device)
+    def to(self, device: Union[torch.device, str]):
+        self._device = device if isinstance(device, torch.device) else torch.device(device)
+        self.model.to(self._device)
         return self
 
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
         past_key_values = past_key_values or kwargs.get("past", None)
-        if self.use_cache:
-            if past_key_values is not None:
-                input_ids = input_ids[:, -1:]
+
+        if self.use_cache and past_key_values is not None:
+            input_ids = input_ids[:, -1:]
+
+        # `past_key_values` may be in the stardard format (e.g. in contrastive search), converts to bloom's format if needed
+        if past_key_values is not None and self.config.model_type == "bloom":
+            if past_key_values[0][0].shape[0] == input_ids.shape[0]:
+                past_key_values = self._convert_to_bloom_cache(past_key_values)
+
         return {
             "input_ids": input_ids,
             "past_key_values": past_key_values,
@@ -245,3 +270,86 @@ class TracedModelForCausalLM(OptimizedModel, GenerationMixin):
             "attention_mask": kwargs.get("attention_mask", None),
             "token_type_ids": None,
         }
+
+    def _reorder_cache(
+        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
+        [`~PreTrainedModel.beam_sample`] is called.
+        This is required to match `past_key_values` with the correct beam_idx at every generation step.
+        """
+        if self.config.model_type == "bloom":
+            return self._reorder_cache_bloom(past_key_values, beam_idx)
+
+        # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
+        return tuple(
+            tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+            for layer_past in past_key_values
+        )
+
+    # Copied from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
+    def _reorder_cache_bloom(
+        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
+        [`~PreTrainedModel.beam_sample`] is called for bloom architecture.
+        This is required to match `past_key_values` with the correct beam_idx at every generation step.
+        """
+        standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
+
+        # Get a copy of `beam_idx` on all the devices where we need those indices.
+        device_to_beam_idx = {
+            past_state.device: beam_idx.to(past_state.device)
+            for layer_past in past_key_values
+            for past_state in layer_past
+        }
+        reordered_past = tuple(
+            (
+                layer_past[0].index_select(0, device_to_beam_idx[layer_past[0].device]),
+                layer_past[1].index_select(0, device_to_beam_idx[layer_past[0].device]),
+            )
+            for layer_past in standardized_past
+        )
+        return self._convert_to_bloom_cache(reordered_past)
+
+    # Copied from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_bloom_cache
+    @staticmethod
+    def _convert_to_bloom_cache(past_key_value: Tuple[Tuple[torch.Tensor]]) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        Converts the cache to the format expected by Bloom, i.e. to tuple(tuple([batch_size * num_heads, ...]))
+        """
+        batch_size, num_heads, head_dim, seq_length = past_key_value[0][0].shape
+        batch_size_times_num_heads = batch_size * num_heads
+        # key:  [batch_size, num_heads, head_dim, seq_length] -> [batch_size * num_heads, head_dim, seq_length]
+        # value: [batch_size, num_heads, seq_length, head_dim] -> [batch_size * num_heads, seq_length, head_dim]
+        return tuple(
+            (
+                layer_past[0].view(batch_size_times_num_heads, head_dim, seq_length),
+                layer_past[1].view(batch_size_times_num_heads, seq_length, head_dim),
+            )
+            for layer_past in past_key_value
+        )
+
+    # Adapted from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_standard_cache
+    def _convert_to_standard_cache(
+        self, past_key_value: Tuple[Tuple[torch.Tensor]], batch_size: int
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        Standardizes the format of the cache so as to match most implementations, i.e. to tuple(tuple([batch_size, num_heads, ...]))
+        """
+        if self.config.model_type != "bloom":
+            return past_key_value
+
+        batch_size_times_num_heads, head_dim, seq_length = past_key_value[0][0].shape
+        num_heads = batch_size_times_num_heads // batch_size
+        # key: [batch_size * num_heads, head_dim, seq_length] -> [batch_size, num_heads, head_dim, seq_length]
+        # value: [batch_size * num_heads, seq_length, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
+        return tuple(
+            (
+                layer_past[0].view(batch_size, num_heads, head_dim, seq_length),
+                layer_past[1].view(batch_size, num_heads, seq_length, head_dim),
+            )
+            for layer_past in past_key_value
+        )
