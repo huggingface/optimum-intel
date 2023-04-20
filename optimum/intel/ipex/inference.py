@@ -193,7 +193,7 @@ class inference_mode:
                                     except Exception as e:
                                         logger.warning(f"failed to use PyTorch jit mode due to: {e}.")
                                 # Patching model with the new one
-                                if "text-generation" in self._model.task:
+                                if self._model.task == "text-generation":
                                     self._model.model = _ModelGenerationWrapper(model, self._original)
                                 else:
                                     self._model.model = _ModelFallbackWrapper(model, self._original)
