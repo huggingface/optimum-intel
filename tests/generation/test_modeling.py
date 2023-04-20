@@ -20,7 +20,7 @@ import torch
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, PretrainedConfig, pipeline, set_seed
 
-from optimum.intel.generation.modeling import TorchScriptModelForCausalLM
+from optimum.intel.generation.modeling import TSModelForCausalLM
 
 
 MODEL_NAMES = {
@@ -56,7 +56,7 @@ class ModelingIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = TorchScriptModelForCausalLM.from_pretrained(model_id, export=True)
+        model = TSModelForCausalLM.from_pretrained(model_id, export=True)
         self.assertIsInstance(model.config, PretrainedConfig)
         trfs_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -71,7 +71,7 @@ class ModelingIntegrationTest(unittest.TestCase):
         # Compare outputs with loaded model
         with tempfile.TemporaryDirectory() as tmpdirname:
             model.save_pretrained(tmpdirname)
-            loaded_model = TorchScriptModelForCausalLM.from_pretrained(tmpdirname)
+            loaded_model = TSModelForCausalLM.from_pretrained(tmpdirname)
             loaded_model_outputs = loaded_model(**tokens)
         self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
 
@@ -79,7 +79,7 @@ class ModelingIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers_generate(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = TorchScriptModelForCausalLM.from_pretrained(model_id, export=True)
+        model = TSModelForCausalLM.from_pretrained(model_id, export=True)
         self.assertIsInstance(model.config, PretrainedConfig)
         trfs_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -96,7 +96,7 @@ class ModelingIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = TorchScriptModelForCausalLM.from_pretrained(model_id, export=True)
+        model = TSModelForCausalLM.from_pretrained(model_id, export=True)
         model.to("cpu")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device="cpu")
@@ -108,7 +108,7 @@ class ModelingIntegrationTest(unittest.TestCase):
     def test_multiple_inputs(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = TorchScriptModelForCausalLM.from_pretrained(model_id, export=True)
+        model = TSModelForCausalLM.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
@@ -122,7 +122,7 @@ class ModelingIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
 
-        model_with_pkv = TorchScriptModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_pkv = TSModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
         # Warmup
         _ = model_with_pkv.generate(**tokens)
         with Timer() as with_pkv_timer:
@@ -130,7 +130,7 @@ class ModelingIntegrationTest(unittest.TestCase):
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = TorchScriptModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
+        model_without_pkv = TSModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
         # Warmup
         _ = model_without_pkv.generate(**tokens)
         with Timer() as without_pkv_timer:
