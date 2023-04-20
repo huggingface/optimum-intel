@@ -35,7 +35,11 @@ def ordered_inputs(inputs: str, model: PreTrainedModel):
     else:
         sig = inspect.signature(model.call)
 
-    return tuple(inputs[key] for key in sig.parameters if inputs.get(key, None) is not None)
+    return tuple(
+        inputs[key]
+        for key in sig.parameters
+        if inputs.get(key, None) is not None and not isinstance(inputs.get(key, None), bool)
+    )
 
 
 def prepare_jit_inputs(model: PreTrainedModel, task: str):
@@ -86,10 +90,9 @@ class _ModelGenerationWrapper(GenerationMixin):
 
     def __call__(self, *args, **kwargs):
         try:
-            trace_graph_inputs = []
-            for k, v in kwargs.items():
-                if v is not None and not isinstance(v, bool):
-                    trace_graph_inputs.append(v)
+            trace_graph_inputs = ordered_inputs(kwargs, self._default)
+            if args:
+                trace_graph_inputs = args + trace_graph_inputs
             trace_graph_inputs = tuple(trace_graph_inputs)
             outputs = self._optimized(*trace_graph_inputs)
             lm_logits = outputs[0]
