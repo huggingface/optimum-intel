@@ -18,7 +18,7 @@ limitations under the License.
 
 Based on the script [`run_generation.py`](https://github.com/huggingface/transformers/blob/main/examples/pytorch/text-generation/run_generation.py).
 
-The original generation task only supported the PyTorch eager model. By calling the `TracedModelForCausalLM` class, we can now support a TorchScript model for generation tasks.
+The original generation task only supported the PyTorch eager model. By calling the `TorchScriptModelForCausalLM` class, we can now support a TorchScript model for generation tasks.
 
 Example usage:
 

@@ -13,4 +13,4 @@
 #  limitations under the License.
 
 
-from .modeling import TracedModelForCausalLM
+from .modeling import TorchScriptModelForCausalLM
