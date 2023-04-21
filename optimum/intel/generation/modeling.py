@@ -191,6 +191,7 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         subfolder: str = "",
         local_files_only: bool = False,
         use_cache: bool = True,
+        torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         **kwargs,
     ):
         if is_torch_version("<", "2.0.0"):
@@ -204,7 +205,7 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
-            "torch_dtype": kwargs.get("torch_dtype", None),
+            "torch_dtype": torch_dtype,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)

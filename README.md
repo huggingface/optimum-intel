@@ -41,8 +41,6 @@ where `extras` can be one or more of `neural-compressor`, `openvino`, `nncf`.
 
 ## Neural Compressor
 
-#### Dynamic quantization:
-
 Dynamic quantization can be used through the Optimum command-line interface:
 
 ```bash
@@ -62,7 +60,7 @@ loaded_model_from_hub = INCModelForSequenceClassification.from_pretrained(
 
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
 
-For more details, please refer to this [guide](https://huggingface.co/docs/optimum/main/en/intel/optimization_inc#apply-quantization-using-the-cli).
+For more details on the supported compression techniques, please refer to the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_inc).
 
 
 ## OpenVINO
