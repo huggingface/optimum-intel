@@ -204,6 +204,7 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
+            "torch_dtype": kwargs.get("torch_dtype", None),
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
