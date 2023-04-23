@@ -205,6 +205,7 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
+            "use_cache": use_cache,
             "torch_dtype": torch_dtype,
         }
 
