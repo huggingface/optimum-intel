@@ -21,7 +21,7 @@ from typing import Optional, Tuple, Union
 
 import torch
 from huggingface_hub import hf_hub_download
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
@@ -81,8 +81,33 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         torch.jit.freeze(model.eval())
         return model
 
+    @staticmethod
+    def jit_trace(model: PreTrainedModel, task: str, config: PretrainedConfig, use_cache: bool = True):
+        model.config.return_dict = False
+        signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
+        onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
+        onnx_config = onnx_config_class(model.config, use_past=use_cache)
+        dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+        model_inputs = {
+            key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None
+        }
+        if use_cache:
+            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()))
+        else:
+            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs)
+        traced_model = torch.jit.freeze(traced_model.eval())
+        traced_model(**model_inputs)
+        traced_model(**model_inputs)
+
+        return traced_model
+
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
         torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
+
+    @classmethod
+    def export_model(cls, model: PreTrainedModel, task: str, use_cache: bool = True):
+        traced_model = cls.jit_trace(model, task, model.config, use_cache)
+        return cls(traced_model, model.config)
 
     def forward(
         self,
@@ -210,20 +235,7 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        model.config.return_dict = False
-        signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
-        onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_class(model.config, use_past=use_cache)
-        dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-        model_inputs = {
-            key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None
-        }
-
-        if use_cache:
-            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()))
-        else:
-            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs)
-        traced_model = torch.jit.freeze(traced_model.eval())
+        traced_model = cls.jit_trace(model, task, config, use_cache)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
