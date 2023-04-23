@@ -1,17 +1,11 @@
-import inspect
 import logging
-from typing import Tuple, Union
+from typing import Union
 
 import torch
 from torch import nn
-from transformers import GenerationMixin, PreTrainedModel, add_start_docstrings
-from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers import add_start_docstrings
 from transformers.pipelines import Pipeline
 from transformers.utils import is_ipex_available
-
-from optimum.exporters.tasks import TasksManager
-
-from ..utils.constant import _TASK_ALIASES
 
 from ..generation.modeling import TSModelForCausalLM
 
