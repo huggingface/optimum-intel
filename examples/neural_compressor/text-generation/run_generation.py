@@ -211,12 +211,14 @@ def main():
         "--quantization_approach",
         type=str,
         default="dynamic",
-        help="Quantization approach. Supported approach are static and dynamic.")
+        help="Quantization approach. Supported approach are static and dynamic.",
+    )
     parser.add_argument(
         "--num_calibration_samples",
         type=int,
         default=50,
-        help="Number of examples to use for the calibration step resulting from static quantization.")
+        help="Number of examples to use for the calibration step resulting from static quantization.",
+    )
     parser.add_argument(
         "--verify_loading",
         action="store_true",
@@ -294,6 +296,7 @@ def main():
         input_ids = encoded_prompt
 
     if args.apply_quantization:
+
         def calibration_fn(c_model):
             c_model = TSModelForCausalLM(model=c_model, config=model.config)
             c_model.generate(
