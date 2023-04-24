@@ -14,48 +14,41 @@
 # See the License for the specific language governing permissions and
 
 import argparse
+import itertools
 import logging
 import math
 import os
 import random
+import tempfile
+from functools import partial
+from io import BytesIO
 from pathlib import Path
 from typing import Iterable, Optional
-import tempfile
-from tqdm import tqdm
-import itertools
-from PIL import Image
-import requests
-from io import BytesIO
-from functools import partial
-import random
 
 import numpy as np
+import requests
 import torch
-
-import nncf  # Important - should be imported directly after torch
-from nncf import NNCFConfig
-from nncf.torch import create_compressed_model, register_default_init_args
-from nncf.torch.initialization import PTInitializingDataLoader
-from nncf.torch.layer_utils import CompressionParameter
-from nncf.common.logging import nncf_logger
-
 import torch.nn.functional as F
 import torch.utils.checkpoint
-
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
 from datasets import load_dataset
-from diffusers import DiffusionPipeline, StableDiffusionPipeline
-from diffusers import DDPMScheduler, DDIMScheduler, LMSDiscreteScheduler
+from diffusers import DDIMScheduler, DDPMScheduler, DiffusionPipeline, LMSDiscreteScheduler, StableDiffusionPipeline
 from diffusers.optimization import get_scheduler
 from huggingface_hub import HfFolder, Repository, whoami
+from nncf import NNCFConfig
+from nncf.common.logging import nncf_logger
+from nncf.torch import create_compressed_model, register_default_init_args
+from nncf.torch.initialization import PTInitializingDataLoader
+from nncf.torch.layer_utils import CompressionParameter
+from openvino._offline_transformations import apply_moc_transformations, compress_quantize_weights_transformation
+from PIL import Image
 from torchvision import transforms
-
-from optimum.intel import OVStableDiffusionPipeline
-from openvino._offline_transformations import compress_quantize_weights_transformation, apply_moc_transformations
+from tqdm import tqdm
 
 from optimum.exporters.onnx import export_models, get_stable_diffusion_models_for_export
+from optimum.intel import OVStableDiffusionPipeline
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
@@ -63,9 +56,11 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
+
 random.seed(42)
 logger = get_logger(__name__)
 nncf_logger.setLevel(logging.INFO)
+
 
 def get_full_repo_name(model_id: str, organization: Optional[str] = None, token: Optional[str] = None):
     if token is None:
@@ -76,36 +71,45 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
     else:
         return f"{organization}/{model_id}"
 
+
 def pokemon_preprocess_train(examples, train_transforms, tokenize_captions, image_column="image"):
     image = examples[image_column]
     examples["pixel_values"] = train_transforms(image.convert("RGB"))
     examples["input_ids"] = tokenize_captions(examples)
     return examples
 
+
 def get_pil_from_url(url):
     response = requests.get(url)
     image = Image.open(BytesIO(response.content))
     return image.convert("RGB")
 
+
 # Many of the images in laion2B dataset are unavailable
 # This is a workaround to substitute such images with a backup or cached available examples
-BACKUP_PAIR = (get_pil_from_url("https://thumbs.dreamstime.com/t/altai-mountains-mountain-lake-russia-siberia-chuya-ridge-49130812.jpg"),
-               "Altai mountains Stock Photography")
+BACKUP_PAIR = (
+    get_pil_from_url(
+        "https://thumbs.dreamstime.com/t/altai-mountains-mountain-lake-russia-siberia-chuya-ridge-49130812.jpg"
+    ),
+    "Altai mountains Stock Photography",
+)
 AVAILABLE_EXAMPLES = []
+
+
 def laion2B_preprocess_train(examples, train_transforms, tokenize_captions, image_column="URL"):
     url = examples[image_column]
     try:
         image = get_pil_from_url(url)
         AVAILABLE_EXAMPLES.append((url, examples["TEXT"]))
-    except:
+    except Exception:
         logger.info(f"Can't load image from url: {url}, using cache with size: {len(AVAILABLE_EXAMPLES)}")
         if len(AVAILABLE_EXAMPLES) > 0:
-            backup_id = random.randint(0, len(AVAILABLE_EXAMPLES)-1)
+            backup_id = random.randint(0, len(AVAILABLE_EXAMPLES) - 1)
             backup_example = AVAILABLE_EXAMPLES[backup_id]
             try:
                 image = get_pil_from_url(backup_example[0])
                 examples["TEXT"] = backup_example[1]
-            except:
+            except Exception:
                 logger.info(f"Can't load image from cached url: {backup_example[0]}, using backup")
                 image = BACKUP_PAIR[0].copy()
                 examples["TEXT"] = BACKUP_PAIR[1]
@@ -113,10 +117,11 @@ def laion2B_preprocess_train(examples, train_transforms, tokenize_captions, imag
             logger.info(f"Can't load image from url: {url}, using backup")
             image = BACKUP_PAIR[0].copy()
             examples["TEXT"] = BACKUP_PAIR[1]
-            
+
     examples["pixel_values"] = train_transforms(image)
     examples["input_ids"] = tokenize_captions(examples)
     return examples
+
 
 dataset_name_mapping = {
     "lambdalabs/pokemon-blip-captions": {
@@ -133,7 +138,7 @@ dataset_name_mapping = {
         "columns": ("URL", "TEXT"),
         "preprocess_fn": laion2B_preprocess_train,
         "streaming": True,
-    }
+    },
 }
 
 
@@ -168,7 +173,7 @@ class EMAQUnet:
             if param.requires_grad:
                 tmp = param.clone()
                 tmp = tmp.to(s_param.device)
-                #tmp = self.decay * (s_param - param.clone.to(s_param.device))
+                # tmp = self.decay * (s_param - param.clone.to(s_param.device))
                 tmp.sub_(s_param)
                 tmp.mul_(self.decay)
                 tmp.neg_()
@@ -203,7 +208,8 @@ class EMAQUnet:
             p.to(device=device, dtype=dtype) if p.is_floating_point() else p.to(device=device)
             for p in self.shadow_params
         ]
-        
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Stable Diffusion 8-bit Quantization for OpenVINO")
     parser.add_argument(
@@ -306,9 +312,7 @@ def parse_args():
         "--noise_schedule_steps",
         type=int,
         default=1000,
-        help=(
-            "The noise scheduler max train timestemps"
-        ),
+        help=("The noise scheduler max train timestemps"),
     )
     parser.add_argument(
         "--center_crop",
@@ -486,9 +490,7 @@ def parse_args():
         "--opt_init_steps",
         type=int,
         default=300,
-        help=(
-            "Max number of initialization steps for quantization before the actual fine-tuning."
-        ),
+        help=("Max number of initialization steps for quantization before the actual fine-tuning."),
     )
     parser.add_argument(
         "--opt_init_type",
@@ -498,13 +500,13 @@ def parse_args():
         help="They way how to estimate activation quantization paramters at the initializatin step before QAT.",
     )
     parser.add_argument(
-        "--tune_quantizers_only", action="store_true", default=False, help="Whether to train quantization parameters only."
+        "--tune_quantizers_only",
+        action="store_true",
+        default=False,
+        help="Whether to train quantization parameters only.",
     )
-    parser.add_argument(
-        "--use_kd", action="store_true", help="Use Knowledge Distillation to boost accuracy."
-    )
-    
-    
+    parser.add_argument("--use_kd", action="store_true", help="Use Knowledge Distillation to boost accuracy.")
+
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
@@ -519,12 +521,13 @@ def parse_args():
         args.non_ema_revision = args.revision
     return args
 
+
 def get_noise_scheduler(args):
     scheduler_args = {
         "beta_start": args.beta_start,
         "beta_end": args.beta_end,
         "beta_schedule": args.beta_schedule,
-        "num_train_timesteps": args.noise_schedule_steps
+        "num_train_timesteps": args.noise_schedule_steps,
     }
     if args.noise_scheduler == "DDIM":
         noise_scheduler = DDIMScheduler(**scheduler_args)
@@ -541,7 +544,7 @@ def export_to_onnx(pipeline, save_dir):
     unet = pipeline.unet
     vae = pipeline.vae
     text_encoder = pipeline.text_encoder
-    
+
     unet.eval().cpu()
     vae.eval().cpu()
     text_encoder.eval().cpu()
@@ -559,39 +562,43 @@ def export_to_onnx(pipeline, save_dir):
         models_and_onnx_configs = get_stable_diffusion_models_for_export(pipeline)
         pipeline.save_config(save_dir)
         export_models(
-            models_and_onnx_configs=models_and_onnx_configs,
-            output_dir=Path(save_dir),
-            output_names=output_names
-        )       
+            models_and_onnx_configs=models_and_onnx_configs, output_dir=Path(save_dir), output_names=output_names
+        )
+
 
 def export_to_openvino(pipeline, onnx_dir, save_dir):
     ov_pipe = OVStableDiffusionPipeline.from_pretrained(
-                model_id=onnx_dir,
-                from_onnx=True,
-                model_save_dir=save_dir,
-                tokenizer=pipeline.tokenizer,
-                scheduler=pipeline.scheduler,
-                feature_extractor=pipeline.feature_extractor,
-                compile=False
-            )
+        model_id=onnx_dir,
+        from_onnx=True,
+        model_save_dir=save_dir,
+        tokenizer=pipeline.tokenizer,
+        scheduler=pipeline.scheduler,
+        feature_extractor=pipeline.feature_extractor,
+        compile=False,
+    )
     apply_moc_transformations(ov_pipe.unet.model, cf=False)
     compress_quantize_weights_transformation(ov_pipe.unet.model)
     ov_pipe.save_pretrained(save_dir)
-    
+
+
 class UnetInitDataset(torch.utils.data.Dataset):
     def __init__(self, data):
         super().__init__()
         self.init_data = data
-    def __len__(self): return len(self.init_data)
-    def __getitem__(self, index): 
+
+    def __len__(self):
+        return len(self.init_data)
+
+    def __getitem__(self, index):
         return self.init_data[index]
-    
+
+
 def prepare_nncf_init_data(pipeline, dataloader, args):
     weight_dtype = torch.float32
     text_encoder = pipeline.text_encoder
     vae = pipeline.vae
     noise_scheduler = pipeline.scheduler
-    
+
     nncf_init_data = []
 
     logger.info(f"Fetching {args.opt_init_steps} for the initialization...")
@@ -612,8 +619,16 @@ def prepare_nncf_init_data(pipeline, dataloader, args):
             # (this is the forward diffusion process)
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
             encoder_hidden_states = text_encoder(batch["input_ids"])[0]
-            nncf_init_data.append((torch.squeeze(noisy_latents).to("cpu"), torch.squeeze(timesteps).to("cpu"), torch.squeeze(encoder_hidden_states).to("cpu"), 0))
+            nncf_init_data.append(
+                (
+                    torch.squeeze(noisy_latents).to("cpu"),
+                    torch.squeeze(timesteps).to("cpu"),
+                    torch.squeeze(encoder_hidden_states).to("cpu"),
+                    0,
+                )
+            )
     return nncf_init_data
+
 
 # The config should work for Stable Diffusion v1.4-2.1
 def get_nncf_config(pipeline, dataloader, args):
@@ -621,21 +636,19 @@ def get_nncf_config(pipeline, dataloader, args):
     unet = pipeline.unet
     nncf_config_dict = {
         "input_info": [
-            {   #"keyword": "latent_model_input",
+            {  # "keyword": "latent_model_input",
                 "sample_size": [1, unet.config["in_channels"], unet.config["sample_size"], unet.config["sample_size"]]
             },
-            {   #"keyword": "t",
-                "sample_size": [1]
+            {"sample_size": [1]},  # "keyword": "t",
+            {  # "keyword": "encoder_hidden_states",
+                "sample_size": [1, text_encoder.config.max_position_embeddings, text_encoder.config.hidden_size]
             },
-            {   #"keyword": "encoder_hidden_states",
-                "sample_size": [1,text_encoder.config.max_position_embeddings,text_encoder.config.hidden_size]
-            }
         ],
         "log_dir": args.output_dir,  # The log directory for NNCF-specific logging outputs.
         "compression": [
             {
                 "algorithm": "quantization",  # Specify the algorithm here.
-                "preset" : "mixed",
+                "preset": "mixed",
                 "initializer": {
                     "range": {"num_init_samples": args.opt_init_steps, "type": args.opt_init_type},
                     "batchnorm_adaptation": {"num_bn_adaptation_samples": args.opt_init_steps},
@@ -652,30 +665,25 @@ def get_nncf_config(pipeline, dataloader, args):
                 ],
                 "export_to_onnx_standard_ops": True,
             },
-        ]
+        ],
     }
     if args.use_kd:
-        nncf_config_dict["compression"].append(
-            {
-                "algorithm": "knowledge_distillation",
-                "type": "mse" # or ""softmax
-            }
-        )
-        
+        nncf_config_dict["compression"].append({"algorithm": "knowledge_distillation", "type": "mse"})  # or ""softmax
+
     class UnetInitDataLoader(PTInitializingDataLoader):
         def get_inputs(self, dataloader_output):
             noisy_latents = dataloader_output[0].float().to(unet.device, non_blocking=True)
             timesteps = dataloader_output[1].float().to(unet.device, non_blocking=True)
             encoder_hidden_states = dataloader_output[2].float().to(unet.device, non_blocking=True)
-            return (noisy_latents,timesteps,encoder_hidden_states), {}
+            return (noisy_latents, timesteps, encoder_hidden_states), {}
 
         def get_target(self, dataloader_output):
             return dataloader_output[0]
-    
+
     nncf_config = NNCFConfig.from_dict(nncf_config_dict)
     nncf_config = register_default_init_args(nncf_config, UnetInitDataLoader(dataloader))
     return nncf_config
-    
+
 
 def main():
     args = parse_args()
@@ -694,7 +702,7 @@ def main():
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO,
     )
-    
+
     logger.info(accelerator.state, main_process_only=False)
 
     # If passed along, set the training seed now.
@@ -761,15 +769,17 @@ def main():
     # download the dataset.
     dataset_settings = dataset_name_mapping.get(args.dataset_name, None)
     if dataset_settings is None:
-        raise ValueError(f"Dataset {args.dataset_name} not supported. Please choose from {dataset_name_mapping.keys()}")
-    
+        raise ValueError(
+            f"Dataset {args.dataset_name} not supported. Please choose from {dataset_name_mapping.keys()}"
+        )
+
     if args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         dataset = load_dataset(
             args.dataset_name,
             args.dataset_config_name,
             cache_dir=args.cache_dir,
-            streaming = dataset_settings["streaming"]
+            streaming=dataset_settings["streaming"],
         )
     else:
         data_files = {}
@@ -801,9 +811,7 @@ def main():
             # take a random caption if there are multiple
             captions.append(random.choice(caption) if is_train else caption[0])
         else:
-            raise ValueError(
-                f"Caption column `{caption_column}` should contain either strings or lists of strings."
-            )
+            raise ValueError(f"Caption column `{caption_column}` should contain either strings or lists of strings.")
         inputs = tokenizer(captions[0], max_length=tokenizer.model_max_length, padding="do_not_pad", truncation=True)
         input_ids = inputs.input_ids
         return input_ids
@@ -818,8 +826,9 @@ def main():
         ]
     )
 
-    preprocess_fn = partial(dataset_settings["preprocess_fn"], 
-                            train_transforms=train_transforms, tokenize_captions=tokenize_captions)
+    preprocess_fn = partial(
+        dataset_settings["preprocess_fn"], train_transforms=train_transforms, tokenize_captions=tokenize_captions
+    )
 
     with accelerator.main_process_first():
         if args.max_train_samples is not None:
@@ -840,27 +849,26 @@ def main():
         }
 
     train_dataloader = torch.utils.data.DataLoader(
-        train_dataset, collate_fn=collate_fn, batch_size=args.train_batch_size,
-        num_workers=args.dataloader_num_workers
+        train_dataset, collate_fn=collate_fn, batch_size=args.train_batch_size, num_workers=args.dataloader_num_workers
     )
-    
+
     unet = accelerator.prepare(unet)
     vae.to(unet.device)
     text_encoder.to(unet.device)
     train_dataloader = accelerator.prepare_data_loader(train_dataloader)
-    orig_unet = unet # save link to original unet model for EMA
+    orig_unet = unet  # save link to original unet model for EMA
 
     ## Create initialization dataset for PTQ
-    nncf_init_data = prepare_nncf_init_data(pipeline, train_dataloader, args)        
+    nncf_init_data = prepare_nncf_init_data(pipeline, train_dataloader, args)
     init_dataloader = torch.utils.data.DataLoader(UnetInitDataset(nncf_init_data), batch_size=1, num_workers=1)
     nncf_config = get_nncf_config(pipeline, init_dataloader, args)
-    
+
     # Quantize the model and initialize quantizer using init data
     compression_controller, unet = create_compressed_model(unet, nncf_config)
-    
+
     statistics_unet = compression_controller.statistics()
     logger.info(statistics_unet.to_str())
-    
+
     del nncf_init_data, init_dataloader
     torch.cuda.empty_cache()
 
@@ -1008,18 +1016,18 @@ def main():
         unet = accelerator.unwrap_model(unet)
         if args.ema_device:
             ema_unet.copy_to(orig_unet.parameters())
-        
+
         if args.push_to_hub:
             repo.push_to_hub(commit_message="End of training", blocking=False, auto_lfs_prune=True)
 
     accelerator.end_training()
-    
+
     # Export optimized pipline to OpenVINO
     export_unet = compression_controller.strip(do_copy=False)
     export_pipeline = StableDiffusionPipeline(
         text_encoder=text_encoder,
         vae=vae,
-        unet = export_unet,
+        unet=export_unet,
         tokenizer=tokenizer,
         scheduler=noise_scheduler,
         safety_checker=pipeline.safety_checker,
@@ -1029,9 +1037,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmpdirname:
         export_to_onnx(export_pipeline, tmpdirname)
         export_to_openvino(export_pipeline, tmpdirname, Path(args.output_dir) / "openvino")
-        
+
+
 if __name__ == "__main__":
     main()
-        
-
-
