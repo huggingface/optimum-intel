@@ -24,6 +24,8 @@ import logging
 import numpy as np
 import torch
 from transformers import (
+    BloomForCausalLM,
+    BloomTokenizerFast,
     CTRLLMHeadModel,
     CTRLTokenizer,
     GPT2LMHeadModel,
@@ -38,6 +40,8 @@ from transformers import (
     XLNetTokenizer,
 )
 
+from neural_compressor import PostTrainingQuantConfig
+from optimum.intel.neural_compressor import INCQuantizer
 from optimum.intel.generation.modeling import TSModelForCausalLM
 
 
@@ -51,6 +55,7 @@ logger = logging.getLogger(__name__)
 MAX_LENGTH = int(10000)  # Hardcoded max length to avoid infinite loop
 
 MODEL_CLASSES = {
+    "bloom": (BloomForCausalLM, BloomTokenizerFast),
     "gpt2": (GPT2LMHeadModel, GPT2Tokenizer),
     "ctrl": (CTRLLMHeadModel, CTRLTokenizer),
     "openai-gpt": (OpenAIGPTLMHeadModel, OpenAIGPTTokenizer),
@@ -197,6 +202,26 @@ def main():
         action="store_true",
         help="Whether to use 16-bit (mixed) precision (through NVIDIA apex) instead of 32-bit",
     )
+    parser.add_argument(
+        "--apply_quantization",
+        action="store_true",
+        help="Whether or not to apply quantization.",
+    )
+    parser.add_argument(
+        "--quantization_approach",
+        type=str,
+        default="dynamic",
+        help="Quantization approach. Supported approach are static and dynamic.")
+    parser.add_argument(
+        "--num_calibration_samples",
+        type=int,
+        default=50,
+        help="Number of examples to use for the calibration step resulting from static quantization.")
+    parser.add_argument(
+        "--verify_loading",
+        action="store_true",
+        help="Whether or not to verify the loading of the quantized model.",
+    )
     parser.add_argument("--jit", action="store_true", help="Whether or not to use jit trace to accelerate inference")
 
     parser.add_argument(
@@ -223,7 +248,7 @@ def main():
 
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
 
-    if args.jit:
+    if args.jit and not args.apply_quantization:
         model = TSModelForCausalLM.from_pretrained(args.model_name_or_path, export=True)
     else:
         model = model_class.from_pretrained(args.model_name_or_path)
@@ -268,6 +293,39 @@ def main():
     else:
         input_ids = encoded_prompt
 
+    if args.apply_quantization:
+        def calibration_fn(c_model):
+            c_model = TSModelForCausalLM(model=c_model, config=model.config)
+            c_model.generate(
+                input_ids=input_ids,
+                max_length=args.length + len(encoded_prompt[0]),
+                temperature=args.temperature,
+                top_k=args.k,
+                top_p=args.p,
+                repetition_penalty=args.repetition_penalty,
+                do_sample=False,
+                num_beams=1,
+                num_return_sequences=args.num_return_sequences,
+            )
+
+        supported_approach = {"static", "dynamic"}
+        if args.quantization_approach not in supported_approach:
+            raise ValueError(
+                f"Unknown quantization approach. Supported approach are {supported_approach}."
+                f"{args.quantization_approach} was given."
+            )
+        quantization_config = PostTrainingQuantConfig(approach=args.quantization_approach)
+
+        # Apply post-training quantization
+        quantizer = INCQuantizer.from_pretrained(model, calibration_fn=calibration_fn)
+
+        quantizer.quantize(
+            quantization_config=quantization_config,
+            save_directory=args.output_dir,
+        )
+        tokenizer.save_pretrained(args.output_dir)
+        model = TSModelForCausalLM.from_pretrained(args.output_dir, export=True)
+
     output_sequences = model.generate(
         input_ids=input_ids,
         max_length=args.length + len(encoded_prompt[0]),
@@ -275,7 +333,8 @@ def main():
         top_k=args.k,
         top_p=args.p,
         repetition_penalty=args.repetition_penalty,
-        do_sample=True,
+        do_sample=False,
+        num_beams=1,
         num_return_sequences=args.num_return_sequences,
     )
 

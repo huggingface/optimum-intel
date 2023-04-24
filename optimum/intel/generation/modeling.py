@@ -21,9 +21,12 @@ from typing import Optional, Tuple, Union
 
 import torch
 from huggingface_hub import hf_hub_download
+from neural_compressor.utils.pytorch import load
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
+from transformers.modeling_utils import no_init_weights
 from transformers.utils import WEIGHTS_NAME
+from transformers.utils.generic import ContextManagers
 
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
@@ -206,7 +209,41 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
             "force_download": force_download,
         }
 
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+        if config.torch_dtype is not torch.int8 and config.torch_dtype != "int8":
+            model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+        else:
+            file_name = kwargs.get("file_name", WEIGHTS_NAME)
+            # Load the model from local directory
+            if os.path.isdir(model_id):
+                state_dict_path = os.path.join(model_id, file_name)
+            # Download the model from the hub
+            else:
+                state_dict_path = hf_hub_download(
+                    repo_id=model_id,
+                    filename=file_name,
+                    use_auth_token=use_auth_token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
+            # Load the state dictionary of the model to verify whether the model is quantized or not
+            state_dict = torch.load(state_dict_path, map_location="cpu")
+            if "best_configure" in state_dict and state_dict["best_configure"] is not None:
+                subfolder = kwargs.get("subfolder", "")
+                arg_framework = kwargs.get("framework", None)
+                framework = TasksManager.determine_framework(model_id, subfolder=subfolder, framework=arg_framework)
+                model_class = TasksManager.get_model_class_for_task(task, framework)
+                init_contexts = [no_init_weights(_enable=True)]
+                with ContextManagers(init_contexts):
+                    model = model_class.from_pretrained(model_id, **model_kwargs)
+                try:
+                    model = load(state_dict_path, model)
+                except Exception as e:
+                    logger.error(e.args)
+                    raise
+            else:
+                model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         model.config.return_dict = False
         signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
         onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)

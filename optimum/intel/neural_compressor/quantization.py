@@ -195,7 +195,10 @@ class INCQuantizer(OptimumQuantizer):
                 " accuracy tolerance has been found. Either the tolerance or the number of trials need to be increased."
             )
         if isinstance(self._original_model.config, PretrainedConfig):
+            original_dtype = self._original_model.config.torch_dtype
+            self._original_model.config.torch_dtype = "int8"
             self._original_model.config.save_pretrained(save_directory)
+            self._original_model.config.torch_dtype = original_dtype
 
         self._quantized_model = compressed_model._model
 
