@@ -37,6 +37,7 @@ from nncf import NNCFConfig
 from nncf.torch import create_compressed_model, register_default_init_args
 from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.layer_utils import CompressionParameter
+from nncf.common.logging import nncf_logger
 
 import torch.nn.functional as F
 import torch.utils.checkpoint
@@ -64,6 +65,7 @@ from optimum.utils import (
 
 random.seed(42)
 logger = get_logger(__name__)
+nncf_logger.setLevel(logging.INFO)
 
 def get_full_repo_name(model_id: str, organization: Optional[str] = None, token: Optional[str] = None):
     if token is None:
@@ -96,7 +98,7 @@ def laion2B_preprocess_train(examples, train_transforms, tokenize_captions, imag
         image = get_pil_from_url(url)
         AVAILABLE_EXAMPLES.append((url, examples["TEXT"]))
     except:
-        logger.info(f"Can't load image from url: {url}, using cache")
+        logger.info(f"Can't load image from url: {url}, using cache with size: {len(AVAILABLE_EXAMPLES)}")
         if len(AVAILABLE_EXAMPLES) > 0:
             backup_id = random.randint(0, len(AVAILABLE_EXAMPLES)-1)
             backup_example = AVAILABLE_EXAMPLES[backup_id]
@@ -123,6 +125,11 @@ dataset_name_mapping = {
         "streaming": False,
     },
     "laion/laion2B-en": {
+        "columns": ("URL", "TEXT"),
+        "preprocess_fn": laion2B_preprocess_train,
+        "streaming": True,
+    },
+    "laion/laion2B-en-aesthetic": {
         "columns": ("URL", "TEXT"),
         "preprocess_fn": laion2B_preprocess_train,
         "streaming": True,
@@ -651,7 +658,7 @@ def get_nncf_config(pipeline, dataloader, args):
         nncf_config_dict["compression"].append(
             {
                 "algorithm": "knowledge_distillation",
-                "type": "mse" # or "softmax"
+                "type": "mse" # or ""softmax
             }
         )
         
