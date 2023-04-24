@@ -11,7 +11,7 @@ But it can be easily extended to other datasets.
 >**Note**: laion2B-en is being downloaded on-fly durint the fine-tuning process. No need to store it locally.
 
 ## Prerequisites
-* Install Opimum-Intel for OpenVINO:
+* Install Optimum-Intel for OpenVINO:
 ```python
 pip install optimum-intel[openvino]
 ```
@@ -19,6 +19,7 @@ pip install optimum-intel[openvino]
 ```python
 pip install -r requirements.txt
 ```
+>**Note**: The example requires `torch~=1.13` and does not work with PyTorch 2.0.
 
 ## Running pre-optimized model
 * General-purpose image generation model:
@@ -55,10 +56,33 @@ The minimal HW setup for the run is GPU with 24GB of memory.
 ## Run QAT:
 * QAT for pokemon generation model:
 ```python
-python quantize.py --ema_device="cpu" --use_kd --model_id="svjack/Stable-Diffusion-Pokemon-en" --center_crop --random_flip --gradient_checkpointing --dataloader_num_workers=2 --dataset_name="lambdalabs/pokemon-blip-captions"  --max_train_steps=4096 --opt_init_steps=300 --output_dir=sd-quantized-pokemon
+python quantize.py \
+    --ema_device="cpu" \
+    --use_kd \
+    --model_id="svjack/Stable-Diffusion-Pokemon-en" \
+    --center_crop \
+    --random_flip \
+    --gradient_checkpointing \
+    --dataloader_num_workers=2 \
+    --dataset_name="lambdalabs/pokemon-blip-captions" \
+    --max_train_steps=4096 \
+    --opt_init_steps=300 \
+    --output_dir=sd-quantized-pokemon
 ```
 
 * QAT on a laion dataset:
 ```python
-CUDA_VISIBLE_DEVICES=2 python quantize.py --ema_device="cpu" --use_kd --center_crop --random_flip --dataset_name="laion/laion2B-en" --max_train_steps=10000  --model_id="runwayml/stable-diffusion-v1-5" --max_train_samples=100000 --dataloader_num_workers=8 --opt_init_steps=800 --gradient_checkpointing --output_dir=sd-1-5-quantied-laion
+python quantize.py \
+    --ema_device="cpu" \
+    --use_kd \
+    --center_crop \
+    --random_flip \
+    --dataset_name="laion/laion2B-en" \
+    --max_train_steps=10000  \
+    --model_id="runwayml/stable-diffusion-v1-5" \
+    --max_train_samples=100000 \
+    --dataloader_num_workers=8 \
+    --opt_init_steps=800 \
+    --gradient_checkpointing \
+    --output_dir=sd-1-5-quantied-laion
 ```
