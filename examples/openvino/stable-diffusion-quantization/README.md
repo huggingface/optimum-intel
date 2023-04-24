@@ -1,5 +1,5 @@
 # Stable Diffusion Quantization
-This example demonstrates Quantization-aware Training (QAT) of Stable Diffusion UNet model wich is the most time-consuming element of the whole pipeline. The quantized model and the pipeline is exported to the OpenVINO format for inference with `OVStableDiffusionPipeline` helper.
+This example demonstrates Quantization-aware Training (QAT) of Stable Diffusion using [NNCF](https://github.com/openvinotoolkit/nncf.git). Quantization is applyied to UNet model which is the most time-consuming element of the whole pipeline. The quantized model and the pipeline is exported to the OpenVINO format for inference with `OVStableDiffusionPipeline` helper. The original training code was taken from the Diffusers [repository](https://github.com/huggingface/diffusers/tree/main/examples/text_to_image) and modified to support QAT.
 
 Knowledge distillation and EMA techniques can be used to improve the model accuracy.
 
