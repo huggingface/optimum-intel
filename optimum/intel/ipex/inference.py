@@ -106,7 +106,6 @@ class inference_mode:
                                             jit_model = jit_trace(
                                                 model=model,
                                                 task=self._model.task,
-                                                config=self._original.config,
                                                 use_cache=self._original.config.use_cache,
                                             )
                                             model = TSModelForCausalLM(

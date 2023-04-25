@@ -210,7 +210,7 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        traced_model = jit_trace(model, task, config, use_cache)
+        traced_model = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)

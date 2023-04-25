@@ -6,7 +6,7 @@ from transformers import PretrainedConfig, PreTrainedModel
 from optimum.exporters import TasksManager
 
 
-def prepare_jit_inputs(model: PreTrainedModel, task: str, config: PretrainedConfig, use_cache: bool = True):
+def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = True):
     signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
     onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
     onnx_config = onnx_config_class(model.config, use_past=use_cache)
@@ -15,7 +15,7 @@ def prepare_jit_inputs(model: PreTrainedModel, task: str, config: PretrainedConf
     return model_inputs
 
 
-def jit_trace(model: PreTrainedModel, task: str, config: PretrainedConfig, use_cache: bool = True):
+def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = True):
     model.config.return_dict = False
     model_inputs = prepare_jit_inputs(model, task, use_cache)
     if use_cache:
