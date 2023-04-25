@@ -127,7 +127,9 @@ recipes = {
     "smooth_quant": True,
     "smooth_quant_args": {
         "alpha": 0.5,  # "auto" or a float value. Default is 0.5
-        "folding": True,  # Default value: True for PyTorch FBGEMM backend, False for IPEX backend.
+        "folding": True,  # folding=False: Allow inserting mul to update the input distribution and not absorbing. It is only for IPEX backend.
+                          # folding=True: Only allow inserting mul with the input scale that can be absorbed into the last layer. 
+                          # If folding not set in config, the default value is IPEX: False (True if version<2.1), Stock PyTorch: True.
     },
 }
 conf = PostTrainingQuantConfig(recipes=recipes)
