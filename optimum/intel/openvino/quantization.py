@@ -184,7 +184,8 @@ class OVQuantizer(OptimumQuantizer):
         f = io.BytesIO() if not save_as_external_data else save_directory / ONNX_WEIGHTS_NAME
 
         # Export the compressed model to the ONNX format
-        opset = max(opset, MIN_ONNX_QDQ_OPSET) if quantization_config.save_onnx_model else None
+        opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+        opset = opset if not quantization_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
         _onnx_export_nncf_model(compressed_model, onnx_config, f, opset)
 
         # Load and save the compressed model
@@ -282,7 +283,7 @@ class OVQuantizer(OptimumQuantizer):
 def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Union[str, io.BytesIO], opset: int = None):
     signature = inspect.signature(model.get_nncf_wrapped_model().forward)
     signature = list(signature.parameters.keys())
-    opset = opset or min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+    opset = opset or config.DEFAULT_ONNX_OPSET
     model_inputs = config.generate_dummy_inputs(framework="pt")
     # Create ordered inputs for the ONNX export of NNCFNetwork as keyword arguments are currently not supported
     model_inputs = tuple(model_inputs.pop(key, None) for key in signature if len(model_inputs) != 0)

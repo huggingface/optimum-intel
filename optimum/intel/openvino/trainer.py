@@ -696,7 +696,9 @@ class OVTrainer(Trainer):
             num_parameters = self.model.num_parameters()
             save_as_external_data = use_external_data_format(num_parameters) or self.ov_config.save_onnx_model
             f = io.BytesIO() if not save_as_external_data else os.path.join(output_dir, ONNX_WEIGHTS_NAME)
-            opset = max(opset, MIN_ONNX_QDQ_OPSET) if self.ov_config.save_onnx_model else None
+
+            opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+            opset = opset if not self.ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
             _onnx_export_nncf_model(self.model, onnx_config, f, opset)
             ov_model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
 
