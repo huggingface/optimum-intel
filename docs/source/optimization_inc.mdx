@@ -106,6 +106,31 @@ quantizer.quantize(
     calibration_dataset=calibration_dataset,
     save_directory=save_dir,
 )
+
+### Specify Quantization Recipes
+Intel(R) Neural Compressor support some quantization recipes. Users can set `recipes` in config class to achieve the above purpose.
+
+| Recipes | PyTorch |
+| :---------------- |:---------------:|
+| smooth_quant      | ✅ |
+| smooth_quant_args | ✅ |
+
+[SmoothQuant](https://arxiv.org/abs/2211.10438), a training free post-training quantization (PTQ) solution,
+offline migrates this difficulty from activations to weights with a mathematically equivalent transformation.
+Usually, smooth quant improves the accuracy of the model.
+
+Please refer to [smooth quant usage](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md) and [neural_compressor recipes](https://github.com/intel/neural-compressor/blob/master/docs/source/quantization.md#specify-quantization-recipes).
+
+Example of recipe:
+```python
+recipes = {
+    "smooth_quant": True,
+    "smooth_quant_args": {
+        "alpha": 0.5,  # "auto" or a float value. Default is 0.5
+        "folding": True,  # Default value: True for PyTorch FBGEMM backend, False for IPEX backend.
+    },
+}
+conf = PostTrainingQuantConfig(recipes=recipes)
 ```
 
 ## During training optimization
