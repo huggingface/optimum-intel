@@ -6,6 +6,7 @@ Knowledge distillation and EMA techniques can be used to improve the model accur
 This example supports model tuning on two datasets from the HuggingFace:
 * [Pokemon BLIP captions](https://huggingface.co/datasets/lambdalabs/pokemon-blip-captions)
 * [laion2B-en](https://huggingface.co/datasets/laion/laion2B-en)
+* [laion2B-en-aesthetic](https://huggingface.co/datasets/laion/laion2B-en-aesthetic)
 
 But it can be easily extended to other datasets.
 >**Note**: laion2B-en is being downloaded on-fly durint the fine-tuning process. No need to store it locally.
@@ -56,7 +57,7 @@ The minimal HW setup for the run is GPU with 24GB of memory.
 ## Run QAT:
 * QAT for pokemon generation model:
 ```python
-python quantize.py \
+python train_text_to_image_qat.py \
     --ema_device="cpu" \
     --use_kd \
     --model_id="svjack/Stable-Diffusion-Pokemon-en" \
@@ -70,19 +71,19 @@ python quantize.py \
     --output_dir=sd-quantized-pokemon
 ```
 
-* QAT on a laion dataset:
+* QAT on a laion-aesthetic dataset:
 ```python
-python quantize.py \
-    --ema_device="cpu" \
+python train_text_to_image_qat.py \
     --use_kd \
     --center_crop \
     --random_flip \
-    --dataset_name="laion/laion2B-en" \
-    --max_train_steps=10000  \
+    --dataset_name="laion/laion2B-en-aesthetic" \
+    --max_train_steps=2048  \
     --model_id="runwayml/stable-diffusion-v1-5" \
-    --max_train_samples=100000 \
-    --dataloader_num_workers=8 \
-    --opt_init_steps=800 \
+    --max_train_samples=15000 \
+    --dataloader_num_workers=4 \
+    --opt_init_steps=500 \
     --gradient_checkpointing \
+    --tune_quantizers_only \
     --output_dir=sd-1-5-quantied-laion
 ```
