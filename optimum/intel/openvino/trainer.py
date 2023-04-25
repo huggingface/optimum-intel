@@ -82,6 +82,7 @@ from .configuration import OVConfig
 from .quantization import OVDataLoader, _onnx_export_nncf_model
 from .training_args import OVTrainingArguments
 from .utils import (
+    MAX_ONNX_OPSET,
     MIN_ONNX_QDQ_OPSET,
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
