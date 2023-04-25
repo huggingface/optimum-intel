@@ -25,12 +25,11 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
+from optimum.intel.generation.tracing import jit_trace
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_torch_version, is_transformers_version
-
-from optimum.intel.generation.tracing import jit_trace
 
 
 if is_transformers_version("<", "4.25.0"):

@@ -1,7 +1,8 @@
 import inspect
-import torch
 
+import torch
 from transformers import PretrainedConfig, PreTrainedModel
+
 from optimum.exporters import TasksManager
 
 
