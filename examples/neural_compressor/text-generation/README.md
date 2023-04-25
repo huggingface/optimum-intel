@@ -22,9 +22,19 @@ The original generation task only supported the PyTorch eager model. By calling 
 
 Example usage:
 
+Generate with PyTorch JIT model
 ```bash
 python run_generation.py \
     --model_type=gpt2 \
     --model_name_or_path=gpt2 \
+    --jit
+```
+
+Quantize and trace model to generate:
+```bash
+python run_generation.py \
+    --model_type=gpt2 \
+    --model_name_or_path=gpt2 \
+    --apply_quantization \
     --jit
 ```
