@@ -167,16 +167,21 @@ class INCQuantizer(OptimumQuantizer):
         calibration_dataloader = None
 
         if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
-            if calibration_dataset is None:
-                raise ValueError("Post-training static quantization needs a calibration dataset.")
+            if calibration_dataset is None and self.calibration_fn is None:
+                raise ValueError(
+                    "Post-training static quantization needs a calibration dataset or a calibration_function."
+                )
 
-            quantization_config.calibration_sampling_size = len(calibration_dataset)
-            calibration_dataloader = self._get_calibration_dataloader(
-                calibration_dataset=calibration_dataset,
-                batch_size=batch_size,
-                remove_unused_columns=remove_unused_columns,
-                data_collator=data_collator,
-            )
+            if calibration_dataset is None:
+                calibration_dataloader = None
+            else:
+                quantization_config.calibration_sampling_size = len(calibration_dataset)
+                calibration_dataloader = self._get_calibration_dataloader(
+                    calibration_dataset=calibration_dataset,
+                    batch_size=batch_size,
+                    remove_unused_columns=remove_unused_columns,
+                    data_collator=data_collator,
+                )
 
         if isinstance(self._original_model.config, PretrainedConfig):
             self._original_model.config.backend = quantization_config.backend
