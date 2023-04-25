@@ -23,6 +23,7 @@ import logging
 
 import numpy as np
 import torch
+from neural_compressor import PostTrainingQuantConfig
 from transformers import (
     BloomForCausalLM,
     BloomTokenizerFast,
@@ -40,9 +41,8 @@ from transformers import (
     XLNetTokenizer,
 )
 
-from neural_compressor import PostTrainingQuantConfig
-from optimum.intel.neural_compressor import INCQuantizer
 from optimum.intel.generation.modeling import TSModelForCausalLM
+from optimum.intel.neural_compressor import INCQuantizer
 
 
 logging.basicConfig(
