@@ -32,6 +32,7 @@ from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
 from torch.onnx import export as onnx_export
+from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 
@@ -171,14 +172,21 @@ class OVQuantizer(OptimumQuantizer):
             task=self.task,
             model_type=model_type,
         )
-        onnx_config = onnx_config_class(self.model.config)
+
+        if self.task == "text-generation":
+            onnx_config = onnx_config_class(self.model.config, use_past=self.model.config.use_cache)
+        else:
+            onnx_config = onnx_config_class(self.model.config)
+
         compressed_model.eval()
         num_parameters = compressed_model.num_parameters()
         save_as_external_data = use_external_data_format(num_parameters) or quantization_config.save_onnx_model
         f = io.BytesIO() if not save_as_external_data else save_directory / ONNX_WEIGHTS_NAME
 
         # Export the compressed model to the ONNX format
-        self._onnx_export(compressed_model, onnx_config, model_inputs, quantization_config, f)
+        opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+        opset = opset if not quantization_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
+        _onnx_export_nncf_model(compressed_model, onnx_config, f, opset)
 
         # Load and save the compressed model
         model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
@@ -189,35 +197,6 @@ class OVQuantizer(OptimumQuantizer):
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
         compress_quantize_weights_transformation(model)
         openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
-
-    def _onnx_export(
-        self,
-        model: NNCFNetwork,
-        config: OnnxConfig,
-        model_inputs: Dict,
-        ov_config: OVConfig,
-        f: Union[str, io.BytesIO],
-    ):
-        opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
-        opset = opset if not ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
-        model_inputs = {k: v.to(model.device) for k, v in model_inputs.items()}
-        # Create ordered inputs for the ONNX export of NNCFNetwork as keyword arguments are currently not supported
-        inputs = tuple([model_inputs.pop(key, None) for key in self._export_input_names if len(model_inputs) != 0])
-
-        with torch.no_grad():
-            # Disable node additions to be exported in the graph
-            model.disable_dynamic_graph_building()
-            onnx_export(
-                model,
-                inputs,
-                f=f,
-                input_names=list(config.inputs.keys()),
-                output_names=list(config.outputs.keys()),
-                dynamic_axes=dict(chain(config.inputs.items(), config.outputs.items())),
-                do_constant_folding=True,
-                opset_version=opset,
-            )
-            model.enable_dynamic_graph_building()
 
     def _set_task(self):
         if self.task is None:
@@ -299,3 +278,36 @@ class OVQuantizer(OptimumQuantizer):
     def _remove_unused_columns(self, dataset: Dataset):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
+
+
+def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Union[str, io.BytesIO], opset: int = None):
+    signature = inspect.signature(model.get_nncf_wrapped_model().forward)
+    signature = list(signature.parameters.keys())
+    opset = opset or config.DEFAULT_ONNX_OPSET
+    model_inputs = config.generate_dummy_inputs(framework="pt")
+    # Create ordered inputs for the ONNX export of NNCFNetwork as keyword arguments are currently not supported
+    model_inputs = tuple(model_inputs.pop(key, None) for key in signature if len(model_inputs) != 0)
+    device = model.device
+
+    def remap(value):
+        if isinstance(value, torch.Tensor):
+            value = value.to(device)
+        return value
+
+    with config.patch_model_for_export(model.get_nncf_wrapped_model()):
+        model_inputs = tree_map(remap, model_inputs)
+        with torch.no_grad():
+            model.eval()
+            # Disable node additions to be exported in the graph
+            model.disable_dynamic_graph_building()
+            onnx_export(
+                model,
+                model_inputs,
+                f=output,
+                input_names=list(config.inputs.keys()),
+                output_names=list(config.outputs.keys()),
+                dynamic_axes=dict(chain(config.inputs.items(), config.outputs.items())),
+                do_constant_folding=True,
+                opset_version=opset,
+            )
+            model.enable_dynamic_graph_building()

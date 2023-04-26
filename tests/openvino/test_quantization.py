@@ -12,6 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+# ruff: noqa
+
 import tempfile
 import unittest
 from functools import partial
@@ -23,6 +25,8 @@ from parameterized import parameterized
 from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
+    AutoModelForCausalLM,
+    AutoModelForTokenClassification,
     AutoTokenizer,
     TrainingArguments,
     default_data_collator,
@@ -32,43 +36,64 @@ from optimum.intel import (
     OVConfig,
     OVModelForQuestionAnswering,
     OVModelForSequenceClassification,
+    OVModelForCausalLM,
+    OVModelForTokenClassification,
     OVQuantizer,
     OVTrainer,
 )
 
+_TASK_TO_DATASET = {
+    "text-generation": ("wikitext", "wikitext-2-raw-v1", "text"),
+    "text-classification": ("glue", "sst2", "sentence"),
+}
+
+
+def get_num_quantized_nodes(ov_model):
+    num_fake_quantize = 0
+    num_int8 = 0
+    for elem in ov_model.model.get_ops():
+        if "FakeQuantize" in elem.name:
+            num_fake_quantize += 1
+        for i in range(elem.get_output_size()):
+            if "8" in elem.get_output_element_type(i).get_type_name():
+                num_int8 += 1
+    return num_fake_quantize, num_int8
+
 
 class OVQuantizerTest(unittest.TestCase):
+    # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("distilbert-base-uncased-finetuned-sst-2-english", 50, 38),
+        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 43, 32),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 71, 1),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_static_quantization(self, model_name, expected_fake_quantize, expected_int8):
+    def test_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
+        task = model_cls.export_feature
+        dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
+
         def preprocess_function(examples, tokenizer):
-            return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
+            return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            transformers_model = AutoModelForSequenceClassification.from_pretrained(model_name)
+            transformers_model = model_cls.auto_model_class.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
-            quantizer = OVQuantizer.from_pretrained(transformers_model)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
+
             calibration_dataset = quantizer.get_calibration_dataset(
-                "glue",
-                dataset_config_name="sst2",
+                dataset_name,
+                dataset_config_name=dataset_config_name,
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,
                 dataset_split="train",
             )
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
 
-            model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
+            model = model_cls.from_pretrained(tmp_dir)
 
-            num_int8 = 0
-            num_fake_quantize = 0
-            for elem in model.model.get_ops():
-                if "FakeQuantize" in elem.name:
-                    num_fake_quantize += 1
-                if "8" in elem.get_element_type().get_type_name():
-                    num_int8 += 1
+            num_fake_quantize, num_int8 = get_num_quantized_nodes(model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
             self.assertEqual(expected_int8, num_int8)
 
@@ -156,13 +181,7 @@ class OVTrainerTest(unittest.TestCase):
             trainer.save_model()
 
             model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
-            num_int8 = 0
-            num_fake_quantize = 0
-            for elem in model.model.get_ops():
-                if "FakeQuantize" in elem.name:
-                    num_fake_quantize += 1
-                if "8" in elem.get_element_type().get_type_name():
-                    num_int8 += 1
+            num_fake_quantize, num_int8 = get_num_quantized_nodes(model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
             self.assertEqual(expected_int8, num_int8)
 
