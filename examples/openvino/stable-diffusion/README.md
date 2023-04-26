@@ -1,5 +1,5 @@
 # Stable Diffusion Quantization
-This example demonstrates Quantization-aware Training (QAT) of Stable Diffusion using [NNCF](https://github.com/openvinotoolkit/nncf). Quantization is applyied to UNet model which is the most time-consuming element of the whole pipeline. The quantized model and the pipeline is exported to the OpenVINO format for inference with `OVStableDiffusionPipeline` helper. The original training code was taken from the Diffusers [repository](https://github.com/huggingface/diffusers/tree/main/examples/text_to_image) and modified to support QAT.
+This example demonstrates how to apply Quantization-aware Training (QAT) from [NNCF](https://github.com/openvinotoolkit/nncf) and Token Merging method to optimize UNet model from Stable Diffusion pipeline. The optimized model and the pipeline are exported to the OpenVINO format for inference with `OVStableDiffusionPipeline` helper. The original training code was taken from the Diffusers [repository](https://github.com/huggingface/diffusers/tree/main/examples/text_to_image) and modified to support QAT.
 
 Knowledge distillation and EMA techniques can be used to improve the model accuracy.
 
@@ -68,6 +68,23 @@ python train_text_to_image_qat.py \
     --dataset_name="lambdalabs/pokemon-blip-captions" \
     --max_train_steps=4096 \
     --opt_init_steps=300 \
+    --output_dir=sd-quantized-pokemon
+```
+
+* QAT + Token Merging (0.5 ratio) for pokemon generation model:
+```python
+python train_text_to_image_qat.py \
+    --ema_device="cpu" \
+    --use_kd \
+    --model_id="svjack/Stable-Diffusion-Pokemon-en" \
+    --center_crop \
+    --random_flip \
+    --gradient_checkpointing \
+    --dataloader_num_workers=2 \
+    --dataset_name="lambdalabs/pokemon-blip-captions" \
+    --max_train_steps=8000 \
+    --opt_init_steps=300 \
+    --tome_ratio=0.5 \
     --output_dir=sd-quantized-pokemon
 ```
 
