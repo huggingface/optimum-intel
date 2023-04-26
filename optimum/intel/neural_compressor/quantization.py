@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Callable, ClassVar, Dict, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
+from diffusers import DiffusionPipeline, StableDiffusionPipeline
 from huggingface_hub import HfApi, hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
@@ -67,6 +68,8 @@ from ..utils.import_utils import (
 from .configuration import INCConfig
 from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME, INCDataLoader, _cfgs_to_fx_cfgs
 
+
+DIFFUSION_WEIGHTS_NAME = "diffusion_pytorch_model.bin"
 
 if TYPE_CHECKING:
     from neural_compressor.config import PostTrainingQuantConfig
@@ -141,6 +144,7 @@ class INCQuantizer(OptimumQuantizer):
         batch_size: int = 8,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        file_name: str = None,
         **kwargs,
     ):
         """
@@ -163,7 +167,7 @@ class INCQuantizer(OptimumQuantizer):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         save_onnx_model = kwargs.pop("save_onnx_model", False)
-        output_path = save_directory.joinpath(WEIGHTS_NAME)
+        output_path = save_directory.joinpath(file_name or WEIGHTS_NAME)
         calibration_dataloader = None
 
         if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
@@ -228,6 +232,7 @@ class INCQuantizer(OptimumQuantizer):
             logger.info(f"Model weights saved to {output_path}")
             return
         state_dict = model._model.state_dict()
+
         if hasattr(model, "q_config"):
             state_dict["best_configure"] = model.q_config
         torch.save(state_dict, output_path)
@@ -650,3 +655,29 @@ class IncQuantizedModelForXLNetLM(IncQuantizedModel):
 
 class IncQuantizedModelForVision2Seq(IncQuantizedModel):
     TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq
+
+
+class INCStableDiffusionPipeline(StableDiffusionPipeline):
+    def __init__(self, *args, **kwargs):
+        raise EnvironmentError(
+            f"{self.__class__.__name__} is designed to be instantiated using the"
+            f"`{self.__class__.__name__}.from_pretrained(model_name_or_path)` method."
+        )
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        model = DiffusionPipeline.from_pretrained(*args, low_cpu_mem_usage=False, **kwargs)
+        components = set(model.config.keys()).intersection({"vae", "text_encoder", "unet", "feature_extractor"})
+        for name in components:
+            component = getattr(model, name, None)
+            if hasattr(component, _internal_dict):
+                state_dict_path = os.path.join(component._internal_dict["_name_or_path"], DIFFUSION_WEIGHTS_NAME)
+                state_dict = torch.load(state_dict_path, map_location="cpu")
+                if "best_configure" in state_dict and state_dict["best_configure"] is not None:
+                    try:
+                        load(state_dict_path, component)
+                    except Exception as e:
+                        if msg is not None:
+                            e.args += (msg,)
+                        raise
+        return model
