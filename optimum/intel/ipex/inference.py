@@ -7,8 +7,7 @@ from transformers import add_start_docstrings
 from transformers.pipelines import Pipeline
 from transformers.utils import is_ipex_available
 
-from ..generation.modeling import TSModelForCausalLM
-from ..generation.tracing import jit_trace
+from ..generation.modeling import TSModelForCausalLM, jit_trace
 
 
 logger = logging.getLogger(__name__)
@@ -102,28 +101,17 @@ class inference_mode:
                             with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)), torch.no_grad():
                                 if self._model.tokenizer is not None and self._jit:
                                     try:
+                                        jit_model = jit_trace(
+                                            model=model,
+                                            task=self._model.task,
+                                            use_cache=self._original.config.use_cache,
+                                        )
                                         if self._model.task == "text-generation":
-                                            jit_model = jit_trace(
-                                                model=model,
-                                                task=self._model.task,
-                                                use_cache=self._original.config.use_cache,
-                                            )
                                             model = TSModelForCausalLM(
                                                 model=jit_model,
                                                 config=self._original.config,
                                                 use_cache=self._original.config.use_cache,
                                             )
-                                        else:
-                                            jit_inputs = []
-                                            dummy_input = self._model.tokenizer("")
-                                            for key in dummy_input:
-                                                jit_inputs.append(
-                                                    torch.ones((1, len(dummy_input[key])), dtype=torch.long)
-                                                )
-                                            model = torch.jit.trace(model, jit_inputs, strict=False)
-                                            model = torch.jit.freeze(model)
-                                            model(*jit_inputs)
-                                            model(*jit_inputs)
                                     except Exception as e:
                                         self._jit = False
                                         logger.warning(f"failed to use PyTorch jit mode due to: {e}.")
