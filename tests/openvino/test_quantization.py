@@ -47,6 +47,7 @@ _TASK_TO_DATASET = {
     "text-classification": ("glue", "sst2", "sentence"),
 }
 
+
 def get_num_quantized_nodes(ov_model):
     num_fake_quantize = 0
     num_int8 = 0
@@ -60,12 +61,12 @@ def get_num_quantized_nodes(ov_model):
 
 
 class OVQuantizerTest(unittest.TestCase):
-
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 43, 32),
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 71, 1),
     )
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
         task = model_cls.export_feature
@@ -187,4 +188,3 @@ class OVTrainerTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
-
