@@ -20,6 +20,7 @@ import math
 import os
 import random
 import tempfile
+from copy import deepcopy
 from functools import partial
 from io import BytesIO
 from pathlib import Path
@@ -27,6 +28,7 @@ from typing import Iterable, Optional
 
 import numpy as np
 import requests
+import tomesd
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
@@ -55,9 +57,6 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
-
-import tomesd
-from copy import deepcopy
 
 
 random.seed(42)
@@ -493,8 +492,9 @@ def parse_args():
         "--tome_ratio",
         type=float,
         default=0,
-        help=("Token Merging ratio. If 0, no merging is applied"
-             "More details here: https://arxiv.org/abs/2303.17604."),
+        help=(
+            "Token Merging ratio. If 0, no merging is applied" "More details here: https://arxiv.org/abs/2303.17604."
+        ),
     )
     parser.add_argument(
         "--opt_init_steps",
@@ -735,13 +735,15 @@ def main():
             os.makedirs(args.output_dir, exist_ok=True)
 
     pipeline = DiffusionPipeline.from_pretrained(args.model_id)
-    
+
     if args.use_kd:
         teacher_model = deepcopy(pipeline.unet)
-        
+
     if args.tome_ratio > 0:
         logger.info(f"Using Token Merging with ratio: {args.tome_ratio}")
-        tomesd.apply_patch(pipeline, ratio=args.tome_ratio, use_rand=False) # Can also use pipe.unet in place of pipe here
+        tomesd.apply_patch(
+            pipeline, ratio=args.tome_ratio, use_rand=False
+        )  # Can also use pipe.unet in place of pipe here
 
     # Load models and create wrapper for stable diffusion
     tokenizer = pipeline.tokenizer
@@ -968,7 +970,7 @@ def main():
     progress_bar = tqdm(range(args.max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
     global_step = 0
-    
+
     for epoch in range(args.num_train_epochs):
         train_loss = 0.0
         compression_controller.scheduler.epoch_step()
@@ -995,9 +997,9 @@ def main():
 
                 # Predict the noise residual and compute loss
                 noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
-                
+
                 loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
-                
+
                 if args.use_kd:
                     with torch.no_grad():
                         orig_output = teacher_model(noisy_latents, timesteps, encoder_hidden_states).sample
