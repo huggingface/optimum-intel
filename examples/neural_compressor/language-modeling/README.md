@@ -56,7 +56,7 @@ python run_clm.py \
     --output_dir /tmp/clm_output
 ```
 
-The following example fine-tunes GPT-Neo on WikiText-2 while first applying snip_momentum pruning and then static quantization with smooth quant.
+The following example shows how to apply post-training static quantization using the SmoothQuant methodology on a GPT-Neo model :
 ```bash
 python run_clm.py \
     --model_name_or_path EleutherAI/gpt-neo-125M \
@@ -65,15 +65,9 @@ python run_clm.py \
     --apply_quantization \
     --quantization_approach static \
     --smooth_quant \
-    --apply_pruning \
-    --target_sparsity 0.02 \
-    --num_train_epochs 4 \
-    --max_train_samples 100 \
-    --do_train \
     --do_eval \
     --verify_loading \
     --output_dir /tmp/clm_output
-```
 
 ### RoBERTa/BERT/DistilBERT and masked language modeling
 
