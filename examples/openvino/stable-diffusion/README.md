@@ -23,6 +23,7 @@ pip install -r requirements.txt
 >**Note**: The example requires `torch~=1.13` and does not work with PyTorch 2.0.
 
 ## Running pre-optimized model
+* You can also run the [notebook](../../../notebooks/openvino/stable_diffusion_optimization.ipynb) to compare FP32 pipeline with the optimized versions.
 * General-purpose image generation model:
 ```python
 from optimum.intel.openvino import OVStableDiffusionPipeline
@@ -47,7 +48,6 @@ prompt = "cartoon bird"
 output = pipe(prompt, num_inference_steps=50, output_type="pil")
 output.images[0].save("result.png")
 ```
-* You can also run `pokemon_generation_demo.ipynb` notebook from the folder to compare FP32 pipeline with the optimized.
 
 ## HW Requirements for QAT
 The minimal HW setup for the run is GPU with 24GB of memory.
