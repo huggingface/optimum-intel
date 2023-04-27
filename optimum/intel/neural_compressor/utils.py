@@ -14,6 +14,7 @@
 
 import logging
 import os
+import warnings
 from collections import UserDict
 from typing import Dict
 
@@ -102,6 +103,7 @@ def load_quantized_model(checkpoint_dir_or_file: str, model: torch.nn.Module, **
         model (`torch.nn.Module`):
             The original FP32 model.
     """
+    warnings.warn("This function has been depreciated and will be removed in optimum-intel v1.9.")
     if os.path.isdir(checkpoint_dir_or_file):
         checkpoint_dir_or_file = os.path.join(
             os.path.abspath(os.path.expanduser(checkpoint_dir_or_file)), WEIGHTS_NAME
