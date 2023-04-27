@@ -224,6 +224,46 @@ class QuantizationTest(unittest.TestCase):
 
             self.assertTrue(torch.equal(model_outputs["logits"], transformers_outputs["logits"]))
 
+    def test_ipex_static_quantization_with_smoothquant(self):
+        model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+        quantization_config = PostTrainingQuantConfig(approach="static",
+                                                      backend="ipex",
+                                                      recipes={"smooth_quant": True})
+        model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+
+        def preprocess_function(examples, tokenizer):
+            return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
+
+        quantizer = INCQuantizer.from_pretrained(model)
+        calibration_dataset = quantizer.get_calibration_dataset(
+            "glue",
+            dataset_config_name="sst2",
+            preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
+            num_samples=10,
+            dataset_split="train",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer = INCQuantizer.from_pretrained(model)
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                calibration_dataset=calibration_dataset,
+                save_directory=tmp_dir,
+                save_onnx_model=False,
+            )
+            transformers_model = INCModelForSequenceClassification.from_pretrained(tmp_dir)
+            inc_config = INCConfig.from_pretrained(tmp_dir)
+            self.assertFalse(inc_config.save_onnx_model)
+            self.assertTrue(inc_config.quantization["is_static"])
+
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
+                model_outputs = quantizer._quantized_model(**tokens)
+
+            self.assertTrue(torch.equal(model_outputs["logits"], transformers_outputs["logits"]))
+
     def test_aware_training_quantization(self):
         model_name = "distilbert-base-uncased"
         expected_quantized_matmuls = 36
