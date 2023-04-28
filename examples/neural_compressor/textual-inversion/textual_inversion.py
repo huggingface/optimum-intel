@@ -21,14 +21,13 @@ from neural_compressor import QuantizationAwareTrainingConfig
 from neural_compressor.config import DistillationConfig, IntermediateLayersKnowledgeDistillationLossConfig
 from neural_compressor.training import prepare_compression
 from neural_compressor.utils import logger
+from neural_compressor.utils.pytorch import load
 from packaging import version
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
-
-from optimum.intel import INCStableDiffusionPipeline
 
 
 if version.parse(version.parse(PIL.__version__).base_version) >= version.parse("9.1.0"):
@@ -996,8 +995,14 @@ def main():
 
     if args.do_quantization and args.verify_loading:
         # Load the model obtained after Intel Neural Compressor quantization
-        int8_pipeline = INCStableDiffusionPipeline.from_pretrained(args.output_dir).to(torch.device("cpu"))
-        loaded_model_images = generate_images(int8_pipeline, prompt=prompt, seed=args.seed)
+        loaded_model = load(args.output_dir, model=unet)
+        loaded_model.eval()
+
+        setattr(pipeline, "unet", loaded_model)
+        if args.do_quantization:
+            pipeline = pipeline.to(torch.device("cpu"))
+
+        loaded_model_images = generate_images(pipeline, prompt=prompt, seed=args.seed)
         if loaded_model_images != optimized_model_images:
             logger.info("The quantized model was not successfully loaded.")
         else:
