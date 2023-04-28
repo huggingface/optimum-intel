@@ -12,8 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from ..utils.import_utils import is_diffusers_available
 from .configuration import INCConfig
-from .modeling_diffusion import INCStableDiffusionPipeline
 from .quantization import (
     INCModel,
     INCModelForCausalLM,
@@ -29,3 +29,7 @@ from .quantization import (
 )
 from .trainer import INCTrainer
 from .trainer_seq2seq import INCSeq2SeqTrainer
+
+
+if is_diffusers_available():
+    from .modeling_diffusion import INCStableDiffusionPipeline
