@@ -954,7 +954,7 @@ def main():
         state_dict = model.state_dict()
         if hasattr(model, "q_config"):
             state_dict["best_configure"] = model.q_config
-        torch.save(state_dict, os.path.join(root, "unet", DIFFUSION_WEIGHTS_NAME))
+        torch.save(state_dict, os.path.join(args.output_dir, "unet", DIFFUSION_WEIGHTS_NAME))
 
         logger.info(f"Optimized model saved to: {args.output_dir}.")
 

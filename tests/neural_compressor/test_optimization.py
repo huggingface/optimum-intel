@@ -21,6 +21,7 @@ import evaluate
 import numpy as np
 import torch
 from datasets import load_dataset
+from diffusers import StableDiffusionPipeline
 from neural_compressor.config import (
     AccuracyCriterion,
     DistillationConfig,
