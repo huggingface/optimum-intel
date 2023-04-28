@@ -44,14 +44,14 @@ from transformers import (
 from optimum.intel import (
     INCConfig,
     INCModelForQuestionAnswering,
-    INCStableDiffusionPipeline,
     INCModelForSequenceClassification,
     INCQuantizer,
+    INCStableDiffusionPipeline,
     INCTrainer,
 )
+from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
 from optimum.onnxruntime import ORTModelForSequenceClassification
 
-from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(1009)
@@ -366,7 +366,7 @@ class QuantizationTest(unittest.TestCase):
             loaded_pipe_outputs = loaded_pipeline(latents=torch.from_numpy(latents), **kwargs).images
         # Compare model outputs
         self.assertTrue(np.allclose(loaded_pipe_outputs, outputs, atol=1e-4))
-       
+
 
 class PruningTest(unittest.TestCase):
     def test_magnitude_pruning(self):
