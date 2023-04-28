@@ -44,7 +44,7 @@ class INCStableDiffusionPipeline(StableDiffusionPipeline):
                 state_dict_path = os.path.join(name_or_path, file_name)
                 if os.path.exists(state_dict_path) and INCConfig.CONFIG_NAME in folder_contents:
                     msg = None
-                    inc_config = INCConfig.from_pretrained(state_dict_path)
+                    inc_config = INCConfig.from_pretrained(name_or_path)
                     if not is_torch_version("==", inc_config.torch_version):
                         msg = f"Quantized model was obtained with torch version {inc_config.torch_version} but {_torch_version} was found."
                     state_dict = torch.load(state_dict_path, map_location="cpu")
