@@ -23,7 +23,7 @@ from neural_compressor.utils.pytorch import load
 from packaging import version
 from torch.utils.data import DataLoader
 
-from .utils.constant import WEIGHTS_NAME
+from ..utils.constant import WEIGHTS_NAME
 
 
 logger = logging.getLogger(__name__)
