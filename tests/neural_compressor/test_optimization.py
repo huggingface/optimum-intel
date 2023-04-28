@@ -188,9 +188,9 @@ class QuantizationTest(unittest.TestCase):
 
     def test_ipex_static_quantization_with_smoothquant(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-        quantization_config = PostTrainingQuantConfig(approach="static",
-                                                      backend="ipex",
-                                                      recipes={"smooth_quant": True})
+        quantization_config = PostTrainingQuantConfig(
+            approach="static", backend="ipex", recipes={"smooth_quant": True}
+        )
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
