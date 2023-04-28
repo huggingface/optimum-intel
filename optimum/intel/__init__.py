@@ -52,7 +52,6 @@ except OptionalDependencyNotAvailable:
 else:
     _import_structure["openvino"].extend(["OVConfig", "OVQuantizer", "OVTrainer", "OVTrainingArguments"])
 
-
 try:
     if not (is_openvino_available() and is_diffusers_available()):
         raise OptionalDependencyNotAvailable()
@@ -109,6 +108,13 @@ else:
         "INCSeq2SeqTrainer",
         "INCTrainer",
     ]
+try:
+    if not (is_neural_compressor_available() and is_diffusers_available()):
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    _import_structure["utils.dummy_neural_compressor_and_diffusers_objects"] = ["INCStableDiffusionPipeline"]
+else:
+    _import_structure["neural_compressor"].append("INCStableDiffusionPipeline")
 
 
 if TYPE_CHECKING:
@@ -175,6 +181,15 @@ if TYPE_CHECKING:
             INCSeq2SeqTrainer,
             INCTrainer,
         )
+
+    try:
+        if not (is_neural_compressor_available() and is_diffusers_available()):
+            raise OptionalDependencyNotAvailable()
+    except OptionalDependencyNotAvailable:
+        from .utils.dummy_neural_compressor_and_diffusers_objects import INCStableDiffusionPipeline
+    else:
+        from .neural_compressor import INCStableDiffusionPipeline
+
 else:
     import sys
 

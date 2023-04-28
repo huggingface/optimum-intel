@@ -63,10 +63,9 @@ from transformers.utils import is_apex_available, is_sagemaker_mp_enabled, loggi
 
 from optimum.exporters import TasksManager
 
-from ..utils.constant import _TASK_ALIASES
+from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 from ..utils.import_utils import is_neural_compressor_version
 from .configuration import INCConfig
-from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 
 
 if is_apex_available():

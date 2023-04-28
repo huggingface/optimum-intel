@@ -23,15 +23,13 @@ from neural_compressor.utils.pytorch import load
 from packaging import version
 from torch.utils.data import DataLoader
 
+from .utils.constant import WEIGHTS_NAME
+
 
 logger = logging.getLogger(__name__)
 
 
 CONFIG_NAME = "best_configure.yaml"
-WEIGHTS_NAME = "pytorch_model.bin"
-TRAINING_ARGS_NAME = "training_args.bin"
-ONNX_WEIGHTS_NAME = "model.onnx"
-MIN_QDQ_ONNX_OPSET = 14
 
 parsed_torch_version_base = version.parse(version.parse(torch.__version__).base_version)
 is_torch_less_than_1_13 = parsed_torch_version_base < version.parse("1.13.0")

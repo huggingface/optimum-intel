@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 from .configuration import INCConfig
+from .modeling_diffusion import INCStableDiffusionPipeline
 from .quantization import (
     INCModel,
     INCModelForCausalLM,

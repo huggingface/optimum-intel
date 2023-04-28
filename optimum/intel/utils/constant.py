@@ -32,3 +32,10 @@ _TASK_LEGACY = {
     "summarization": "seq2seq-lm",
     "translation": "seq2seq-lm",
 }
+
+
+WEIGHTS_NAME = "pytorch_model.bin"
+DIFFUSION_WEIGHTS_NAME = "diffusion_pytorch_model.bin"
+TRAINING_ARGS_NAME = "training_args.bin"
+ONNX_WEIGHTS_NAME = "model.onnx"
+MIN_QDQ_ONNX_OPSET = 14

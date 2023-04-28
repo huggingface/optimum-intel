@@ -20,13 +20,13 @@ import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, ClassVar, Dict, Optional, Union
+from typing import Callable, ClassVar, Dict, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
-from diffusers import StableDiffusionPipeline
 from huggingface_hub import HfApi, hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
+from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
@@ -58,7 +58,7 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
 
-from ..utils.constant import _TASK_ALIASES
+from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME
 from ..utils.import_utils import (
     _neural_compressor_version,
     _torch_version,
@@ -66,13 +66,7 @@ from ..utils.import_utils import (
     is_torch_version,
 )
 from .configuration import INCConfig
-from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME, INCDataLoader, _cfgs_to_fx_cfgs
-
-
-DIFFUSION_WEIGHTS_NAME = "diffusion_pytorch_model.bin"
-
-if TYPE_CHECKING:
-    from neural_compressor.config import PostTrainingQuantConfig
+from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 
 
 logger = logging.getLogger(__name__)
@@ -655,35 +649,3 @@ class IncQuantizedModelForXLNetLM(IncQuantizedModel):
 
 class IncQuantizedModelForVision2Seq(IncQuantizedModel):
     TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq
-
-
-class INCStableDiffusionPipeline(StableDiffusionPipeline):
-    @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        model = super(INCStableDiffusionPipeline, cls).from_pretrained(*args, low_cpu_mem_usage=False, **kwargs)
-        components = set(model.config.keys()).intersection({"vae", "text_encoder", "unet"})
-        for name in components:
-            component = getattr(model, name, None)
-            name_or_path = ""
-            if hasattr(component, "_internal_dict"):
-                name_or_path = component._internal_dict["_name_or_path"]
-            elif hasattr(component, "name_or_path"):
-                name_or_path = component.name_or_path
-            if os.path.isdir(name_or_path):
-                folder_contents = os.listdir(name_or_path)
-                file_name = DIFFUSION_WEIGHTS_NAME if DIFFUSION_WEIGHTS_NAME in folder_contents else WEIGHTS_NAME
-                state_dict_path = os.path.join(name_or_path, file_name)
-                if os.path.exists(state_dict_path) and INCConfig.CONFIG_NAME in folder_contents:
-                    msg = None
-                    inc_config = INCConfig.from_pretrained(state_dict_path)
-                    if not is_torch_version("==", inc_config.torch_version):
-                        msg = f"Quantized model was obtained with torch version {inc_config.torch_version} but {_torch_version} was found."
-                    state_dict = torch.load(state_dict_path, map_location="cpu")
-                    if "best_configure" in state_dict and state_dict["best_configure"] is not None:
-                        try:
-                            load(state_dict_path, component)
-                        except Exception as e:
-                            if msg is not None:
-                                e.args += (msg,)
-                            raise
-        return model
