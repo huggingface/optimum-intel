@@ -44,12 +44,14 @@ from transformers import (
 from optimum.intel import (
     INCConfig,
     INCModelForQuestionAnswering,
+    INCStableDiffusionPipeline,
     INCModelForSequenceClassification,
     INCQuantizer,
     INCTrainer,
 )
 from optimum.onnxruntime import ORTModelForSequenceClassification
 
+from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(1009)
@@ -324,6 +326,47 @@ class QuantizationTest(unittest.TestCase):
                 transformers_model(**tokens)
             # self.assertTrue(torch.allclose(ort_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
+    def test_dynamic_diffusion_model(self):
+        model_id = "hf-internal-testing/diffusers-stable-diffusion-tiny-all"
+        pipeline = StableDiffusionPipeline.from_pretrained(model_id)
+        pipeline.safety_checker = None
+        num_images_per_prompt, height, width, scale_factor = 1, 512, 512, 8
+        latents_shape = (
+            num_images_per_prompt,
+            pipeline.unet.in_channels,
+            height // scale_factor,
+            width // scale_factor,
+        )
+        latents = np.random.randn(*latents_shape).astype(np.float32)
+        kwargs = {
+            "prompt": "sailing ship in storm by Leonardo da Vinci",
+            "num_inference_steps": 1,
+            "output_type": "np",
+            "num_images_per_prompt": num_images_per_prompt,
+            "height": height,
+            "width": width,
+        }
+
+        pipeline.to("cpu")
+        quantization_config = PostTrainingQuantConfig(approach="dynamic")
+        quantizer = INCQuantizer.from_pretrained(pipeline.unet)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            pipeline.save_pretrained(tmp_dir)
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                save_directory=os.path.join(tmp_dir, "unet"),
+                file_name=DIFFUSION_WEIGHTS_NAME,
+            )
+            loaded_pipeline = INCStableDiffusionPipeline.from_pretrained(tmp_dir)
+            loaded_pipeline.to("cpu")
+            pipeline.unet = quantizer._quantized_model
+        with torch.no_grad():
+            outputs = pipeline(latents=torch.from_numpy(latents), **kwargs).images
+            loaded_pipe_outputs = loaded_pipeline(latents=torch.from_numpy(latents), **kwargs).images
+        # Compare model outputs
+        self.assertTrue(np.allclose(loaded_pipe_outputs, outputs, atol=1e-4))
+       
 
 class PruningTest(unittest.TestCase):
     def test_magnitude_pruning(self):

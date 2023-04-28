@@ -19,10 +19,8 @@ from diffusers import StableDiffusionPipeline
 from neural_compressor.utils.pytorch import load
 
 from ..utils.constant import DIFFUSION_WEIGHTS_NAME, WEIGHTS_NAME
-from ..utils.import_utils import (
-    _torch_version,
-    is_torch_version,
-)
+from ..utils.import_utils import _torch_version, is_torch_version
+
 from .configuration import INCConfig
 
 
