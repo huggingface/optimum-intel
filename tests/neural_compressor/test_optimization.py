@@ -55,6 +55,14 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(1009)
 
 
+def num_quantized_matmul_onnx_model(onnx_model):
+    num_quantized_matmul = 0
+    for initializer in onnx_model.graph.initializer:
+        if "MatMul" in initializer.name and "quantized" in initializer.name:
+            num_quantized_matmul += 1
+    return num_quantized_matmul
+
+
 class QuantizationTest(unittest.TestCase):
     def test_dynamic_quantization(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
@@ -78,10 +86,7 @@ class QuantizationTest(unittest.TestCase):
             self.assertTrue(inc_config.save_onnx_model)
             self.assertFalse(inc_config.quantization["is_static"])
 
-        num_quantized_matmul = 0
-        for initializer in onnx_model.graph.initializer:
-            if "MatMul" in initializer.name and "quantized" in initializer.name:
-                num_quantized_matmul += 1
+        num_quantized_matmul = num_quantized_matmul_onnx_model(onnx_model)
         self.assertEqual(expected_quantized_matmuls, num_quantized_matmul)
 
         ort_outputs = ort_model(**tokens)
@@ -167,10 +172,7 @@ class QuantizationTest(unittest.TestCase):
             self.assertTrue(inc_config.quantization["is_static"])
             self.assertEqual(inc_config.quantization["dataset_num_samples"], num_samples)
 
-        num_quantized_matmul = 0
-        for initializer in onnx_model.graph.initializer:
-            if "MatMul" in initializer.name and "quantized" in initializer.name:
-                num_quantized_matmul += 1
+        num_quantized_matmul = num_quantized_matmul_onnx_model(onnx_model)
         self.assertEqual(expected_quantized_matmuls, num_quantized_matmul)
 
         ort_outputs = ort_model(**tokens)
@@ -257,10 +259,7 @@ class QuantizationTest(unittest.TestCase):
             self.assertTrue(inc_config.save_onnx_model)
             self.assertTrue(inc_config.quantization["is_static"])
 
-        num_quantized_matmul = 0
-        for initializer in onnx_model.graph.initializer:
-            if "MatMul" in initializer.name and "quantized" in initializer.name:
-                num_quantized_matmul += 1
+        num_quantized_matmul = num_quantized_matmul_onnx_model(onnx_model)
         self.assertEqual(expected_quantized_matmuls, num_quantized_matmul)
 
         ort_outputs = ort_model(**tokens)
