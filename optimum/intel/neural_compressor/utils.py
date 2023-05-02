@@ -14,6 +14,7 @@
 
 import logging
 import os
+import warnings
 from collections import UserDict
 from typing import Dict
 
@@ -22,15 +23,13 @@ from neural_compressor.utils.pytorch import load
 from packaging import version
 from torch.utils.data import DataLoader
 
+from ..utils.constant import WEIGHTS_NAME
+
 
 logger = logging.getLogger(__name__)
 
 
 CONFIG_NAME = "best_configure.yaml"
-WEIGHTS_NAME = "pytorch_model.bin"
-TRAINING_ARGS_NAME = "training_args.bin"
-ONNX_WEIGHTS_NAME = "model.onnx"
-MIN_QDQ_ONNX_OPSET = 14
 
 parsed_torch_version_base = version.parse(version.parse(torch.__version__).base_version)
 is_torch_less_than_1_13 = parsed_torch_version_base < version.parse("1.13.0")
@@ -102,6 +101,7 @@ def load_quantized_model(checkpoint_dir_or_file: str, model: torch.nn.Module, **
         model (`torch.nn.Module`):
             The original FP32 model.
     """
+    warnings.warn("This function has been depreciated and will be removed in optimum-intel v1.9.")
     if os.path.isdir(checkpoint_dir_or_file):
         checkpoint_dir_or_file = os.path.join(
             os.path.abspath(os.path.expanduser(checkpoint_dir_or_file)), WEIGHTS_NAME

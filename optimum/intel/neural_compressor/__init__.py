@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from ..utils.import_utils import is_diffusers_available
 from .configuration import INCConfig
 from .quantization import (
     INCModel,
@@ -28,3 +29,7 @@ from .quantization import (
 )
 from .trainer import INCTrainer
 from .trainer_seq2seq import INCSeq2SeqTrainer
+
+
+if is_diffusers_available():
+    from .modeling_diffusion import INCStableDiffusionPipeline

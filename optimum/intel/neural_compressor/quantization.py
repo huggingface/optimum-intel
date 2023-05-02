@@ -20,12 +20,13 @@ import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, ClassVar, Dict, Optional, Union
+from typing import Callable, ClassVar, Dict, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi, hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
+from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
@@ -57,7 +58,7 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
 
-from ..utils.constant import _TASK_ALIASES
+from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME
 from ..utils.import_utils import (
     _neural_compressor_version,
     _torch_version,
@@ -65,11 +66,7 @@ from ..utils.import_utils import (
     is_torch_version,
 )
 from .configuration import INCConfig
-from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME, INCDataLoader, _cfgs_to_fx_cfgs
-
-
-if TYPE_CHECKING:
-    from neural_compressor.config import PostTrainingQuantConfig
+from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 
 
 logger = logging.getLogger(__name__)
@@ -141,6 +138,7 @@ class INCQuantizer(OptimumQuantizer):
         batch_size: int = 8,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        file_name: str = None,
         **kwargs,
     ):
         """
@@ -163,7 +161,7 @@ class INCQuantizer(OptimumQuantizer):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         save_onnx_model = kwargs.pop("save_onnx_model", False)
-        output_path = save_directory.joinpath(WEIGHTS_NAME)
+        output_path = save_directory.joinpath(file_name or WEIGHTS_NAME)
         calibration_dataloader = None
 
         if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
@@ -228,6 +226,7 @@ class INCQuantizer(OptimumQuantizer):
             logger.info(f"Model weights saved to {output_path}")
             return
         state_dict = model._model.state_dict()
+
         if hasattr(model, "q_config"):
             state_dict["best_configure"] = model.q_config
         torch.save(state_dict, output_path)
