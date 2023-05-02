@@ -156,12 +156,12 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
-        model_id = Path(model_id)
         encoder_file_name = encoder_file_name or (ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME)
 
+        model_name = Path(model_id)
         if decoder_file_name is None:
-            if model_id.is_dir():
-                model_files = list(model_id.glob("*.xml"))
+            if model_name.is_dir():
+                model_files = list(model_name.glob("*.xml"))
             else:
                 if isinstance(use_auth_token, bool):
                     token = HfFolder().get_token()
@@ -174,10 +174,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             legacy_model_files = [p for p in model_files if p.match(pattern)]
             model_files = legacy_model_files or model_files
             if len(model_files) == 0:
-                raise FileNotFoundError(f"Could not find any decoder model in {model_id}")
+                raise FileNotFoundError(f"Could not find any OpenVINO decoder model in {model_name}.")
             elif len(model_files) > 1:
                 raise RuntimeError(
-                    f"Too many model files were found in {model_id}, specify which one to load by using the decoder_file_name argument."
+                    f"Too many model files were found in {model_name}, specify which one to load by using the `decoder_file_name` argument."
                 )
             else:
                 decoder_file_name = model_files[0].name

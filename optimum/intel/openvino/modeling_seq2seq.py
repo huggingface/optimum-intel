@@ -265,8 +265,8 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.decoder.request = None
 
     def compile(self):
-        self.encoder._create_inference_request()
-        self.decoder._create_inference_request()
+        self.encoder._compile()
+        self.decoder._compile()
 
 
 class OVEncoder:
@@ -294,19 +294,13 @@ class OVEncoder:
         attention_mask: torch.LongTensor = None,
         **kwargs,
     ) -> BaseModelOutput:
-        self._create_inference_request()
 
-        # Check if inputs are c-like, if not - convert them
-        input_ids = _contiguous_helper(np.array(input_ids))
+        self._compile()
 
-        inputs = {
-            "input_ids": Tensor(input_ids, shared_memory=True),
-        }
-
+        inputs = {"input_ids": input_ids}
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
-            attention_mask = _contiguous_helper(np.array(attention_mask))
-            inputs["attention_mask"] = Tensor(attention_mask, shared_memory=True)
+            inputs["attention_mask"] = attention_mask
 
         # Run inference
         self.request.start_async(inputs)
@@ -319,7 +313,7 @@ class OVEncoder:
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
-    def _create_inference_request(self):
+    def _compile(self):
         if self.request is None:
             logger.info("Compiling the encoder and creating the inference request ...")
             compiled_model = core.compile_model(self.model, self._device, self.ov_config)
@@ -368,7 +362,7 @@ class OVDecoder:
         encoder_attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
     ) -> Seq2SeqLMOutput:
-        self._create_inference_request()
+        self._compile()
 
         inputs = {}
 
@@ -443,7 +437,7 @@ class OVDecoder:
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
-    def _create_inference_request(self):
+    def _compile(self):
         if self.request is None:
             logger.info("Compiling the decoder and creating the inference request ...")
             compiled_model = core.compile_model(self.model, self._device, self.ov_config)
