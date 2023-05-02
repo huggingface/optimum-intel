@@ -19,23 +19,21 @@ from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
 import openvino
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfApi, HfFolder, hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export
+from optimum.exporters.onnx import export_models
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_DECODER_NAME,
-    ONNX_DECODER_WITH_PAST_NAME,
     ONNX_ENCODER_NAME,
     OV_DECODER_NAME,
-    OV_DECODER_WITH_PAST_NAME,
     OV_ENCODER_NAME,
 )
 
@@ -55,7 +53,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self,
         encoder: openvino.runtime.Model,
         decoder: openvino.runtime.Model,
-        decoder_with_past: openvino.runtime.Model = None,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -64,8 +61,8 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         **kwargs,
     ):
         self.config = config
-        self.use_cache = decoder_with_past is not None
-        self.model_save_dir = model_save_dir
+        self.use_cache = any("past_key_values" in key.get_any_name() for key in decoder.inputs)
+        self.model_save_dir = Path(model_save_dir)
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {}
@@ -76,10 +73,8 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         if self.is_dynamic:
             encoder = self._reshape(encoder, -1, -1, is_decoder=False)
             decoder = self._reshape(decoder, -1, -1)
-            decoder_with_past = self._reshape(decoder_with_past, -1, -1) if self.use_cache else None
         self.encoder_model = encoder
         self.decoder_model = decoder
-        self.decoder_with_past_model = decoder_with_past
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
@@ -93,7 +88,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         save_directory: Union[str, Path],
         encoder_file_name: Optional[str] = None,
         decoder_file_name: Optional[str] = None,
-        decoder_with_past_file_name: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -109,15 +103,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             decoder_file_name(`str`, *optional*):
                 The decoder model file name. Overwrites the default file name and allows one to save the decoder model
                 with a different name.
-            decoder_with_past_file_name(`str`, *optional*):
-                The decoder with past key values model file name overwriting the default file name, allowing to save
-                the decoder model with a different name.
         """
         src_files = [self.encoder_model, self.decoder_model]
         dst_file_names = [encoder_file_name or OV_ENCODER_NAME, decoder_file_name or OV_DECODER_NAME]
-        if self.use_cache:
-            src_files.append(self.decoder_with_past_model)
-            dst_file_names.append(decoder_with_past_file_name or OV_DECODER_WITH_PAST_NAME)
 
         for src_file, dst_file_name in zip(src_files, dst_file_names):
             dst_path = os.path.join(save_directory, dst_file_name)
@@ -134,7 +122,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         cache_dir: Optional[str] = None,
         encoder_file_name: Optional[str] = None,
         decoder_file_name: Optional[str] = None,
-        decoder_with_past_file_name: Optional[str] = None,
         local_files_only: bool = False,
         use_cache: bool = True,
         from_onnx: bool = False,
@@ -166,43 +153,52 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             decoder_file_name(`str`, *optional*):
                 The decoder model file name. Overwrites the default file name openvino_decoder_model.xml and allows one to
                 load the decoder model with a different name.
-            decoder_with_past_file_name(`str`, *optional*):
-                The decoder with past key values model file name overwriting the default file name
-                openvino_decoder_with_past_model.xml, allowing to load the decoder model with a different name.
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
-        default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
-        default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
-        default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
-        encoder_file_name = encoder_file_name or default_encoder_file_name
-        decoder_file_name = decoder_file_name or default_decoder_file_name
-        decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
+        model_id = Path(model_id)
+        encoder_file_name = encoder_file_name or (ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME)
+
+        if decoder_file_name is None:
+            if model_id.is_dir():
+                model_files = list(model_id.glob("*.xml"))
+            else:
+                if isinstance(use_auth_token, bool):
+                    token = HfFolder().get_token()
+                else:
+                    token = use_auth_token
+                model_files = map(Path, HfApi().list_repo_files(model_id, revision=revision, token=token))
+            pattern = "openvino_decoder*.xml"
+            model_files = [p for p in model_files if p.match(pattern)]
+            pattern = "*with_past*" if use_cache else "*decoder_model*"
+            legacy_model_files = [p for p in model_files if p.match(pattern)]
+            model_files = legacy_model_files or model_files
+            if len(model_files) == 0:
+                raise FileNotFoundError(f"Could not find any decoder model in {model_id}")
+            elif len(model_files) > 1:
+                raise RuntimeError(
+                    f"Too many model files were found in {model_id}, specify which one to load by using the decoder_file_name argument."
+                )
+            else:
+                decoder_file_name = model_files[0].name
 
         # Load model from a local directory
         if os.path.isdir(model_id):
             if os.path.isfile(os.path.join(model_id, "ov_encoder_model.xml")):
                 encoder_file_name = "ov_encoder_model.xml"
-                encoder_file_name = "ov_decoder_model.xml"
-                encoder_file_name = "ov_decoder_with_past_model.xml"
+                decoder_file_name = "ov_decoder_model.xml" if use_cache else "ov_decoder_with_past_model.xml"
                 logger.warning(
                     "The file names `ov_encoder_model.xml`, `ov_decoder_model.xml` and `ov_decoder_with_past_model.xml` "
                     "will be soon deprecated. Make sure to rename your file to respectively `openvino_encoder_model.xml`, "
                     "`openvino_decoder_model.xml` and `openvino_decoder_with_past_model.xml`"
                 )
-
             encoder = cls.load_model(os.path.join(model_id, encoder_file_name))
             decoder = cls.load_model(os.path.join(model_id, decoder_file_name))
-            decoder_with_past = (
-                cls.load_model(os.path.join(model_id, decoder_with_past_file_name)) if use_cache else None
-            )
             model_save_dir = Path(model_id)
 
         # Load model from hub
         else:
             model_file_names = {"encoder": encoder_file_name, "decoder": decoder_file_name}
-            if use_cache:
-                model_file_names["decoder_with_past"] = decoder_with_past_file_name
 
             # If not ONNX then OpenVINO IR : adds binary files
             if not from_onnx:
@@ -222,9 +218,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     )
                     file_names[name] = model_cache_path
             except EntryNotFoundError:
-                model_file_names = {"encoder": "ov_encoder_model.xml", "decoder": "ov_decoder_model.xml"}
-                if use_cache:
-                    model_file_names["decoder_with_past"] = "ov_decoder_with_past_model.xml"
+                model_file_names = {
+                    "encoder": "ov_encoder_model.xml",
+                    "decoder": "ov_decoder_model.xml" if use_cache else "ov_decoder_with_past_model.xml",
+                }
                 for key in list(model_file_names.keys()):
                     model_file_names[key + "_bin"] = model_file_names[key].replace(".xml", ".bin")
                 file_names = model_file_names.copy()
@@ -248,12 +245,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             model_save_dir = Path(model_cache_path).parent
             encoder = cls.load_model(file_names["encoder"])
             decoder = cls.load_model(file_names["decoder"])
-            decoder_with_past = cls.load_model(file_names["decoder_with_past"]) if use_cache else None
 
         return cls(
             encoder=encoder,
             decoder=decoder,
-            decoder_with_past=decoder_with_past,
             config=config,
             model_save_dir=model_save_dir,
             **kwargs,
@@ -295,7 +290,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         """
         encoder_file_name = os.path.join("encoder", ONNX_ENCODER_NAME)
         decoder_file_name = os.path.join("decoder", ONNX_DECODER_NAME)
-        decoder_with_past_file_name = os.path.join("decoder_with_past", ONNX_DECODER_WITH_PAST_NAME)
 
         if task is None:
             task = cls._auto_model_to_task(cls.auto_model_class)
@@ -315,11 +309,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
-        models_and_onnx_configs = get_encoder_decoder_models_for_export(model, onnx_config)
-
+        models_and_onnx_configs = {
+            ONNX_ENCODER_NAME: (model.get_encoder(), onnx_config.with_behavior("encoder")),
+            ONNX_DECODER_NAME: (model, onnx_config.with_behavior("decoder", use_past=use_cache)),
+        }
         output_names = [encoder_file_name, decoder_file_name]
-        if use_cache is True:
-            output_names.append(decoder_with_past_file_name)
 
         export_models(
             models_and_onnx_configs=models_and_onnx_configs,
@@ -339,7 +333,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             cache_dir=cache_dir,
             encoder_file_name=encoder_file_name,
             decoder_file_name=decoder_file_name,
-            decoder_with_past_file_name=decoder_with_past_file_name,
             local_files_only=local_files_only,
             **kwargs,
         )
@@ -372,8 +365,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.encoder_model = self._reshape(self.encoder_model, batch_size, sequence_length, is_decoder=False)
         self.decoder_model = self._reshape(self.decoder_model, batch_size, sequence_length)
-        if self.use_cache:
-            self.decoder_with_past_model = self._reshape(self.decoder_with_past_model, batch_size, sequence_length)
 
     def half(self):
         """
@@ -383,9 +374,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         apply_moc_transformations(self.decoder_model, cf=False)
         compress_model_transformation(self.encoder_model)
         compress_model_transformation(self.decoder_model)
-        if self.use_cache:
-            apply_moc_transformations(self.decoder_with_past_model, cf=False)
-            compress_model_transformation(self.decoder_with_past_model)
         return self
 
     def forward(self, *args, **kwargs):

@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 import logging
-from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -24,6 +23,8 @@ from openvino.runtime import Core, Tensor
 from transformers import AutoConfig, AutoModelForSeq2SeqLM
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
+
+from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
@@ -46,8 +47,6 @@ INPUTS_DOCSTRING = r"""
             The OpenVINO Runtime model associated to the encoder.
         decoder (`openvino.runtime.Model`):
             The OpenVINO Runtime model associated to the decoder.
-        decoder_with_past (`openvino.runtime.Model`):
-            The OpenVINO Runtime model associated  to the decoder with past key values.
         config (`transformers.PretrainedConfig`):
             [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig)
             is an instance of the configuration associated to the model. Initializing with a config file does
@@ -143,30 +142,20 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self,
         encoder: openvino.runtime.Model,
         decoder: openvino.runtime.Model,
-        decoder_with_past: openvino.runtime.Model = None,
         config: transformers.PretrainedConfig = None,
         **kwargs,
     ):
-        super().__init__(
-            encoder=encoder, decoder=decoder, decoder_with_past=decoder_with_past, config=config, **kwargs
-        )
+        super().__init__(encoder=encoder, decoder=decoder, config=config, **kwargs)
         self.device = torch.device("cpu")
         self.main_input_name = "input_ids"
-        self.decoder_with_past = None
+        kwargs.pop("use_cache", True)
+        self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         enable_compilation = kwargs.get("compile", True)
-        encoder_cache_dir = Path(self.model_save_dir).joinpath("encoder_cache")
-        encoder_cache_dir.mkdir(parents=True, exist_ok=True)
-        ov_encoder_config = {**self.ov_config, "CACHE_DIR": str(encoder_cache_dir)}
+        ov_encoder_config = {**self.ov_config, "CACHE_DIR": str(self.model_save_dir.joinpath("encoder_cache"))}
         self.encoder = OVEncoder(self.encoder_model, self._device, ov_encoder_config)
-        decoder_cache_dir = Path(self.model_save_dir).joinpath("decoder_cache")
-        decoder_cache_dir.mkdir(parents=True, exist_ok=True)
-        ov_decoder_config = {**self.ov_config, "CACHE_DIR": str(decoder_cache_dir)}
+        ov_decoder_config = {**self.ov_config, "CACHE_DIR": str(self.model_save_dir.joinpath("decoder_cache"))}
         self.decoder = OVDecoder(self.decoder_model, self._device, ov_decoder_config)
-        if self.use_cache:
-            decoder_past_cache_dir = Path(self.model_save_dir).joinpath("decoder_past_cache")
-            decoder_past_cache_dir.mkdir(parents=True, exist_ok=True)
-            ov_decoder_past_config = {**self.ov_config, "CACHE_DIR": str(decoder_past_cache_dir)}
-            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, self._device, ov_decoder_past_config)
+
         if enable_compilation:
             self.compile()
 
@@ -178,8 +167,6 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self._device = device.upper()
         self.encoder._device = self._device
         self.decoder._device = self._device
-        if self.use_cache:
-            self.decoder_with_past._device = self._device
         self.clear_requests()
         return self
 
@@ -205,19 +192,12 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             encoder_outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
 
         # Decode
-        if past_key_values is None or self.decoder_with_past is None:
-            decoder_outputs = self.decoder(
-                input_ids=decoder_input_ids,
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                encoder_attention_mask=attention_mask,
-            )
-        else:
-            decoder_outputs = self.decoder_with_past(
-                input_ids=decoder_input_ids[:, -1:],  # Cut decoder_input_ids if past is used
-                past_key_values=past_key_values,
-                encoder_hidden_states=encoder_outputs.last_hidden_state,
-                encoder_attention_mask=attention_mask,
-            )
+        decoder_outputs = self.decoder(
+            input_ids=decoder_input_ids,
+            past_key_values=past_key_values,
+            encoder_hidden_states=encoder_outputs.last_hidden_state,
+            encoder_attention_mask=attention_mask,
+        )
 
         return Seq2SeqLMOutput(logits=decoder_outputs.logits, past_key_values=decoder_outputs.past_key_values)
 
@@ -283,14 +263,10 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
     def clear_requests(self):
         self.encoder.request = None
         self.decoder.request = None
-        if self.use_cache:
-            self.decoder_with_past.request = None
 
     def compile(self):
         self.encoder._create_inference_request()
         self.decoder._create_inference_request()
-        if self.use_cache:
-            self.decoder_with_past._create_inference_request()
 
 
 class OVEncoder:
@@ -365,8 +341,13 @@ class OVDecoder:
         self.model = model
         self._device = device
         self.device = torch.device("cpu")
-        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
+        self.output_names = {key.get_any_name(): idx for idx, key in enumerate(model.outputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
+        self.key_value_output_names = [
+            key for key in self.output_names if "present" in key or "past" in key
+        ]  # or "key_values" in key] for legacy
+        self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs)
         is_legacy = any("past_key_values" in key.get_any_name() for key in self.model.outputs)
 
         if len(self.key_value_input_names) > 0 and not is_legacy:
@@ -392,68 +373,72 @@ class OVDecoder:
         inputs = {}
 
         if past_key_values is not None:
+            if self.use_cache:
+                input_ids = input_ids[:, -1:]
+
             # Flatten the past_key_values
             past_key_values = tuple(
-                _contiguous_helper(np.array(past_key_value))
-                for pkv_per_layer in past_key_values
-                for past_key_value in pkv_per_layer
+                past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
             )
-
             # Add the past_key_values to the decoder inputs
             inputs = {
-                input_name: Tensor(past_key_value, shared_memory=True)
+                input_name: past_key_value
                 for input_name, past_key_value in zip(self.key_value_input_names, past_key_values)
             }
+            # inputs = dict(zip(self.key_value_input_names, past_key_values))
 
-        # Check if inputs are c-like, if not - convert them
-        input_ids = _contiguous_helper(np.array(input_ids))
-        inputs["input_ids"] = Tensor(input_ids, shared_memory=True)
+        # Create empty past_key_values for decoder_with_past first generation step
+        elif self.use_cache:
+            shape_input_ids = input_ids.shape
+            for input_name in self.key_value_input_names:
+                model_inputs = self.model.input(input_name)
+                shape = model_inputs.get_partial_shape()
+                shape[0] = shape_input_ids[0]  # * num_attention_heads
+                if shape[2].is_dynamic:
+                    shape[2] = 0
+                if shape[1].is_dynamic:
+                    shape[1] = 0
+                inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
+
+        inputs["input_ids"] = input_ids
 
         # Add the encoder_attention_mask inputs when needed
         if "encoder_attention_mask" in self.input_names and encoder_attention_mask is not None:
-            encoder_attention_mask = _contiguous_helper(np.array(encoder_attention_mask))
-            inputs["encoder_attention_mask"] = Tensor(encoder_attention_mask, shared_memory=True)
+            inputs["encoder_attention_mask"] = encoder_attention_mask
 
         # Add the encoder_hidden_states inputs when needed
         if "encoder_hidden_states" in self.input_names and encoder_hidden_states is not None:
-            encoder_hidden_states = _contiguous_helper(np.array(encoder_hidden_states))
-            inputs["encoder_hidden_states"] = Tensor(encoder_hidden_states, shared_memory=True)
+            inputs["encoder_hidden_states"] = encoder_hidden_states
 
         # Run inference
         self.request.start_async(inputs)
         self.request.wait()
 
-        outputs = {}
-        for key, value in zip(self.request.model_outputs, self.request.outputs):
-            output_names = key.get_names()
-            output_name = "logits" if "logits" in output_names else next(iter(output_names))
-            outputs[output_name] = value.data
+        outputs = {
+            key.get_any_name(): value.data for key, value in zip(self.request.model_outputs, self.request.outputs)
+        }
 
         logits = torch.from_numpy(outputs["logits"]).to(self.device)
 
         # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
         # self-attention layer and 2 to the cross-attention layer)
-        out_past_key_values = tuple(
-            torch.from_numpy(outputs[key]).to(self.device)
-            for key in outputs
-            if ("key_values" in key or "present" in key)
-        )
+        out_pkv = tuple(torch.from_numpy(outputs[key]).to(self.device) for key in self.key_value_output_names)
 
         # Tuple of tuple of length `n_layers`, with each tuple of length equal to:
         # * 4 for the decoder without cache (k/v of self-attention + k/v of cross-attention)
         # * 2 for the decoder with cache (k/v of self-attention as cross-attention cache is constant)
-        if self.use_past is False:
-            out_past_key_values = tuple(
-                out_past_key_values[i : i + self.num_pkv] for i in range(0, len(out_past_key_values), self.num_pkv)
+        if self.use_cache and past_key_values is not None:
+            # Grab the cross attention key/values from the inputs
+            num_pkv = 2
+            out_pkv = tuple(
+                out_pkv[i : i + num_pkv] + past_key_values[2 * i + 2 : 2 * i + 2 + num_pkv]
+                for i in range(0, len(out_pkv), num_pkv)
             )
         else:
-            # grab the cross attention key/values from the inputs
-            out_past_key_values = tuple(
-                out_past_key_values[i : i + self.num_pkv] + past_key_values[2 * i + 2 : 2 * i + 2 + self.num_pkv]
-                for i in range(0, len(out_past_key_values), self.num_pkv)
-            )
+            num_pkv = 4
+            out_pkv = tuple(out_pkv[i : i + num_pkv] for i in range(0, len(out_pkv), num_pkv))
 
-        return Seq2SeqLMOutput(logits=logits, past_key_values=out_past_key_values)
+        return Seq2SeqLMOutput(logits=logits, past_key_values=out_pkv)
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
