@@ -28,7 +28,7 @@ from typing import Iterable, Optional
 
 import numpy as np
 import requests
-import tomesd
+import tomeov
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
@@ -97,28 +97,36 @@ BACKUP_PAIR = (
 )
 AVAILABLE_EXAMPLES = []
 
+def check_text_data(data):
+    if isinstance(data, str):
+        return True
+    if isinstance(data, list):
+        return all(isinstance(x, str) for x in data)
+    return False    
 
-def laion2B_preprocess_train(examples, train_transforms, tokenize_captions, image_column="URL"):
+def laion2B_preprocess_train(examples, train_transforms, tokenize_captions, image_column="URL", text_column="TEXT"):
     url = examples[image_column]
     try:
         image = get_pil_from_url(url)
-        AVAILABLE_EXAMPLES.append((url, examples["TEXT"]))
+        if not check_text_data(examples[text_column]):
+            raise ValueError("Text data is not valid")
+        AVAILABLE_EXAMPLES.append((url, examples[text_column]))
     except Exception:
-        logger.info(f"Can't load image from url: {url}, using cache with size: {len(AVAILABLE_EXAMPLES)}")
+        print(f"Can't load image from url: {url}, using cache with size: {len(AVAILABLE_EXAMPLES)}")
         if len(AVAILABLE_EXAMPLES) > 0:
             backup_id = random.randint(0, len(AVAILABLE_EXAMPLES) - 1)
             backup_example = AVAILABLE_EXAMPLES[backup_id]
             try:
                 image = get_pil_from_url(backup_example[0])
-                examples["TEXT"] = backup_example[1]
+                examples[text_column] = backup_example[1]
             except Exception:
-                logger.info(f"Can't load image from cached url: {backup_example[0]}, using backup")
+                print(f"Can't load image from cached url: {backup_example[0]}, using backup")
                 image = BACKUP_PAIR[0].copy()
-                examples["TEXT"] = BACKUP_PAIR[1]
+                examples[text_column] = BACKUP_PAIR[1]
         else:
-            logger.info(f"Can't load image from url: {url}, using backup")
+            print(f"Can't load image from url: {url}, using backup")
             image = BACKUP_PAIR[0].copy()
-            examples["TEXT"] = BACKUP_PAIR[1]
+            examples[text_column] = BACKUP_PAIR[1]
 
     examples["pixel_values"] = train_transforms(image)
     examples["input_ids"] = tokenize_captions(examples)
@@ -139,6 +147,16 @@ dataset_name_mapping = {
     "laion/laion2B-en-aesthetic": {
         "columns": ("URL", "TEXT"),
         "preprocess_fn": laion2B_preprocess_train,
+        "streaming": True,
+    },
+    "laion/laion-art": {
+        "columns": ("URL", "TEXT"),
+        "preprocess_fn": laion2B_preprocess_train,
+        "streaming": True,
+    },
+    "laion/laion400m": {
+        "columns": ("url", "caption"),
+        "preprocess_fn": partial(laion2B_preprocess_train, image_column="url", text_column="caption"),
         "streaming": True,
     },
 }
@@ -400,6 +418,13 @@ def parse_args():
         help="Whether to use EMA model and where to store the EMA model.",
     )
     parser.add_argument(
+        "--quantization_mode",
+        type=str,
+        default="moderate",
+        choices=["moderate", "aggressive"],
+        help="Whether to use EMA model and where to store the EMA model.",
+    )
+    parser.add_argument(
         "--non_ema_revision",
         type=str,
         default=None,
@@ -644,7 +669,7 @@ def prepare_nncf_init_data(pipeline, dataloader, args):
 def get_nncf_config(pipeline, dataloader, args):
     text_encoder = pipeline.text_encoder
     unet = pipeline.unet
-    nncf_config_dict = {
+    moderate_quantization_config = {
         "input_info": [
             {  # "keyword": "latent_model_input",
                 "sample_size": [1, unet.config["in_channels"], unet.config["sample_size"], unet.config["sample_size"]]
@@ -677,6 +702,38 @@ def get_nncf_config(pipeline, dataloader, args):
             },
         ],
     }
+    
+    aggressive_quantization_config = {
+        "input_info": [
+            {  # "keyword": "latent_model_input",
+                "sample_size": [1, unet.config["in_channels"], unet.config["sample_size"], unet.config["sample_size"]]
+            },
+            {"sample_size": [1]},  # "keyword": "t",
+            {  # "keyword": "encoder_hidden_states",
+                "sample_size": [1, text_encoder.config.max_position_embeddings, text_encoder.config.hidden_size]
+            },
+        ],
+        "log_dir": args.output_dir,  # The log directory for NNCF-specific logging outputs.
+        "compression": [
+            {
+                "algorithm": "quantization",  # Specify the algorithm here.
+                "preset": "mixed",
+                "initializer": {
+                    "range": {"num_init_samples": args.opt_init_steps, "type": args.opt_init_type},
+                    "batchnorm_adaptation": {"num_bn_adaptation_samples": args.opt_init_steps},
+                },
+                "scope_overrides": {"activations": {"{re}.*baddbmm_0": {"mode": "symmetric"}, "{re}.*bmm_0": {"mode": "symmetric"}}},
+                "ignored_scopes": [
+                    "{re}.*layer_norm_0",
+                    "{re}.*__truediv__*",
+                    "{re}.*group_norm_0",
+                    "{re}.*mul___[0-2]",
+                    "{re}.*silu_[0-2]",
+                ],
+                "export_to_onnx_standard_ops": True,
+            },
+        ],
+    }
 
     class UnetInitDataLoader(PTInitializingDataLoader):
         def get_inputs(self, dataloader_output):
@@ -687,8 +744,12 @@ def get_nncf_config(pipeline, dataloader, args):
 
         def get_target(self, dataloader_output):
             return dataloader_output[0]
+        
+    quantization_config = aggressive_quantization_config if args.quantization_mode == "aggressive" else moderate_quantization_config
+    print(f"quantization_mode: {args.quantization_mode}")
+    print(f"Config: {quantization_config}")
 
-    nncf_config = NNCFConfig.from_dict(nncf_config_dict)
+    nncf_config = NNCFConfig.from_dict(quantization_config)
     nncf_config = register_default_init_args(nncf_config, UnetInitDataLoader(dataloader))
     return nncf_config
 
@@ -741,7 +802,7 @@ def main():
 
     if args.tome_ratio > 0:
         logger.info(f"Using Token Merging with ratio: {args.tome_ratio}")
-        tomesd.apply_patch(
+        tomeov.apply_patch(
             pipeline, ratio=args.tome_ratio, use_rand=False
         )  # Can also use pipe.unet in place of pipe here
 
