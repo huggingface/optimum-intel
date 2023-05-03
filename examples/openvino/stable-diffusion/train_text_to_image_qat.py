@@ -20,6 +20,7 @@ import math
 import os
 import random
 import tempfile
+from copy import deepcopy
 from functools import partial
 from io import BytesIO
 from pathlib import Path
@@ -27,6 +28,7 @@ from typing import Iterable, Optional
 
 import numpy as np
 import requests
+import tomesd
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
@@ -487,6 +489,14 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--tome_ratio",
+        type=float,
+        default=0,
+        help=(
+            "Token Merging ratio. If 0, no merging is applied" "More details here: https://arxiv.org/abs/2303.17604."
+        ),
+    )
+    parser.add_argument(
         "--opt_init_steps",
         type=int,
         default=300,
@@ -667,8 +677,6 @@ def get_nncf_config(pipeline, dataloader, args):
             },
         ],
     }
-    if args.use_kd:
-        nncf_config_dict["compression"].append({"algorithm": "knowledge_distillation", "type": "mse"})  # or ""softmax
 
     class UnetInitDataLoader(PTInitializingDataLoader):
         def get_inputs(self, dataloader_output):
@@ -727,6 +735,15 @@ def main():
             os.makedirs(args.output_dir, exist_ok=True)
 
     pipeline = DiffusionPipeline.from_pretrained(args.model_id)
+
+    if args.use_kd:
+        teacher_model = deepcopy(pipeline.unet)
+
+    if args.tome_ratio > 0:
+        logger.info(f"Using Token Merging with ratio: {args.tome_ratio}")
+        tomesd.apply_patch(
+            pipeline, ratio=args.tome_ratio, use_rand=False
+        )  # Can also use pipe.unet in place of pipe here
 
     # Load models and create wrapper for stable diffusion
     tokenizer = pipeline.tokenizer
@@ -857,6 +874,8 @@ def main():
     text_encoder.to(unet.device)
     train_dataloader = accelerator.prepare_data_loader(train_dataloader)
     orig_unet = unet  # save link to original unet model for EMA
+    if args.use_kd:
+        teacher_model.to(unet.device)
 
     ## Create initialization dataset for PTQ
     nncf_init_data = prepare_nncf_init_data(pipeline, train_dataloader, args)
@@ -978,7 +997,13 @@ def main():
 
                 # Predict the noise residual and compute loss
                 noise_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+
                 loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
+
+                if args.use_kd:
+                    with torch.no_grad():
+                        orig_output = teacher_model(noisy_latents, timesteps, encoder_hidden_states).sample
+                    loss += F.mse_loss(noise_pred.float(), orig_output.float(), reduction="mean")
 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
