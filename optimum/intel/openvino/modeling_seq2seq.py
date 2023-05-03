@@ -337,9 +337,7 @@ class OVDecoder:
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(model.outputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
-        self.key_value_output_names = [
-            key for key in self.output_names if "present" in key or "past" in key
-        ]  # or "key_values" in key] for legacy
+        self.key_value_output_names = [key for key in self.output_names if "present" in key or "past" in key]
         self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs)
         is_legacy = any("past_key_values" in key.get_any_name() for key in self.model.outputs)
 
