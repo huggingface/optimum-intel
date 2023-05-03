@@ -818,11 +818,12 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
         )
         self.assertFalse(pipeline.is_dynamic)
         pipeline.compile()
+        # Verify output shapes requirements not matching the static model don't impact the final outputs
         outputs = pipeline(
             [prompt] * batch_size,
             num_inference_steps=2,
             num_images_per_prompt=num_images_per_prompt,
-            height=height,
+            height=width,
             width=width,
             output_type="np",
         ).images
