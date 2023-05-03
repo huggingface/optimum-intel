@@ -294,7 +294,6 @@ class OVEncoder:
         attention_mask: torch.LongTensor = None,
         **kwargs,
     ) -> BaseModelOutput:
-
         self._compile()
 
         inputs = {"input_ids": input_ids}
@@ -375,11 +374,7 @@ class OVDecoder:
                 past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
             )
             # Add the past_key_values to the decoder inputs
-            inputs = {
-                input_name: past_key_value
-                for input_name, past_key_value in zip(self.key_value_input_names, past_key_values)
-            }
-            # inputs = dict(zip(self.key_value_input_names, past_key_values))
+            inputs = dict(zip(self.key_value_input_names, past_key_values))
 
         # Create empty past_key_values for decoder_with_past first generation step
         elif self.use_cache:
@@ -387,7 +382,7 @@ class OVDecoder:
             for input_name in self.key_value_input_names:
                 model_inputs = self.model.input(input_name)
                 shape = model_inputs.get_partial_shape()
-                shape[0] = shape_input_ids[0]  # * num_attention_heads
+                shape[0] = shape_input_ids[0]
                 if shape[2].is_dynamic:
                     shape[2] = 0
                 if shape[1].is_dynamic:

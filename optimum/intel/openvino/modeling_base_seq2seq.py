@@ -320,6 +320,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             opset=onnx_config.DEFAULT_ONNX_OPSET,
             output_dir=save_dir_path,
             output_names=output_names,
+            disable_dynamic_axes_fix=True,
         )
 
         return cls._from_pretrained(
