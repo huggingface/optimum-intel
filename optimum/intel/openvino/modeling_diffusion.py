@@ -429,22 +429,22 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         _, _, _height, _width = self.unet.model.inputs[0].get_partial_shape()
 
         if _height.is_static:
-            _height = _height.get_length()
+            _height = _height.get_length() * self._vae_scale_factor
             if height != _height:
                 logger.warning(
                     f"`height` was set to {height} but the static model will output images of height {_height}."
                     "To fix the height, please reshape your model accordingly using the `.reshape()` method."
                 )
-            height = _height * self._vae_scale_factor
+            height = _height
 
         if _width.is_static:
-            _width = _width.get_length()
+            _width = _width.get_length() * self._vae_scale_factor
             if width != _width:
                 logger.warning(
                     f"`width` was set to {width} but the static model will output images of width {_width}."
                     "To fix the width, please reshape your model accordingly using the `.reshape()` method."
                 )
-            width = _width * self._vae_scale_factor
+            width = _width
 
         if guidance_scale is not None and guidance_scale <= 1 and not self.is_dynamic:
             raise ValueError(
