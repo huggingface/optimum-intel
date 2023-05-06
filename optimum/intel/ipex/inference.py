@@ -42,6 +42,17 @@ class _ModelFallbackWrapper:
             return self.item
 
 
+class _ModelGenerationWrapper(_ModelFallbackWrapper):
+    def __getattr__(self, item):
+        if not item.startswith("__"):
+            try:
+                return getattr(self._optimized, item)
+            except Exception:
+                return getattr(self._default, item)
+        else:
+            return self.item
+
+
 @add_start_docstrings(
     """
     inference_mode is an Intel specific context-manager analogous to PyTorch's inference_mode to use for inference
@@ -99,27 +110,23 @@ class inference_mode:
 
                             # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
                             with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)), torch.no_grad():
-                                if self._model.tokenizer is not None and self._jit:
+                                if self._jit:
                                     try:
-                                        jit_model = jit_trace(
+                                        model = jit_trace(
                                             model=model,
                                             task=self._model.task,
                                             use_cache=self._original.config.use_cache,
                                         )
                                         if self._model.task == "text-generation":
                                             model = TSModelForCausalLM(
-                                                model=jit_model,
+                                                model=model,
                                                 config=self._original.config,
                                                 use_cache=self._original.config.use_cache,
                                             )
                                     except Exception as e:
-                                        self._jit = False
                                         logger.warning(f"failed to use PyTorch jit mode due to: {e}.")
                                 # Patching model with the new one
-                                if self._model.task == "text-generation" and self._jit:
-                                    self._model.model = model
-                                else:
-                                    self._model.model = _ModelFallbackWrapper(model, self._original)
+                                self._model.model = _ModelGenerationWrapper(model, self._original)
                                 return self._model
                         else:
                             self._original = self._model
