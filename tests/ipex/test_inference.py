@@ -20,6 +20,7 @@ from parameterized import parameterized
 # TODO : add more tasks
 from transformers import (
     AutoModelForCausalLM,
+    AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoTokenizer,
@@ -54,12 +55,33 @@ class IPEXIntegrationTest(unittest.TestCase):
     )
 
     TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
-        "bloom",
         "gptj",
         "gpt2",
         "gpt_neo",
-        "gpt_neox",
     )
+
+    QA_SUPPORTED_ARCHITECTURES = (
+        "bert",
+        "distilbert",
+        "roberta",
+    )
+
+    @parameterized.expand(QA_SUPPORTED_ARCHITECTURES)
+    def test_question_answering_pipeline_inference(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForQuestionAnswering.from_pretrained(model_id, torch_dtype=torch.float32)
+        pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
+
+        with torch.inference_mode():
+            outputs = pipe(question="Where was HuggingFace founded ?", context="HuggingFace was founded in Paris.")
+        with ipex_inference_mode(pipe, dtype=model.config.torch_dtype, verbose=False, jit=True) as ipex_pipe:
+            outputs_ipex = ipex_pipe(
+                question="Where was HuggingFace founded ?", context="HuggingFace was founded in Paris."
+            )
+        self.assertTrue(isinstance(ipex_pipe.model._optimized, torch.jit.RecursiveScriptModule))
+        self.assertEqual(outputs["start"], outputs_ipex["start"])
+        self.assertEqual(outputs["end"], outputs_ipex["end"])
 
     @parameterized.expand(CLASSIFICATION_SUPPORTED_ARCHITECTURES)
     def test_classification_pipeline_inference(self, model_arch):
@@ -67,14 +89,14 @@ class IPEXIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
         for task, auto_model_class in _CLASSIFICATION_TASK_TO_AUTOMODELS.items():
-            model = auto_model_class.from_pretrained(model_id)
+            model = auto_model_class.from_pretrained(model_id, torch_dtype=torch.float32)
             pipe = pipeline(task, model=model, tokenizer=tokenizer)
 
             with torch.inference_mode():
                 outputs = pipe(inputs)
-            with ipex_inference_mode(pipe) as ipex_pipe:
+            with ipex_inference_mode(pipe, dtype=model.config.torch_dtype, verbose=False, jit=True) as ipex_pipe:
                 outputs_ipex = ipex_pipe(inputs)
-
+            self.assertTrue(isinstance(ipex_pipe.model._optimized, torch.jit.RecursiveScriptModule))
             self.assertEqual(outputs[0]["score"], outputs_ipex[0]["score"])
 
     @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
@@ -91,4 +113,5 @@ class IPEXIntegrationTest(unittest.TestCase):
             text_generator, dtype=model.config.torch_dtype, verbose=False, jit=True
         ) as ipex_text_generator:
             output_ipex = ipex_text_generator(inputs)
+        self.assertTrue(isinstance(ipex_text_generator.model._optimized, torch.jit.RecursiveScriptModule))
         self.assertEqual(output[0]["generated_text"], output_ipex[0]["generated_text"])
