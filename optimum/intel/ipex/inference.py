@@ -46,8 +46,8 @@ def prepare_jit_inputs(model: PreTrainedModel, task: str):
     """
     Prepare tuple inputs for jit trace model
     """
-    task = _TASK_ALIASES[task]
-    if hasattr(model.config, "use_cache") and model.config.use_cache:
+    task = _TASK_ALIASES.get(task, task)
+    if "generation" in task and hasattr(model.config, "use_cache") and model.config.use_cache:
         task += "-with-past"
     onnx_config_class = TasksManager.get_exporter_config_constructor(
         exporter="onnx",
