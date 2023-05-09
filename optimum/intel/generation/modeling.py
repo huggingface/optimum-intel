@@ -149,10 +149,12 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
             inputs["past_key_values"] = past_key_values
         outputs = self.model(**inputs)
 
-        if self.use_cache:
-            outputs = CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1])
+        if isinstance(outputs, tuple):
+            outputs = CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
         else:
-            outputs = CausalLMOutputWithPast(logits=outputs["logits"])
+            outputs = CausalLMOutputWithPast(
+                logits=outputs["logits"], past_key_values=outputs["past_key_values"] if self.use_cache else None
+            )
 
         return outputs
 
