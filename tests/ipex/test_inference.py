@@ -28,7 +28,6 @@ from transformers import (
 )
 
 from optimum.intel import inference_mode as ipex_inference_mode
-
 from optimum.intel.generation.modeling import TSModelForCausalLM
 
 

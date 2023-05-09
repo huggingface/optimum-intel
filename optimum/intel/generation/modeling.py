@@ -29,9 +29,8 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
-from ..utils.import_utils import is_torch_version, is_transformers_version
-
 from ..utils.constant import _TASK_ALIASES
+from ..utils.import_utils import is_torch_version, is_transformers_version
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -47,7 +46,6 @@ def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = Fals
     task = _TASK_ALIASES.get(task, task)
     signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
     onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-    # import pdb; pdb.set_trace()
     onnx_config = onnx_config_class(model.config)
     if task == "text-generation" and use_cache:
         onnx_config = onnx_config_class(model.config, use_past=True)
@@ -151,7 +149,12 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
             inputs["past_key_values"] = past_key_values
         outputs = self.model(**inputs)
 
-        return CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
+        if self.use_cache:
+            outputs = CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1])
+        else:
+            outputs = CausalLMOutputWithPast(logits=outputs["logits"])
+
+        return outputs
 
     @classmethod
     def _from_pretrained(

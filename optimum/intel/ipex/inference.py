@@ -113,7 +113,10 @@ class inference_mode:
                                 if self._jit:
                                     try:
                                         use_cache = False
-                                        if hasattr(self._original.config, "use_cache") and self._original.config.use_cache:
+                                        if (
+                                            hasattr(self._original.config, "use_cache")
+                                            and self._original.config.use_cache
+                                        ):
                                             use_cache = True
                                         model = jit_trace(
                                             model=model,
