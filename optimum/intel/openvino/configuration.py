@@ -59,7 +59,7 @@ class OVConfig(BaseConfig):
     def add_input_info(self, model_inputs: Dict):
         self.input_info = [
             {
-                "sample_size": list(value.shape),
+                "sample_size": [1] + list(value.shape[1:]),
                 "type": "long" if value.dtype is torch.int64 else "float",
                 "keyword": name,
             }
