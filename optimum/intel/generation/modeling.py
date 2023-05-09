@@ -31,6 +31,8 @@ from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_torch_version, is_transformers_version
 
+from ..utils.constant import _TASK_ALIASES
+
 
 if is_transformers_version("<", "4.25.0"):
     from transformers.generation_utils import GenerationMixin
@@ -41,22 +43,26 @@ else:
 logger = logging.getLogger(__name__)
 
 
-def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = True):
+def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = False):
+    task = _TASK_ALIASES.get(task, task)
     signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
     onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-    onnx_config = onnx_config_class(model.config, use_past=use_cache)
+    # import pdb; pdb.set_trace()
+    onnx_config = onnx_config_class(model.config)
+    if task == "text-generation" and use_cache:
+        onnx_config = onnx_config_class(model.config, use_past=True)
     dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
     model_inputs = {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
     return model_inputs
 
 
-def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = True):
-    model.config.return_dict = False
+def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     model_inputs = prepare_jit_inputs(model, task, use_cache)
-    if use_cache:
-        traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()))
+    if "past_key_values" in model_inputs.keys():
+        model.config.return_dict = False
+        traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()), strict=False)
     else:
-        traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs)
+        traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs, strict=False)
     traced_model = torch.jit.freeze(traced_model.eval())
     traced_model(**model_inputs)
     traced_model(**model_inputs)

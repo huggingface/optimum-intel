@@ -112,16 +112,19 @@ class inference_mode:
                             with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)), torch.no_grad():
                                 if self._jit:
                                     try:
+                                        use_cache = False
+                                        if hasattr(self._original.config, "use_cache") and self._original.config.use_cache:
+                                            use_cache = True
                                         model = jit_trace(
                                             model=model,
                                             task=self._model.task,
-                                            use_cache=self._original.config.use_cache,
+                                            use_cache=use_cache,
                                         )
                                         if self._model.task == "text-generation":
                                             model = TSModelForCausalLM(
                                                 model=model,
                                                 config=self._original.config,
-                                                use_cache=self._original.config.use_cache,
+                                                use_cache=use_cache,
                                             )
                                     except Exception as e:
                                         logger.warning(f"failed to use PyTorch jit mode due to: {e}.")
