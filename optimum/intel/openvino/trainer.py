@@ -168,7 +168,8 @@ class OVTrainer(Trainer):
             model_inputs = next(iter(train_dataloader))
             for label_name in self.label_names:
                 model_inputs.pop(label_name)
-            self.ov_config.add_input_info(model_inputs)
+            force_single_batch = self._should_apply_pruning_transform()
+            self.ov_config.add_input_info(model_inputs, force_single_batch)
             nncf_config = NNCFConfig.from_dict(self.ov_config.__dict__)
             nncf_config.register_extra_structs(
                 [
