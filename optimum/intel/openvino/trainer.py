@@ -168,7 +168,7 @@ class OVTrainer(Trainer):
             model_inputs = next(iter(train_dataloader))
             for label_name in self.label_names:
                 model_inputs.pop(label_name)
-            force_batch_one = self._should_apply_pruning_transform()
+            force_batch_one = self._is_pruning_enabled()
             self.ov_config.add_input_info(model_inputs, force_batch_one)
             nncf_config = NNCFConfig.from_dict(self.ov_config.__dict__)
             nncf_config.register_extra_structs(
@@ -767,3 +767,12 @@ class OVTrainer(Trainer):
         if self.task is None:
             raise ValueError("The model task defining the model topology needs to be specified for the ONNX export.")
         self.task = _TASK_ALIASES.get(self.task, self.task)
+
+    def _is_pruning_enabled(compression: Union[Dict, List, None]):
+        if isinstance(compression, dict) and compression["algorithm"] == "movement_pruning":
+            return True
+        if isinstance(compression, list):
+            for algo_config in compression:
+                if algo_config["algorithm"] == "movement_pruning":
+                    return True
+        return False
