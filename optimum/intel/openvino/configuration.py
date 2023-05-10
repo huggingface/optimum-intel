@@ -56,10 +56,10 @@ class OVConfig(BaseConfig):
         self._enable_standard_onnx_export_option()
         self.optimum_version = kwargs.pop("optimum_version", None)
 
-    def add_input_info(self, model_inputs: Dict, force_single_batch: bool = False):
+    def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
         self.input_info = [
             {
-                "sample_size": [1] + list(value.shape[1:] if force_single_batch else value.shape),
+                "sample_size": [1] + list(value.shape[1:] if force_batch_one else value.shape),
                 "type": "long" if value.dtype is torch.int64 else "float",
                 "keyword": name,
             }
