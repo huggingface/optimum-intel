@@ -194,10 +194,7 @@ class OVTrainer(Trainer):
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
             # Inspect model forward signature to keep only the arguments it accepts.
-            if isinstance(self.model, NNCFNetwork):
-                signature = inspect.signature(self.model.get_nncf_wrapped_model().forward)
-            else:
-                signature = inspect.signature(self.model.forward)
+            signature = inspect.signature(self.model.forward)
             self._signature_columns = list(signature.parameters.keys())
             # Labels may be named label or label_ids, the default data collator handles that.
             self._signature_columns += list(set(["label", "label_ids"] + self.label_names))
@@ -655,8 +652,6 @@ class OVTrainer(Trainer):
 
         if not isinstance(self.model, PreTrainedModel):
             unwrapped_model = unwrap_model(self.model)
-            if isinstance(unwrapped_model, NNCFNetwork):
-                unwrapped_model = unwrapped_model.get_nncf_wrapped_model()
             is_pretrained_model = isinstance(unwrapped_model, PreTrainedModel)
             if state_dict is None:
                 state_dict = self.model.state_dict()
