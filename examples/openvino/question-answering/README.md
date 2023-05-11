@@ -47,7 +47,7 @@ python run_qa.py \
 ```
 
 ### Joint Pruning, Quantization and Distillation (JPQD) for BERT on SQuAD1.0
-`OVTrainer` also provides an advanced optimization workflow through the NNCF when Transformer model can be structurally pruned along with 8-bit quantization and distillation. Below is an example which demonstrates how to jointly prune, quantize BERT-base for SQuAD 1.0 using NNCF config `--nncf_compression_config` and distill from BERT-large teacher. This example closely resembles the movement sparsification work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf). This example takes about 12 hours with a single V100 GPU and ~40% of the weights of the Transformer blocks were pruned.
+`OVTrainer` also provides an advanced optimization workflow through the NNCF when Transformer model can be structurally pruned along with 8-bit quantization and distillation. Below is an example which demonstrates how to jointly prune, quantize BERT-base for SQuAD 1.0 using NNCF config `--nncf_compression_config` and distill from BERT-large teacher. This example closely resembles the movement sparsification work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf). This example takes about 12 hours with a single V100 GPU and ~40% of the weights of the Transformer blocks were pruned. For launching script on multiple GPU specify `--nproc-per-node=<number of GPU>`.
 
 More on how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
@@ -57,7 +57,7 @@ To run the JPQD example, please install optimum-intel from source. This command 
 ```
 
 ```bash
-python run_qa.py \
+torchrun --nproc-per-node=1 run_qa.py \
     --model_name_or_path bert-base-uncased \
     --dataset_name squad \
     --teacher_model_name_or_path bert-large-uncased-whole-word-masking-finetuned-squad \

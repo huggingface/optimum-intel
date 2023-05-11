@@ -48,7 +48,7 @@ On a single V100 GPU, this example takes about 1 minute and yields a quantized m
 `OVTrainer` also provides advanced optimization workflow via NNCF to structurally prune, quantize and distill. Following is an example of joint pruning, quantization and distillation on Swin-base model for food101 dataset. To enable JPQD optimization, use an alternative configuration specified with `--nncf_compression_config`. For more details on how to configure the pruning algorithm, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
 ```bash
-python run_image_classification.py \
+torchrun --nproc-per-node=1 run_image_classification.py \
     --model_name_or_path microsoft/swin-base-patch4-window7-224 \
     --teacher_model_name_or_path skylord/swin-finetuned-food101 \
     --distillation_weight 0.9 \
@@ -75,4 +75,4 @@ python run_image_classification.py \
     --nncf_compression_config configs/swin-base-jpqd.json
 ```
 
-This example results in a quantized swin-base model with ~40% sparsity in its linear layers of the transformer blocks, giving 90.7% accuracy on food101 and taking about 12.5 hours on a single V100 GPU.
+This example results in a quantized swin-base model with ~40% sparsity in its linear layers of the transformer blocks, giving 90.7% accuracy on food101 and taking about 12.5 hours on a single V100 GPU. For launching script on multiple GPU specify `--nproc-per-node=<number of GPU>`.
