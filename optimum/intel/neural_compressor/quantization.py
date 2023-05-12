@@ -165,16 +165,21 @@ class INCQuantizer(OptimumQuantizer):
         calibration_dataloader = None
 
         if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
+            # Since PyTorch fx trace does not really require an example_inputs, only need calibration_dataset or calibration_fn here.
+            if calibration_dataset is None and self.calibration_fn is None:
+                raise ValueError(
+                    "Post-training static quantization needs a calibration dataset or a calibration_function."
+                )
             if calibration_dataset is None:
-                raise ValueError("Post-training static quantization needs a calibration dataset.")
-
-            quantization_config.calibration_sampling_size = len(calibration_dataset)
-            calibration_dataloader = self._get_calibration_dataloader(
-                calibration_dataset=calibration_dataset,
-                batch_size=batch_size,
-                remove_unused_columns=remove_unused_columns,
-                data_collator=data_collator,
-            )
+                calibration_dataloader = None
+            else:
+                quantization_config.calibration_sampling_size = len(calibration_dataset)
+                calibration_dataloader = self._get_calibration_dataloader(
+                    calibration_dataset=calibration_dataset,
+                    batch_size=batch_size,
+                    remove_unused_columns=remove_unused_columns,
+                    data_collator=data_collator,
+                )
 
         if isinstance(self._original_model.config, PretrainedConfig):
             self._original_model.config.backend = quantization_config.backend
@@ -193,7 +198,10 @@ class INCQuantizer(OptimumQuantizer):
                 " accuracy tolerance has been found. Either the tolerance or the number of trials need to be increased."
             )
         if isinstance(self._original_model.config, PretrainedConfig):
+            original_dtype = self._original_model.config.torch_dtype
+            self._original_model.config.torch_dtype = "int8"
             self._original_model.config.save_pretrained(save_directory)
+            self._original_model.config.torch_dtype = original_dtype
 
         self._quantized_model = compressed_model._model
 
