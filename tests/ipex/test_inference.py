@@ -115,4 +115,5 @@ class IPEXIntegrationTest(unittest.TestCase):
         ) as ipex_text_generator:
             output_ipex = ipex_text_generator(inputs)
         self.assertTrue(isinstance(ipex_text_generator.model._optimized, TSModelForCausalLM))
+        self.assertTrue(isinstance(ipex_text_generator.model._optimized.model, torch.jit.RecursiveScriptModule))
         self.assertEqual(output[0]["generated_text"], output_ipex[0]["generated_text"])

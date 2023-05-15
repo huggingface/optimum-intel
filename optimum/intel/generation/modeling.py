@@ -44,23 +44,43 @@ logger = logging.getLogger(__name__)
 
 def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = False):
     task = _TASK_ALIASES.get(task, task)
-    signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
+    signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.__call__)
     onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
     onnx_config = onnx_config_class(model.config)
     if task == "text-generation" and use_cache:
         onnx_config = onnx_config_class(model.config, use_past=True)
     dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
     model_inputs = {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
+    if task == "text-generation" and use_cache:
+        # WA jit.trace issue of model like llama in https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L464, or else, generation output will be incorrect
+        pkv = []
+        for i in range(len(model_inputs["past_key_values"])):
+            pkv.append([])
+            for j in range(len(model_inputs["past_key_values"][0])):
+                pkv[i].append(model_inputs["past_key_values"][i][j].to(model.dtype))
+            pkv[i] = tuple(pkv[i])
+        model_inputs["past_key_values"] = tuple(pkv)
+        i = model_inputs["input_ids"]
+        a = model_inputs["attention_mask"]
+        model_inputs["input_ids"] = torch.cat([torch.zeros(i.shape[0], 1), i], -1).to(i.dtype)
+        model_inputs["attention_mask"] = torch.cat([torch.zeros(a.shape[0], 1), a], -1).to(a.dtype)
     return model_inputs
 
 
 def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     model_inputs = prepare_jit_inputs(model, task, use_cache)
+    torch._C._jit_set_texpr_fuser_enabled(False)
     if "past_key_values" in model_inputs.keys():
         model.config.return_dict = False
-        traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()), strict=False)
+        if is_torch_version(">", "2.0.1"):
+            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs, strict=False)
+        else:
+            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()), strict=False)
     else:
-        traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs, strict=False)
+        if is_torch_version(">=", "2.0.0"):
+            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs, strict=False)
+        else:
+            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()), strict=False)
     traced_model = torch.jit.freeze(traced_model.eval())
     traced_model(**model_inputs)
     traced_model(**model_inputs)
@@ -90,6 +110,7 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.model.to(self._device)
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
+        self.model_dtype = kwargs.get("model_dtype", None)
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
@@ -134,6 +155,8 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
                 if self.config.model_type != "bloom":
                     new_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
                     empty_tensor = torch.empty(size=new_shape)
+                    if self.model_dtype is not None:
+                        empty_tensor = empty_tensor.to(self.model_dtype)
                     past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
                     pkv = tuple(empty_tensor for _ in range(nb_pkv))
                 else:
@@ -143,7 +166,10 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
                             new_shape = [input_ids.shape[0] * num_attention_heads, d_k, 0]
                         else:
                             new_shape = [input_ids.shape[0] * num_attention_heads, 0, d_k]
-                        pkv = pkv + (torch.empty(size=new_shape),)
+                        empty_tensor = torch.empty(size=new_shape)
+                        if self.model_dtype is not None:
+                            empty_tensor = empty_tensor.to(self.model_dtype)
+                        pkv = pkv + (empty_tensor,)
                 past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
 
             inputs["past_key_values"] = past_key_values

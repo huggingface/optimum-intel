@@ -66,8 +66,8 @@ class inference_mode:
         self,
         model: Union[nn.Module, Pipeline],
         dtype: torch.dtype = torch.float32,
-        verbose: bool = False,
         jit: bool = False,
+        **kwargs,
     ):
         """
         Args:
@@ -78,14 +78,13 @@ class inference_mode:
                 Acceptable type are `torch.float32` (default) and `torch.bfloat16`.
                 Please note `torch.bfloat16` requires `avx512_bf16` instructions set as present on
                 4th Generation of Intel Xeon Scalable CPUs (Sapphire Rapids).
-            verbose (`boolean = False`, *optional*):
-                Enable IPEx verbose output to see the kernels and optimizations applied.
+            jit (`boolean = False`, *optional*):
+                Enable jit to accelerate inference speed
         """
         if not is_ipex_available():
             raise ImportError(IPEX_NOT_AVAILABLE_ERROR_MSG)
 
         self._model = model
-        self._verbose = ipex.utils.verbose.VERBOSE_ON if verbose else ipex.utils.verbose.VERBOSE_OFF
         self._dtype = dtype
         self._graph_mode = False  # Let's keep for future use when it doesn't hang anymore
         self._original = None
@@ -95,58 +94,59 @@ class inference_mode:
         if self._model.framework == "pt":
             with torch.inference_mode():
                 try:
-                    with ipex.verbose(self._verbose):
-                        ipex.enable_onednn_fusion(True)
-                        if isinstance(self._model, Pipeline):
-                            self._original = self._model.model
+                    ipex.enable_onednn_fusion(True)
+                    if isinstance(self._model, Pipeline):
+                        self._original = self._model.model
 
-                            model = ipex.optimize(
-                                self._model.model,
-                                dtype=self._dtype,
-                                graph_mode=self._graph_mode,
-                                level="O1",
-                                auto_kernel_selection=True,
-                            )
+                        model = ipex.optimize(
+                            self._model.model,
+                            dtype=self._dtype,
+                            graph_mode=self._graph_mode,
+                            level="O1",
+                            auto_kernel_selection=True,
+                        )
 
-                            # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
-                            with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)), torch.no_grad():
-                                if self._jit:
-                                    try:
-                                        use_cache = False
-                                        if (
-                                            hasattr(self._original.config, "use_cache")
-                                            and self._original.config.use_cache
-                                        ):
-                                            use_cache = True
-                                        model = jit_trace(
+                        # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
+                        with torch.cpu.amp.autocast(
+                            enabled=(self._dtype == torch.bfloat16 and self._original.dtype != torch.bfloat16)
+                        ), torch.no_grad():
+                            if self._jit:
+                                try:
+                                    use_cache = False
+                                    if hasattr(self._original.config, "use_cache") and self._original.config.use_cache:
+                                        use_cache = True
+                                    model = jit_trace(
+                                        model=model,
+                                        task=self._model.task,
+                                        use_cache=use_cache,
+                                    )
+                                    if self._model.task == "text-generation":
+                                        model = TSModelForCausalLM(
                                             model=model,
-                                            task=self._model.task,
+                                            config=self._original.config,
                                             use_cache=use_cache,
+                                            model_dtype=self._original.dtype,
                                         )
-                                        if self._model.task == "text-generation":
-                                            model = TSModelForCausalLM(
-                                                model=model,
-                                                config=self._original.config,
-                                                use_cache=use_cache,
-                                            )
-                                    except Exception as e:
-                                        logger.warning(f"failed to use PyTorch jit mode due to: {e}.")
+                                except Exception as e:
+                                    logger.warning(f"failed to use PyTorch jit mode due to: {e}.")
                                 # Patching model with the new one
-                                self._model.model = _ModelGenerationWrapper(model, self._original)
-                                return self._model
-                        else:
-                            self._original = self._model
-                            model = ipex.optimize(
-                                self._model,
-                                dtype=self._dtype,
-                                graph_mode=self._graph_mode,
-                                level="O1",
-                                auto_kernel_selection=True,
-                            )
+                            self._model.model = _ModelGenerationWrapper(model, self._original)
+                            return self._model
+                    else:
+                        self._original = self._model
+                        model = ipex.optimize(
+                            self._model,
+                            dtype=self._dtype,
+                            graph_mode=self._graph_mode,
+                            level="O1",
+                            auto_kernel_selection=True,
+                        )
 
-                            # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
-                            with torch.cpu.amp.autocast(enabled=(self._dtype == torch.bfloat16)):
-                                return model
+                        # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
+                        with torch.cpu.amp.autocast(
+                            enabled=(self._dtype == torch.bfloat16 and self._original.dtype != torch.bfloat16)
+                        ):
+                            return model
                 except RuntimeError:
                     return self._model
         else:
