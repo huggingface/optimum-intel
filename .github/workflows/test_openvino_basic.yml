@@ -43,6 +43,7 @@ jobs:
         # optimum or transformers to a specific version
         # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
         pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+        pip install accelerate
         pip install .[tests] openvino onnx onnxruntime ${{ matrix.optimum}} ${{ matrix.transformers }}
 
     - name: Pip freeze        
