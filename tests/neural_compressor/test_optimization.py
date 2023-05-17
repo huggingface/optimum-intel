@@ -186,9 +186,11 @@ class QuantizationTest(unittest.TestCase):
         self.assertTrue(torch.equal(model_outputs.logits, loaded_model_outputs.logits))
         # self.assertTrue(torch.allclose(ort_outputs.logits, loaded_model_outputs.logits, atol=1e-4))
 
-    def test_ipex_static_quantization(self):
+    def test_ipex_static_quantization_with_smoothquant(self):
         model_name = "distilbert-base-uncased-finetuned-sst-2-english"
-        quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex")
+        quantization_config = PostTrainingQuantConfig(
+            approach="static", backend="ipex", recipes={"smooth_quant": True, "smooth_quant_args": {"alpha": 0.5}}
+        )
         model = AutoModelForSequenceClassification.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
