@@ -28,7 +28,7 @@ from typing import Iterable, Optional
 
 import numpy as np
 import requests
-import tomeov
+import tomesd
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
@@ -46,6 +46,7 @@ from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.layer_utils import CompressionParameter
 from openvino._offline_transformations import apply_moc_transformations, compress_quantize_weights_transformation
 from PIL import Image
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
 from torchvision import transforms
 from tqdm import tqdm
 
@@ -58,6 +59,8 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
+
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 random.seed(42)
 logger = get_logger(__name__)
@@ -82,7 +85,7 @@ def pokemon_preprocess_train(examples, train_transforms, tokenize_captions, imag
 
 
 def get_pil_from_url(url):
-    response = requests.get(url)
+    response = requests.get(url, verify=False, timeout=20)
     image = Image.open(BytesIO(response.content))
     return image.convert("RGB")
 
@@ -698,6 +701,7 @@ def get_nncf_config(pipeline, dataloader, args):
                     "{re}.*mul___[0-2]",
                     "{re}.*silu_[0-2]",
                 ],
+                "overflow_fix": "disable",
                 "export_to_onnx_standard_ops": True,
             },
         ],
@@ -730,6 +734,7 @@ def get_nncf_config(pipeline, dataloader, args):
                     "{re}.*mul___[0-2]",
                     "{re}.*silu_[0-2]",
                 ],
+                "overflow_fix": "disable",
                 "export_to_onnx_standard_ops": True,
             },
         ],
@@ -802,7 +807,7 @@ def main():
 
     if args.tome_ratio > 0:
         logger.info(f"Using Token Merging with ratio: {args.tome_ratio}")
-        tomeov.apply_patch(
+        tomesd.apply_patch(
             pipeline, ratio=args.tome_ratio, use_rand=False
         )  # Can also use pipe.unet in place of pipe here
 
@@ -958,10 +963,21 @@ def main():
         for p in unet.parameters():
             if not isinstance(p, CompressionParameter):
                 p.requires_grad = False
+                
+    # exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n \
+    #         or 'scale' in n or 'input_low' in n or 'input_range' in n 
+    # include = lambda n, p: not exclude(n, p)
+
+    # named_parameters = list(unet.named_parameters())
+    # gain_or_bias_params = [p for n, p in named_parameters if exclude(n, p) and p.requires_grad]
+    # rest_params = [p for n, p in named_parameters if include(n, p) and p.requires_grad]
+    # for p in rest_params:
+    #     p.requires_grad = False
 
     # Reinit
     optimizer = optimizer_cls(
         filter(lambda p: p.requires_grad, unet.parameters()),
+        #gain_or_bias_params,
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
