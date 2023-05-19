@@ -149,7 +149,12 @@ class OVTrainingExampleTest(unittest.TestCase):
 
         self.env[CUDA_VISIBLE_DEVICES] = str(self.available_cuda_device_ids[0])
         with tempfile.TemporaryDirectory() as output_dir:
-            args = [sys.executable, desc.filename, *desc.get_args_with_output_dir(output_dir)]
+            args = [
+                "torchrun",
+                "--nproc_per_node=1",
+                desc.filename,
+                *desc.get_args_with_output_dir(output_dir)
+            ]
             proc = subprocess.Popen(
                 args=args,
                 cwd=desc.cwd,
@@ -184,9 +189,7 @@ class OVTrainingExampleTest(unittest.TestCase):
         self.env[CUDA_VISIBLE_DEVICES] = ",".join(map(str, self.available_cuda_device_ids[:2]))
         with tempfile.TemporaryDirectory() as output_dir:
             args = [
-                sys.executable,
-                "-m",
-                "torch.distributed.run",
+                "torchrun",
                 "--rdzv_backend=c10d",
                 "--rdzv_endpoint=localhost:0",
                 "--nnodes=1",
