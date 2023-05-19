@@ -581,10 +581,6 @@ class INCModelForQuestionAnswering(INCModel):
     TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
 
 
-class INCModelForSequenceClassification(INCModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
-
-
 class INCModelForTokenClassification(INCModel):
     TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
 
