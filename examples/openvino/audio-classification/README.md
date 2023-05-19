@@ -92,4 +92,4 @@ torchrun --nproc-per-node=1 run_audio_classification.py \
     --seed 0
 ```
 
-This script should take about 3 hours on a single V100 GPU and produce a quantized Wav2Vec2-base model with ~80% structured sparsity in its linear layers. The model accuracy should converge to about 97.5%. For launching script on multiple GPU specify `--nproc-per-node=<number of GPU>`.
+This script should take about 3 hours on a single V100 GPU and produce a quantized Wav2Vec2-base model with ~80% structured sparsity in its linear layers. The model accuracy should converge to about 97.5%. For launching the script on multiple GPUs specify `--nproc-per-node=<number of GPU>`. Note, that different batch size and other hyperparameters might be required to achieve the same results as on a single GPU.

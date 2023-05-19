@@ -75,4 +75,4 @@ torchrun --nproc-per-node=1 run_image_classification.py \
     --nncf_compression_config configs/swin-base-jpqd.json
 ```
 
-This example results in a quantized swin-base model with ~40% sparsity in its linear layers of the transformer blocks, giving 90.7% accuracy on food101 and taking about 12.5 hours on a single V100 GPU. For launching script on multiple GPU specify `--nproc-per-node=<number of GPU>`.
+This example results in a quantized swin-base model with ~40% sparsity in its linear layers of the transformer blocks, giving 90.7% accuracy on food101 and taking about 12.5 hours on a single V100 GPU. For launching the script on multiple GPUs specify `--nproc-per-node=<number of GPU>`. Note, that different batch size and other hyperparameters might be required to achieve the same results as on a single GPU.

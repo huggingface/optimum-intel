@@ -83,4 +83,4 @@ torchrun --nproc-per-node=1 run_glue.py \
 ```
 
 On a single V100 GPU, this script should run in ~1.8 hours, and yield accuracy of **92.2%** with ~40% of the weights of the Transformer blocks pruned.
-For launching script on multiple GPU specify `--nproc-per-node=<number of GPU>`.
+For launching the script on multiple GPUs specify `--nproc-per-node=<number of GPU>`. Note, that different batch size and other hyperparameters might be required to achieve the same results as on a single GPU.
