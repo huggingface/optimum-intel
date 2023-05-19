@@ -157,10 +157,10 @@ class INCTrainer(Trainer):
             self.model = self._compression_manager.model.model
             self.model_wrapped = self.model
 
-        for callback in self._compression_manager.callbacks.callbacks_list:
-            if isinstance(callback, DistillationCallbacks):
-                self.distillation_callback = callback
-                break
+            for callback in self._compression_manager.callbacks.callbacks_list:
+                if isinstance(callback, DistillationCallbacks):
+                    self.distillation_callback = callback
+                    break
 
         self.inc_config = INCConfig(
             quantization=self.quantization_config,
