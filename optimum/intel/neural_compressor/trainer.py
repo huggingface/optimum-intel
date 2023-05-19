@@ -62,6 +62,7 @@ from transformers.training_args import TrainingArguments
 from transformers.utils import is_apex_available, is_sagemaker_mp_enabled, logging
 
 from optimum.exporters import TasksManager
+from optimum.intel.neural_compressor.modeling_base import INCBaseModel
 
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 from ..utils.import_utils import is_neural_compressor_version
@@ -141,7 +142,13 @@ class INCTrainer(Trainer):
         self.deepspeed = None
 
         # Attach dtype and architecture to the config
-        self.dtype = "int8" if quantization_config is not None else str(get_parameter_dtype(self.model)).split(".")[1]
+        if quantization_config is not None:
+            self.dtype = "int8"
+        else:
+            if isinstance(self.model, INCBaseModel):
+                self.dtype = str(get_parameter_dtype(self.model.model)).split(".")[1]
+            else:
+                self.dtype = str(get_parameter_dtype(self.model)).split(".")[1]
         self.model.config.torch_dtype = self.dtype
         self.model.config.framework = "pytorch_fx"
         self.model.config.backend = "default"
