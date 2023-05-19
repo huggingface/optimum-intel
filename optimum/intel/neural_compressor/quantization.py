@@ -581,6 +581,10 @@ class INCModelForQuestionAnswering(INCModel):
     TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
 
 
+class INCModelForSequenceClassification(INCModel):
+    TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
+
+
 class INCModelForTokenClassification(INCModel):
     TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
 
@@ -591,10 +595,6 @@ class INCModelForMultipleChoice(INCModel):
 
 class INCModelForSeq2SeqLM(INCModel):
     TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
-
-
-class INCModelForCausalLM(INCModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
 
 
 class INCModelForMaskedLM(INCModel):
