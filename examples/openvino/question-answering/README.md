@@ -51,12 +51,6 @@ python run_qa.py \
 
 More on how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
-To run the JPQD example, please install optimum-intel from source. This command will install or upgrade optimum-intel and all necessary dependencies:
-
-```python
-python -m pip install --upgrade "git+https://github.com/huggingface/optimum-intel.git#egg=optimum-intel[openvino, nncf]"
-```
-
 ```bash
 torchrun --nproc-per-node=1 run_qa.py \
     --model_name_or_path bert-base-uncased \
