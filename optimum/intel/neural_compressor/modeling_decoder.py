@@ -13,12 +13,11 @@
 #  limitations under the License.
 
 import logging
-import torch
-from intel_extension_for_transformers.backends.neural_engine.compile.graph.graph import Graph
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
 
+import torch
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -26,7 +25,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_transformers_version
-from .modeling_base import _TOKENIZER_FOR_DOC, INCBaseModel, INPUTS_DOCSTRING, MODEL_START_DOCSTRING
+from .modeling_base import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, INCBaseModel
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -153,13 +152,16 @@ class INCModelForCausalLM(INCBaseDecoderModel, GenerationMixin):
             inputs["past_key_values"] = past_key_values
         if self.backend == "neural_engine":
             past_key_values = [past_key_values[i][j] for i in range(num_layers) for j in range(nb_pkv)]
-            predictions = self.model.inference([input_ids] + past_key_values +[attention_mask])
+            predictions = self.model.inference([input_ids] + past_key_values + [attention_mask])
             for key in predictions:
                 predictions[key] = torch.from_numpy(predictions[key])
 
             torchout = CausalLMOutputWithPast()
             torchout.logits = list(predictions.values())[0]
-            torchout.past_key_values = [(list(predictions.values())[2*i+1], list(predictions.values())[2*i+2]) for i in range(num_layers)]
+            torchout.past_key_values = [
+                (list(predictions.values())[2 * i + 1], list(predictions.values())[2 * i + 2])
+                for i in range(num_layers)
+            ]
             outputs = torchout
             if first_token:
                 input_bs = input_ids.size()[0]
@@ -175,11 +177,11 @@ class INCModelForCausalLM(INCBaseDecoderModel, GenerationMixin):
                         key = key.view(key.size(1) * key.size(0), key.size(2), key.size(3))
                     if value_dim == 3:
                         value = value.view(value.size(1) * value.size(0), value.size(2), value.size(3))
-                    past_key_values.append(tuple([key, value]))
+                    past_key_values.append((key, value))
                 outputs.past_key_values = tuple(past_key_values)
         else:
             outputs = self.model(**inputs)
-        if isinstance(outputs, list):
+        if isinstance(outputs, list) or isinstance(outputs, tuple):
             return CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
         elif isinstance(outputs, CausalLMOutputWithPast):
             return outputs

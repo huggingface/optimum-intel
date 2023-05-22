@@ -14,6 +14,7 @@
 
 from ..utils.import_utils import is_diffusers_available
 from .configuration import INCConfig
+from .modeling_decoder import INCModelForCausalLM
 from .quantization import (
     INCModel,
     INCModelForMaskedLM,
@@ -26,7 +27,6 @@ from .quantization import (
     INCQuantizationMode,
     INCQuantizer,
 )
-from .modeling_decoder import INCModelForCausalLM
 from .trainer import INCTrainer
 from .trainer_seq2seq import INCSeq2SeqTrainer
 

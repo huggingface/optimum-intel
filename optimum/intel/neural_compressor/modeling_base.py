@@ -12,36 +12,29 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import logging
 import inspect
+import logging
 import os
-import torch
 from pathlib import Path
-from intel_extension_for_transformers.backends.neural_engine.compile import compile
 from tempfile import TemporaryDirectory
 from typing import Optional, Union
 
+import torch
 from huggingface_hub import hf_hub_download
+from intel_extension_for_transformers.backends.neural_engine.compile import compile
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.utils.pytorch import load
-from transformers import (
-    AutoConfig,
-    AutoModel,
-    PretrainedConfig
-)
+from transformers import AutoConfig, AutoModel, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.modeling_utils import no_init_weights
 from transformers.utils.generic import ContextManagers
 
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
-from optimum.utils import NormalizedConfigManager
 
-from ..utils.import_utils import is_torch_version, is_transformers_version, _torch_version
+from ..utils.import_utils import _torch_version, is_torch_version, is_transformers_version
 from .configuration import INCConfig
-from .utils import WEIGHTS_NAME, ENGINE_MODEL_NAME
-
-
+from .utils import ENGINE_MODEL_CONFIG, ENGINE_MODEL_NAME, WEIGHTS_NAME
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -70,12 +63,10 @@ MODEL_START_DOCSTRING = r"""
     This model check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving)
     Parameters:
-        model (`PyTorch model`): is the main class used to run OpenVINO Runtime inference.
+        model (`PyTorch model`): is the main class used to run inference.
         config (`transformers.PretrainedConfig`): [PretrainedConfig](https://huggingface.co/docs/transformers/main_classes/configuration#transformers.PretrainedConfig)
             is the Model configuration class with all the parameters of the model.
-            Initializing with a config file does not load the weights associated with the model, only the configuration.
-            Check out the [`~intel.openvino.modeling.OVBaseModel.from_pretrained`] method to load the model weights.
-        device (`str`, defaults to `"CPU"`):
+        device (`str`, defaults to `"cpu"`):
             The device type for which the model will be optimized for. The resulting compiled model will contains nodes specific to this device.
 """
 
@@ -104,6 +95,7 @@ IMAGE_INPUTS_DOCSTRING = r"""
             Pixel values can be obtained from encoded images using [`AutoFeatureExtractor`](https://huggingface.co/docs/transformers/autoclass_tutorial#autofeatureextractor).
 """
 
+
 @add_start_docstrings(
     """
     Base INCBaseModel class.
@@ -127,7 +119,6 @@ class INCBaseModel(OptimizedModel):
         self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        # self.model.to(self._device)
         self.backend = getattr(config, "backend", None)
 
         if is_transformers_version("<=", "4.25.1"):
@@ -147,7 +138,7 @@ class INCBaseModel(OptimizedModel):
         torch.jit.freeze(model.eval())
         return model
 
-    def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str]=WEIGHTS_NAME, **kwargs):
+    def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = WEIGHTS_NAME, **kwargs):
         if self.config.backend == "neural_engine":
             self.model.save(save_directory)
         elif self.config.torchscript:
@@ -155,7 +146,7 @@ class INCBaseModel(OptimizedModel):
         elif isinstance(self.model, IPEXModel):
             self.model._model.save(os.path.join(save_directory, file_name))
         elif isinstance(self.model, PyTorchModel):
-            state_dict =self.model._model.state_dict()
+            state_dict = self.model._model.state_dict()
 
             if hasattr(self.model, "q_config"):
                 state_dict["best_configure"] = self.model.q_config
@@ -208,7 +199,7 @@ class INCBaseModel(OptimizedModel):
         """
         backend = getattr(config, "backend", None)
         if backend == "ipex":
-            import intel_extension_for_pytorch
+            pass
 
         if config.torchscript or backend == "neural_engine":
             # Load the model from local directory
@@ -217,15 +208,35 @@ class INCBaseModel(OptimizedModel):
                 model_save_dir = model_id
             # Download the model from the hub
             else:
-                file_name = hf_hub_download(
-                    repo_id=model_id,
-                    filename=file_name,
-                    use_auth_token=use_auth_token,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
-                )
+                if backend == "neural_engine":
+                    file_name = hf_hub_download(
+                        repo_id=model_id,
+                        filename=ENGINE_MODEL_NAME,
+                        use_auth_token=use_auth_token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                    )
+                    hf_hub_download(
+                        repo_id=model_id,
+                        filename=ENGINE_MODEL_CONFIG,
+                        use_auth_token=use_auth_token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                    )
+                else:
+                    file_name = hf_hub_download(
+                        repo_id=model_id,
+                        filename=file_name,
+                        use_auth_token=use_auth_token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                    )
                 model_save_dir = Path(file_name).parent
             if backend == "neural_engine":
                 model = compile(model_save_dir)
@@ -236,6 +247,7 @@ class INCBaseModel(OptimizedModel):
                     config.torchscript = False
                     config.backend = "neural_engine"
                 except Exception as e:
+                    logger.warning(e)
                     logger.info("Compile model with neural engine failed! Inference with original model.")
                     model = cls.load_model(file_name)
         else:
@@ -253,15 +265,18 @@ class INCBaseModel(OptimizedModel):
                 model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
             else:
                 state_dict_path = kwargs.get("state_dict_path", None)
+                import copy
+
                 from transformers.models.auto.auto_factory import _get_model_class
                 from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
-                import copy
 
                 model_class = _get_model_class(config, cls.auto_model_class._model_mapping)
                 keys_to_ignore_on_load_unexpected = copy.deepcopy(
                     getattr(model_class, "_keys_to_ignore_on_load_unexpected", None)
                 )
-                keys_to_ignore_on_load_missing = copy.deepcopy(getattr(model_class, "_keys_to_ignore_on_load_missing", None))
+                keys_to_ignore_on_load_missing = copy.deepcopy(
+                    getattr(model_class, "_keys_to_ignore_on_load_missing", None)
+                )
                 # Avoid unnecessary warnings resulting from quantized model initialization
                 quantized_keys_to_ignore_on_load = [
                     r"zero_point",
@@ -325,7 +340,7 @@ class INCBaseModel(OptimizedModel):
                             msg = (
                                 f"Can't load config for '{model_id}'. Make sure that:\n\n"
                                 f"-'{model_id}' is a correct model identifier listed on 'https://huggingface.co/models'\n\n"
-                                f"-or '{model_id}' is a correct path to a directory containing a {q_model_name} file\n\n"
+                                f"-or '{model_id}' is a correct path to a directory containing a {file_name} file\n\n"
                             )
 
                             if revision is not None:
@@ -452,7 +467,9 @@ class INCBaseModel(OptimizedModel):
                 model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         try:
             model.config.return_dict = False
-            signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
+            signature = (
+                inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
+            )
             onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
             onnx_config = onnx_config_class(model.config, use_past=use_cache)
             dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
@@ -508,6 +525,6 @@ class INCBaseModel(OptimizedModel):
         self._device = device if isinstance(device, torch.device) else torch.device(device)
         self.model.to(self._device)
         return self
-    
+
     def eval(self):
-         self.model.eval()
+        self.model.eval()
