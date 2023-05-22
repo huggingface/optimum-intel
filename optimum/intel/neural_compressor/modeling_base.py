@@ -44,17 +44,6 @@ else:
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_DEVICES = {
-    "CPU",
-    "GPU",
-    "AUTO",
-    "AUTO:CPU,GPU",
-    "AUTO:GPU,CPU",
-    "MULTI",
-    "MULTI:CPU,GPU",
-    "MULTI:GPU,CPU",
-}
-
 
 _TOKENIZER_FOR_DOC = "AutoTokenizer"
 _FEATURE_EXTRACTOR_FOR_DOC = "AutoFeatureExtractor"
@@ -209,26 +198,26 @@ class INCBaseModel(OptimizedModel):
             # Download the model from the hub
             else:
                 if backend == "neural_engine":
-                    file_name = hf_hub_download(
-                        repo_id=model_id,
-                        filename=ENGINE_MODEL_NAME,
-                        use_auth_token=use_auth_token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                    )
-                    hf_hub_download(
-                        repo_id=model_id,
-                        filename=ENGINE_MODEL_CONFIG,
-                        use_auth_token=use_auth_token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                    )
+                    model_file_names = {"model": ENGINE_MODEL_NAME, "config": ENGINE_MODEL_CONFIG}
+                    try:
+                        for name, file_name in model_file_names.items():
+                            model_cache_path = hf_hub_download(
+                                repo_id=model_id,
+                                filename=file_name,
+                                use_auth_token=use_auth_token,
+                                revision=revision,
+                                cache_dir=cache_dir,
+                                force_download=force_download,
+                                local_files_only=local_files_only,
+                            )
+                            model_file_names[name] = model_cache_path
+                    except Exception:
+                        logger.warning(
+                            f"The file names {ENGINE_MODEL_NAME} or {ENGINE_MODEL_CONFIG} was not found! Please check it!"
+                        )
+                        raise Exception
                 else:
-                    file_name = hf_hub_download(
+                    model_cache_path = hf_hub_download(
                         repo_id=model_id,
                         filename=file_name,
                         use_auth_token=use_auth_token,
@@ -237,7 +226,7 @@ class INCBaseModel(OptimizedModel):
                         force_download=force_download,
                         local_files_only=local_files_only,
                     )
-                model_save_dir = Path(file_name).parent
+                model_save_dir = Path(model_cache_path).parent
             if backend == "neural_engine":
                 model = compile(model_save_dir)
                 config.backend = "neural_engine"
@@ -465,30 +454,23 @@ class INCBaseModel(OptimizedModel):
                     raise
             else:
                 model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        try:
-            model.config.return_dict = False
-            signature = (
-                inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
-            )
-            onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-            onnx_config = onnx_config_class(model.config, use_past=use_cache)
-            dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-            model_inputs = {
-                key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None
-            }
-            if use_cache:
-                traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()))
-            else:
-                traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs)
-            traced_model = torch.jit.freeze(traced_model.eval())
-            save_dir = TemporaryDirectory()
-            save_dir_path = Path(save_dir.name)
-            torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
-            config.torchscript = True
-        except Exception as e:
-            logger.warning(f"Unexpected {e=}, {type(e)=}")
-            logger.info("Can't trace the model, use original model now!")
-            save_dir_path = model_id
+        model.config.return_dict = False
+        signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
+        onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
+        onnx_config = onnx_config_class(model.config, use_past=use_cache)
+        dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+        model_inputs = {
+            key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None
+        }
+        if use_cache:
+            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()))
+        else:
+            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs)
+        traced_model = torch.jit.freeze(traced_model.eval())
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
+        torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
+        config.torchscript = True
 
         return cls._from_pretrained(
             model_id=save_dir_path,
