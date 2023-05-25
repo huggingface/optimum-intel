@@ -20,11 +20,11 @@ from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
 
 import torch
-from huggingface_hub import hf_hub_download
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
+from huggingface_hub import hf_hub_download
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
@@ -139,6 +139,8 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
+        if attention_mask is None:
+            attention_mask = torch.ones(input_ids.shape)
         inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
@@ -219,17 +221,6 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
             )
             model_save_dir = Path(model_cache_path).parent
             model = cls.load_model(model_cache_path)
-
-        # IPEX jit model need 2 iterations to convert model to int8 model
-        onnx_config_class = TasksManager.get_exporter_config_constructor(
-            model_type=config.model_type.replace("_", "-"),
-            exporter="onnx",
-            task=cls.export_feature,
-        )
-        onnx_config = onnx_config_class(config, use_past=use_cache)
-        model_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-        for i in range(2):
-            model(**model_inputs)
 
         return cls(
             model,
