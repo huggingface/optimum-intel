@@ -149,12 +149,7 @@ class OVTrainingExampleTest(unittest.TestCase):
 
         self.env[CUDA_VISIBLE_DEVICES] = str(self.available_cuda_device_ids[0])
         with tempfile.TemporaryDirectory() as output_dir:
-            args = [
-                "torchrun",
-                "--nproc_per_node=1",
-                desc.filename,
-                *desc.get_args_with_output_dir(output_dir)
-            ]
+            args = ["torchrun", "--nproc_per_node=1", desc.filename, *desc.get_args_with_output_dir(output_dir)]
             proc = subprocess.Popen(
                 args=args,
                 cwd=desc.cwd,
