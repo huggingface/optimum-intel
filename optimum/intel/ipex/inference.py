@@ -7,7 +7,7 @@ from transformers import add_start_docstrings
 from transformers.pipelines import Pipeline
 from transformers.utils import is_ipex_available
 
-from ..generation.modeling import TSModelForCausalLM, jit_trace
+from ..generation.modeling import TSModelForCausalLM, TSModelForSeq2SeqLM, jit_trace
 
 
 logger = logging.getLogger(__name__)
@@ -123,6 +123,16 @@ class inference_mode:
                                     if self._model.task == "text-generation":
                                         model = TSModelForCausalLM(
                                             model=model,
+                                            config=self._original.config,
+                                            use_cache=use_cache,
+                                            model_dtype=self._original.dtype,
+                                        )
+                                    elif self._model.task == "text2text-generation":
+                                        decoder, encoder, decoder_pkv = model
+                                        model = TSModelForSeq2SeqLM(
+                                            decoder=decoder,
+                                            encoder=encoder,
+                                            decoder_pkv=decoder_pkv,
                                             config=self._original.config,
                                             use_cache=use_cache,
                                             model_dtype=self._original.dtype,

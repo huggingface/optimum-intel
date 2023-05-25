@@ -23,12 +23,13 @@ from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
+    AutoModelForSeq2SeqLM,
     AutoTokenizer,
     pipeline,
 )
 
 from optimum.intel import inference_mode as ipex_inference_mode
-from optimum.intel.generation.modeling import TSModelForCausalLM
+from optimum.intel.generation.modeling import TSModelForCausalLM, TSModelForSeq2SeqLM
 
 
 MODEL_NAMES = {
@@ -40,6 +41,7 @@ MODEL_NAMES = {
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
+    "t5": "hf-internal-testing/tiny-random-t5",
 }
 
 _CLASSIFICATION_TASK_TO_AUTOMODELS = {
@@ -65,6 +67,10 @@ class IPEXIntegrationTest(unittest.TestCase):
         "bert",
         "distilbert",
         "roberta",
+    )
+
+    TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
+        "t5",
     )
 
     @parameterized.expand(QA_SUPPORTED_ARCHITECTURES)
@@ -116,4 +122,23 @@ class IPEXIntegrationTest(unittest.TestCase):
             output_ipex = ipex_text_generator(inputs)
         self.assertTrue(isinstance(ipex_text_generator.model._optimized, TSModelForCausalLM))
         self.assertTrue(isinstance(ipex_text_generator.model._optimized.model, torch.jit.RecursiveScriptModule))
+        self.assertEqual(output[0]["generated_text"], output_ipex[0]["generated_text"])
+
+    @parameterized.expand(TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
+    def test_text2text_generation_pipeline_inference(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_id, torch_dtype=torch.float32, return_dict=False)
+        model = model.eval()
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs = "DeepSpeed is a machine learning framework for deep neural networks and deep reinforcement learning. It is written in C++ and is available for Linux, Mac OS X,"
+        text_generator = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
+        with torch.inference_mode():
+            output = text_generator(inputs)
+        with ipex_inference_mode(
+            text_generator, dtype=model.config.torch_dtype, verbose=False, jit=True
+        ) as ipex_text_generator:
+            output_ipex = ipex_text_generator(inputs)
+        self.assertTrue(isinstance(ipex_text_generator.model._optimized, TSModelForSeq2SeqLM))
+        self.assertTrue(isinstance(ipex_text_generator.model._optimized.decoder, torch.jit.RecursiveScriptModule))
+        self.assertTrue(isinstance(ipex_text_generator.model._optimized.encoder, torch.jit.RecursiveScriptModule))
         self.assertEqual(output[0]["generated_text"], output_ipex[0]["generated_text"])
