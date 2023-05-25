@@ -18,11 +18,11 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Tuple, Union, Dict, Any
+from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
 from huggingface_hub import hf_hub_download
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel, AutoModelForSeq2SeqLM
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast, Seq2SeqLMOutput
 from transformers.utils import WEIGHTS_NAME
 
@@ -81,8 +81,10 @@ def prepare_jit_inputs(
         dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt", sequence_length=1)
         encoder_inputs = dummy_inputs.pop("input_ids", None).repeat_interleave(encoder_sequence_length, dim=-1)
         dummy_inputs["attention_mask"] = torch.ones_like(encoder_inputs, dtype=torch.int64)
-        encoder_outputs = torch.ones([encoder_inputs.shape[0], encoder_inputs.shape[1], model.config.d_model], dtype=model.dtype)
-        dummy_inputs["encoder_outputs"] = tuple([encoder_outputs])
+        encoder_outputs = torch.ones(
+            [encoder_inputs.shape[0], encoder_inputs.shape[1], model.config.d_model], dtype=model.dtype
+        )
+        dummy_inputs["encoder_outputs"] = (encoder_outputs,)
         if use_cache:
             pkv = []
             for i in range(len(dummy_inputs["past_key_values"])):
@@ -105,9 +107,13 @@ def prepare_jit_inputs(
 
     dummy_inputs = {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
     if dummy_inputs_2:
-        dummy_inputs_2 = {key: dummy_inputs_2[key] for key in signature.parameters if dummy_inputs_2.get(key, None) is not None}
+        dummy_inputs_2 = {
+            key: dummy_inputs_2[key] for key in signature.parameters if dummy_inputs_2.get(key, None) is not None
+        }
     if dummy_inputs_3:
-        dummy_inputs_3 = {key: dummy_inputs_3[key] for key in signature.parameters if dummy_inputs_3.get(key, None) is not None}
+        dummy_inputs_3 = {
+            key: dummy_inputs_3[key] for key in signature.parameters if dummy_inputs_3.get(key, None) is not None
+        }
     return dummy_inputs, dummy_inputs_2, dummy_inputs_3
 
 
@@ -523,7 +529,14 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         torch.jit.freeze(model.eval())
         return model
 
-    def _save_pretrained(self, save_directory: Union[str, Path], save_directory_2: Union[str, Path], save_directory_3: Union[str, Path], file_name: Optional[str] = None, **kwargs):
+    def _save_pretrained(
+        self,
+        save_directory: Union[str, Path],
+        save_directory_2: Union[str, Path],
+        save_directory_3: Union[str, Path],
+        file_name: Optional[str] = None,
+        **kwargs,
+    ):
         torch.jit.save(self.decoder, os.path.join(save_directory, WEIGHTS_NAME))
         torch.jit.save(self.encoder, os.path.join(save_directory_2, WEIGHTS_NAME))
         torch.jit.save(self.decoder_pkv, os.path.join(save_directory_3, WEIGHTS_NAME))
@@ -590,8 +603,10 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         dummy_inputs_3 = {}
         encoder_inputs = dummy_inputs.pop("input_ids", None).repeat_interleave(5, dim=-1)
         dummy_inputs["attention_mask"] = torch.ones_like(encoder_inputs, dtype=torch.int64)
-        encoder_outputs = torch.ones([encoder_inputs.shape[0], encoder_inputs.shape[1], config.d_model], dtype=torch_dtype)
-        dummy_inputs["encoder_outputs"] = tuple([encoder_outputs])
+        encoder_outputs = torch.ones(
+            [encoder_inputs.shape[0], encoder_inputs.shape[1], config.d_model], dtype=torch_dtype
+        )
+        dummy_inputs["encoder_outputs"] = (encoder_outputs,)
         if use_cache:
             pkv = []
             for i in range(len(dummy_inputs["past_key_values"])):
@@ -599,9 +614,7 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
                 for j in range(len(dummy_inputs["past_key_values"][0])):
                     if j == 2 or j == 3:
                         pkv[i].append(
-                            dummy_inputs["past_key_values"][i][j]
-                            .repeat_interleave(5, dim=-2)
-                            .to(torch_dtype)
+                            dummy_inputs["past_key_values"][i][j].repeat_interleave(5, dim=-2).to(torch_dtype)
                         )
                     else:
                         pkv[i].append(dummy_inputs["past_key_values"][i][j].to(torch_dtype))
@@ -748,21 +761,27 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         attention_mask: Optional[torch.LongTensor] = None,
         input_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-        **kwargs
+        **kwargs,
     ) -> Union[Tuple[torch.FloatTensor], Seq2SeqLMOutput]:
         if input_ids is not None:
             encoder_outputs = self.encoder(input_ids=input_ids)
 
         if not isinstance(encoder_outputs, tuple):
-            encoder_outputs = tuple([encoder_outputs["last_hidden_state"]])
+            encoder_outputs = (encoder_outputs["last_hidden_state"],)
 
         if decoder_input_ids is None:
-            decoder_input_ids = torch.ones([encoder_outputs[0].shape[0], 1], dtype=torch.int64) * self.decoder_start_token_id
-    
+            decoder_input_ids = (
+                torch.ones([encoder_outputs[0].shape[0], 1], dtype=torch.int64) * self.decoder_start_token_id
+            )
+
         if attention_mask is None:
             attention_mask = torch.ones([encoder_outputs[0].shape[0], encoder_outputs[0].shape[-2]], dtype=torch.int64)
 
-        model_inputs = {"decoder_input_ids": decoder_input_ids, "encoder_outputs": encoder_outputs, "attention_mask": attention_mask}
+        model_inputs = {
+            "decoder_input_ids": decoder_input_ids,
+            "encoder_outputs": encoder_outputs,
+            "attention_mask": attention_mask,
+        }
 
         if past_key_values is None:
             decoder_outputs = self.decoder(**model_inputs)
@@ -770,7 +789,9 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             model_inputs["past_key_values"] = past_key_values
             decoder_outputs = self.decoder_pkv(**model_inputs)
         else:
-            raise ValueError("Cannot find decoder_pkv, please assign a traced model with past_key_values inputs or set use_cache=False")
+            raise ValueError(
+                "Cannot find decoder_pkv, please assign a traced model with past_key_values inputs or set use_cache=False"
+            )
 
         if isinstance(decoder_outputs, tuple):
             logits = decoder_outputs[0]
@@ -781,7 +802,9 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             encoder_last_hidden_state = decoder_outputs["encoder_last_hidden_state"]
             past_key_values = decoder_outputs["past_key_values"] if self.use_cache else None
 
-        outputs = Seq2SeqLMOutput(logits=logits, encoder_last_hidden_state=encoder_last_hidden_state, past_key_values=past_key_values)
+        outputs = Seq2SeqLMOutput(
+            logits=logits, encoder_last_hidden_state=encoder_last_hidden_state, past_key_values=past_key_values
+        )
 
         return outputs
 
@@ -887,6 +910,7 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
                 if dict_to_expand[key] is not None and isinstance(dict_to_expand[key], torch.Tensor):
                     dict_to_expand[key] = dict_to_expand[key].repeat_interleave(expand_size, dim=0)
             return dict_to_expand
+
         if input_ids is not None:
             input_ids = input_ids.repeat_interleave(expand_size, dim=0)
 
@@ -898,7 +922,9 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             if isinstance(model_kwargs["encoder_outputs"], tuple):
                 encoder_outputs_list = []
                 for i in range(len(model_kwargs["encoder_outputs"])):
-                    encoder_outputs_list.append(model_kwargs["encoder_outputs"][i].repeat_interleave(expand_size, dim=0))
+                    encoder_outputs_list.append(
+                        model_kwargs["encoder_outputs"][i].repeat_interleave(expand_size, dim=0)
+                    )
                 model_kwargs["encoder_outputs"] = tuple(encoder_outputs_list)
             else:
                 model_kwargs["encoder_outputs"] = _expand_dict_for_generation(model_kwargs["encoder_outputs"])

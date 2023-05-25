@@ -21,9 +21,9 @@ from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForQuestionAnswering,
+    AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
-    AutoModelForSeq2SeqLM,
     AutoTokenizer,
     pipeline,
 )
@@ -69,9 +69,7 @@ class IPEXIntegrationTest(unittest.TestCase):
         "roberta",
     )
 
-    TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
-        "t5",
-    )
+    TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("t5",)
 
     @parameterized.expand(QA_SUPPORTED_ARCHITECTURES)
     def test_question_answering_pipeline_inference(self, model_arch):

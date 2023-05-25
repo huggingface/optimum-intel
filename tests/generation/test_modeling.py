@@ -14,12 +14,19 @@
 
 import time
 import unittest
-from tempfile import TemporaryDirectory
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import torch
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer, PretrainedConfig, pipeline, set_seed
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
+    AutoTokenizer,
+    PretrainedConfig,
+    pipeline,
+    set_seed,
+)
 
 from optimum.intel.generation.modeling import TSModelForCausalLM, TSModelForSeq2SeqLM
 
@@ -150,9 +157,7 @@ class TSModelForCausalLMTest(unittest.TestCase):
 
 
 class TSModelForSeq2SeqLMTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = (
-        "t5",
-    )
+    SUPPORTED_ARCHITECTURES = ("t5",)
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.2
 
@@ -168,7 +173,9 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
         outputs = model(**tokens)
         self.assertIsInstance(outputs.logits, torch.Tensor)
         with torch.no_grad():
-            tokens["decoder_input_ids"] = torch.ones([1, 1], dtype=torch.int64) * trfs_model.config.decoder_start_token_id
+            tokens["decoder_input_ids"] = (
+                torch.ones([1, 1], dtype=torch.int64) * trfs_model.config.decoder_start_token_id
+            )
             trfs_outputs = trfs_model(**tokens)
         # Compare outputs with original transformers model
         atol = 1e-4
@@ -180,8 +187,12 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
         save_dir_path = Path(save_dir.name)
         save_dir_path_2 = Path(save_dir_2.name)
         save_dir_path_3 = Path(save_dir_3.name)
-        model._save_pretrained(save_directory=save_dir_path, save_directory_2=save_dir_path_2, save_directory_3=save_dir_path_3)
-        loaded_model = TSModelForSeq2SeqLM._from_pretrained(model_id=save_dir_path, model_id_2=save_dir_path_2, model_id_3=save_dir_path_3, config=model.config)
+        model._save_pretrained(
+            save_directory=save_dir_path, save_directory_2=save_dir_path_2, save_directory_3=save_dir_path_3
+        )
+        loaded_model = TSModelForSeq2SeqLM._from_pretrained(
+            model_id=save_dir_path, model_id_2=save_dir_path_2, model_id_3=save_dir_path_3, config=model.config
+        )
         loaded_model_outputs = loaded_model(**tokens)
         self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
 
