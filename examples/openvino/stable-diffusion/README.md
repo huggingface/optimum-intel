@@ -11,7 +11,7 @@ This example supports model tuning on the following datasets from the HuggingFac
 * [laion400m](https://huggingface.co/datasets/laion/laion400m)
 
 But it can be easily extended to other datasets.
->**Note**: laion2B* datasets are being downloaded on-fly durint the fine-tuning process. No need to store them locally.
+>**Note**: laion2B* datasets are being downloaded on-fly during the fine-tuning process. No need to store them locally.
 
 ## Prerequisites
 * Install Optimum-Intel for OpenVINO:
