@@ -971,7 +971,6 @@ def main():
     # Reinit
     optimizer = optimizer_cls(
         filter(lambda p: p.requires_grad, unet.parameters()),
-        # gain_or_bias_params,
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
