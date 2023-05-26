@@ -136,6 +136,7 @@ class OVBaseDecoderModel(OVModel):
         local_files_only: bool = False,
         task: Optional[str] = None,
         use_cache: bool = True,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         model_file_name = ONNX_WEIGHTS_NAME
@@ -152,6 +153,7 @@ class OVBaseDecoderModel(OVModel):
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
+            "trust_remote_code": trust_remote_code,
         }
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)

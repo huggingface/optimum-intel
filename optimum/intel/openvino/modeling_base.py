@@ -237,6 +237,7 @@ class OVBaseModel(OptimizedModel):
         subfolder: str = "",
         local_files_only: bool = False,
         task: Optional[str] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         """
@@ -267,6 +268,7 @@ class OVBaseModel(OptimizedModel):
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
+            "trust_remote_code": trust_remote_code,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
