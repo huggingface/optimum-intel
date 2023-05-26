@@ -63,10 +63,9 @@ from transformers.utils import is_apex_available, is_sagemaker_mp_enabled, loggi
 
 from optimum.exporters import TasksManager
 
-from ..utils.constant import _TASK_ALIASES
+from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 from ..utils.import_utils import is_neural_compressor_version
 from .configuration import INCConfig
-from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 
 
 if is_apex_available():
@@ -158,10 +157,10 @@ class INCTrainer(Trainer):
             self.model = self._compression_manager.model.model
             self.model_wrapped = self.model
 
-        for callback in self._compression_manager.callbacks.callbacks_list:
-            if isinstance(callback, DistillationCallbacks):
-                self.distillation_callback = callback
-                break
+            for callback in self._compression_manager.callbacks.callbacks_list:
+                if isinstance(callback, DistillationCallbacks):
+                    self.distillation_callback = callback
+                    break
 
         self.inc_config = INCConfig(
             quantization=self.quantization_config,

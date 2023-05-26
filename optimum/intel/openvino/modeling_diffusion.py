@@ -17,7 +17,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import openvino
@@ -101,6 +101,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         self.feature_extractor = feature_extractor
         self.safety_checker = None
         self.preprocessors = []
+        self._vae_scale_factor = 8
 
         if self.is_dynamic:
             self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
@@ -414,14 +415,54 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         self.vae_decoder._create_inference_request()
         self.unet._create_inference_request()
 
-    def __call__(self, *args, **kwargs):
-        guidance_scale = kwargs.get("guidance_scale", None)
+    def __call__(
+        self,
+        prompt: Union[str, List[str]],
+        height: Optional[int] = 512,
+        width: Optional[int] = 512,
+        num_inference_steps: Optional[int] = 50,
+        guidance_scale: Optional[float] = 7.5,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: Optional[int] = 1,
+        **kwargs,
+    ):
+        _, _, _height, _width = self.unet.model.inputs[0].get_partial_shape()
+
+        if _height.is_static:
+            _height = _height.get_length() * self._vae_scale_factor
+            if height != _height:
+                logger.warning(
+                    f"`height` was set to {height} but the static model will output images of height {_height}."
+                    "To fix the height, please reshape your model accordingly using the `.reshape()` method."
+                )
+            height = _height
+
+        if _width.is_static:
+            _width = _width.get_length() * self._vae_scale_factor
+            if width != _width:
+                logger.warning(
+                    f"`width` was set to {width} but the static model will output images of width {_width}."
+                    "To fix the width, please reshape your model accordingly using the `.reshape()` method."
+                )
+            width = _width
+
         if guidance_scale is not None and guidance_scale <= 1 and not self.is_dynamic:
             raise ValueError(
                 f"`guidance_scale` was set to {guidance_scale}, static shapes are only supported for `guidance_scale` > 1, "
                 "please set `dynamic_shapes` to `True` when loading the model."
             )
-        return StableDiffusionPipelineMixin.__call__(self, *args, **kwargs)
+
+        return StableDiffusionPipelineMixin.__call__(
+            self,
+            prompt=prompt,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            negative_prompt=negative_prompt,
+            num_images_per_prompt=num_images_per_prompt,
+            **kwargs,
+        )
 
     @classmethod
     def _load_config(cls, config_name_or_path: Union[str, os.PathLike], **kwargs):
