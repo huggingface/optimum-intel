@@ -427,7 +427,10 @@ def parse_args():
         type=str,
         default="moderate",
         choices=["moderate", "aggressive"],
-        help="Whether to use EMA model and where to store the EMA model.",
+        help=(
+            "'aggressive' mode quantizes all MatMul operations while 'moderate' keeps MatMul that applies attention mask non-quantized."
+            " The later allows preserving a better accuracy while keeping the similar inference performance after optimization."
+        ),
     )
     parser.add_argument(
         "--non_ema_revision",
