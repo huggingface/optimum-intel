@@ -15,12 +15,12 @@
 from ..utils.import_utils import is_diffusers_available
 from .configuration import INCConfig
 from .modeling_decoder import INCModelForCausalLM
+from .modeling_seq2seq import INCModelForSeq2SeqLM
 from .quantization import (
     INCModel,
     INCModelForMaskedLM,
     INCModelForMultipleChoice,
     INCModelForQuestionAnswering,
-    INCModelForSeq2SeqLM,
     INCModelForSequenceClassification,
     INCModelForTokenClassification,
     INCModelForVision2Seq,

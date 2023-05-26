@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 CONFIG_NAME = "best_configure.yaml"
 ENGINE_MODEL_NAME = "model.bin"
 ENGINE_MODEL_CONFIG = "conf.yaml"
+ENCODER_NAME = "encoder_model.bin"
+DECODER_NAME = "decoder_model.bin"
+DECODER_WITH_PAST_NAME = "decoder_with_past_model.bin"
 
 parsed_torch_version_base = version.parse(version.parse(torch.__version__).base_version)
 is_torch_less_than_1_13 = parsed_torch_version_base < version.parse("1.13.0")
