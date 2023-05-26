@@ -272,6 +272,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         local_files_only: bool = False,
         task: Optional[str] = None,
         use_cache: bool = True,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         """
@@ -310,6 +311,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
+            "trust_remote_code": trust_remote_code,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
