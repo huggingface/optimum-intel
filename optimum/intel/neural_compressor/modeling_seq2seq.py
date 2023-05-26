@@ -269,6 +269,8 @@ class INCEncoder:
         }
 
         outputs = self.model(**inputs)
+        if isinstance(outputs, BaseModelOutput):
+            return outputs
 
         last_hidden_state = outputs[0].to(self.device)
 
