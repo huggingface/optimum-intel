@@ -100,12 +100,14 @@ BACKUP_PAIR = (
 )
 AVAILABLE_EXAMPLES = []
 
+
 def check_text_data(data):
     if isinstance(data, str):
         return True
     if isinstance(data, list):
         return all(isinstance(x, str) for x in data)
-    return False    
+    return False
+
 
 def laion2B_preprocess_train(examples, train_transforms, tokenize_captions, image_column="URL", text_column="TEXT"):
     url = examples[image_column]
@@ -115,7 +117,7 @@ def laion2B_preprocess_train(examples, train_transforms, tokenize_captions, imag
             raise ValueError("Text data is not valid")
         AVAILABLE_EXAMPLES.append((url, examples[text_column]))
     except Exception:
-        print(f"Can't load image from url: {url}, using cache with size: {len(AVAILABLE_EXAMPLES)}")
+        logger.info(f"Can't load image from url: {url}, using cache with size: {len(AVAILABLE_EXAMPLES)}")
         if len(AVAILABLE_EXAMPLES) > 0:
             backup_id = random.randint(0, len(AVAILABLE_EXAMPLES) - 1)
             backup_example = AVAILABLE_EXAMPLES[backup_id]
@@ -123,11 +125,11 @@ def laion2B_preprocess_train(examples, train_transforms, tokenize_captions, imag
                 image = get_pil_from_url(backup_example[0])
                 examples[text_column] = backup_example[1]
             except Exception:
-                print(f"Can't load image from cached url: {backup_example[0]}, using backup")
+                logger.info(f"Can't load image from cached url: {backup_example[0]}, using backup")
                 image = BACKUP_PAIR[0].copy()
                 examples[text_column] = BACKUP_PAIR[1]
         else:
-            print(f"Can't load image from url: {url}, using backup")
+            logger.info(f"Can't load image from url: {url}, using backup")
             image = BACKUP_PAIR[0].copy()
             examples[text_column] = BACKUP_PAIR[1]
 
@@ -706,7 +708,7 @@ def get_nncf_config(pipeline, dataloader, args):
             },
         ],
     }
-    
+
     aggressive_quantization_config = {
         "input_info": [
             {  # "keyword": "latent_model_input",
@@ -726,7 +728,9 @@ def get_nncf_config(pipeline, dataloader, args):
                     "range": {"num_init_samples": args.opt_init_steps, "type": args.opt_init_type},
                     "batchnorm_adaptation": {"num_bn_adaptation_samples": args.opt_init_steps},
                 },
-                "scope_overrides": {"activations": {"{re}.*baddbmm_0": {"mode": "symmetric"}, "{re}.*bmm_0": {"mode": "symmetric"}}},
+                "scope_overrides": {
+                    "activations": {"{re}.*baddbmm_0": {"mode": "symmetric"}, "{re}.*bmm_0": {"mode": "symmetric"}}
+                },
                 "ignored_scopes": [
                     "{re}.*layer_norm_0",
                     "{re}.*__truediv__*",
@@ -749,10 +753,10 @@ def get_nncf_config(pipeline, dataloader, args):
 
         def get_target(self, dataloader_output):
             return dataloader_output[0]
-        
-    quantization_config = aggressive_quantization_config if args.quantization_mode == "aggressive" else moderate_quantization_config
-    print(f"quantization_mode: {args.quantization_mode}")
-    print(f"Config: {quantization_config}")
+
+    quantization_config = (
+        aggressive_quantization_config if args.quantization_mode == "aggressive" else moderate_quantization_config
+    )
 
     nncf_config = NNCFConfig.from_dict(quantization_config)
     nncf_config = register_default_init_args(nncf_config, UnetInitDataLoader(dataloader))
@@ -963,21 +967,11 @@ def main():
         for p in unet.parameters():
             if not isinstance(p, CompressionParameter):
                 p.requires_grad = False
-                
-    # exclude = lambda n, p: p.ndim < 2 or "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n \
-    #         or 'scale' in n or 'input_low' in n or 'input_range' in n 
-    # include = lambda n, p: not exclude(n, p)
-
-    # named_parameters = list(unet.named_parameters())
-    # gain_or_bias_params = [p for n, p in named_parameters if exclude(n, p) and p.requires_grad]
-    # rest_params = [p for n, p in named_parameters if include(n, p) and p.requires_grad]
-    # for p in rest_params:
-    #     p.requires_grad = False
 
     # Reinit
     optimizer = optimizer_cls(
         filter(lambda p: p.requires_grad, unet.parameters()),
-        #gain_or_bias_params,
+        # gain_or_bias_params,
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
