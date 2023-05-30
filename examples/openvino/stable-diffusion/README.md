@@ -3,13 +3,15 @@ This example demonstrates how to apply Quantization-aware Training (QAT) from [N
 
 Knowledge distillation and EMA techniques can be used to improve the model accuracy.
 
-This example supports model tuning on three datasets from the HuggingFace:
+This example supports model tuning on the following datasets from the HuggingFace:
 * [Pokemon BLIP captions](https://huggingface.co/datasets/lambdalabs/pokemon-blip-captions)
 * [laion2B-en](https://huggingface.co/datasets/laion/laion2B-en)
 * [laion2B-en-aesthetic](https://huggingface.co/datasets/laion/laion2B-en-aesthetic)
+* [laion-art](https://huggingface.co/datasets/laion/laion-art)
+* [laion400m](https://huggingface.co/datasets/laion/laion400m)
 
 But it can be easily extended to other datasets.
->**Note**: laion2B-en is being downloaded on-fly durint the fine-tuning process. No need to store it locally.
+>**Note**: laion2B* datasets are being downloaded on-fly during the fine-tuning process. No need to store them locally.
 
 ## Prerequisites
 * Install Optimum-Intel for OpenVINO:
@@ -104,3 +106,6 @@ python train_text_to_image_qat.py \
     --tune_quantizers_only \
     --output_dir=sd-1-5-quantied-laion
 ```
+
+## References
+* [Optimizing Stable Diffusion for Intel CPUs with NNCF and 🤗 Optimum](https://huggingface.co/blog/train-optimize-sd-intel)
