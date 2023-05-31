@@ -54,8 +54,10 @@ _SUPPORTED_DEVICES = {
     "MULTI:GPU,CPU",
 }
 
+
 class PreTrainedModel(OptimizedModel):
     pass
+
 
 @add_start_docstrings(
     """
