@@ -551,11 +551,17 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         save_directory_2: Union[str, Path],
         save_directory_3: Union[str, Path],
         file_name: Optional[str] = None,
+        is_jit: bool = None,
         **kwargs,
     ):
-        torch.jit.save(self.decoder, os.path.join(save_directory, WEIGHTS_NAME))
-        torch.jit.save(self.encoder, os.path.join(save_directory_2, WEIGHTS_NAME))
-        torch.jit.save(self.decoder_pkv, os.path.join(save_directory_3, WEIGHTS_NAME))
+        if is_jit:
+            torch.jit.save(self.decoder, os.path.join(save_directory, WEIGHTS_NAME))
+            torch.jit.save(self.encoder, os.path.join(save_directory_2, WEIGHTS_NAME))
+            torch.jit.save(self.decoder_pkv, os.path.join(save_directory_3, WEIGHTS_NAME))
+        else:
+            torch.save(self.decoder, os.path.join(save_directory, WEIGHTS_NAME))
+            torch.save(self.encoder, os.path.join(save_directory_2, WEIGHTS_NAME))
+            torch.save(self.decoder_pkv, os.path.join(save_directory_3, WEIGHTS_NAME))
 
     @classmethod
     def _load_model(
@@ -653,8 +659,9 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             local_files_only=local_files_only,
             is_jit=is_jit,
         )
-        decoder(**dummy_inputs)
-        decoder(**dummy_inputs)
+        if is_jit:
+            decoder(**dummy_inputs)
+            decoder(**dummy_inputs)
 
         encoder, model_save_dir_2 = cls._load_model(
             model_id=model_id_2,
@@ -666,8 +673,9 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             local_files_only=local_files_only,
             is_jit=is_jit,
         )
-        encoder(**dummy_inputs_2)
-        encoder(**dummy_inputs_2)
+        if is_jit:
+            encoder(**dummy_inputs_2)
+            encoder(**dummy_inputs_2)
 
         decoder_pkv, model_save_dir_3 = None, None
         if model_id_3 is not None:
@@ -681,8 +689,9 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
                 local_files_only=local_files_only,
                 is_jit=is_jit,
             )
-            decoder_pkv(**dummy_inputs_3)
-            decoder_pkv(**dummy_inputs_3)
+            if is_jit:
+                decoder_pkv(**dummy_inputs_3)
+                decoder_pkv(**dummy_inputs_3)
 
         return cls(
             decoder=decoder,

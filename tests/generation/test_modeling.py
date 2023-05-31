@@ -28,6 +28,8 @@ from transformers import (
     set_seed,
 )
 
+from packaging.version import parse
+
 from optimum.intel.generation.modeling import TSModelForCausalLM, TSModelForSeq2SeqLM
 
 
@@ -36,7 +38,7 @@ MODEL_NAMES = {
     "gptj": "hf-internal-testing/tiny-random-gptj",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
-    "t5": "hf-internal-testing/tiny-random-t5",
+    "t5": "google/flan-t5-base",
 }
 
 SEED = 42
@@ -160,6 +162,7 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("t5",)
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.2
+    IS_JIT = False if parse(parse(torch.__version__).base_version) < parse("2.1.0") else True
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -188,7 +191,10 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
         save_dir_path_2 = Path(save_dir_2.name)
         save_dir_path_3 = Path(save_dir_3.name)
         model._save_pretrained(
-            save_directory=save_dir_path, save_directory_2=save_dir_path_2, save_directory_3=save_dir_path_3
+            save_directory=save_dir_path,
+            save_directory_2=save_dir_path_2,
+            save_directory_3=save_dir_path_3,
+            is_jit=IS_JIT,
         )
         loaded_model = TSModelForSeq2SeqLM._from_pretrained(
             model_id=save_dir_path, model_id_2=save_dir_path_2, model_id_3=save_dir_path_3, config=model.config
@@ -243,6 +249,14 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
 
+        model_without_pkv = TSModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=False)
+        # Warmup
+        _ = model_without_pkv.generate(**tokens)
+        with Timer() as without_pkv_timer:
+            outputs_model_without_pkv = model_without_pkv.generate(
+                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+
         model_with_pkv = TSModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=True)
         # Warmup
         _ = model_with_pkv.generate(**tokens)
@@ -251,13 +265,6 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = TSModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=False)
-        # Warmup
-        _ = model_without_pkv.generate(**tokens)
-        with Timer() as without_pkv_timer:
-            outputs_model_without_pkv = model_without_pkv.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
-            )
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
