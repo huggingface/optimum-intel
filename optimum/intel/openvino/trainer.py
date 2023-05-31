@@ -78,6 +78,7 @@ from transformers.utils import (
 from optimum.exporters import TasksManager
 
 from ..utils.constant import _TASK_ALIASES
+from ..utils.import_utils import is_transformers_version
 from .configuration import OVConfig
 from .quantization import OVDataLoader, _onnx_export_nncf_model
 from .training_args import OVTrainingArguments
@@ -282,9 +283,16 @@ class OVTrainer(Trainer):
         if args.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
-        if self.args.local_rank != -1:
-            if self.compression_controller is not None:
-                self.compression_controller.distributed()
+        if is_transformers_version("<", "4.29.0"):
+            is_distributed = self.args.local_rank != -1
+        else:
+            from accelerate.utils import DistributedType
+
+            is_distributed = self.args.distributed_state.distributed_type != DistributedType.NO
+
+        if self.compression_controller is not None and is_distributed:
+            self.compression_controller.distributed()
+
         model = self._wrap_model(self.model_wrapped)
 
         if is_sagemaker_mp_enabled() and resume_from_checkpoint is not None:
