@@ -18,6 +18,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import torch
+from packaging.version import parse
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -27,8 +28,6 @@ from transformers import (
     pipeline,
     set_seed,
 )
-
-from packaging.version import parse
 
 from optimum.intel.generation.modeling import TSModelForCausalLM, TSModelForSeq2SeqLM
 
@@ -162,7 +161,6 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("t5",)
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.2
-    IS_JIT = False if parse(parse(torch.__version__).base_version) < parse("2.1.0") else True
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -184,6 +182,7 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
         atol = 1e-4
         self.assertTrue(torch.allclose(outputs.logits, trfs_outputs.logits, atol=atol))
         # Compare outputs with loaded model
+        is_jit = False if parse(parse(torch.__version__).base_version) < parse("2.1.0") else True
         save_dir = TemporaryDirectory()
         save_dir_2 = TemporaryDirectory()
         save_dir_3 = TemporaryDirectory()
@@ -194,7 +193,7 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
             save_directory=save_dir_path,
             save_directory_2=save_dir_path_2,
             save_directory_3=save_dir_path_3,
-            is_jit=IS_JIT,
+            is_jit=is_jit,
         )
         loaded_model = TSModelForSeq2SeqLM._from_pretrained(
             model_id=save_dir_path, model_id_2=save_dir_path_2, model_id_3=save_dir_path_3, config=model.config
