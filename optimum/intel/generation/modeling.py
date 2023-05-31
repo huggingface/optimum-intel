@@ -139,6 +139,9 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+
         inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
@@ -219,17 +222,6 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
             )
             model_save_dir = Path(model_cache_path).parent
             model = cls.load_model(model_cache_path)
-
-        # IPEX jit model need 2 iterations to convert model to int8 model
-        onnx_config_class = TasksManager.get_exporter_config_constructor(
-            model_type=config.model_type.replace("_", "-"),
-            exporter="onnx",
-            task=cls.export_feature,
-        )
-        onnx_config = onnx_config_class(config, use_past=use_cache)
-        model_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-        for i in range(2):
-            model(**model_inputs)
 
         return cls(
             model,
