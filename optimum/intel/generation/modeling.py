@@ -140,7 +140,8 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         if attention_mask is None:
-            attention_mask = torch.ones(input_ids.shape)
+            attention_mask = torch.ones_like(input_ids)
+
         inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
