@@ -54,13 +54,15 @@ _SUPPORTED_DEVICES = {
     "MULTI:GPU,CPU",
 }
 
+class PreTrainedModel(OptimizedModel):
+    pass
 
 @add_start_docstrings(
     """
     Base OVModel class.
     """,
 )
-class OVBaseModel(OptimizedModel):
+class OVBaseModel(PreTrainedModel):
     _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
     auto_model_class = None
     export_feature = None
