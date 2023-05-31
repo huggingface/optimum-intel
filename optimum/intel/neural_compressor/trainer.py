@@ -139,6 +139,8 @@ class INCTrainer(Trainer):
         self._compression_manager = None
         self.distillation_callback = None
         self.save_onnx_model = save_onnx_model
+        # TODO : To deprecate once support transformers > 4.30.0
+        self.deepspeed = None
 
         # Attach dtype and architecture to the config
         self.dtype = "int8" if quantization_config is not None else str(get_parameter_dtype(self.model)).split(".")[1]
