@@ -191,6 +191,8 @@ class OVTrainer(Trainer):
 
             self.compression_controller, self.model = create_compressed_model(self.model, nncf_config)
             self.model_wrapped = self.model
+            # TODO : To deprecate once support transformers > 4.30.0
+            self.deepspeed = None
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
