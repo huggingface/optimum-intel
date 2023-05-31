@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
 from huggingface_hub import hf_hub_download
+from packaging.version import parse
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast, Seq2SeqLMOutput
 from transformers.utils import WEIGHTS_NAME
@@ -133,6 +134,10 @@ def trace_model(model: PreTrainedModel, model_inputs: dict):
 
 def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     model_inputs, model_inputs_2, model_inputs_3 = prepare_jit_inputs(model, task, use_cache)
+    if task == "text2text-generation" and parse(parse(torch.__version__).base_version) < parse("2.1.0"):
+        logger.warning("Current torch version cause unexpected error, return the rager mode model instead.")
+        return model, model.get_encoder(), model
+
     torch._C._jit_set_texpr_fuser_enabled(False)
 
     if "past_key_values" in model_inputs.keys() or "past_key_values" in model_inputs_3.keys():
@@ -146,7 +151,7 @@ def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     if model_inputs_3:
         traced_model_3 = trace_model(model, model_inputs_3)
 
-    if task == "text2text-generation":
+    if traced_model_2 is not None:
         return traced_model, traced_model_2, traced_model_3
     else:
         return traced_model
@@ -524,9 +529,20 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         self.auto_model_class.register(AutoConfig, self.__class__)
 
     @staticmethod
-    def load_model(file_name: Union[str, Path]):
-        model = torch.jit.load(file_name)
-        torch.jit.freeze(model.eval())
+    def save_model(model: Union[PreTrainedModel, torch.jit.RecursiveScriptModule], file_name: Union[str, Path]):
+        if isinstance(model, torch.jit.RecursiveScriptModule):
+            torch.jit.save(model, file_name)
+        else:
+            torch.save(model, file_name)
+        return model
+
+    @staticmethod
+    def load_model(file_name: Union[str, Path], is_jit: bool):
+        if is_jit:
+            model = torch.jit.load(file_name)
+            torch.jit.freeze(model.eval())
+        else:
+            model = torch.load(file_name)
         return model
 
     def _save_pretrained(
@@ -551,10 +567,11 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         cache_dir: Optional[str] = None,
         file_name: Optional[str] = WEIGHTS_NAME,
         local_files_only: bool = False,
+        is_jit: bool = False,
         **kwargs,
     ):
         if os.path.isdir(model_id):
-            model = cls.load_model(os.path.join(model_id, file_name))
+            model = cls.load_model(os.path.join(model_id, file_name), is_jit)
             model_save_dir = model_id
         else:
             # Download the model from the hub
@@ -568,7 +585,7 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
                 local_files_only=local_files_only,
             )
             model_save_dir = Path(model_cache_path).parent
-            model = cls.load_model(model_cache_path)
+            model = cls.load_model(model_cache_path, is_jit)
 
         return model, model_save_dir
 
@@ -587,6 +604,7 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         local_files_only: bool = False,
         use_cache: bool = True,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = torch.float32,
+        is_jit: bool = None,
         **kwargs,
     ):
         if not getattr(config, "torchscript", False):
@@ -633,6 +651,7 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             cache_dir=cache_dir,
             file_name=file_name,
             local_files_only=local_files_only,
+            is_jit=is_jit,
         )
         decoder(**dummy_inputs)
         decoder(**dummy_inputs)
@@ -645,6 +664,7 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             cache_dir=cache_dir,
             file_name=file_name,
             local_files_only=local_files_only,
+            is_jit=is_jit,
         )
         encoder(**dummy_inputs_2)
         encoder(**dummy_inputs_2)
@@ -659,6 +679,7 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
                 cache_dir=cache_dir,
                 file_name=file_name,
                 local_files_only=local_files_only,
+                is_jit=is_jit,
             )
             decoder_pkv(**dummy_inputs_3)
             decoder_pkv(**dummy_inputs_3)
@@ -711,14 +732,18 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         save_dir_2 = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         save_dir_path_2 = Path(save_dir_2.name)
-        torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
-        torch.jit.save(traced_model_2, save_dir_path_2 / WEIGHTS_NAME)
+        cls.save_model(traced_model, save_dir_path / WEIGHTS_NAME)
+        cls.save_model(traced_model_2, save_dir_path_2 / WEIGHTS_NAME)
         save_dir_path_3 = None
         if traced_model_3 is not None:
             save_dir_3 = TemporaryDirectory()
             save_dir_path_3 = Path(save_dir_3.name)
-            torch.jit.save(traced_model_3, save_dir_path_3 / WEIGHTS_NAME)
+            cls.save_model(traced_model_3, save_dir_path_3 / WEIGHTS_NAME)
         config.torchscript = True
+
+        is_jit = None
+        if isinstance(traced_model, torch.jit.RecursiveScriptModule):
+            is_jit = True
 
         return cls._from_pretrained(
             model_id=save_dir_path,
@@ -732,6 +757,7 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             cache_dir=cache_dir,
             local_files_only=local_files_only,
             torch_dtype=torch_dtype,
+            is_jit=is_jit,
             **kwargs,
         )
 
