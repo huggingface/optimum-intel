@@ -55,6 +55,7 @@ _SUPPORTED_DEVICES = {
 }
 
 
+# workaround to enable compatibility between openvino models and transformers pipelines
 class PreTrainedModel(OptimizedModel):
     pass
 
