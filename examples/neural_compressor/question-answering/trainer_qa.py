@@ -13,7 +13,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 """
-A subclass of `IncTrainer` specific to Question-Answering tasks
+A subclass of `INCTrainer` specific to Question-Answering tasks
 """
 import math
 import time

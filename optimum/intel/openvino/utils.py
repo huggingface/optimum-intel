@@ -51,10 +51,10 @@ OV_TO_NP_TYPE = {
 
 
 _HEAD_TO_AUTOMODELS = {
-    "masked-lm": "OVModelForMaskedLM",
-    "causal-lm": "OVModelForCausalLM",
-    "seq2seq-lm": "OVModelForSeq2SeqLM",
-    "sequence-classification": "OVModelForSequenceClassification",
+    "fill-mask": "OVModelForMaskedLM",
+    "text-generation": "OVModelForCausalLM",
+    "text2text-generation": "OVModelForSeq2SeqLM",
+    "text-classification": "OVModelForSequenceClassification",
     "token-classification": "OVModelForTokenClassification",
     "question-answering": "OVModelForQuestionAnswering",
     "image-classification": "OVModelForImageClassification",

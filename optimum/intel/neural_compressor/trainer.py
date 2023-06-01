@@ -17,7 +17,6 @@ import math
 import os
 import sys
 import time
-import warnings
 from collections.abc import Mapping
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
@@ -64,9 +63,9 @@ from transformers.utils import is_apex_available, is_sagemaker_mp_enabled, loggi
 
 from optimum.exporters import TasksManager
 
+from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 from ..utils.import_utils import is_neural_compressor_version
 from .configuration import INCConfig
-from .utils import MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 
 
 if is_apex_available():
@@ -138,6 +137,8 @@ class INCTrainer(Trainer):
         self._compression_manager = None
         self.distillation_callback = None
         self.save_onnx_model = save_onnx_model
+        # TODO : To deprecate once support transformers > 4.30.0
+        self.deepspeed = None
 
         # Attach dtype and architecture to the config
         self.dtype = "int8" if quantization_config is not None else str(get_parameter_dtype(self.model)).split(".")[1]
@@ -158,10 +159,10 @@ class INCTrainer(Trainer):
             self.model = self._compression_manager.model.model
             self.model_wrapped = self.model
 
-        for callback in self._compression_manager.callbacks.callbacks_list:
-            if isinstance(callback, DistillationCallbacks):
-                self.distillation_callback = callback
-                break
+            for callback in self._compression_manager.callbacks.callbacks_list:
+                if isinstance(callback, DistillationCallbacks):
+                    self.distillation_callback = callback
+                    break
 
         self.inc_config = INCConfig(
             quantization=self.quantization_config,
@@ -625,10 +626,7 @@ class INCTrainer(Trainer):
     def _set_task(self):
         if self.task is None:
             raise ValueError("The model task defining the model topology needs to be specified for the ONNX export.")
-        elif self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-            self.task = "sequence-classification"
-        elif self.task in ["feature-extraction", "fill-mask"]:
-            self.task = "default"
+        self.task = _TASK_ALIASES.get(self.task, self.task)
 
     def _onnx_export(self, model: nn.Module, config: "OnnxConfig", output_path: str):
         opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
@@ -812,11 +810,3 @@ class INCTrainer(Trainer):
         if self._compression_manager is not None:
             sparsity = self._compression_manager.model.report_sparsity()[-1]
         return sparsity
-
-
-class IncTrainer(INCTrainer):
-    # Warning at import time
-    warnings.warn(
-        "The class `IncTrainer` has been depreciated and will be removed in optimum-intel v1.7, please use "
-        "`INCTrainer` instead.",
-    )

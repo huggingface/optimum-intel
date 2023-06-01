@@ -145,6 +145,14 @@ class OptimizationArguments:
         default="dynamic",
         metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
     )
+    smooth_quant: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to quantize with smooth quant."},
+    )
+    smooth_quant_alpha: float = field(
+        default=0.5,
+        metadata={"help": "Set alpha of smooth quant argument."},
+    )
     num_calibration_samples: int = field(
         default=50,
         metadata={"help": "Number of examples to use for the calibration step resulting from static quantization."},
@@ -588,7 +596,9 @@ def main():
         if optim_args.quantization_approach == "aware_training":
             quantization_config = QuantizationAwareTrainingConfig()
         else:
-            quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
+            if optim_args.smooth_quant:
+                recipes = {"smooth_quant": True, "smooth_quant_args": {"alpha": optim_args.smooth_quant_alpha}}
+            quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach, recipes=recipes)
 
     if optim_args.apply_pruning:
         if optim_args.end_step is None:

@@ -131,7 +131,9 @@ class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
 
         # check saved ovmodel IR and output
         ovmodel = self.get_ov_model()
-        self.check_if_ovmodel_is_dynamic(ovmodel, True)
+        # dynamic batch size for tiny-swin does not work in OpenVINO 2023.0
+        is_swin = "swin" in desc.model_id.lower()
+        self.check_if_ovmodel_is_dynamic(ovmodel, expected_result=not is_swin)
         self.check_ovmodel_output_equals_torch_output(ovmodel, trainer.model)
         self.check_ovmodel_reshaping(ovmodel)
 
@@ -621,19 +623,23 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
         self.train_dataset = raw_dataset.select(range(8))
         self.eval_dataset = raw_dataset.select(range(8, 12))
         self.data_collator = default_data_collator
+        self.is_swin = "swin" in desc.model_id.lower()
 
     def get_ov_model(self, model_id=None) -> OVModel:
         # image models, e.g. swin, may require a determined image size
         model_id = model_id or self.output_dir
         size = (self.feature_extractor.size["height"], self.feature_extractor.size["width"])
         ovmodel = self.ovmodel_cls.from_pretrained(model_id, compile=False)
-        ovmodel.reshape(-1, 3, *size)
+        # dynamic batch size for tiny-swin does not work in OpenVINO 2023.0
+        batch_size = 1 if self.is_swin else -1
+        ovmodel.reshape(batch_size, 3, *size)
         ovmodel.compile()
         return ovmodel
 
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
-        for batch_size in [1, 4]:
+        batch_sizes = [1] if self.is_swin else [1, 4]
+        for batch_size in batch_sizes:
             self.trainer.args.per_device_eval_batch_size = batch_size
             for inputs in self.trainer.get_eval_dataloader():
                 self.assertEqual(inputs["pixel_values"].shape[0], batch_size)
@@ -650,7 +656,8 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
                 )
 
     def check_ovmodel_reshaping(self, ovmodel: OVModel):
-        self.check_if_ovmodel_is_dynamic(ovmodel, True)
+        # dynamic batch size for tiny-swin does not work in OpenVINO 2023.0
+        self.check_if_ovmodel_is_dynamic(ovmodel, not self.is_swin)
         size = (self.feature_extractor.size["height"], self.feature_extractor.size["width"])
         dynamic_shape = [-1, 3, *size]
         for batch_size in [1, 4]:
@@ -659,8 +666,9 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
             self.check_if_ovmodel_is_dynamic(ovmodel, False)
             for input_ in ovmodel.model.inputs:
                 self.assertSequenceEqual(list(input_.get_shape()), static_shape)
-            ovmodel.reshape(*dynamic_shape)
-            self.check_if_ovmodel_is_dynamic(ovmodel, True)
+            if not self.is_swin:
+                ovmodel.reshape(*dynamic_shape)
+                self.check_if_ovmodel_is_dynamic(ovmodel, True)
 
 
 QUANTIZATION_CONFIG_FOR_WAV2VEC2 = {

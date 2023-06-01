@@ -19,7 +19,6 @@ import os
 import sys
 import time
 from collections import defaultdict
-from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Type, Union
 
@@ -46,7 +45,6 @@ from openvino.tools.mo.back.offline_transformations import (
     apply_moc_transformations,
     apply_user_transformations,
 )
-from torch.onnx import export as onnx_export
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
@@ -78,10 +76,11 @@ from transformers.utils import (
 )
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import OnnxConfig
 
+from ..utils.constant import _TASK_ALIASES
+from ..utils.import_utils import is_transformers_version
 from .configuration import OVConfig
-from .quantization import OVDataLoader
+from .quantization import OVDataLoader, _onnx_export_nncf_model
 from .training_args import OVTrainingArguments
 from .utils import (
     MAX_ONNX_OPSET,
@@ -192,6 +191,8 @@ class OVTrainer(Trainer):
 
             self.compression_controller, self.model = create_compressed_model(self.model, nncf_config)
             self.model_wrapped = self.model
+            # TODO : To deprecate once support transformers > 4.30.0
+            self.deepspeed = None
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
@@ -284,9 +285,16 @@ class OVTrainer(Trainer):
         if args.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
-        if self.args.local_rank != -1:
-            if self.compression_controller is not None:
-                self.compression_controller.distributed()
+        if is_transformers_version("<", "4.29.0"):
+            is_distributed = self.args.local_rank != -1
+        else:
+            from accelerate.utils import DistributedType
+
+            is_distributed = self.args.distributed_state.distributed_type != DistributedType.NO
+
+        if self.compression_controller is not None and is_distributed:
+            self.compression_controller.distributed()
+
         model = self._wrap_model(self.model_wrapped)
 
         if is_sagemaker_mp_enabled() and resume_from_checkpoint is not None:
@@ -658,9 +666,8 @@ class OVTrainer(Trainer):
         if not isinstance(self.model, PreTrainedModel):
             unwrapped_model = unwrap_model(self.model)
             if isinstance(unwrapped_model, NNCFNetwork):
-                is_pretrained_model = isinstance(unwrapped_model.get_nncf_wrapped_model(), PreTrainedModel)
-            else:
-                is_pretrained_model = isinstance(unwrapped_model, PreTrainedModel)
+                unwrapped_model = unwrapped_model.get_nncf_wrapped_model()
+            is_pretrained_model = isinstance(unwrapped_model, PreTrainedModel)
             if state_dict is None:
                 state_dict = self.model.state_dict()
             if is_pretrained_model:
@@ -691,12 +698,19 @@ class OVTrainer(Trainer):
                 task=self.task,
                 model_type=model_type,
             )
-            onnx_config = onnx_config_class(self.model.config)
+
+            if self.task == "text-generation":
+                onnx_config = onnx_config_class(self.model.config, use_past=self.model.config.use_cache)
+            else:
+                onnx_config = onnx_config_class(self.model.config)
 
             num_parameters = self.model.num_parameters()
             save_as_external_data = use_external_data_format(num_parameters) or self.ov_config.save_onnx_model
             f = io.BytesIO() if not save_as_external_data else os.path.join(output_dir, ONNX_WEIGHTS_NAME)
-            self._onnx_export(self.model, onnx_config, self.ov_config, f)
+
+            opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+            opset = opset if not self.ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
+            _onnx_export_nncf_model(self.model, onnx_config, f, opset)
             ov_model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
 
             # Prune IR if structured pruning is conducted on the model
@@ -761,33 +775,4 @@ class OVTrainer(Trainer):
     def _set_task(self):
         if self.task is None:
             raise ValueError("The model task defining the model topology needs to be specified for the ONNX export.")
-        elif self.task in ["sentiment-analysis", "text-classification", "zero-shot-classification"]:
-            self.task = "sequence-classification"
-        elif self.task in ["feature-extraction", "fill-mask"]:
-            self.task = "default"
-
-    def _onnx_export(self, model: NNCFNetwork, config: OnnxConfig, ov_config: OVConfig, f: Union[str, io.BytesIO]):
-        opset = min(config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
-        opset = opset if not ov_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
-        model_inputs = config.generate_dummy_inputs(framework="pt")
-        device = model.device
-        model_inputs = {k: v.to(device) for k, v in model_inputs.items()}
-        self._set_signature_columns_if_needed()  # find model input names needed in ONNX export
-        # Create ordered inputs for the ONNX export of NNCFNetwork as keyword arguments are currently not supported
-        inputs = tuple([model_inputs.pop(key, None) for key in self._signature_columns if len(model_inputs) != 0])
-
-        with torch.no_grad():
-            model.eval()
-            # Disable node additions to be exported in the graph
-            model.disable_dynamic_graph_building()
-            onnx_export(
-                model,
-                inputs,
-                f=f,
-                input_names=list(config.inputs.keys()),
-                output_names=list(config.outputs.keys()),
-                dynamic_axes=dict(chain(config.inputs.items(), config.outputs.items())),
-                do_constant_folding=True,
-                opset_version=opset,
-            )
-            model.enable_dynamic_graph_building()
+        self.task = _TASK_ALIASES.get(self.task, self.task)

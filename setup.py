@@ -12,11 +12,12 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-    "optimum>=1.7.3",
+    "optimum>=1.8.0",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
+    "accelerate",  # transformers 4.29 require accelerate for PyTorch
 ]
 
 TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate", "diffusers", "py-cpuinfo"]
@@ -25,7 +26,7 @@ QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
 
 EXTRAS_REQUIRE = {
     "neural-compressor": [
-        "neural-compressor>=2.1.0",
+        "neural-compressor>=2.1.1",
         "onnx",
         "onnxruntime",
         "torch<2.0.0",  # remove after neural-compressor next release
@@ -33,7 +34,7 @@ EXTRAS_REQUIRE = {
     ],
     "openvino": ["openvino>=2023.0.0.dev20230217", "onnx", "onnxruntime"],
     "nncf": ["nncf>=2.4.0", "openvino-dev>=2023.0.0.dev20230217"],
-    "ipex": ["intel-extension-for-pytorch"],
+    "ipex": ["intel-extension-for-pytorch", "onnx"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
@@ -69,5 +70,5 @@ setup(
     extras_require=EXTRAS_REQUIRE,
     include_package_data=True,
     zip_safe=False,
-    entry_points={"console_scripts": ["optimum-intel-cli = optimum.intel.commands.optimum_intel_cli:main"]},
+    entry_points={"console_scripts": ["optimum-cli=optimum.commands.optimum_cli:main"]},
 )

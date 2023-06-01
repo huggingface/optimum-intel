@@ -32,8 +32,8 @@ from PIL import Image
 from pytorch_fid import fid_score
 from torch.utils.data import Dataset
 
-from optimum.intel.neural_compressor import INCQuantizer
-from optimum.intel.neural_compressor.utils import load_quantized_model
+from optimum.intel import INCQuantizer, INCStableDiffusionPipeline
+from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -254,31 +254,30 @@ def main():
         )
 
     quantization_config = PostTrainingQuantConfig(approach=args.quantization_approach)
+    pipeline.save_pretrained(args.output_dir)
     quantizer = INCQuantizer.from_pretrained(pipeline.unet, calibration_fn=calibration_func)
 
     quantizer.quantize(
         quantization_config=quantization_config,
-        save_directory=args.output_dir,
+        save_directory=os.path.join(args.output_dir, "unet"),
         calibration_dataset=CalibDataset() if args.quantization_approach == "static" else None,
         remove_unused_columns=False,
+        file_name=DIFFUSION_WEIGHTS_NAME,
     )
 
     if args.apply_quantization and args.verify_loading:
-        loaded_model = load_quantized_model(args.output_dir, model=getattr(pipeline, "unet"))
+        int8_pipeline = INCStableDiffusionPipeline.from_pretrained(args.output_dir)
         result_optimized_model = eval_func(quantizer._quantized_model)
-        result_loaded_model = eval_func(loaded_model)
+        result_loaded_model = eval_func(int8_pipeline.unet)
         if result_loaded_model != result_optimized_model:
             logger.error("The quantized model was not successfully loaded.")
         else:
             logger.info("The quantized model was successfully loaded.")
 
     if args.benchmark and args.int8:
-        print("====int8 inference====")
-        loaded_model = load_quantized_model(args.output_dir, model=getattr(pipeline, "unet"))
-        loaded_model.eval()
-        setattr(pipeline, "unet", loaded_model)
+        int8_pipeline = INCStableDiffusionPipeline.from_pretrained(args.output_dir)
         generator = torch.Generator("cpu").manual_seed(args.seed)
-        benchmark(pipeline, generator)
+        benchmark(int8_pipeline, generator)
 
 
 def _mp_fn(index):

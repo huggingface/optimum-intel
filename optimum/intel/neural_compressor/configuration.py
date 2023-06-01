@@ -14,7 +14,7 @@
 
 from typing import Dict, Optional, Union
 
-from neural_compressor.conf.pythonic_config import DistillationConfig, WeightPruningConfig, _BaseQuantizationConfig
+from neural_compressor.config import DistillationConfig, WeightPruningConfig, _BaseQuantizationConfig
 
 from optimum.configuration_utils import BaseConfig
 

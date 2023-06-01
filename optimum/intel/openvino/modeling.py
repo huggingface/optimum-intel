@@ -106,6 +106,10 @@ class OVModel(OVBaseModel):
         self.device = torch.device("cpu")
 
     def to(self, device: str):
+        """
+        Use the specified `device` for inference. For example: "cpu" or "gpu". `device` can
+        be in upper or lower case. To speed up first inference, call `.compile()` after `.to()`.
+        """
         self._device = device.upper()
         self.request = None
         return self
@@ -135,7 +139,7 @@ SEQUENCE_CLASSIFICATION_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForSequenceClassification(OVModel):
-    export_feature = "sequence-classification"
+    export_feature = "text-classification"
     auto_model_class = AutoModelForSequenceClassification
 
     def __init__(self, model=None, config=None, **kwargs):
@@ -336,7 +340,7 @@ FEATURE_EXTRACTION_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForFeatureExtraction(OVModel):
-    export_feature = "default"
+    export_feature = "feature-extraction"
     auto_model_class = AutoModel
 
     def __init__(self, model=None, config=None, **kwargs):
@@ -406,7 +410,7 @@ MASKED_LM_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class OVModelForMaskedLM(OVModel):
-    export_feature = "masked-lm"
+    export_feature = "fill-mask"
     auto_model_class = AutoModelForMaskedLM
 
     def __init__(self, model=None, config=None, **kwargs):

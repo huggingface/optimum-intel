@@ -108,6 +108,16 @@ quantizer.quantize(
 )
 ```
 
+### Specify Quantization Recipes
+
+The [SmoothQuant](https://arxiv.org/abs/2211.10438) methodology is available for post-training quantization. This methodology usually improves the accuracy of the model in comparison to other post-training static quantization methodologies. This is done by migratesing the difficulty from activations to weights with a mathematically equivalent transformation.
+```diff
+- quantization_config = PostTrainingQuantConfig(approach="static")
++ recipes={"smooth_quant": True,  "smooth_quant_args": {"alpha": 0.5, "folding": True}}
++ quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex", recipes=recipes)
+```
+Please refer to INC [documentation](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md) and the list of [models](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md#validated-models) quantized with the methodology for more details. 
+
 ## During training optimization
 
 The [`INCTrainer`] class provides an API to train your model while combining different compression techniques such as knowledge distillation, pruning and quantization.
@@ -260,3 +270,16 @@ outputs = pipe_cls(text)
 ```
 
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
+
+
+
+## Apply quantization using the CLI
+
+Intel Neural Compressor dynamic quantization can be applied on your model through the Optimum command-line.
+
+You can easily add dynamic quantization on your model by using the following command line:
+
+```bash
+optimum-cli inc quantize --model distilbert-base-cased-distilled-squad --output ./quantized_distilbert
+```
+

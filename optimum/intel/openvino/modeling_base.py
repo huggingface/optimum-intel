@@ -55,12 +55,17 @@ _SUPPORTED_DEVICES = {
 }
 
 
+# workaround to enable compatibility between openvino models and transformers pipelines
+class PreTrainedModel(OptimizedModel):
+    pass
+
+
 @add_start_docstrings(
     """
     Base OVModel class.
     """,
 )
-class OVBaseModel(OptimizedModel):
+class OVBaseModel(PreTrainedModel):
     _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
     auto_model_class = None
     export_feature = None
@@ -237,6 +242,7 @@ class OVBaseModel(OptimizedModel):
         subfolder: str = "",
         local_files_only: bool = False,
         task: Optional[str] = None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         """
@@ -267,6 +273,7 @@ class OVBaseModel(OptimizedModel):
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
+            "trust_remote_code": trust_remote_code,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
@@ -307,11 +314,8 @@ class OVBaseModel(OptimizedModel):
     def compile(self):
         if self.request is None:
             logger.info("Compiling the model...")
-            # Only enable CACHE_DIR for GPU because CACHE_DIR fails with some INT8 models on CPU with 2022.3
-            ov_config = self.ov_config.copy()
-            if self._device == "GPU":
-                cache_dir = Path(self.model_save_dir).joinpath("model_cache")
-                ov_config["CACHE_DIR"] = str(cache_dir)
+            cache_dir = Path(self.model_save_dir).joinpath("model_cache")
+            ov_config = {**self.ov_config, "CACHE_DIR": str(cache_dir)}
             self.request = core.compile_model(self.model, self._device, ov_config)
 
     def _reshape(
