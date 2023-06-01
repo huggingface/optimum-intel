@@ -313,11 +313,10 @@ class OVBaseModel(PreTrainedModel):
 
     def compile(self):
         if self.request is None:
-            logger.info("Compiling the model and creating the inference request ...")
+            logger.info("Compiling the model...")
             cache_dir = Path(self.model_save_dir).joinpath("model_cache")
             ov_config = {**self.ov_config, "CACHE_DIR": str(cache_dir)}
-            compiled_model = core.compile_model(self.model, self._device, ov_config)
-            self.request = compiled_model.create_infer_request()
+            self.request = core.compile_model(self.model, self._device, ov_config)
 
     def _reshape(
         self,
