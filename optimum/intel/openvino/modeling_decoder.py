@@ -71,10 +71,6 @@ TEXT_GENERATION_EXAMPLE = r"""
 """
 
 
-def _contiguous_helper(tensor: np.ndarray) -> np.ndarray:
-    return tensor if tensor.flags["C_CONTIGUOUS"] else np.ascontiguousarray(tensor)
-
-
 @add_start_docstrings(
     """
     Base OVBaseDecoderModel class.
