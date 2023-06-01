@@ -539,5 +539,5 @@ class OVModelVaeEncoder(OVModelPart):
         inputs = {
             "sample": sample,
         }
-        outputs = self.request.infer(inputs, shared_memory=True)
+        outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
