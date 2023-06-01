@@ -411,9 +411,9 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         self.unet.request = None
 
     def compile(self):
-        self.text_encoder._create_inference_request()
-        self.vae_decoder._create_inference_request()
-        self.unet._create_inference_request()
+        self.text_encoder._compile()
+        self.vae_decoder._compile()
+        self.unet._compile()
 
     def __call__(
         self,
@@ -486,11 +486,10 @@ class OVModelPart:
         self.ov_config = ov_config or self.parent_model.ov_config
         self.request = None
 
-    def _create_inference_request(self):
+    def _compile(self):
         if self.request is None:
-            logger.info("Compiling the encoder and creating the inference request ...")
-            compiled_model = core.compile_model(self.model, self.device, self.ov_config)
-            self.request = compiled_model.create_infer_request()
+            logger.info("Compiling the encoder...")
+            self.request = core.compile_model(self.model, self.device, self.ov_config)
 
     @property
     def device(self):
@@ -499,18 +498,18 @@ class OVModelPart:
 
 class OVModelTextEncoder(OVModelPart):
     def __call__(self, input_ids: np.ndarray):
-        self._create_inference_request()
+        self._compile()
 
         inputs = {
             "input_ids": input_ids,
         }
-        outputs = self.request.infer(inputs)
+        outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
 
 
 class OVModelUnet(OVModelPart):
     def __call__(self, sample: np.ndarray, timestep: np.ndarray, encoder_hidden_states: np.ndarray):
-        self._create_inference_request()
+        self._compile()
 
         inputs = {
             "sample": sample,
@@ -518,27 +517,27 @@ class OVModelUnet(OVModelPart):
             "encoder_hidden_states": encoder_hidden_states,
         }
 
-        outputs = self.request.infer(inputs)
+        outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
 
 
 class OVModelVaeDecoder(OVModelPart):
     def __call__(self, latent_sample: np.ndarray):
-        self._create_inference_request()
+        self._compile()
 
         inputs = {
             "latent_sample": latent_sample,
         }
-        outputs = self.request.infer(inputs)
+        outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
 
 
 class OVModelVaeEncoder(OVModelPart):
     def __call__(self, sample: np.ndarray):
-        self._create_inference_request()
+        self._compile()
 
         inputs = {
             "sample": sample,
         }
-        outputs = self.request.infer(inputs)
+        outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
