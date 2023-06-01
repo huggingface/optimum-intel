@@ -100,7 +100,7 @@ quantizer.quantize(
 
 ### Specify Quantization Recipes
 
-The [SmoothQuant](https://arxiv.org/abs/2211.10438) methodology is available for post-training quantization. This methodology usually improves the accuracy of the model in comparison to other post-training static quantization methodologies. This is done by migratesing the difficulty from activations to weights with a mathematically equivalent transformation.
+The [SmoothQuant](https://arxiv.org/abs/2211.10438) methodology is available for post-training quantization. This methodology usually improves the accuracy of the model in comparison to other post-training static quantization methodologies. This is done by migrating the difficulty from activations to weights with a mathematically equivalent transformation.
 ```diff
 - quantization_config = PostTrainingQuantConfig(approach="static")
 + recipes={"smooth_quant": True,  "smooth_quant_args": {"alpha": 0.5, "folding": True}}
