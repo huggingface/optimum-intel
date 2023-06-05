@@ -210,8 +210,8 @@ class INCSeq2SeqTrainer(INCTrainer):
                 self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
             )
         else:
-            if self.config.pad_token_id is not None:
-                pad_token_id = self.config.pad_token_id
+            if self.model.config.pad_token_id is not None:
+                pad_token_id = self.model.config.pad_token_id
             else:
                 raise ValueError("Pad_token_id must be set in the configuration of the model, in order to pad tensors")
 
