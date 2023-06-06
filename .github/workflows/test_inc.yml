@@ -30,6 +30,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install onnx==1.13.1
+        pip install onnxruntime==1.14.1
         pip install .[neural-compressor,ipex,diffusers,tests]
     - name: Test with Pytest
       run: |
