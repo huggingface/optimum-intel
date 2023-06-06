@@ -402,12 +402,11 @@ class OptimizationTest(unittest.TestCase):
     def test_seq2seq_aware_training_quantization(self):
         quantization_config = QuantizationAwareTrainingConfig()
         save_onnx_model = True
-        batch_size = 1
-
+        batch_size = 2
         train_dataset = load_dataset("cnn_dailymail", "3.0.0", split="train[:1%]")
         val_dataset = load_dataset("cnn_dailymail", "3.0.0", split="validation[:1%]")
-        train_dataset = train_dataset.select(range(2))
-        val_dataset = val_dataset.select(range(2))
+        train_dataset = train_dataset.select(range(4))
+        val_dataset = val_dataset.select(range(4))
 
         model = EncoderDecoderModel.from_encoder_decoder_pretrained("prajjwal1/bert-tiny", "prajjwal1/bert-tiny")
         tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
@@ -430,7 +429,6 @@ class OptimizationTest(unittest.TestCase):
             ]
             batch["decoder_attention_mask"] = outputs.attention_mask
             return batch
-
 
         def _compute_metrics(pred):
             labels_ids = pred.label_ids
@@ -485,6 +483,18 @@ class OptimizationTest(unittest.TestCase):
             trainer.evaluate()
             trainer.save_model()
             trainer.model.eval()
+            loaded_model = INCModelForSeq2SeqLM.from_pretrained(tmp_dir)
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * model.config.decoder_start_token_id}
+
+            with torch.no_grad():
+                model_outputs = trainer.model(**tokens, **decoder_inputs)
+                loaded_model_outputs = loaded_model(**tokens, **decoder_inputs)
+
+            self.assertTrue("logits" in loaded_model_outputs)
+            self.assertIsInstance(loaded_model_outputs.logits, torch.Tensor)
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(loaded_model_outputs.logits, model_outputs.logits, atol=1e-4))
 
     def check_model_outputs(
         self,
