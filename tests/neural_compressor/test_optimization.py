@@ -40,14 +40,18 @@ from transformers import (
     AutoTokenizer,
     EvalPrediction,
     TrainingArguments,
+    Seq2SeqTrainingArguments,
     default_data_collator,
     pipeline,
+    BertTokenizer,
+    EncoderDecoderModel,
     set_seed,
 )
 
 from optimum.intel import (
     INCConfig,
     INCModelForCausalLM,
+    INCModelForSeq2SeqLM,
     INCModelForQuestionAnswering,
     INCModelForSequenceClassification,
     INCModelForMaskedLM,
@@ -55,6 +59,7 @@ from optimum.intel import (
     INCQuantizer,
     INCStableDiffusionPipeline,
     INCTrainer,
+    INCSeq2SeqTrainer,
 )
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME, ONNX_WEIGHTS_NAME
@@ -393,6 +398,93 @@ class OptimizationTest(unittest.TestCase):
             inc_config = INCConfig.from_pretrained(tmp_dir)
             self.assertEqual(inc_config.distillation["teacher_model_name_or_path"], model_name)
             self.assertEqual(inc_config.distillation["temperature"], 1.0)
+
+    def test_seq2seq_aware_training_quantization(self):
+        quantization_config = QuantizationAwareTrainingConfig()
+        save_onnx_model = True
+        batch_size = 1
+
+        train_dataset = load_dataset("cnn_dailymail", "3.0.0", split="train[:1%]")
+        val_dataset = load_dataset("cnn_dailymail", "3.0.0", split="validation[:1%]")
+        train_dataset = train_dataset.select(range(2))
+        val_dataset = val_dataset.select(range(2))
+
+        model = EncoderDecoderModel.from_encoder_decoder_pretrained("prajjwal1/bert-tiny", "prajjwal1/bert-tiny")
+        tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+        model.config.vocab_size = model.config.encoder.vocab_size
+        model.config.eos_token_id = tokenizer.sep_token_id
+        model.config.decoder_start_token_id = tokenizer.cls_token_id
+        model.config.max_length = 128
+        columns = ["input_ids", "attention_mask", "decoder_input_ids", "decoder_attention_mask", "labels"]
+
+        def _map_to_encoder_decoder_inputs(batch):
+            inputs = tokenizer(batch["article"], padding="max_length", truncation=True, max_length=512)
+            outputs = tokenizer(batch["highlights"], padding="max_length", truncation=True, max_length=128)
+            batch["input_ids"] = inputs.input_ids
+            batch["attention_mask"] = inputs.attention_mask
+
+            batch["decoder_input_ids"] = outputs.input_ids
+            batch["labels"] = outputs.input_ids.copy()
+            batch["labels"] = [
+                [-100 if token == tokenizer.pad_token_id else token for token in labels] for labels in batch["labels"]
+            ]
+            batch["decoder_attention_mask"] = outputs.attention_mask
+            return batch
+
+
+        def _compute_metrics(pred):
+            labels_ids = pred.label_ids
+            pred_ids = pred.predictions
+            pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
+            label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
+            accuracy = sum([int(pred_str[i] == label_str[i]) for i in range(len(pred_str))]) / len(pred_str)
+            return {"accuracy": accuracy}
+
+        train_dataset = train_dataset.map(
+            _map_to_encoder_decoder_inputs,
+            batched=True,
+            batch_size=batch_size,
+            remove_columns=["article", "highlights"],
+        )
+        train_dataset.set_format(type="torch", columns=columns)
+
+        val_dataset = val_dataset.map(
+            _map_to_encoder_decoder_inputs,
+            batched=True,
+            batch_size=batch_size,
+            remove_columns=["article", "highlights"],
+        )
+        val_dataset.set_format(type="torch", columns=columns)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = Seq2SeqTrainingArguments(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=batch_size,
+                per_device_eval_batch_size=batch_size,
+                predict_with_generate=True,
+                evaluation_strategy="steps",
+                do_train=True,
+                do_eval=True,
+                warmup_steps=0,
+                eval_steps=1,
+                logging_steps=1,
+                num_train_epochs=1.0,
+            )
+
+            trainer = INCSeq2SeqTrainer(
+                model=model,
+                quantization_config=quantization_config,
+                args=training_args,
+                compute_metrics=_compute_metrics,
+                train_dataset=train_dataset,
+                eval_dataset=val_dataset,
+                tokenizer=tokenizer,
+            )
+
+            trainer.train()
+            trainer.evaluate()
+            trainer.save_model()
+            trainer.model.eval()
 
     def check_model_outputs(
         self,
