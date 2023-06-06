@@ -485,7 +485,9 @@ class OptimizationTest(unittest.TestCase):
             trainer.model.eval()
             loaded_model = INCModelForSeq2SeqLM.from_pretrained(tmp_dir)
             tokens = tokenizer("This is a sample input", return_tensors="pt")
-            decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * model.config.decoder_start_token_id}
+            decoder_inputs = {
+                "decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * model.config.decoder_start_token_id
+            }
 
             with torch.no_grad():
                 model_outputs = trainer.model(**tokens, **decoder_inputs)
