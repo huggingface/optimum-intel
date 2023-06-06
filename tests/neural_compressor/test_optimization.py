@@ -50,6 +50,8 @@ from optimum.intel import (
     INCModelForCausalLM,
     INCModelForQuestionAnswering,
     INCModelForSequenceClassification,
+    INCModelForMaskedLM,
+    INCModelForTokenClassification,
     INCQuantizer,
     INCStableDiffusionPipeline,
     INCTrainer,
@@ -101,16 +103,21 @@ def _generate_dataset(quantizer, tokenizer, num_samples=10):
 class OptimizationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         ("text-classification", "hf-internal-testing/tiny-random-bert", 30),
-        # ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 1), ## TODO : enable causal lm task once INC ONNX export fixed
+        # ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 1), # TODO : enable causal lm task once INC ONNX export fixed
     )
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS + (
+        ("fill-mask", "hf-internal-testing/tiny-random-DistilBertForMaskedLM", 30),
+        ("token-classification", "hf-internal-testing/tiny-random-AlbertForTokenClassification", 30),
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_DYNAMIC)
     def test_dynamic_quantization(self, task, model_name, expected_quantized_matmuls):
         quantization_config = PostTrainingQuantConfig(approach="dynamic")
         model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         quantizer = INCQuantizer.from_pretrained(model, task=task)
-        save_onnx_model = task != "text-generation"
+        save_onnx_model = "generation" in task
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantizer.quantize(
                 quantization_config=quantization_config,
