@@ -36,7 +36,6 @@ from nncf.experimental.torch.sparsity.movement.scheduler import MovementSchedule
 from nncf.torch import create_compressed_model
 from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
 from nncf.torch.compression_method_api import PTCompressionAlgorithmController
-from nncf.torch.nncf_network import NNCFNetwork
 from nncf.torch.quantization.algo import QuantizationController
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, PartialShape, serialize
