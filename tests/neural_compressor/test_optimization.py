@@ -76,12 +76,14 @@ def num_quantized_matmul_onnx_model(onnx_model):
             num_quantized_matmul += 1
     return num_quantized_matmul
 
+
 def _preprocess_function(examples, tokenizer, column_name):
     return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
 
 
 def _compute_metrics(outputs, metric):
     return metric.compute(predictions=np.argmax(outputs.predictions, axis=1), references=outputs.label_ids)
+
 
 def _generate_dataset(quantizer, tokenizer, num_samples=10):
     dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[quantizer.task]
@@ -93,6 +95,7 @@ def _generate_dataset(quantizer, tokenizer, num_samples=10):
         dataset_split="train",
     )
     return dataset
+
 
 class PostTrainingOptimizationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
@@ -123,10 +126,8 @@ class PostTrainingOptimizationTest(unittest.TestCase):
                 load_onnx_model=save_onnx_model,
             )
 
-
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_static_quantization(self, task, model_name, expected_quantized_matmuls):
-
         num_samples = 10
         quantization_config = PostTrainingQuantConfig(approach="static")
         model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
@@ -156,10 +157,9 @@ class PostTrainingOptimizationTest(unittest.TestCase):
                 load_onnx_model=save_onnx_model,
             )
 
-
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_ipex_static_quantization_with_smoothquant(self, task, model_name, expected_quantized_matmuls):
-        recipes={"smooth_quant": True, "smooth_quant_args": {"alpha": 0.5}}
+        recipes = {"smooth_quant": True, "smooth_quant_args": {"alpha": 0.5}}
         num_samples = 10
         quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex", recipes=recipes)
         model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
@@ -186,7 +186,6 @@ class PostTrainingOptimizationTest(unittest.TestCase):
                 load_onnx_model=False,
                 num_samples=num_samples,
             )
-
 
     def test_dynamic_accuracy_strategy_quantization(self):
         model_name = "distilbert-base-cased-distilled-squad"
@@ -224,7 +223,6 @@ class PostTrainingOptimizationTest(unittest.TestCase):
         quantized_model_metric = eval_fn(loaded_model)
         # Verification accuracy loss is under 5%
         self.assertGreaterEqual(quantized_model_metric, original_model_metric * (1 - tolerance_criterion))
-
 
     def test_dynamic_diffusion_model(self):
         model_id = "hf-internal-testing/diffusers-stable-diffusion-tiny-all"
@@ -271,7 +269,7 @@ class PostTrainingOptimizationTest(unittest.TestCase):
     def test_aware_training_quantization(self, task, model_name, expected_quantized_matmuls):
         quantization_config = QuantizationAwareTrainingConfig()
         save_onnx_model = True
-        
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             trainer = self.get_trainer(
                 model_name=model_name,
@@ -359,7 +357,6 @@ class PostTrainingOptimizationTest(unittest.TestCase):
             self.assertEqual(inc_config.pruning["approach"], "magnitude")
             self.assertEqual(inc_config.pruning["pattern"], "4x1")
 
-
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_distillation(self, task, model_name, expected_quantized_matmuls):
         teacher_model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
@@ -388,7 +385,6 @@ class PostTrainingOptimizationTest(unittest.TestCase):
             self.assertEqual(inc_config.distillation["teacher_model_name_or_path"], model_name)
             self.assertEqual(inc_config.distillation["temperature"], 1.0)
 
-
     def check_model_outputs(
         self,
         q_model,
@@ -399,11 +395,15 @@ class PostTrainingOptimizationTest(unittest.TestCase):
         is_static=True,
         load_onnx_model=True,
         num_samples=None,
-        file_name=ONNX_WEIGHTS_NAME
+        file_name=ONNX_WEIGHTS_NAME,
     ):
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         inc_model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(save_directory)
-        model_kwargs = {"decoder_file_name": file_name, "use_cache": False} if task=="text-generation" else {"file_name": file_name}
+        model_kwargs = (
+            {"decoder_file_name": file_name, "use_cache": False}
+            if task == "text-generation"
+            else {"file_name": file_name}
+        )
         inc_config = INCConfig.from_pretrained(save_directory)
         self.assertEqual(inc_config.save_onnx_model, load_onnx_model)
 
@@ -421,7 +421,7 @@ class PostTrainingOptimizationTest(unittest.TestCase):
             ort_model = ORT_SUPPORTED_TASKS[task]["class"][0].from_pretrained(save_directory, **model_kwargs)
             ort_outputs = ort_model(**tokens)
             self.assertTrue("logits" in ort_outputs)
-    
+
         with torch.no_grad():
             model_outputs = q_model(**tokens)
             inc_model_outputs = inc_model(**tokens)
@@ -448,8 +448,10 @@ class PostTrainingOptimizationTest(unittest.TestCase):
         metric = evaluate.load("accuracy")
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
         dataset = load_dataset(dataset_name, dataset_config_name)
-        dataset = dataset.map(partial(_preprocess_function, tokenizer=tokenizer, column_name=column_name), batched=True)
-        
+        dataset = dataset.map(
+            partial(_preprocess_function, tokenizer=tokenizer, column_name=column_name), batched=True
+        )
+
         trainer = INCTrainer(
             model=model,
             quantization_config=q_config,
