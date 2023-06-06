@@ -253,7 +253,9 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         use_cache: bool = True,
         **kwargs,
     ):
-        super(TSModelForCausalLM, self).__init__(model=model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
+        super(TSModelForCausalLM, self).__init__(
+            model=model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs
+        )
         self.model.to(self._device)
 
     def to(self, device: Union[torch.device, str]):

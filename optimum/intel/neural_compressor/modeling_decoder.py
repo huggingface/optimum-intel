@@ -75,9 +75,10 @@ class INCModelForCausalLM(INCBaseModel, BaseModelForCausalLM):
         use_cache: bool = True,
         **kwargs,
     ):
-        super(INCBaseModel, self).__init__(model=model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
+        super(INCBaseModel, self).__init__(
+            model=model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs
+        )
         self.backend = getattr(config, "backend", None)
-
 
     @add_start_docstrings_to_model_forward(
         INPUTS_DOCSTRING.format("batch_size, sequence_length")
