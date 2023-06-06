@@ -88,9 +88,7 @@ def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     return traced_model
 
 
-class TSModelForCausalLM(OptimizedModel, GenerationMixin):
-    auto_model_class = AutoModelForCausalLM
-    export_feature = "text-generation"
+class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
     main_input_name = "input_ids"
     base_model_prefix = "torch_script_model"
 
@@ -108,7 +106,6 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         self.preprocessors = kwargs.get("preprocessors", [])
         self.use_cache = use_cache
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.model.to(self._device)
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
 
@@ -123,6 +120,13 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
 
+    def can_generate(self) -> bool:
+        return True
+
+    @property
+    def device(self) -> torch.device:
+        return self._device
+
     @staticmethod
     def load_model(file_name: Union[str, Path]):
         model = torch.jit.load(file_name)
@@ -131,6 +135,131 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
         torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
+
+    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
+        past_key_values = past_key_values or kwargs.get("past", None)
+
+        if self.use_cache and past_key_values is not None:
+            input_ids = input_ids[:, -1:]
+
+        # `past_key_values` may be in the stardard format (e.g. in contrastive search), converts to bloom's format if needed
+        if past_key_values is not None and self.config.model_type == "bloom":
+            if past_key_values[0][0].shape[0] == input_ids.shape[0]:
+                past_key_values = self._convert_to_bloom_cache(past_key_values)
+
+        return {
+            "input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "use_cache": self.use_cache,
+            "position_ids": None,
+            "attention_mask": kwargs.get("attention_mask", None),
+            "token_type_ids": None,
+        }
+
+    def _reorder_cache(
+        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
+        [`~PreTrainedModel.beam_sample`] is called.
+        This is required to match `past_key_values` with the correct beam_idx at every generation step.
+        """
+        if self.config.model_type == "bloom":
+            return self._reorder_cache_bloom(past_key_values, beam_idx)
+
+        # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
+        return tuple(
+            tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+            for layer_past in past_key_values
+        )
+
+    # Copied from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
+    def _reorder_cache_bloom(
+        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
+        [`~PreTrainedModel.beam_sample`] is called for bloom architecture.
+        This is required to match `past_key_values` with the correct beam_idx at every generation step.
+        """
+        standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
+
+        # Get a copy of `beam_idx` on all the devices where we need those indices.
+        device_to_beam_idx = {
+            past_state.device: beam_idx.to(past_state.device)
+            for layer_past in past_key_values
+            for past_state in layer_past
+        }
+        reordered_past = tuple(
+            (
+                layer_past[0].index_select(0, device_to_beam_idx[layer_past[0].device]),
+                layer_past[1].index_select(0, device_to_beam_idx[layer_past[0].device]),
+            )
+            for layer_past in standardized_past
+        )
+        return self._convert_to_bloom_cache(reordered_past)
+
+    # Copied from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_bloom_cache
+    @staticmethod
+    def _convert_to_bloom_cache(past_key_value: Tuple[Tuple[torch.Tensor]]) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        Converts the cache to the format expected by Bloom, i.e. to tuple(tuple([batch_size * num_heads, ...]))
+        """
+        batch_size, num_heads, head_dim, seq_length = past_key_value[0][0].shape
+        batch_size_times_num_heads = batch_size * num_heads
+        # key:  [batch_size, num_heads, head_dim, seq_length] -> [batch_size * num_heads, head_dim, seq_length]
+        # value: [batch_size, num_heads, seq_length, head_dim] -> [batch_size * num_heads, seq_length, head_dim]
+        return tuple(
+            (
+                layer_past[0].view(batch_size_times_num_heads, head_dim, seq_length),
+                layer_past[1].view(batch_size_times_num_heads, seq_length, head_dim),
+            )
+            for layer_past in past_key_value
+        )
+
+    # Adapted from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_standard_cache
+    def _convert_to_standard_cache(
+        self, past_key_value: Tuple[Tuple[torch.Tensor]], batch_size: int
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        Standardizes the format of the cache so as to match most implementations, i.e. to tuple(tuple([batch_size, num_heads, ...]))
+        """
+        if self.config.model_type != "bloom":
+            return past_key_value
+
+        batch_size_times_num_heads, head_dim, seq_length = past_key_value[0][0].shape
+        num_heads = batch_size_times_num_heads // batch_size
+        # key: [batch_size * num_heads, head_dim, seq_length] -> [batch_size, num_heads, head_dim, seq_length]
+        # value: [batch_size * num_heads, seq_length, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
+        return tuple(
+            (
+                layer_past[0].view(batch_size, num_heads, head_dim, seq_length),
+                layer_past[1].view(batch_size, num_heads, seq_length, head_dim),
+            )
+            for layer_past in past_key_value
+        )
+
+
+class TSModelForCausalLM(OptimizedModel, GenerationMixin):
+    auto_model_class = AutoModelForCausalLM
+    export_feature = "text-generation"
+
+    def __init__(
+        self,
+        model,
+        config: PretrainedConfig = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        use_cache: bool = True,
+        **kwargs,
+    ):
+        super(TSModelForCausalLM, self).__init__(model=model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
+        self.model.to(self._device)
+
+    def to(self, device: Union[torch.device, str]):
+        self._device = device if isinstance(device, torch.device) else torch.device(device)
+        self.model.to(self._device)
+        return self
 
     def forward(
         self,
@@ -278,120 +407,4 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
             cache_dir=cache_dir,
             local_files_only=local_files_only,
             **kwargs,
-        )
-
-    def can_generate(self) -> bool:
-        return True
-
-    @property
-    def device(self) -> torch.device:
-        return self._device
-
-    def to(self, device: Union[torch.device, str]):
-        self._device = device if isinstance(device, torch.device) else torch.device(device)
-        self.model.to(self._device)
-        return self
-
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        past_key_values = past_key_values or kwargs.get("past", None)
-
-        if self.use_cache and past_key_values is not None:
-            input_ids = input_ids[:, -1:]
-
-        # `past_key_values` may be in the stardard format (e.g. in contrastive search), converts to bloom's format if needed
-        if past_key_values is not None and self.config.model_type == "bloom":
-            if past_key_values[0][0].shape[0] == input_ids.shape[0]:
-                past_key_values = self._convert_to_bloom_cache(past_key_values)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": self.use_cache,
-            "position_ids": None,
-            "attention_mask": kwargs.get("attention_mask", None),
-            "token_type_ids": None,
-        }
-
-    def _reorder_cache(
-        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
-    ) -> Tuple[Tuple[torch.Tensor]]:
-        """
-        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
-        [`~PreTrainedModel.beam_sample`] is called.
-        This is required to match `past_key_values` with the correct beam_idx at every generation step.
-        """
-        if self.config.model_type == "bloom":
-            return self._reorder_cache_bloom(past_key_values, beam_idx)
-
-        # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
-        return tuple(
-            tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
-            for layer_past in past_key_values
-        )
-
-    # Copied from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
-    def _reorder_cache_bloom(
-        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
-    ) -> Tuple[Tuple[torch.Tensor]]:
-        """
-        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
-        [`~PreTrainedModel.beam_sample`] is called for bloom architecture.
-        This is required to match `past_key_values` with the correct beam_idx at every generation step.
-        """
-        standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
-
-        # Get a copy of `beam_idx` on all the devices where we need those indices.
-        device_to_beam_idx = {
-            past_state.device: beam_idx.to(past_state.device)
-            for layer_past in past_key_values
-            for past_state in layer_past
-        }
-        reordered_past = tuple(
-            (
-                layer_past[0].index_select(0, device_to_beam_idx[layer_past[0].device]),
-                layer_past[1].index_select(0, device_to_beam_idx[layer_past[0].device]),
-            )
-            for layer_past in standardized_past
-        )
-        return self._convert_to_bloom_cache(reordered_past)
-
-    # Copied from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_bloom_cache
-    @staticmethod
-    def _convert_to_bloom_cache(past_key_value: Tuple[Tuple[torch.Tensor]]) -> Tuple[Tuple[torch.Tensor]]:
-        """
-        Converts the cache to the format expected by Bloom, i.e. to tuple(tuple([batch_size * num_heads, ...]))
-        """
-        batch_size, num_heads, head_dim, seq_length = past_key_value[0][0].shape
-        batch_size_times_num_heads = batch_size * num_heads
-        # key:  [batch_size, num_heads, head_dim, seq_length] -> [batch_size * num_heads, head_dim, seq_length]
-        # value: [batch_size, num_heads, seq_length, head_dim] -> [batch_size * num_heads, seq_length, head_dim]
-        return tuple(
-            (
-                layer_past[0].view(batch_size_times_num_heads, head_dim, seq_length),
-                layer_past[1].view(batch_size_times_num_heads, seq_length, head_dim),
-            )
-            for layer_past in past_key_value
-        )
-
-    # Adapted from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_standard_cache
-    def _convert_to_standard_cache(
-        self, past_key_value: Tuple[Tuple[torch.Tensor]], batch_size: int
-    ) -> Tuple[Tuple[torch.Tensor]]:
-        """
-        Standardizes the format of the cache so as to match most implementations, i.e. to tuple(tuple([batch_size, num_heads, ...]))
-        """
-        if self.config.model_type != "bloom":
-            return past_key_value
-
-        batch_size_times_num_heads, head_dim, seq_length = past_key_value[0][0].shape
-        num_heads = batch_size_times_num_heads // batch_size
-        # key: [batch_size * num_heads, head_dim, seq_length] -> [batch_size, num_heads, head_dim, seq_length]
-        # value: [batch_size * num_heads, seq_length, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
-        return tuple(
-            (
-                layer_past[0].view(batch_size, num_heads, head_dim, seq_length),
-                layer_past[1].view(batch_size, num_heads, seq_length, head_dim),
-            )
-            for layer_past in past_key_value
         )

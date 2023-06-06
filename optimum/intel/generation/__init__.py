@@ -13,4 +13,4 @@
 #  limitations under the License.
 
 
-from .modeling import TSModelForCausalLM
+from .modeling import BaseModelForCausalLM, TSModelForCausalLM

@@ -24,13 +24,12 @@ from huggingface_hub import hf_hub_download
 from intel_extension_for_transformers.backends.neural_engine.compile import compile
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.utils.pytorch import load
-from transformers import AutoConfig, AutoModel, PretrainedConfig
+from transformers import AutoModel, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.modeling_utils import no_init_weights
 from transformers.utils.generic import ContextManagers
 
 from optimum.exporters import TasksManager
-from optimum.modeling_base import OptimizedModel
 
 from ..utils.import_utils import _torch_version, is_torch_version, is_transformers_version
 from .configuration import INCConfig
@@ -90,36 +89,11 @@ IMAGE_INPUTS_DOCSTRING = r"""
     Base INCBaseModel class.
     """,
 )
-class INCBaseModel(OptimizedModel):
+class INCBaseModel:
     _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
     base_model_prefix = "inc_model"
     auto_model_class = AutoModel
     export_feature = None
-
-    def __init__(
-        self,
-        model,
-        config: PretrainedConfig = None,
-        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        **kwargs,
-    ):
-        self.model = model
-        self.config = config
-        self.model_save_dir = model_save_dir
-        self.preprocessors = kwargs.get("preprocessors", [])
-        self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.backend = getattr(config, "backend", None)
-
-        if is_transformers_version("<=", "4.25.1"):
-            self.generation_config = None
-        else:
-            from transformers import GenerationConfig
-
-            self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
-
-        # Avoid warnings when creating a transformers pipeline
-        AutoConfig.register(self.base_model_prefix, AutoConfig)
-        self.auto_model_class.register(AutoConfig, self.__class__)
 
     @staticmethod
     def load_model(file_name: Union[str, Path]):
@@ -187,14 +161,15 @@ class INCBaseModel(OptimizedModel):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
         backend = getattr(config, "backend", None)
-        if backend == "ipex":
-            pass
 
-        if config.torchscript or backend == "neural_engine":
+        if getattr(config, "torchscript", None) or backend == "neural_engine":
             # Load the model from local directory
             if os.path.isdir(model_id):
-                file_name = os.path.join(model_id, file_name)
-                model_save_dir = model_id
+                if backend == "neural_engine":
+                    file_name = model_id
+                else:
+                    file_name = os.path.join(model_id, file_name)
+                    model_save_dir = model_id
             # Download the model from the hub
             else:
                 if backend == "neural_engine":
@@ -210,7 +185,7 @@ class INCBaseModel(OptimizedModel):
                                 force_download=force_download,
                                 local_files_only=local_files_only,
                             )
-                            model_file_names[name] = model_cache_path
+                        file_name = Path(model_cache_path).parent
                     except Exception:
                         logger.warning(
                             f"The file names {ENGINE_MODEL_NAME} or {ENGINE_MODEL_CONFIG} was not found! Please check it!"
@@ -227,18 +202,14 @@ class INCBaseModel(OptimizedModel):
                         local_files_only=local_files_only,
                     )
                 model_save_dir = Path(model_cache_path).parent
-            if backend == "neural_engine":
-                model = compile(model_save_dir)
+            try:
+                model = compile(file_name)
+                config.torchscript = False
                 config.backend = "neural_engine"
-            else:
-                try:
-                    model = compile(file_name)
-                    config.torchscript = False
-                    config.backend = "neural_engine"
-                except Exception as e:
-                    logger.warning(e)
-                    logger.info("Compile model with neural engine failed! Inference with original model.")
-                    model = cls.load_model(file_name)
+            except Exception as e:
+                logger.warning(e)
+                logger.info("Compile model with neural engine failed! Inference with original model.")
+                model = cls.load_model(file_name)
         else:
             model_save_dir = None
             model_kwargs = {
@@ -419,7 +390,7 @@ class INCBaseModel(OptimizedModel):
             "torch_dtype": torch_dtype,
         }
 
-        if config.torch_dtype != "int8":
+        if config.torch_dtype != "int8" and config.torch_dtype != torch.int8:
             model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         else:
             file_name = kwargs.get("file_name", WEIGHTS_NAME)

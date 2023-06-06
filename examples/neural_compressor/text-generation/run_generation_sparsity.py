@@ -152,7 +152,7 @@ def main():
         model = model_class.from_pretrained(args.model_name_or_path)
         model.to(args.device)
 
-    if args.output_dir is not None and args.jit:
+    if args.output_dir is not None and args.run_sparsity:
         model.save_pretrained(args.output_dir)
         tokenizer.save_pretrained(args.output_dir)
 

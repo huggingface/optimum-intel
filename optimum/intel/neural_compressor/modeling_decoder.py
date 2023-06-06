@@ -22,16 +22,9 @@ from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from optimum.utils import NormalizedConfigManager
+from optimum.intel.generation import BaseModelForCausalLM
 
-from ..utils.import_utils import is_transformers_version
 from .modeling_base import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, INCBaseModel
-
-
-if is_transformers_version("<", "4.25.0"):
-    from transformers.generation_utils import GenerationMixin
-else:
-    from transformers.generation import GenerationMixin
 
 
 logger = logging.getLogger(__name__)
@@ -65,11 +58,14 @@ TEXT_GENERATION_EXAMPLE = r"""
 
 @add_start_docstrings(
     """
-    Base INCBaseDecoderModel class.
+    Neural-compressor Model with a causal language modeling head on top (linear layer with weights tied to the input
+    embeddings).
     """,
+    MODEL_START_DOCSTRING,
 )
-class INCBaseDecoderModel(INCBaseModel):
-    main_input_name = "input_ids"
+class INCModelForCausalLM(INCBaseModel, BaseModelForCausalLM):
+    export_feature = "text-generation"
+    auto_model_class = AutoModelForCausalLM
 
     def __init__(
         self,
@@ -79,27 +75,9 @@ class INCBaseDecoderModel(INCBaseModel):
         use_cache: bool = True,
         **kwargs,
     ):
-        super().__init__(
-            model,
-            config,
-            model_save_dir=model_save_dir,
-            **kwargs,
-        )
+        super(INCBaseModel, self).__init__(model=model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
+        self.backend = getattr(config, "backend", None)
 
-        self.use_cache = use_cache
-        self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
-
-
-@add_start_docstrings(
-    """
-    Neural-compressor Model with a causal language modeling head on top (linear layer with weights tied to the input
-    embeddings).
-    """,
-    MODEL_START_DOCSTRING,
-)
-class INCModelForCausalLM(INCBaseDecoderModel, GenerationMixin):
-    export_feature = "text-generation"
-    auto_model_class = AutoModelForCausalLM
 
     @add_start_docstrings_to_model_forward(
         INPUTS_DOCSTRING.format("batch_size, sequence_length")
@@ -189,111 +167,3 @@ class INCModelForCausalLM(INCBaseDecoderModel, GenerationMixin):
             raise ValueError(
                 f"output should be a list or an instance of CausalLMOutputWithPast, but got {type(outputs)}"
             )
-
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        past_key_values = past_key_values or kwargs.get("past", None)
-
-        if self.use_cache and past_key_values is not None:
-            input_ids = input_ids[:, -1:]
-
-        # `past_key_values` may be in the stardard format (e.g. in contrastive search), converts to bloom's format if needed
-        if past_key_values is not None and self.config.model_type == "bloom":
-            if past_key_values[0][0].shape[0] == input_ids.shape[0]:
-                past_key_values = self._convert_to_bloom_cache(past_key_values)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": self.use_cache,
-            "position_ids": None,
-            "attention_mask": kwargs.get("attention_mask", None),
-            "token_type_ids": None,
-        }
-
-    def _reorder_cache(
-        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
-    ) -> Tuple[Tuple[torch.Tensor]]:
-        """
-        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
-        [`~PreTrainedModel.beam_sample`] is called.
-        This is required to match `past_key_values` with the correct beam_idx at every generation step.
-        """
-        if self.config.model_type == "bloom":
-            return self._reorder_cache_bloom(past_key_values, beam_idx)
-
-        # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
-        return tuple(
-            tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
-            for layer_past in past_key_values
-        )
-
-    # Copied from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
-    def _reorder_cache_bloom(
-        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
-    ) -> Tuple[Tuple[torch.Tensor]]:
-        """
-        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
-        [`~PreTrainedModel.beam_sample`] is called for bloom architecture.
-        This is required to match `past_key_values` with the correct beam_idx at every generation step.
-        """
-        standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
-
-        # Get a copy of `beam_idx` on all the devices where we need those indices.
-        device_to_beam_idx = {
-            past_state.device: beam_idx.to(past_state.device)
-            for layer_past in past_key_values
-            for past_state in layer_past
-        }
-        reordered_past = tuple(
-            (
-                layer_past[0].index_select(0, device_to_beam_idx[layer_past[0].device]),
-                layer_past[1].index_select(0, device_to_beam_idx[layer_past[0].device]),
-            )
-            for layer_past in standardized_past
-        )
-        return self._convert_to_bloom_cache(reordered_past)
-
-    # Copied from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_bloom_cache
-    @staticmethod
-    def _convert_to_bloom_cache(past_key_value: Tuple[Tuple[torch.Tensor]]) -> Tuple[Tuple[torch.Tensor]]:
-        """
-        Converts the cache to the format expected by Bloom, i.e. to tuple(tuple([batch_size * num_heads, ...]))
-        """
-        batch_size, num_heads, head_dim, seq_length = past_key_value[0][0].shape
-        batch_size_times_num_heads = batch_size * num_heads
-        # key:  [batch_size, num_heads, head_dim, seq_length] -> [batch_size * num_heads, head_dim, seq_length]
-        # value: [batch_size, num_heads, seq_length, head_dim] -> [batch_size * num_heads, seq_length, head_dim]
-        return tuple(
-            (
-                layer_past[0].view(batch_size_times_num_heads, head_dim, seq_length),
-                layer_past[1].view(batch_size_times_num_heads, seq_length, head_dim),
-            )
-            for layer_past in past_key_value
-        )
-
-    # Adapted from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_standard_cache
-    def _convert_to_standard_cache(
-        self, past_key_value: Tuple[Tuple[torch.Tensor]], batch_size: int
-    ) -> Tuple[Tuple[torch.Tensor]]:
-        """
-        Standardizes the format of the cache so as to match most implementations, i.e. to tuple(tuple([batch_size, num_heads, ...]))
-        """
-        if self.config.model_type != "bloom":
-            return past_key_value
-
-        batch_size_times_num_heads, head_dim, seq_length = past_key_value[0][0].shape
-        num_heads = batch_size_times_num_heads // batch_size
-        # key: [batch_size * num_heads, head_dim, seq_length] -> [batch_size, num_heads, head_dim, seq_length]
-        # value: [batch_size * num_heads, seq_length, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
-        return tuple(
-            (
-                layer_past[0].view(batch_size, num_heads, head_dim, seq_length),
-                layer_past[1].view(batch_size, num_heads, seq_length, head_dim),
-            )
-            for layer_past in past_key_value
-        )
-
-    def can_generate(self):
-        """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
-        return True

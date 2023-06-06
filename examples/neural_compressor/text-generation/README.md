@@ -28,3 +28,14 @@ python run_generation.py \
     --model_name_or_path=gpt2 \
     --jit
 ```
+
+We also support sparsity kernel by calling the `INCModelForCausalLM`.
+
+Example usage:
+
+```bash
+python run_generation.py \
+    --model_type=gptj \
+    --model_name_or_path=EleutherAI/gpt-j-6b \
+    --run_sparsity
+```
