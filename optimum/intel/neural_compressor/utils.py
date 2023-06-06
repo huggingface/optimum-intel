@@ -31,6 +31,18 @@ logger = logging.getLogger(__name__)
 
 CONFIG_NAME = "best_configure.yaml"
 
+_HEAD_TO_AUTOMODELS = {
+    "fill-mask": "INCModelForMaskedLM",
+    "text-generation": "INCModelForCausalLM",
+    "text2text-generation": "INCModelForSeq2SeqLM",
+    "text-classification": "INCModelForSequenceClassification",
+    "token-classification": "INCModelForTokenClassification",
+    "question-answering": "INCModelForQuestionAnswering",
+    "multiple-choice": "INCModelForMultipleChoice",
+    "stable-diffusion": "INCStableDiffusionPipeline",
+}
+
+
 parsed_torch_version_base = version.parse(version.parse(torch.__version__).base_version)
 is_torch_less_than_1_13 = parsed_torch_version_base < version.parse("1.13.0")
 

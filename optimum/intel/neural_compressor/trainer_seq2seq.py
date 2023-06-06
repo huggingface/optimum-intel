@@ -157,8 +157,8 @@ class INCSeq2SeqTrainer(INCTrainer):
 
         # XXX: adapt synced_gpus for fairscale as well
         gen_kwargs = {
-            "max_length": self._max_length if self._max_length is not None else self.config.max_length,
-            "num_beams": self._num_beams if self._num_beams is not None else self.config.num_beams,
+            "max_length": self._max_length if self._max_length is not None else self.model.config.max_length,
+            "num_beams": self._num_beams if self._num_beams is not None else self.model.config.num_beams,
             "synced_gpus": True if is_deepspeed_zero3_enabled() else False,
         }
 
@@ -210,8 +210,8 @@ class INCSeq2SeqTrainer(INCTrainer):
                 self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
             )
         else:
-            if self.config.pad_token_id is not None:
-                pad_token_id = self.config.pad_token_id
+            if self.model.config.pad_token_id is not None:
+                pad_token_id = self.model.config.pad_token_id
             else:
                 raise ValueError("Pad_token_id must be set in the configuration of the model, in order to pad tensors")
 
