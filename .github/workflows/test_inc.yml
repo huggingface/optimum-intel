@@ -31,6 +31,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install git+https://github.com/huggingface/transformers
+        pip install git+https://github.com/intel/neural-compressor
         pip install .[neural-compressor,ipex,diffusers,tests]
     - name: Test with Pytest
       run: |

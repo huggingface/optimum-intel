@@ -62,6 +62,7 @@ from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAM
 from ..utils.import_utils import (
     _neural_compressor_version,
     _torch_version,
+    is_ipex_version,
     is_neural_compressor_version,
     is_torch_version,
 )
@@ -72,6 +73,7 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 logger = logging.getLogger(__name__)
 
 NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
+IPEX_MINIMUM_VERSION = "2.1.0"
 
 if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
     raise ImportError(
@@ -180,6 +182,12 @@ class INCQuantizer(OptimumQuantizer):
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
                 )
+
+        if quantization_config.backend == "ipex" and is_ipex_version("<", IPEX_MINIMUM_VERSION):
+            raise ImportError(
+                f"Found an incompatible version of intel-extension-for-pytorch. Found version {_ipex_version}, "
+                f"but only version {IPEX_MINIMUM_VERSION} or higher is supported."
+            )
 
         if isinstance(self._original_model.config, PretrainedConfig):
             self._original_model.config.backend = quantization_config.backend
