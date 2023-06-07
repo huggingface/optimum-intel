@@ -58,7 +58,7 @@ To run the JPQD example, please install optimum-intel from source. This command 
 
 ```bash
 TASK_NAME=sst2
-python run_glue.py \
+torchrun --nproc-per-node=1 run_glue.py \
     --model_name_or_path bert-base-uncased \
     --task_name $TASK_NAME \
     --teacher_model_name_or_path yoshitomo-matsubara/bert-large-uncased-sst2 \
@@ -83,3 +83,4 @@ python run_glue.py \
 ```
 
 On a single V100 GPU, this script should run in ~1.8 hours, and yield accuracy of **92.2%** with ~40% of the weights of the Transformer blocks pruned.
+For launching the script on multiple GPUs specify `--nproc-per-node=<number of GPU>`. Note, that different batch size and other hyperparameters might be required to achieve the same results as on a single GPU.
