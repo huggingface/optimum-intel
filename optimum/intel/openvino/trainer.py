@@ -36,7 +36,6 @@ from nncf.experimental.torch.sparsity.movement.scheduler import MovementSchedule
 from nncf.torch import create_compressed_model
 from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
 from nncf.torch.compression_method_api import PTCompressionAlgorithmController
-from nncf.torch.nncf_network import NNCFNetwork
 from nncf.torch.quantization.algo import QuantizationController
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, PartialShape, serialize
@@ -78,6 +77,7 @@ from transformers.utils import (
 from optimum.exporters import TasksManager
 
 from ..utils.constant import _TASK_ALIASES
+from ..utils.import_utils import is_transformers_version
 from .configuration import OVConfig
 from .quantization import OVDataLoader, _onnx_export_nncf_model
 from .training_args import OVTrainingArguments
@@ -191,14 +191,13 @@ class OVTrainer(Trainer):
 
             self.compression_controller, self.model = create_compressed_model(self.model, nncf_config)
             self.model_wrapped = self.model
+            # TODO : To deprecate once support transformers > 4.30.0
+            self.deepspeed = None
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
             # Inspect model forward signature to keep only the arguments it accepts.
-            if isinstance(self.model, NNCFNetwork):
-                signature = inspect.signature(self.model.get_nncf_wrapped_model().forward)
-            else:
-                signature = inspect.signature(self.model.forward)
+            signature = inspect.signature(self.model.forward)
             self._signature_columns = list(signature.parameters.keys())
             # Labels may be named label or label_ids, the default data collator handles that.
             self._signature_columns += list(set(["label", "label_ids"] + self.label_names))
@@ -283,9 +282,16 @@ class OVTrainer(Trainer):
         if args.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 
-        if self.args.local_rank != -1:
-            if self.compression_controller is not None:
-                self.compression_controller.distributed()
+        if is_transformers_version("<", "4.29.0"):
+            is_distributed = self.args.local_rank != -1
+        else:
+            from accelerate.utils import DistributedType
+
+            is_distributed = self.args.distributed_state.distributed_type != DistributedType.NO
+
+        if self.compression_controller is not None and is_distributed:
+            self.compression_controller.distributed()
+
         model = self._wrap_model(self.model_wrapped)
 
         if is_sagemaker_mp_enabled() and resume_from_checkpoint is not None:
@@ -656,8 +662,6 @@ class OVTrainer(Trainer):
 
         if not isinstance(self.model, PreTrainedModel):
             unwrapped_model = unwrap_model(self.model)
-            if isinstance(unwrapped_model, NNCFNetwork):
-                unwrapped_model = unwrapped_model.get_nncf_wrapped_model()
             is_pretrained_model = isinstance(unwrapped_model, PreTrainedModel)
             if state_dict is None:
                 state_dict = self.model.state_dict()

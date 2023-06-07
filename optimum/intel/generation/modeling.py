@@ -21,7 +21,7 @@ from typing import Optional, Tuple, Union
 
 import torch
 from huggingface_hub import hf_hub_download
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
@@ -29,6 +29,7 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
+from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_torch_version, is_transformers_version
 
 
@@ -39,6 +40,52 @@ else:
 
 
 logger = logging.getLogger(__name__)
+
+
+def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = False):
+    task = _TASK_ALIASES.get(task, task)
+    signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.__call__)
+    onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
+    onnx_config = onnx_config_class(model.config)
+    if task == "text-generation" and use_cache:
+        onnx_config = onnx_config_class(model.config, use_past=True)
+    dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+    model_inputs = {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
+    if task == "text-generation" and use_cache:
+        # WA jit.trace issue of model like llama in https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L464, or else, generation output will be incorrect
+        pkv = []
+        for i in range(len(model_inputs["past_key_values"])):
+            pkv.append([])
+            for j in range(len(model_inputs["past_key_values"][0])):
+                pkv[i].append(model_inputs["past_key_values"][i][j].to(model.dtype))
+            pkv[i] = tuple(pkv[i])
+        model_inputs["past_key_values"] = tuple(pkv)
+        i = model_inputs["input_ids"]
+        a = model_inputs["attention_mask"]
+        model_inputs["input_ids"] = torch.cat([torch.zeros(i.shape[0], 1), i], -1).to(i.dtype)
+        model_inputs["attention_mask"] = torch.cat([torch.zeros(a.shape[0], 1), a], -1).to(a.dtype)
+    return model_inputs
+
+
+def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
+    model_inputs = prepare_jit_inputs(model, task, use_cache)
+    torch._C._jit_set_texpr_fuser_enabled(False)
+    if "past_key_values" in model_inputs.keys():
+        model.config.return_dict = False
+        if is_torch_version(">", "2.0.1"):
+            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs, strict=False)
+        else:
+            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()), strict=False)
+    else:
+        if is_torch_version(">=", "2.0.0"):
+            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs, strict=False)
+        else:
+            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()), strict=False)
+    traced_model = torch.jit.freeze(traced_model.eval())
+    traced_model(**model_inputs)
+    traced_model(**model_inputs)
+
+    return traced_model
 
 
 class TSModelForCausalLM(OptimizedModel, GenerationMixin):
@@ -63,6 +110,7 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.model.to(self._device)
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
+        self.model_dtype = kwargs.get("model_dtype", None)
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
@@ -91,6 +139,9 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+
         inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
@@ -107,6 +158,8 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
                 if self.config.model_type != "bloom":
                     new_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
                     empty_tensor = torch.empty(size=new_shape)
+                    if self.model_dtype is not None:
+                        empty_tensor = empty_tensor.to(self.model_dtype)
                     past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
                     pkv = tuple(empty_tensor for _ in range(nb_pkv))
                 else:
@@ -116,13 +169,23 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
                             new_shape = [input_ids.shape[0] * num_attention_heads, d_k, 0]
                         else:
                             new_shape = [input_ids.shape[0] * num_attention_heads, 0, d_k]
-                        pkv = pkv + (torch.empty(size=new_shape),)
+                        empty_tensor = torch.empty(size=new_shape)
+                        if self.model_dtype is not None:
+                            empty_tensor = empty_tensor.to(self.model_dtype)
+                        pkv = pkv + (empty_tensor,)
                 past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
 
             inputs["past_key_values"] = past_key_values
         outputs = self.model(**inputs)
 
-        return CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
+        if isinstance(outputs, tuple):
+            outputs = CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
+        else:
+            outputs = CausalLMOutputWithPast(
+                logits=outputs["logits"], past_key_values=outputs["past_key_values"] if self.use_cache else None
+            )
+
+        return outputs
 
     @classmethod
     def _from_pretrained(
@@ -159,17 +222,6 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
             )
             model_save_dir = Path(model_cache_path).parent
             model = cls.load_model(model_cache_path)
-
-        # IPEX jit model need 2 iterations to convert model to int8 model
-        onnx_config_class = TasksManager.get_exporter_config_constructor(
-            model_type=config.model_type.replace("_", "-"),
-            exporter="onnx",
-            task=cls.export_feature,
-        )
-        onnx_config = onnx_config_class(config, use_past=use_cache)
-        model_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-        for i in range(2):
-            model(**model_inputs)
 
         return cls(
             model,
@@ -210,20 +262,7 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        model.config.return_dict = False
-        signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
-        onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_class(model.config, use_past=use_cache)
-        dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-        model_inputs = {
-            key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None
-        }
-
-        if use_cache:
-            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()))
-        else:
-            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs)
-        traced_model = torch.jit.freeze(traced_model.eval())
+        traced_model = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)

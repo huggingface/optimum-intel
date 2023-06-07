@@ -71,10 +71,6 @@ TEXT_GENERATION_EXAMPLE = r"""
 """
 
 
-def _contiguous_helper(tensor: np.ndarray) -> np.ndarray:
-    return tensor if tensor.flags["C_CONTIGUOUS"] else np.ascontiguousarray(tensor)
-
-
 @add_start_docstrings(
     """
     Base OVBaseDecoderModel class.
@@ -136,6 +132,7 @@ class OVBaseDecoderModel(OVModel):
         local_files_only: bool = False,
         task: Optional[str] = None,
         use_cache: bool = True,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         model_file_name = ONNX_WEIGHTS_NAME
@@ -152,6 +149,7 @@ class OVBaseDecoderModel(OVModel):
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
+            "trust_remote_code": trust_remote_code,
         }
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
@@ -243,15 +241,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if past_key_values is not None:
             # Flatten the past_key_values
             past_key_values = tuple(
-                _contiguous_helper(np.array(past_key_value))
-                for pkv_per_layer in past_key_values
-                for past_key_value in pkv_per_layer
+                np.array(past_key_value) for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
             )
             # Add the past_key_values to the decoder inputs
-            inputs = {
-                input_name: Tensor(past_key_value, shared_memory=True)
-                for input_name, past_key_value in zip(self.key_value_input_names, past_key_values)
-            }
+            inputs = dict(zip(self.key_value_input_names, past_key_values))
 
         # Create empty past_key_values for decoder_with_past first generation step
         elif self.use_cache:
@@ -276,12 +269,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             inputs["attention_mask"] = np.array(attention_mask)
 
         # Run inference
-        self.request.start_async(inputs)
-        self.request.wait()
+        outputs = self.request(inputs, shared_memory=True)
 
-        outputs = {
-            key.get_any_name(): value.data for key, value in zip(self.request.model_outputs, self.request.outputs)
-        }
         logits = torch.from_numpy(outputs["logits"]).to(self.device)
 
         if self.use_cache:

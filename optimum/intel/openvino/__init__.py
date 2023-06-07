@@ -11,13 +11,20 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import logging
 
 from ..utils.import_utils import is_diffusers_available, is_nncf_available
 from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 
 
 if is_nncf_available():
+    import nncf
+
+    # Suppress version mismatch logging
+    nncf.set_log_level(logging.ERROR)
     from nncf.torch import patch_torch_operators
+
+    nncf.set_log_level(logging.INFO)
 
     patch_torch_operators()
 

@@ -281,7 +281,7 @@ class OVQuantizer(OptimumQuantizer):
 
 
 def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Union[str, io.BytesIO], opset: int = None):
-    signature = inspect.signature(model.get_nncf_wrapped_model().forward)
+    signature = inspect.signature(model.forward)
     signature = list(signature.parameters.keys())
     opset = opset or config.DEFAULT_ONNX_OPSET
     model_inputs = config.generate_dummy_inputs(framework="pt")
@@ -294,7 +294,7 @@ def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Unio
             value = value.to(device)
         return value
 
-    with config.patch_model_for_export(model.get_nncf_wrapped_model()):
+    with config.patch_model_for_export(model):
         model_inputs = tree_map(remap, model_inputs)
         with torch.no_grad():
             model.eval()

@@ -21,33 +21,23 @@ Note that quantization is currently only supported for CPUs (only CPU backends a
 
 ### Dynamic quantization
 
-To apply dynamic quantization on a fine-tuned DistilBERT, we first need to create the corresponding configuration describing the quantization details as well as the quantizer object used to later apply quantization:
+You can easily add dynamic quantization on your model by using the following command line:
 
-```python
-from transformers import AutoModelForQuestionAnswering
-from neural_compressor.config import PostTrainingQuantConfig
-from optimum.intel import INCQuantizer
-
-model_name = "distilbert-base-cased-distilled-squad"
-model = AutoModelForQuestionAnswering.from_pretrained(model_name)
-# The directory where the quantized model will be saved
-save_dir = "dynamic_quantization"
-
-# Load the quantization configuration detailing the quantization we wish to apply
-quantization_config = PostTrainingQuantConfig(approach="dynamic")
-quantizer = INCQuantizer.from_pretrained(model)
-# Apply dynamic quantization and save the resulting model
-quantizer.quantize(quantization_config=quantization_config, save_directory=save_dir)
+```bash
+optimum-cli inc quantize --model distilbert-base-cased-distilled-squad --output quantized_distilbert
 ```
 
-The accuracy tolerance along with an adapted evaluation function can also be specified in order to find a quantized model meeting the specified accuracy tolerance.
+When applying post-training quantization, an accuracy tolerance along with an adapted evaluation function can also be specified in order to find a quantized model meeting the specified constraints. This can be done for both dynamic and static quantization.
 
 ```python
 import evaluate
+from optimum.intel import INCQuantizer
 from datasets import load_dataset
-from transformers import AutoTokenizer, pipeline
-from neural_compressor.config import AccuracyCriterion, TuningCriterion
+from transformers import AutoModelForQuestionAnswering, AutoTokenizer, pipeline
+from neural_compressor.config import AccuracyCriterion, TuningCriterion, PostTrainingQuantConfig
 
+model_name = "distilbert-base-cased-distilled-squad"
+model = AutoModelForQuestionAnswering.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 eval_dataset = load_dataset("squad", split="validation").select(range(64))
 task_evaluator = evaluate.evaluator("question-answering")
@@ -66,7 +56,7 @@ quantization_config = PostTrainingQuantConfig(
     approach="dynamic", accuracy_criterion=accuracy_criterion, tuning_criterion=tuning_criterion
 )
 quantizer = INCQuantizer.from_pretrained(model, eval_fn=eval_fn)
-quantizer.quantize(quantization_config=quantization_config, save_directory=save_dir)
+quantizer.quantize(quantization_config=quantization_config, save_directory="dynamic_quantization")
 ```
 
 ### Static quantization
@@ -107,6 +97,16 @@ quantizer.quantize(
     save_directory=save_dir,
 )
 ```
+
+### Specify Quantization Recipes
+
+The [SmoothQuant](https://arxiv.org/abs/2211.10438) methodology is available for post-training quantization. This methodology usually improves the accuracy of the model in comparison to other post-training static quantization methodologies. This is done by migrating the difficulty from activations to weights with a mathematically equivalent transformation.
+```diff
+- quantization_config = PostTrainingQuantConfig(approach="static")
++ recipes={"smooth_quant": True,  "smooth_quant_args": {"alpha": 0.5, "folding": True}}
++ quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex", recipes=recipes)
+```
+Please refer to INC [documentation](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md) and the list of [models](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md#validated-models) quantized with the methodology for more details. 
 
 ## During training optimization
 
@@ -260,16 +260,3 @@ outputs = pipe_cls(text)
 ```
 
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory for more sophisticated usage.
-
-
-
-## Apply quantization using the CLI
-
-Intel Neural Compressor dynamic quantization can be applied on your model through the Optimum command-line.
-
-You can easily add dynamic quantization on your model by using the following command line:
-
-```bash
-optimum-cli inc quantize --model distilbert-base-cased-distilled-squad --output ./quantized_distilbert
-```
-
