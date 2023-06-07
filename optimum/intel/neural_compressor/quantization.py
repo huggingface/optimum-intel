@@ -60,6 +60,7 @@ from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME
 from ..utils.import_utils import (
+    _ipex_version,
     _neural_compressor_version,
     _torch_version,
     is_ipex_version,
