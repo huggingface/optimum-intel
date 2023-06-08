@@ -261,8 +261,8 @@ class INCQuantizer(OptimumQuantizer):
         device = model.model.device
         inputs = {k: v.to(device) for k, v in inputs.items()}
         torch_to_int8_onnx(
-            fp32_model=self._original_model.to(device),
-            int8_model=model.model,
+            # fp32_model=self._original_model.to(device),
+            model.model,
             q_config=model.q_config,
             save_path=str(output_path),
             example_inputs=inputs,
