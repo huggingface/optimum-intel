@@ -61,9 +61,10 @@ On a single V100 GPU, this script should run in ~45 minutes and yield a quantize
 
 ```bash
 torchrun --nproc-per-node=1 run_audio_classification.py \
-    --model_name_or_path facebook/wav2vec2-base \
+    --model_name_or_path anton-l/wav2vec2-base-ft-keyword-spotting \
     --teacher_model_name_or_path anton-l/wav2vec2-base-ft-keyword-spotting \
     --nncf_compression_config configs/wav2vec2-base-jpqd.json \
+    --freeze_feature_encoder False \
     --distillation_weight 0.9 \
     --dataset_name superb \
     --dataset_config_name ks \
@@ -74,11 +75,11 @@ torchrun --nproc-per-node=1 run_audio_classification.py \
     --do_train  \
     --fp16 \
     --optim adamw_torch \
-    --learning_rate 2e-4 \
+    --learning_rate 7e-5 \
     --max_length_seconds 1 \
     --attention_mask False \
-    --warmup_ratio 0.1 \
-    --num_train_epochs 15 \
+    --warmup_ratio 0.5 \
+    --num_train_epochs 12 \
     --per_device_train_batch_size 32 \
     --gradient_accumulation_steps 4 \
     --per_device_eval_batch_size 64 \
@@ -89,7 +90,7 @@ torchrun --nproc-per-node=1 run_audio_classification.py \
     --save_strategy epoch \
     --load_best_model_at_end False \
     --save_total_limit 3 \
-    --seed 0
+    --seed 42
 ```
 
-This script should take about 3 hours on a single V100 GPU and produce a quantized Wav2Vec2-base model with ~80% structured sparsity in its linear layers. The model accuracy should converge to about 97.5%. For launching the script on multiple GPUs specify `--nproc-per-node=<number of GPU>`. Note, that different batch size and other hyperparameters might be required to achieve the same results as on a single GPU.
+This script should take about 3 hours on a single V100 GPU and produce a quantized Wav2Vec2-base model with ~60% structured sparsity in its linear layers. The model accuracy should converge to about 97.6%. For launching the script on multiple GPUs specify `--nproc-per-node=<number of GPU>`. Note, that different batch size and other hyperparameters might be required to achieve the same results as on a single GPU.
