@@ -31,7 +31,7 @@ from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_transformers_version
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .modeling_utils import _prepare_attn_mask
+from .modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .utils import ONNX_WEIGHTS_NAME
 
 
@@ -156,9 +156,12 @@ class OVBaseDecoderModel(OVModel):
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
 
-        # TODO : create model patcher
+        # TODO : create ModelPatcher to patch each architecture
         if model.config.model_type == "bloom":
             model.transformer._prepare_attn_mask = _prepare_attn_mask
+
+        if model.config.model_type == "llama":
+            model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
 
         # Export the model to the ONNX format
         export(model=model, config=onnx_config, output=save_dir_path / model_file_name)

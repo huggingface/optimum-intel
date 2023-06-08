@@ -416,7 +416,6 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bloom",
-        # "gpt_bigcode"
         "gpt2",
         "gpt_neo",
         "gpt_neox",

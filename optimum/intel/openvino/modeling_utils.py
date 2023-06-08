@@ -17,19 +17,32 @@ from typing import Tuple
 import torch
 
 
+# Modified from transformers.models.bloom.modeling_bloom._make_causal_mask
 def _make_causal_mask(
-    input_ids_shape: torch.Size, device: torch.device, past_key_values_length: int
+    input_ids_shape: torch.Size,
+    device: torch.device,
+    past_key_values_length: int,
+    dtype: torch.dtype = None,
 ) -> torch.BoolTensor:
+    """
+    Make causal mask used for bi-directional self-attention.
+    """
     batch_size, target_length = input_ids_shape
-    mask = torch.zeros((target_length, target_length + past_key_values_length), dtype=torch.bool, device=device)
+    mask = torch.zeros(
+        (target_length, target_length + past_key_values_length), dtype=dtype or torch.bool, device=device
+    )
     seq_ids = torch.arange(target_length, device=device)
     mask[:, past_key_values_length:] = seq_ids[:, None] < seq_ids[None, :]
-    expanded_mask = mask[None, None, :, :].expand(batch_size, 1, target_length, target_length + past_key_values_length)
-    return expanded_mask
+
+    if dtype is not None:
+        mask[:, past_key_values_length:] *= torch.finfo(dtype).min
+
+    return mask[None, None, :, :].expand(batch_size, 1, target_length, target_length + past_key_values_length)
 
 
+# Modified from transformers.models..bloom.modeling_bloom._prepare_attn_mask
 def _prepare_attn_mask(
-    attention_mask: torch.Tensor = None, input_shape: Tuple[int, int] = None, past_key_values_length: int = None
+    attention_mask: torch.Tensor, input_shape: Tuple[int, int], past_key_values_length: int
 ) -> torch.BoolTensor:
     from transformers.models.bloom.modeling_bloom import _expand_mask
 
@@ -39,15 +52,40 @@ def _prepare_attn_mask(
     device = attention_mask.device
     _, src_length = input_shape
 
-    if src_length > 0:
-        combined_attention_mask = _make_causal_mask(
-            input_shape, device=device, past_key_values_length=past_key_values_length
-        )
-
-    # [batch_size, seq_length] -> [batch_size, 1, tgt_length, src_length]
+    combined_attention_mask = _make_causal_mask(
+        input_shape, device=device, past_key_values_length=past_key_values_length
+    )
+    # [batch_size, seq_length] -> [batch_size, 1, tgt_length, src_length]_prepare_decoder_attention_mask
     expanded_attn_mask = _expand_mask(attention_mask, tgt_length=src_length)
     combined_attention_mask = (
         expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask | combined_attention_mask
     )
+
+    return combined_attention_mask
+
+
+# Modified from transformers.models.llama.modeling_llama._prepare_decoder_attention_mask
+def _prepare_decoder_attention_mask(attention_mask, input_shape, inputs_embeds, past_key_values_length):
+    from transformers.models.llama.modeling_llama import _expand_mask
+
+    # create causal mask
+    # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+    combined_attention_mask = None
+
+    combined_attention_mask = _make_causal_mask(
+        input_shape,
+        device=inputs_embeds.device,
+        past_key_values_length=past_key_values_length,
+        dtype=inputs_embeds.dtype,
+    )
+
+    if attention_mask is not None:
+        # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+        expanded_attn_mask = _expand_mask(attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]).to(
+            inputs_embeds.device
+        )
+        combined_attention_mask = (
+            expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask
+        )
 
     return combined_attention_mask
