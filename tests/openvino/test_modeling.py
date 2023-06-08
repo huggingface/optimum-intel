@@ -81,10 +81,12 @@ MODEL_NAMES = {
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
+    "gpt_bigcode": "bigcode/tiny_starcoder_py",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
+    "llama": "fxmarty/tiny-llama-fast-tokenizer",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "m2m_100": "valhalla/m2m100_tiny_random",
@@ -414,9 +416,11 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bloom",
+        # "gpt_bigcode"
         "gpt2",
         "gpt_neo",
         "gpt_neox",
+        # "llama",
     )
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.2
@@ -436,8 +440,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         # Compare tensor outputs
-        atol = 1e-1 if model_arch == "bloom" else 1e-4
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=atol))
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
