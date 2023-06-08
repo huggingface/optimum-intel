@@ -88,7 +88,11 @@ def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     return traced_model
 
 
-class TSModelForCausalLM(OptimizedModel, GenerationMixin):
+class PreTrainedModel(OptimizedModel):
+    pass
+
+
+class TSModelForCausalLM(PreTrainedModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
     main_input_name = "input_ids"
