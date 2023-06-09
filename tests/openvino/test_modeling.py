@@ -856,3 +856,22 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
         # Compare model outputs
         self.assertTrue(np.array_equal(outputs_1.images[0], outputs_2.images[0]))
         self.assertFalse(np.array_equal(outputs_1.images[0], outputs_3.images[0]))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_diffusers
+    def test_height_width_properties(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        batch_size = 1
+        num_images_per_prompt = 4
+        height = 128
+        width = 64
+        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, compile=False, dynamic=True)
+        self.assertTrue(pipeline.is_dynamic)
+        self.assertEqual(pipeline.height, -1)
+        self.assertEqual(pipeline.width, -1)
+        pipeline.reshape(
+            batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt
+        )
+        self.assertFalse(pipeline.is_dynamic)
+        self.assertEqual(pipeline.height, height)
+        self.assertEqual(pipeline.width, width)
