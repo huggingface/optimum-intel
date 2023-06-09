@@ -31,6 +31,7 @@ from optimum.utils import NormalizedConfigManager
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_torch_version, is_transformers_version
+from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -266,6 +267,13 @@ class TSModelForCausalLM(PreTrainedModel, GenerationMixin):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+
+        if model.config.model_type == "bloom":
+            model.transformer._prepare_attn_mask = _prepare_attn_mask
+
+        if model.config.model_type == "llama":
+            model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+
         traced_model = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)

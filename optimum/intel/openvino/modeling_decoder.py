@@ -30,8 +30,8 @@ from optimum.exporters.onnx import export
 from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_transformers_version
+from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .utils import ONNX_WEIGHTS_NAME
 
 
