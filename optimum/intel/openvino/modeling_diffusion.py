@@ -21,7 +21,6 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import openvino
-import packaging
 from diffusers import DDIMScheduler, LMSDiscreteScheduler, PNDMScheduler, StableDiffusionPipeline
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME
@@ -40,6 +39,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
+from ..utils import is_torch_version
 from .modeling_base import OVBaseModel
 from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME
 
@@ -286,11 +286,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         **kwargs,
     ):
-        import torch
-
-        if packaging.version.parse(torch.__version__) > packaging.version.parse("1.13.1") and packaging.version.parse(
-            torch.__version__
-        ) < packaging.version.parse("2.1.0"):
+        if is_torch_version(">", "1.13.1") and is_torch_version("<=", "2.0.1"):
             register_custom_scaled_dot_product_attention_export()
         if task is None:
             task = cls._auto_model_to_task(cls.auto_model_class)
