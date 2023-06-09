@@ -111,7 +111,8 @@ class TSModelForCausalLMTest(unittest.TestCase):
         model = TSModelForCausalLM.from_pretrained(model_id, export=True)
         model.to("cpu")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, device="cpu", framework="pt")
+        pipe = pipeline("text-generation", tokenizer=tokenizer, device="cpu")
+        pipe.model = model
         outputs = pipe("This is a sample", max_length=10)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
@@ -222,7 +223,8 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
         model = TSModelForSeq2SeqLM.from_pretrained(model_id, export=True)
         model.to("cpu")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer, device="cpu", framework="pt")
+        pipe = pipeline("text2text-generation", tokenizer=tokenizer, device="cpu")
+        pipe.model = model
         outputs = pipe("This is a sample", max_length=10, min_length=1)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(item["generated_text"] is not None for item in outputs)

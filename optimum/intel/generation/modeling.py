@@ -645,6 +645,7 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             encoder=encoder,
             config=config,
             use_cache=use_cache,
+            model_dtype=torch_dtype,
             **kwargs,
         )
 
