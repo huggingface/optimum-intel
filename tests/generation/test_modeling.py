@@ -38,6 +38,8 @@ MODEL_NAMES = {
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "t5": "hf-internal-testing/tiny-random-t5",
+    "bart": "hf-internal-testing/tiny-random-bart",
+    "mbart": "hf-internal-testing/tiny-random-mbart",
 }
 
 SEED = 42
@@ -158,7 +160,7 @@ class TSModelForCausalLMTest(unittest.TestCase):
 
 
 class TSModelForSeq2SeqLMTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("t5",)
+    SUPPORTED_ARCHITECTURES = ("t5", "bart", "mbart")
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.2
 

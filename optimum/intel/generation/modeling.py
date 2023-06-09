@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import copy
 import inspect
 import logging
 import os
@@ -23,7 +22,14 @@ from typing import Any, Dict, Optional, Tuple, Union
 import torch
 from huggingface_hub import hf_hub_download
 from packaging.version import parse
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, PretrainedConfig, PreTrainedModel, GenerationConfig
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+    AutoModelForSeq2SeqLM,
+    GenerationConfig,
+    PretrainedConfig,
+    PreTrainedModel,
+)
 from transformers.modeling_outputs import CausalLMOutputWithPast, Seq2SeqLMOutput
 from transformers.utils import WEIGHTS_NAME
 
@@ -763,11 +769,10 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
                     empty_tensor = empty_tensor.to(self.model_dtype)
                 past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
                 pkv = tuple(empty_tensor for _ in range(nb_pkv))
-                
+
                 past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
 
             inputs["past_key_values"] = past_key_values
-
 
         decoder_outputs = self.decoder(**inputs)
 

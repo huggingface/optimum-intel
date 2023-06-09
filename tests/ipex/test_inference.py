@@ -42,6 +42,8 @@ MODEL_NAMES = {
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "t5": "hf-internal-testing/tiny-random-t5",
+    "bart": "hf-internal-testing/tiny-random-bart",
+    "mbart": "hf-internal-testing/tiny-random-mbart",
 }
 
 _CLASSIFICATION_TASK_TO_AUTOMODELS = {
@@ -69,7 +71,7 @@ class IPEXIntegrationTest(unittest.TestCase):
         "roberta",
     )
 
-    TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("t5",)
+    TEXT2TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("t5", "bart", "mbart")
 
     @parameterized.expand(QA_SUPPORTED_ARCHITECTURES)
     def test_question_answering_pipeline_inference(self, model_arch):

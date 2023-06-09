@@ -97,7 +97,7 @@ class inference_mode:
                     ipex.enable_onednn_fusion(True)
                     if isinstance(self._model, Pipeline):
                         self._original = self._model.model
-                        import pdb; pdb.set_trace()
+
                         model = ipex.optimize(
                             self._model.model,
                             dtype=self._dtype,
