@@ -86,7 +86,7 @@ MODEL_NAMES = {
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
-    "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "llama": "trl-internal-testing/tiny-random-LlamaForCausalLM",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "m2m_100": "valhalla/m2m100_tiny_random",
