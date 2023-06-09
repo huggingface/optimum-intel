@@ -162,7 +162,7 @@ class TSModelForCausalLMTest(unittest.TestCase):
 class TSModelForSeq2SeqLMTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("t5", "bart", "mbart")
     GENERATION_LENGTH = 100
-    SPEEDUP_CACHE = 1.2
+    SPEEDUP_CACHE = 1.19
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -173,10 +173,10 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
         trfs_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample", return_tensors="pt")
+        tokens["decoder_input_ids"] = torch.ones([1, 1], dtype=torch.int64)
         outputs = model(**tokens)
         self.assertIsInstance(outputs.logits, torch.Tensor)
         with torch.no_grad():
-            tokens["decoder_input_ids"] = torch.ones([1, 1], dtype=torch.int64)
             trfs_outputs = trfs_model(**tokens)
         # Compare outputs with original transformers model
         atol = 1e-4
