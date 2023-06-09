@@ -37,7 +37,7 @@ MODEL_NAMES = {
     "gptj": "hf-internal-testing/tiny-random-gptj",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
-    "t5": "google/flan-t5-base",
+    "t5": "hf-internal-testing/tiny-random-t5",
 }
 
 SEED = 42
@@ -185,18 +185,15 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
         is_jit = False if parse(parse(torch.__version__).base_version) < parse("2.1.0") else True
         save_dir = TemporaryDirectory()
         save_dir_2 = TemporaryDirectory()
-        save_dir_3 = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         save_dir_path_2 = Path(save_dir_2.name)
-        save_dir_path_3 = Path(save_dir_3.name)
         model._save_pretrained(
             save_directory=save_dir_path,
             save_directory_2=save_dir_path_2,
-            save_directory_3=save_dir_path_3,
             is_jit=is_jit,
         )
         loaded_model = TSModelForSeq2SeqLM._from_pretrained(
-            model_id=save_dir_path, model_id_2=save_dir_path_2, model_id_3=save_dir_path_3, config=model.config
+            model_id=save_dir_path, model_id_2=save_dir_path_2, config=model.config
         )
         loaded_model_outputs = loaded_model(**tokens)
         self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))

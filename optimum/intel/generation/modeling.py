@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 import torch
 from huggingface_hub import hf_hub_download
 from packaging.version import parse
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, PretrainedConfig, PreTrainedModel
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForSeq2SeqLM, PretrainedConfig, PreTrainedModel, GenerationConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast, Seq2SeqLMOutput
 from transformers.utils import WEIGHTS_NAME
 
@@ -61,7 +61,6 @@ def prepare_jit_inputs(
     # Models with encoder and decoder need to trace seperately
     dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt", sequence_length=sequence_length)
     dummy_inputs_2 = {}
-    dummy_inputs_3 = {}
     # The length of input_ids in dummy_inputs is always 1 if use_past, see https://github.com/huggingface/optimum/blob/main/optimum/exporters/onnx/base.py#L558-L571
     if task == "text-generation" and use_cache:
         # WA jit.trace issue of model like llama in https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L463-L464,
@@ -78,7 +77,7 @@ def prepare_jit_inputs(
             [torch.zeros(dummy_inputs["attention_mask"].shape[0], 1), dummy_inputs["attention_mask"]], -1
         ).to(dummy_inputs["attention_mask"].dtype)
     elif task == "text2text-generation":
-        # dummy_inputs is for decoder without pkv, dummy_inputs_2 is for encoder, dummy_inputs_3 is for decoder with pkv
+        # dummy_inputs is for decoder without pkv, dummy_inputs_2 is for encoder
         dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt", sequence_length=1)
         encoder_inputs = dummy_inputs.pop("input_ids", None).repeat_interleave(encoder_sequence_length, dim=-1)
         dummy_inputs["attention_mask"] = torch.ones_like(encoder_inputs, dtype=torch.int64)
@@ -91,18 +90,9 @@ def prepare_jit_inputs(
             for i in range(len(dummy_inputs["past_key_values"])):
                 pkv.append([])
                 for j in range(len(dummy_inputs["past_key_values"][0])):
-                    if j == 2 or j == 3:
-                        pkv[i].append(
-                            dummy_inputs["past_key_values"][i][j]
-                            .repeat_interleave(encoder_sequence_length, dim=-2)
-                            .to(model.dtype)
-                        )
-                    else:
-                        pkv[i].append(dummy_inputs["past_key_values"][i][j].to(model.dtype))
+                    pkv[i].append(dummy_inputs["past_key_values"][i][j].to(model.dtype))
                 pkv[i] = tuple(pkv[i])
             dummy_inputs["past_key_values"] = tuple(pkv)
-            dummy_inputs_3 = copy.deepcopy(dummy_inputs)
-            dummy_inputs.pop("past_key_values", None)
 
         dummy_inputs_2["input_ids"] = encoder_inputs
 
@@ -111,11 +101,8 @@ def prepare_jit_inputs(
         dummy_inputs_2 = {
             key: dummy_inputs_2[key] for key in signature.parameters if dummy_inputs_2.get(key, None) is not None
         }
-    if dummy_inputs_3:
-        dummy_inputs_3 = {
-            key: dummy_inputs_3[key] for key in signature.parameters if dummy_inputs_3.get(key, None) is not None
-        }
-    return dummy_inputs, dummy_inputs_2, dummy_inputs_3
+
+    return dummy_inputs, dummy_inputs_2
 
 
 def trace_model(model: PreTrainedModel, model_inputs: dict):
@@ -133,26 +120,23 @@ def trace_model(model: PreTrainedModel, model_inputs: dict):
 
 
 def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
-    model_inputs, model_inputs_2, model_inputs_3 = prepare_jit_inputs(model, task, use_cache)
+    model_inputs, model_inputs_2 = prepare_jit_inputs(model, task, use_cache)
     if task == "text2text-generation" and parse(parse(torch.__version__).base_version) < parse("2.1.0"):
         logger.warning("Current torch version cause unexpected error, return the rager mode model instead.")
-        return model, model.get_encoder(), model
+        return model, model.get_encoder()
 
     torch._C._jit_set_texpr_fuser_enabled(False)
 
-    if "past_key_values" in model_inputs.keys() or "past_key_values" in model_inputs_3.keys():
+    if "past_key_values" in model_inputs.keys():
         model.config.return_dict = False
 
     traced_model = trace_model(model, model_inputs)
     traced_model_2 = None
-    traced_model_3 = None
     if model_inputs_2:
         traced_model_2 = trace_model(model.get_encoder(), model_inputs_2)
-    if model_inputs_3:
-        traced_model_3 = trace_model(model, model_inputs_3)
 
     if traced_model_2 is not None:
-        return traced_model, traced_model_2, traced_model_3
+        return traced_model, traced_model_2
     else:
         return traced_model
 
@@ -180,13 +164,7 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         self.model.to(self._device)
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
-
-        if is_transformers_version("<=", "4.25.1"):
-            self.generation_config = None
-        else:
-            from transformers import GenerationConfig
-
-            self.generation_config = GenerationConfig.from_model_config(config)
+        self.generation_config = GenerationConfig.from_model_config(config)
 
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -485,20 +463,16 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         decoder,
         encoder,
         config: PretrainedConfig = None,
-        decoder_pkv: Optional[torch.jit.RecursiveScriptModule] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         model_save_dir_2: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        model_save_dir_3: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
         **kwargs,
     ):
         self.decoder = decoder
         self.encoder = encoder
-        self.decoder_pkv = decoder_pkv
         self.config = config
         self.model_save_dir = model_save_dir
         self.model_save_dir_2 = model_save_dir_2
-        self.model_save_dir_3 = model_save_dir_3
         self.preprocessors = kwargs.get("preprocessors", [])
         self.use_cache = use_cache
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -517,12 +491,7 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         if self.decoder_start_token_id is None:
             logger.warning("Please assign the decoder_start_token_id, it may cause unexpected errors.")
 
-        if is_transformers_version("<=", "4.25.1"):
-            self.generation_config = None
-        else:
-            from transformers import GenerationConfig
-
-            self.generation_config = GenerationConfig.from_model_config(config)
+        self.generation_config = GenerationConfig.from_model_config(config)
 
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -549,7 +518,6 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         self,
         save_directory: Union[str, Path],
         save_directory_2: Union[str, Path],
-        save_directory_3: Union[str, Path],
         file_name: Optional[str] = None,
         is_jit: bool = None,
         **kwargs,
@@ -557,11 +525,9 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         if is_jit:
             torch.jit.save(self.decoder, os.path.join(save_directory, WEIGHTS_NAME))
             torch.jit.save(self.encoder, os.path.join(save_directory_2, WEIGHTS_NAME))
-            torch.jit.save(self.decoder_pkv, os.path.join(save_directory_3, WEIGHTS_NAME))
         else:
             torch.save(self.decoder, os.path.join(save_directory, WEIGHTS_NAME))
             torch.save(self.encoder, os.path.join(save_directory_2, WEIGHTS_NAME))
-            torch.save(self.decoder_pkv, os.path.join(save_directory_3, WEIGHTS_NAME))
 
     @classmethod
     def _load_model(
@@ -601,7 +567,6 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         model_id: Union[str, Path],
         model_id_2: Union[str, Path],
         config: PretrainedConfig,
-        model_id_3: Optional[Union[str, Path]] = None,
         use_auth_token: Optional[Union[bool, str, None]] = None,
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
@@ -624,7 +589,6 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         onnx_config = onnx_config_class(config, use_past=use_cache)
         dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt", sequence_length=1)
         dummy_inputs_2 = {}
-        dummy_inputs_3 = {}
         encoder_inputs = dummy_inputs.pop("input_ids", None).repeat_interleave(5, dim=-1)
         dummy_inputs["attention_mask"] = torch.ones_like(encoder_inputs, dtype=torch.int64)
         encoder_outputs = torch.ones(
@@ -636,16 +600,9 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             for i in range(len(dummy_inputs["past_key_values"])):
                 pkv.append([])
                 for j in range(len(dummy_inputs["past_key_values"][0])):
-                    if j == 2 or j == 3:
-                        pkv[i].append(
-                            dummy_inputs["past_key_values"][i][j].repeat_interleave(5, dim=-2).to(torch_dtype)
-                        )
-                    else:
-                        pkv[i].append(dummy_inputs["past_key_values"][i][j].to(torch_dtype))
+                    pkv[i].append(dummy_inputs["past_key_values"][i][j].to(torch_dtype))
                 pkv[i] = tuple(pkv[i])
             dummy_inputs["past_key_values"] = tuple(pkv)
-            dummy_inputs_3 = copy.deepcopy(dummy_inputs)
-            dummy_inputs.pop("past_key_values", None)
         dummy_inputs_2["input_ids"] = encoder_inputs
 
         # Load the model from local directory
@@ -677,30 +634,10 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             encoder(**dummy_inputs_2)
             encoder(**dummy_inputs_2)
 
-        decoder_pkv, model_save_dir_3 = None, None
-        if model_id_3 is not None:
-            decoder_pkv, model_save_dir_3 = cls._load_model(
-                model_id=model_id_3,
-                use_auth_token=use_auth_token,
-                revision=revision,
-                force_download=force_download,
-                cache_dir=cache_dir,
-                file_name=file_name,
-                local_files_only=local_files_only,
-                is_jit=is_jit,
-            )
-            if is_jit:
-                decoder_pkv(**dummy_inputs_3)
-                decoder_pkv(**dummy_inputs_3)
-
         return cls(
             decoder=decoder,
             encoder=encoder,
-            decoder_pkv=decoder_pkv,
             config=config,
-            model_save_dir_1=model_save_dir_1,
-            model_save_dir_2=model_save_dir_2,
-            model_save_dir_3=model_save_dir_3,
             use_cache=use_cache,
             **kwargs,
         )
@@ -736,18 +673,13 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        traced_model, traced_model_2, traced_model_3 = jit_trace(model, task, use_cache)
+        traced_model, traced_model_2 = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
         save_dir_2 = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         save_dir_path_2 = Path(save_dir_2.name)
         cls.save_model(traced_model, save_dir_path / WEIGHTS_NAME)
         cls.save_model(traced_model_2, save_dir_path_2 / WEIGHTS_NAME)
-        save_dir_path_3 = None
-        if traced_model_3 is not None:
-            save_dir_3 = TemporaryDirectory()
-            save_dir_path_3 = Path(save_dir_3.name)
-            cls.save_model(traced_model_3, save_dir_path_3 / WEIGHTS_NAME)
         config.torchscript = True
 
         is_jit = None
@@ -758,7 +690,6 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
             model_id=save_dir_path,
             model_id_2=save_dir_path_2,
             config=config,
-            model_id_3=save_dir_path_3,
             use_cache=use_cache,
             use_auth_token=use_auth_token,
             revision=revision,
@@ -812,21 +743,33 @@ class TSModelForSeq2SeqLM(OptimizedModel, GenerationMixin):
         if attention_mask is None:
             attention_mask = torch.ones([encoder_outputs[0].shape[0], encoder_outputs[0].shape[-2]], dtype=torch.int64)
 
-        model_inputs = {
+        inputs = {
             "decoder_input_ids": decoder_input_ids,
             "encoder_outputs": encoder_outputs,
             "attention_mask": attention_mask,
         }
 
-        if past_key_values is None:
-            decoder_outputs = self.decoder(**model_inputs)
-        elif self.decoder_pkv is not None:
-            model_inputs["past_key_values"] = past_key_values
-            decoder_outputs = self.decoder_pkv(**model_inputs)
-        else:
-            raise ValueError(
-                "Cannot find decoder_pkv, please assign a traced model with past_key_values inputs or set use_cache=False"
-            )
+        if self.use_cache:
+            if past_key_values is None:
+                nb_pkv = 4
+                num_layers = self.normalized_config.num_layers
+                num_attention_heads = self.normalized_config.num_attention_heads
+                hidden_size = self.normalized_config.hidden_size
+                d_k = hidden_size // num_attention_heads
+
+                new_shape = [decoder_input_ids.shape[0], num_attention_heads, 0, d_k]
+                empty_tensor = torch.empty(size=new_shape)
+                if self.model_dtype is not None:
+                    empty_tensor = empty_tensor.to(self.model_dtype)
+                past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
+                pkv = tuple(empty_tensor for _ in range(nb_pkv))
+                
+                past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
+
+            inputs["past_key_values"] = past_key_values
+
+
+        decoder_outputs = self.decoder(**inputs)
 
         if isinstance(decoder_outputs, tuple):
             logits = decoder_outputs[0]
