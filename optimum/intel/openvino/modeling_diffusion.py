@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional, Union
+import packaging
 
 import numpy as np
 import openvino
@@ -285,6 +286,9 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         **kwargs,
     ):
+        import torch
+        if packaging.version.parse(torch.__version__) > packaging.version.parse("1.13.1") and packaging.version.parse(torch.__version__) < packaging.version.parse("2.1.0"):
+            register_custom_scaled_dot_product_attention_export()
         if task is None:
             task = cls._auto_model_to_task(cls.auto_model_class)
         save_dir = TemporaryDirectory()
@@ -340,18 +344,18 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         return self._device.lower()
 
     @property
-    def current_height(self) -> int:
+    def height(self) -> int:
         height = self.unet.model.inputs[0].get_partial_shape()[2]
         if height.is_dynamic:
             return -1
-        return height.get_lenght() * self._vae_scale_factor
+        return height.get_length() * self._vae_scale_factor
 
     @property
-    def current_width(self) -> int:
+    def width(self) -> int:
         width = self.unet.model.inputs[0].get_partial_shape()[3]
         if width.is_dynamic:
             return -1
-        return width.get_lenght() * self._vae_scale_factor
+        return width.get_length() * self._vae_scale_factor
 
     def _reshape_unet(
         self,
@@ -440,20 +444,20 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         num_images_per_prompt: Optional[int] = 1,
         **kwargs,
     ):
-        _height = self.current_height
-        _width = self.current_width
+        _height = self.height
+        _width = self.width
 
         if _height != -1 and height != _height:
             logger.warning(
-                    f"`height` was set to {height} but the static model will output images of height {_height}."
-                    "To fix the height, please reshape your model accordingly using the `.reshape()` method."
+                f"`height` was set to {height} but the static model will output images of height {_height}."
+                "To fix the height, please reshape your model accordingly using the `.reshape()` method."
             )
             height = _height
 
         if _width != -1 and width != _width:
             logger.warning(
-                    f"`width` was set to {width} but the static model will output images of width {_width}."
-                    "To fix the width, please reshape your model accordingly using the `.reshape()` method."
+                f"`width` was set to {width} but the static model will output images of width {_width}."
+                "To fix the width, please reshape your model accordingly using the `.reshape()` method."
             )
             width = _width
 
@@ -485,7 +489,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
 
 class OVModelPart:
     def __init__(
-        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None, model_name:str = "encoder"
+        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None, model_name: str = "encoder"
     ):
         self.model = model
         self.parent_model = parent_model
@@ -511,6 +515,7 @@ class OVModelPart:
 class OVModelTextEncoder(OVModelPart):
     def __init__(self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None):
         super().__init__(model, parent_model, ov_config, "text_encoder")
+
     def __call__(self, input_ids: np.ndarray):
         self._compile()
 
@@ -524,6 +529,7 @@ class OVModelTextEncoder(OVModelPart):
 class OVModelUnet(OVModelPart):
     def __init__(self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None):
         super().__init__(model, parent_model, ov_config, "unet")
+
     def __call__(self, sample: np.ndarray, timestep: np.ndarray, encoder_hidden_states: np.ndarray):
         self._compile()
 
@@ -554,6 +560,7 @@ class OVModelVaeDecoder(OVModelPart):
 class OVModelVaeEncoder(OVModelPart):
     def __init__(self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None):
         super().__init__(model, parent_model, ov_config, "vae_encoder")
+
     def __call__(self, sample: np.ndarray):
         self._compile()
 
@@ -562,3 +569,140 @@ class OVModelVaeEncoder(OVModelPart):
         }
         outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
+
+
+def register_custom_scaled_dot_product_attention_export():
+    import torch
+
+    def scaled_dot_product_attention(
+        g: torch.onnx._internal.jit_utils.GraphContext,
+        query: torch._C.Value,
+        key: torch._C.Value,
+        value: torch._C.Value,
+        attn_mask: Optional[torch._C.Value] = None,
+        dropout_p: float = 0.0,
+        is_causal: bool = False,
+        scale: Optional[torch._C.Value] = None,
+    ):
+        assert (not is_causal) or (
+            is_causal and torch.onnx.symbolic_helper._is_none(attn_mask)
+        ), "is_causal and attn_mask cannot be set at the same time"
+
+        scale = torch.onnx.symbolic_helper._maybe_get_const(scale, "f")
+        if scale is None:
+            scale = _attention_scale(g, query)
+
+        if is_causal:
+            attn_mask = _causal_attention_mask(g, query, key)
+        key_shape_builtin = torch.onnx.symbolic_helper._get_tensor_rank(key)
+        key_transposed_axes = list(range(key_shape_builtin))
+        key_transposed_axes[-1], key_transposed_axes[-2] = (
+            key_transposed_axes[-2],
+            key_transposed_axes[-1],
+        )
+        key_transposed = g.op("Transpose", key, perm_i=key_transposed_axes)
+        query_scaled = g.op("Mul", query, g.op("Sqrt", scale))
+        key_transposed_scaled = g.op("Mul", key_transposed, g.op("Sqrt", scale))
+        mul_qk = g.op("MatMul", query_scaled, key_transposed_scaled)
+
+        if attn_mask is None:
+            mul_qk_add = mul_qk
+        elif (
+            torch.onnx._type_utils.JitScalarType.from_value(attn_mask)
+            == torch.onnx._type_utils.JitScalarType.BOOL
+        ):
+            # Turn the Boolean mask to float: attn_mask.masked_fill(not attn_mask, -float('inf'))
+            const_zero = g.op("Constant", value_t=torch.tensor([0.0]))
+            const_neg_inf = g.op("Constant", value_t=torch.tensor([-float("inf")]))
+            attn_mask = g.op("Where", attn_mask, const_zero, const_neg_inf)
+            mul_qk_add = g.op("Add", mul_qk, attn_mask)
+        elif (
+            torch.onnx._type_utils.JitScalarType.from_value(attn_mask)
+            == torch.onnx._type_utils.JitScalarType.FLOAT
+        ):
+            mul_qk_add = g.op("Add", mul_qk, attn_mask)
+        else:
+            raise ValueError(
+                f"Unsupported type for attn_mask: {torch.onnx._type_utils.JitScalarType.from_value(attn_mask)}"
+            )
+
+        attn_weight = g.op("Softmax", mul_qk_add, axis_i=-1)
+
+        if dropout_p != 0:
+            attn_weight = g.op(
+                "Dropout",
+                attn_weight,
+                g.op("Constant", value_t=torch.tensor(dropout_p, dtype=torch.float)),
+            )
+
+        return g.op("MatMul", attn_weight, value)
+
+    def _attention_scale(
+        g: torch.onnx._internal.jit_utils.GraphContext, query: torch._C.Value
+    ) -> torch._C.Value:
+        """Calculate the scale factor for the attention result.
+
+        Args:
+            query: Tensor of shape [..., L, E]
+
+        Returns:
+            Scalar scale factor := 1 / math.sqrt(query.size(-1))
+        """
+        query_shape = g.op("Shape", query)
+        query_shape_last = g.op(
+            "Slice",
+            query_shape,
+            g.op("Constant", value_t=torch.tensor([-1], dtype=torch.int64)),
+            g.op(
+                "Constant", value_t=torch.tensor([torch.onnx._constants.INT64_MAX], dtype=torch.int64)
+            ),
+        )
+        embedding_size = g.op(
+            "Cast",
+            query_shape_last,
+            to_i=torch.onnx._type_utils.JitScalarType.from_value(query).onnx_type(),
+        )
+        const_one = g.op("Constant", value_t=torch.tensor([1.0], dtype=torch.float))
+        scale = g.op("Div", const_one, g.op("Sqrt", embedding_size))
+        return scale
+
+    def _causal_attention_mask(
+        g: torch.onnx._internal.jit_utils.GraphContext, query: torch._C.Value, key: torch._C.Value
+    ) -> torch._C.Value:
+        """Create a causal mask for the given query and key tensors.
+
+        Equivalent to::
+            mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+            attn_mask = torch.zeros(L, S, dtype=torch.float)
+            attn_mask = attn_mask.masked_fill(not mask, -float('inf'))
+
+        Args:
+            query: Tensor of shape [..., L, E]
+            key: Tensor of shape [..., S, E]
+
+        Returns:
+            Tensor of shape [L, S]
+        """
+
+        query_shape = g.op("Shape", query)
+        key_shape = g.op("Shape", key)
+
+        last_idx = g.op("Constant", value_t=torch.tensor([-1], dtype=torch.int64))
+        second_last_idx = g.op("Constant", value_t=torch.tensor([-2], dtype=torch.int64))
+        target_length = g.op("Slice", query_shape, second_last_idx, last_idx)
+        source_length = g.op("Slice", key_shape, second_last_idx, last_idx)
+        # attn_mask = torch.ones(L, S) := {
+        size = g.op("Concat", target_length, source_length, axis_i=0)
+        const_one = g.op("Constant", value_t=torch.tensor([1.0]))
+        attn_mask = g.op("Expand", const_one, size)
+        # }
+        attn_mask = g.op("Trilu", attn_mask, upper_i=0)
+        # The causal mask has 0s in the lower triangle and -inf in the upper triangle.
+        const_zero = g.op("Constant", value_t=torch.tensor([0.0]))
+        const_neg_inf = g.op("Constant", value_t=torch.tensor([-float("inf")]))
+        attn_mask = g.op(
+            "Where", g.op("Equal", attn_mask, const_zero), const_neg_inf, const_zero
+        )
+        return attn_mask
+
+    torch.onnx.register_custom_op_symbolic("aten::scaled_dot_product_attention", scaled_dot_product_attention, opset_version=14)
