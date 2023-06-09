@@ -18,10 +18,10 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional, Union
-import packaging
 
 import numpy as np
 import openvino
+import packaging
 from diffusers import DDIMScheduler, LMSDiscreteScheduler, PNDMScheduler, StableDiffusionPipeline
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME
@@ -287,7 +287,10 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         **kwargs,
     ):
         import torch
-        if packaging.version.parse(torch.__version__) > packaging.version.parse("1.13.1") and packaging.version.parse(torch.__version__) < packaging.version.parse("2.1.0"):
+
+        if packaging.version.parse(torch.__version__) > packaging.version.parse("1.13.1") and packaging.version.parse(
+            torch.__version__
+        ) < packaging.version.parse("2.1.0"):
             register_custom_scaled_dot_product_attention_export()
         if task is None:
             task = cls._auto_model_to_task(cls.auto_model_class)
@@ -489,7 +492,11 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
 
 class OVModelPart:
     def __init__(
-        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None, model_name: str = "encoder"
+        self,
+        model: openvino.runtime.Model,
+        parent_model: OVBaseModel,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_name: str = "encoder",
     ):
         self.model = model
         self.parent_model = parent_model
@@ -513,7 +520,9 @@ class OVModelPart:
 
 
 class OVModelTextEncoder(OVModelPart):
-    def __init__(self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None):
+    def __init__(
+        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+    ):
         super().__init__(model, parent_model, ov_config, "text_encoder")
 
     def __call__(self, input_ids: np.ndarray):
@@ -527,7 +536,9 @@ class OVModelTextEncoder(OVModelPart):
 
 
 class OVModelUnet(OVModelPart):
-    def __init__(self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None):
+    def __init__(
+        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+    ):
         super().__init__(model, parent_model, ov_config, "unet")
 
     def __call__(self, sample: np.ndarray, timestep: np.ndarray, encoder_hidden_states: np.ndarray):
@@ -544,7 +555,9 @@ class OVModelUnet(OVModelPart):
 
 
 class OVModelVaeDecoder(OVModelPart):
-    def __init__(self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None):
+    def __init__(
+        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+    ):
         super().__init__(model, parent_model, ov_config, "vae_decoder")
 
     def __call__(self, latent_sample: np.ndarray):
@@ -558,7 +571,9 @@ class OVModelVaeDecoder(OVModelPart):
 
 
 class OVModelVaeEncoder(OVModelPart):
-    def __init__(self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None):
+    def __init__(
+        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+    ):
         super().__init__(model, parent_model, ov_config, "vae_encoder")
 
     def __call__(self, sample: np.ndarray):
@@ -574,6 +589,7 @@ class OVModelVaeEncoder(OVModelPart):
 def register_custom_scaled_dot_product_attention_export():
     import torch
 
+    @torch.onnx.symbolic_helper.parse_args("v", "v", "v", "v", "f", "b", "v")
     def scaled_dot_product_attention(
         g: torch.onnx._internal.jit_utils.GraphContext,
         query: torch._C.Value,
@@ -604,22 +620,15 @@ def register_custom_scaled_dot_product_attention_export():
         query_scaled = g.op("Mul", query, g.op("Sqrt", scale))
         key_transposed_scaled = g.op("Mul", key_transposed, g.op("Sqrt", scale))
         mul_qk = g.op("MatMul", query_scaled, key_transposed_scaled)
-
-        if attn_mask is None:
+        if attn_mask is None or torch.onnx.symbolic_helper._is_none(attn_mask):
             mul_qk_add = mul_qk
-        elif (
-            torch.onnx._type_utils.JitScalarType.from_value(attn_mask)
-            == torch.onnx._type_utils.JitScalarType.BOOL
-        ):
+        elif torch.onnx._type_utils.JitScalarType.from_value(attn_mask) == torch.onnx._type_utils.JitScalarType.BOOL:
             # Turn the Boolean mask to float: attn_mask.masked_fill(not attn_mask, -float('inf'))
             const_zero = g.op("Constant", value_t=torch.tensor([0.0]))
             const_neg_inf = g.op("Constant", value_t=torch.tensor([-float("inf")]))
             attn_mask = g.op("Where", attn_mask, const_zero, const_neg_inf)
             mul_qk_add = g.op("Add", mul_qk, attn_mask)
-        elif (
-            torch.onnx._type_utils.JitScalarType.from_value(attn_mask)
-            == torch.onnx._type_utils.JitScalarType.FLOAT
-        ):
+        elif torch.onnx._type_utils.JitScalarType.from_value(attn_mask) == torch.onnx._type_utils.JitScalarType.FLOAT:
             mul_qk_add = g.op("Add", mul_qk, attn_mask)
         else:
             raise ValueError(
@@ -637,9 +646,7 @@ def register_custom_scaled_dot_product_attention_export():
 
         return g.op("MatMul", attn_weight, value)
 
-    def _attention_scale(
-        g: torch.onnx._internal.jit_utils.GraphContext, query: torch._C.Value
-    ) -> torch._C.Value:
+    def _attention_scale(g: torch.onnx._internal.jit_utils.GraphContext, query: torch._C.Value) -> torch._C.Value:
         """Calculate the scale factor for the attention result.
 
         Args:
@@ -653,9 +660,7 @@ def register_custom_scaled_dot_product_attention_export():
             "Slice",
             query_shape,
             g.op("Constant", value_t=torch.tensor([-1], dtype=torch.int64)),
-            g.op(
-                "Constant", value_t=torch.tensor([torch.onnx._constants.INT64_MAX], dtype=torch.int64)
-            ),
+            g.op("Constant", value_t=torch.tensor([torch.onnx._constants.INT64_MAX], dtype=torch.int64)),
         )
         embedding_size = g.op(
             "Cast",
@@ -700,9 +705,9 @@ def register_custom_scaled_dot_product_attention_export():
         # The causal mask has 0s in the lower triangle and -inf in the upper triangle.
         const_zero = g.op("Constant", value_t=torch.tensor([0.0]))
         const_neg_inf = g.op("Constant", value_t=torch.tensor([-float("inf")]))
-        attn_mask = g.op(
-            "Where", g.op("Equal", attn_mask, const_zero), const_neg_inf, const_zero
-        )
+        attn_mask = g.op("Where", g.op("Equal", attn_mask, const_zero), const_neg_inf, const_zero)
         return attn_mask
 
-    torch.onnx.register_custom_op_symbolic("aten::scaled_dot_product_attention", scaled_dot_product_attention, opset_version=14)
+    torch.onnx.register_custom_op_symbolic(
+        "aten::scaled_dot_product_attention", scaled_dot_product_attention, opset_version=14
+    )

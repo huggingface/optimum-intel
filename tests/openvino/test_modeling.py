@@ -870,4 +870,4 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
         )
         self.assertFalse(pipeline.is_dynamic)
         self.assertEqual(pipeline.height, height)
-        self.assertEqual(pipeline.width,  width)
+        self.assertEqual(pipeline.width, width)
