@@ -176,9 +176,7 @@ class TSModelForSeq2SeqLMTest(unittest.TestCase):
         outputs = model(**tokens)
         self.assertIsInstance(outputs.logits, torch.Tensor)
         with torch.no_grad():
-            tokens["decoder_input_ids"] = (
-                torch.ones([1, 1], dtype=torch.int64) * trfs_model.config.decoder_start_token_id
-            )
+            tokens["decoder_input_ids"] = torch.ones([1, 1], dtype=torch.int64)
             trfs_outputs = trfs_model(**tokens)
         # Compare outputs with original transformers model
         atol = 1e-4

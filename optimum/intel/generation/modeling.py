@@ -83,7 +83,7 @@ def prepare_jit_inputs(
             [torch.zeros(dummy_inputs["attention_mask"].shape[0], 1), dummy_inputs["attention_mask"]], -1
         ).to(dummy_inputs["attention_mask"].dtype)
     elif task == "text2text-generation":
-        # dummy_inputs is for decoder without pkv, dummy_inputs_2 is for encoder
+        # dummy_inputs is for decoder, dummy_inputs_2 is for encoder
         dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt", sequence_length=1)
         encoder_inputs = dummy_inputs.pop("input_ids", None).repeat_interleave(encoder_sequence_length, dim=-1)
         dummy_inputs["attention_mask"] = torch.ones_like(encoder_inputs, dtype=torch.int64)
