@@ -339,6 +339,20 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
     def device(self) -> str:
         return self._device.lower()
 
+    @property
+    def current_height(self) -> int:
+        height = self.unet.model.inputs[0].get_partial_shape()[2]
+        if height.is_dynamic:
+            return -1
+        return height.get_lenght() * self._vae_scale_factor
+
+    @property
+    def current_width(self) -> int:
+        width = self.unet.model.inputs[0].get_partial_shape()[3]
+        if width.is_dynamic:
+            return -1
+        return width.get_lenght() * self._vae_scale_factor
+
     def _reshape_unet(
         self,
         model: openvino.runtime.Model,
@@ -426,24 +440,21 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         num_images_per_prompt: Optional[int] = 1,
         **kwargs,
     ):
-        _, _, _height, _width = self.unet.model.inputs[0].get_partial_shape()
+        _height = self.current_height
+        _width = self.current_width
 
-        if _height.is_static:
-            _height = _height.get_length() * self._vae_scale_factor
-            if height != _height:
-                logger.warning(
+        if _height != -1 and height != _height:
+            logger.warning(
                     f"`height` was set to {height} but the static model will output images of height {_height}."
                     "To fix the height, please reshape your model accordingly using the `.reshape()` method."
-                )
+            )
             height = _height
 
-        if _width.is_static:
-            _width = _width.get_length() * self._vae_scale_factor
-            if width != _width:
-                logger.warning(
+        if _width != -1 and width != _width:
+            logger.warning(
                     f"`width` was set to {width} but the static model will output images of width {_width}."
                     "To fix the width, please reshape your model accordingly using the `.reshape()` method."
-                )
+            )
             width = _width
 
         if guidance_scale is not None and guidance_scale <= 1 and not self.is_dynamic:
@@ -474,7 +485,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
 
 class OVModelPart:
     def __init__(
-        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None, model_name:str = "encoder"
     ):
         self.model = model
         self.parent_model = parent_model
@@ -485,10 +496,11 @@ class OVModelPart:
         }
         self.ov_config = ov_config or self.parent_model.ov_config
         self.request = None
+        self._model_name = model_name
 
     def _compile(self):
         if self.request is None:
-            logger.info("Compiling the encoder...")
+            logger.info(f"Compiling the {self._model_name}...")
             self.request = core.compile_model(self.model, self.device, self.ov_config)
 
     @property
@@ -497,6 +509,8 @@ class OVModelPart:
 
 
 class OVModelTextEncoder(OVModelPart):
+    def __init__(self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None):
+        super().__init__(model, parent_model, ov_config, "text_encoder")
     def __call__(self, input_ids: np.ndarray):
         self._compile()
 
@@ -508,6 +522,8 @@ class OVModelTextEncoder(OVModelPart):
 
 
 class OVModelUnet(OVModelPart):
+    def __init__(self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None):
+        super().__init__(model, parent_model, ov_config, "unet")
     def __call__(self, sample: np.ndarray, timestep: np.ndarray, encoder_hidden_states: np.ndarray):
         self._compile()
 
@@ -522,6 +538,9 @@ class OVModelUnet(OVModelPart):
 
 
 class OVModelVaeDecoder(OVModelPart):
+    def __init__(self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None):
+        super().__init__(model, parent_model, ov_config, "vae_decoder")
+
     def __call__(self, latent_sample: np.ndarray):
         self._compile()
 
@@ -533,6 +552,8 @@ class OVModelVaeDecoder(OVModelPart):
 
 
 class OVModelVaeEncoder(OVModelPart):
+    def __init__(self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None):
+        super().__init__(model, parent_model, ov_config, "vae_encoder")
     def __call__(self, sample: np.ndarray):
         self._compile()
 
