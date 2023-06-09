@@ -81,7 +81,7 @@ MODEL_NAMES = {
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
-    "gpt_bigcode": "bigcode/tiny_starcoder_py",
+    #"gpt_bigcode": "bigcode/tiny_starcoder_py",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
@@ -419,7 +419,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt2",
         "gpt_neo",
         "gpt_neox",
-        # "llama",
+        "llama",
     )
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.2
