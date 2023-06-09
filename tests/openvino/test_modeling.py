@@ -432,7 +432,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None)
+        tokens = tokenizer(
+            "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
+        )
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
