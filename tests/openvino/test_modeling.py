@@ -81,10 +81,12 @@ MODEL_NAMES = {
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
+    # "gpt_bigcode": "bigcode/tiny_starcoder_py",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
+    "llama": "trl-internal-testing/tiny-random-LlamaForCausalLM",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "m2m_100": "valhalla/m2m100_tiny_random",
@@ -417,6 +419,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt2",
         "gpt_neo",
         "gpt_neox",
+        # "llama",
     )
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.2
@@ -429,15 +432,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample", return_tensors="pt")
+        tokens = tokenizer(
+            "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
+        )
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         # Compare tensor outputs
-        atol = 1e-1 if model_arch == "bloom" else 1e-4
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=atol))
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
