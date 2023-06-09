@@ -1,9 +1,15 @@
 name: Delete PR documentation
 
 on:
-  pull_request:
-    types: [ closed ]
-
+  workflow_run:
+    workflows: ["Delete doc comment trigger"]
+    types:
+      - completed
+    paths:
+      - "optimum/**.py"
+      - "docs/**"
+      - ".github/workflows/build_pr_documentation.yml"
+      - ".github/workflows/delete_doc_comment.yml"
 
 jobs:
   delete:
