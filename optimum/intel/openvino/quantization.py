@@ -19,6 +19,7 @@ from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple, Union
 
+import nncf
 import openvino
 import torch
 import transformers
@@ -40,6 +41,7 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.quantization_base import OptimumQuantizer
 
+from .modeling_base import OVBaseModel
 from ..utils.constant import _TASK_ALIASES
 from .configuration import OVConfig
 from .utils import (
@@ -86,12 +88,12 @@ class OVQuantizer(OptimumQuantizer):
                 )
         self.task = task or feature
         self.seed = seed
+        self.input_names = None
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
         self._export_input_names = [
             column for column in self._signature_columns if column not in {"label", "labels", "label_ids"}
         ]
-        self.input_names = None
 
     @classmethod
     def from_pretrained(cls, model: PreTrainedModel, **kwargs):
@@ -104,9 +106,10 @@ class OVQuantizer(OptimumQuantizer):
         save_directory: Union[str, Path],
         quantization_config: OVConfig = None,
         file_name: Optional[str] = None,
-        batch_size: int = 8,
+        batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        **kwargs
     ):
         """
         Quantize a model given the optimization specifications defined in `quantization_config`.
@@ -137,11 +140,78 @@ class OVQuantizer(OptimumQuantizer):
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
         """
+        if isinstance(self.model, OVBaseModel):
+            self._quantize_ovbasemodel(calibration_dataset,
+                                 save_directory,
+                                 quantization_config,
+                                 file_name,
+                                 batch_size,
+                                 data_collator,
+                                 remove_unused_columns,
+                                 **kwargs)
+        elif isinstance(self.model, torch.nn.Module):
+            self._quantize_torchmodel(calibration_dataset,
+                                 save_directory,
+                                 quantization_config,
+                                 file_name,
+                                 batch_size,
+                                 data_collator,
+                                 remove_unused_columns,
+                                 **kwargs)
+        else:
+            raise TypeError(f"Unsupported model type: {type(self.model)}")
+        
+    def _quantize_ovbasemodel(
+        self,
+        calibration_dataset: Dataset,
+        save_directory: Union[str, Path],
+        quantization_config: OVConfig = None,
+        file_name: Optional[str] = None,
+        batch_size: int = 8,
+        data_collator: Optional[DataCollator] = None,
+        remove_unused_columns: bool = True,
+        **kwargs
+    ):
+        save_directory = Path(save_directory)
+        save_directory.mkdir(parents=True, exist_ok=True)
+        
+        calibration_dataloader = self._get_calibration_dataloader(
+            calibration_dataset=calibration_dataset,
+            batch_size=batch_size,
+            remove_unused_columns=remove_unused_columns,
+            data_collator=data_collator,
+        )
+        
+        quantization_dataset = nncf.Dataset(calibration_dataloader, lambda x: x)
+        quantized_model = nncf.quantize(
+            self.model.model,
+            quantization_dataset,
+            model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
+            fast_bias_correction=True if not kwargs.get("fast_bias_correction") else kwargs.get("fast_bias_correction"),
+            subset_size=300 if not kwargs.get("subset_size") else kwargs.get("subset_size"),
+            **kwargs
+        )
+        self.model.model = quantized_model
+        self.model.save_pretrained(save_directory)
+        
+    
+    def _quantize_torchmodel(
+        self,
+        calibration_dataset: Dataset,
+        save_directory: Union[str, Path],
+        quantization_config: OVConfig = None,
+        file_name: Optional[str] = None,
+        batch_size: int = 8,
+        data_collator: Optional[DataCollator] = None,
+        remove_unused_columns: bool = True,
+        **kwargs
+    ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         file_name = file_name if file_name is not None else OV_XML_FILE_NAME
         output_path = save_directory.joinpath(file_name)
         output_path = output_path.with_suffix(".xml").as_posix()
+        
         calibration_dataloader = self._get_calibration_dataloader(
             calibration_dataset=calibration_dataset,
             batch_size=batch_size,
@@ -278,7 +348,6 @@ class OVQuantizer(OptimumQuantizer):
     def _remove_unused_columns(self, dataset: Dataset):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
-
 
 def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Union[str, io.BytesIO], opset: int = None):
     signature = inspect.signature(model.forward)
