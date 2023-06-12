@@ -32,6 +32,7 @@ from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
 from torch.onnx import export as onnx_export
+from optimum.exporters.onnx import export
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
@@ -160,36 +161,72 @@ class OVQuantizer(OptimumQuantizer):
         controller, compressed_model = create_compressed_model(
             self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
         )
-        controller.prepare_for_export()
+        #controller.prepare_for_export()
+        compressed_model = controller.strip(do_copy=False)
 
         self._set_task()
 
-        self.model.config.save_pretrained(save_directory)
+        # self.model.config.save_pretrained(save_directory)
+        # model_type = self.model.config.model_type.replace("_", "-")
+        # onnx_config_class = TasksManager.get_exporter_config_constructor(
+        #     exporter="onnx",
+        #     model=self.model,
+        #     task=self.task,
+        #     model_type=model_type,
+        # )
+
+        # if self.task == "text-generation":
+        #     onnx_config = onnx_config_class(self.model.config, use_past=self.model.config.use_cache)
+        # else:
+        #     onnx_config = onnx_config_class(self.model.config)
+
+        # compressed_model.eval()
+        # num_parameters = compressed_model.num_parameters()
+        # save_as_external_data = True #use_external_data_format(num_parameters) or quantization_config.save_onnx_model
+        # f = save_directory / ONNX_WEIGHTS_NAME #io.BytesIO() if not save_as_external_data else save_directory / ONNX_WEIGHTS_NAME
+
+        # # Export the compressed model to the ONNX format
+        # opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+        # opset = opset if not quantization_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
+        # _onnx_export_nncf_model(compressed_model, onnx_config, f, opset)
+        
+        task =self.task
+        model = self.model
+
         model_type = self.model.config.model_type.replace("_", "-")
+        # onnx_config_class = TasksManager.get_exporter_config_constructor(
+        #     exporter="onnx",
+        #     model=model,
+        #     task=task,
+        #     model_name=model_id,
+        #     model_type=model_type,
+        # )
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",
             model=self.model,
             task=self.task,
             model_type=model_type,
         )
-
-        if self.task == "text-generation":
-            onnx_config = onnx_config_class(self.model.config, use_past=self.model.config.use_cache)
+        #onnx_config = onnx_config_class(model.config)
+        if task == "text-generation":
+            onnx_config = onnx_config_class(model.config, use_past=model.config.use_cache)
         else:
-            onnx_config = onnx_config_class(self.model.config)
+            onnx_config = onnx_config_class(model.config)
+        save_dir = save_directory / ONNX_WEIGHTS_NAME
+        save_dir_path = Path(save_dir.name)
 
-        compressed_model.eval()
-        num_parameters = compressed_model.num_parameters()
-        save_as_external_data = use_external_data_format(num_parameters) or quantization_config.save_onnx_model
-        f = io.BytesIO() if not save_as_external_data else save_directory / ONNX_WEIGHTS_NAME
-
-        # Export the compressed model to the ONNX format
-        opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
-        opset = opset if not quantization_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
-        _onnx_export_nncf_model(compressed_model, onnx_config, f, opset)
+        # Export the model to the ONNX format
+        print(f"ONNX config: {onnx_config}")
+        export(
+            model=compressed_model,
+            config=onnx_config,
+            opset=onnx_config.DEFAULT_ONNX_OPSET,
+            output=save_dir_path / ONNX_WEIGHTS_NAME,
+        )
+        save_as_external_data = True
 
         # Load and save the compressed model
-        model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
+        model = core.read_model(save_dir_path / ONNX_WEIGHTS_NAME) #core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
         self._save_pretrained(model, output_path)
         quantization_config.save_pretrained(save_directory)
 
@@ -296,18 +333,24 @@ def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Unio
 
     with config.patch_model_for_export(model.get_nncf_wrapped_model()):
         model_inputs = tree_map(remap, model_inputs)
+        inputs = config.ordered_inputs(model.get_nncf_wrapped_model())
+        input_names = list(inputs.keys())
+        output_names = list(config.outputs.keys())
         with torch.no_grad():
             model.eval()
             # Disable node additions to be exported in the graph
-            model.disable_dynamic_graph_building()
+            #model.disable_dynamic_graph_building()
+            print(f"Dynamic axes:\n {dict(chain(config.inputs.items(), config.outputs.items()))}")
+            #print(f"{config}")
+            
             onnx_export(
                 model,
                 model_inputs,
                 f=output,
-                input_names=list(config.inputs.keys()),
-                output_names=list(config.outputs.keys()),
+                input_names=input_names, #list(config.inputs.keys()),
+                output_names=output_names,#list(config.outputs.keys()),
                 dynamic_axes=dict(chain(config.inputs.items(), config.outputs.items())),
                 do_constant_folding=True,
                 opset_version=opset,
             )
-            model.enable_dynamic_graph_building()
+            #model.enable_dynamic_graph_building()
