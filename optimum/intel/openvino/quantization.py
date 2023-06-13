@@ -31,7 +31,7 @@ from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_obj
 from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core, InferRequest
+from openvino.runtime import Core
 from torch.onnx import export as onnx_export
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
@@ -167,7 +167,7 @@ class OVQuantizer(OptimumQuantizer):
                 file_name,
                 batch_size,
                 data_collator,
-                remove_unused_columns
+                remove_unused_columns,
             )
         else:
             raise TypeError(f"Unsupported model type: {type(self.model)}")
@@ -204,7 +204,7 @@ class OVQuantizer(OptimumQuantizer):
         )
         self.model.model = quantized_model
         self.model.save_pretrained(save_directory)
-        
+
     def _quantize_ovcausallm(
         self,
         calibration_dataset: Dataset,
@@ -223,22 +223,25 @@ class OVQuantizer(OptimumQuantizer):
             remove_unused_columns=remove_unused_columns,
             data_collator=data_collator,
         )
-        
+
         # Prefeth past_key_values
         self.model.compile()
-        subset_size=300 if not kwargs.get("subset_size") else kwargs.get("subset_size")
+        subset_size = 300 if not kwargs.get("subset_size") else kwargs.get("subset_size")
         data_cache = []
-        class InferRequestWrapper():
+
+        class InferRequestWrapper:
             def __init__(self, request):
                 self.request = request
+
             def __call__(self, *args, **kwargs):
                 data_cache.append(*args)
                 return self.request(*args, *kwargs)
+
             def __getattr__(self, attr):
                 if attr in self.__dict__:
                     return getattr(self, attr)
                 return getattr(self.request, attr)
-            
+
         self.model.request = InferRequestWrapper(self.model.request)
         for i, data in enumerate(calibration_dataloader):
             self.model.generate(**data, max_new_tokens=10)

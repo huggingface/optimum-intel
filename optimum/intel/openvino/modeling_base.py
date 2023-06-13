@@ -228,7 +228,7 @@ class OVBaseModel(PreTrainedModel):
                 )
             model_save_dir = Path(model_cache_path).parent
             file_name = file_names[0]
-            
+
         if from_onnx:
             model = mo.convert_model(file_name)
         else:
