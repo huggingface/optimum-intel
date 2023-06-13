@@ -419,7 +419,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt2",
         "gpt_neo",
         "gpt_neox",
-        # "llama",
+        "llama",
     )
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.2
