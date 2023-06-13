@@ -31,7 +31,7 @@ from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_obj
 from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core
+from openvino.runtime import Core, InferRequest
 from torch.onnx import export as onnx_export
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
@@ -44,7 +44,7 @@ from optimum.quantization_base import OptimumQuantizer
 from ..utils.constant import _TASK_ALIASES
 from .configuration import OVConfig
 from .modeling_base import OVBaseModel
-from .modeling_decoder import OVModelForCausalLM
+from .modeling_decoder import OVBaseDecoderModel
 from .utils import (
     MAX_ONNX_OPSET,
     MIN_ONNX_QDQ_OPSET,
@@ -141,7 +141,7 @@ class OVQuantizer(OptimumQuantizer):
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
         """
-        if isinstance(self.model, OVModelForCausalLM) and self.model.use_cache:
+        if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
             self._quantize_ovcausallm(
                 calibration_dataset,
                 save_directory,
@@ -150,7 +150,7 @@ class OVQuantizer(OptimumQuantizer):
                 remove_unused_columns,
                 **kwargs,
             )
-        if isinstance(self.model, OVBaseModel):
+        elif isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
                 calibration_dataset,
                 save_directory,
@@ -214,7 +214,6 @@ class OVQuantizer(OptimumQuantizer):
         remove_unused_columns: bool = True,
         **kwargs,
     ):
-        print("The right branch")
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
 
@@ -226,29 +225,29 @@ class OVQuantizer(OptimumQuantizer):
         )
         
         # Prefeth past_key_values
-        subset_size=50 if not kwargs.get("subset_size") else kwargs.get("subset_size")
+        self.model.compile()
+        subset_size=300 if not kwargs.get("subset_size") else kwargs.get("subset_size")
         data_cache = []
-        
-        orig_forward = OVModelForCausalLM.forward
-        def wrapped_forward(obj, **kwargs):
-            print(f"obj: {obj}, kwargs: {kwargs}")
-            result = orig_forward(obj, **kwargs)
-            data_cache.append(kwargs)
-            return result
-        OVModelForCausalLM.forward = wrapped_forward
-        
+        class InferRequestWrapper():
+            def __init__(self, request):
+                self.request = request
+            def __call__(self, *args, **kwargs):
+                data_cache.append(*args)
+                return self.request(*args, *kwargs)
+            def __getattr__(self, attr):
+                if attr in self.__dict__:
+                    return getattr(self, attr)
+                return getattr(self.request, attr)
+            
+        self.model.request = InferRequestWrapper(self.model.request)
         for i, data in enumerate(calibration_dataloader):
-            print(f"Index: {i}")
             self.model.generate(**data, max_new_tokens=10)
-            if i > subset_size:
+            if len(data_cache) >= subset_size:
                 break
-        
-        OVModelForCausalLM.forward = orig_forward
-        
-        print(f"cache example: {data_cache[1]}")
+        self.model.request = self.model.request.request
 
         # Actual model quantization
-        quantization_dataset = nncf.Dataset(data, lambda x: x)
+        quantization_dataset = nncf.Dataset(data_cache, lambda x: x)
         quantized_model = nncf.quantize(
             self.model.model,
             quantization_dataset,
