@@ -44,6 +44,7 @@ from optimum.quantization_base import OptimumQuantizer
 from ..utils.constant import _TASK_ALIASES
 from .configuration import OVConfig
 from .modeling_base import OVBaseModel
+from .modeling_decoder import OVModelForCausalLM
 from .utils import (
     MAX_ONNX_OPSET,
     MIN_ONNX_QDQ_OPSET,
@@ -140,12 +141,19 @@ class OVQuantizer(OptimumQuantizer):
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
         """
+        if isinstance(self.model, OVModelForCausalLM) and self.model.use_cache:
+            self._quantize_ovcausallm(
+                calibration_dataset,
+                save_directory,
+                batch_size,
+                data_collator,
+                remove_unused_columns,
+                **kwargs,
+            )
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
                 calibration_dataset,
                 save_directory,
-                quantization_config,
-                file_name,
                 batch_size,
                 data_collator,
                 remove_unused_columns,
@@ -159,8 +167,7 @@ class OVQuantizer(OptimumQuantizer):
                 file_name,
                 batch_size,
                 data_collator,
-                remove_unused_columns,
-                **kwargs,
+                remove_unused_columns
             )
         else:
             raise TypeError(f"Unsupported model type: {type(self.model)}")
@@ -169,9 +176,7 @@ class OVQuantizer(OptimumQuantizer):
         self,
         calibration_dataset: Dataset,
         save_directory: Union[str, Path],
-        quantization_config: OVConfig = None,
-        file_name: Optional[str] = None,
-        batch_size: int = 8,
+        batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         **kwargs,
@@ -199,6 +204,63 @@ class OVQuantizer(OptimumQuantizer):
         )
         self.model.model = quantized_model
         self.model.save_pretrained(save_directory)
+        
+    def _quantize_ovcausallm(
+        self,
+        calibration_dataset: Dataset,
+        save_directory: Union[str, Path],
+        batch_size: int = 1,
+        data_collator: Optional[DataCollator] = None,
+        remove_unused_columns: bool = True,
+        **kwargs,
+    ):
+        print("The right branch")
+        save_directory = Path(save_directory)
+        save_directory.mkdir(parents=True, exist_ok=True)
+
+        calibration_dataloader = self._get_calibration_dataloader(
+            calibration_dataset=calibration_dataset,
+            batch_size=batch_size,
+            remove_unused_columns=remove_unused_columns,
+            data_collator=data_collator,
+        )
+        
+        # Prefeth past_key_values
+        subset_size=50 if not kwargs.get("subset_size") else kwargs.get("subset_size")
+        data_cache = []
+        
+        orig_forward = OVModelForCausalLM.forward
+        def wrapped_forward(obj, **kwargs):
+            print(f"obj: {obj}, kwargs: {kwargs}")
+            result = orig_forward(obj, **kwargs)
+            data_cache.append(kwargs)
+            return result
+        OVModelForCausalLM.forward = wrapped_forward
+        
+        for i, data in enumerate(calibration_dataloader):
+            print(f"Index: {i}")
+            self.model.generate(**data, max_new_tokens=10)
+            if i > subset_size:
+                break
+        
+        OVModelForCausalLM.forward = orig_forward
+        
+        print(f"cache example: {data_cache[1]}")
+
+        # Actual model quantization
+        quantization_dataset = nncf.Dataset(data, lambda x: x)
+        quantized_model = nncf.quantize(
+            self.model.model,
+            quantization_dataset,
+            model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
+            fast_bias_correction=True
+            if not kwargs.get("fast_bias_correction")
+            else kwargs.get("fast_bias_correction"),
+            subset_size=subset_size,
+            **kwargs,
+        )
+        self.model.model = quantized_model
+        self.model.save_pretrained(save_directory)
 
     def _quantize_torchmodel(
         self,
@@ -206,10 +268,9 @@ class OVQuantizer(OptimumQuantizer):
         save_directory: Union[str, Path],
         quantization_config: OVConfig = None,
         file_name: Optional[str] = None,
-        batch_size: int = 8,
+        batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
-        **kwargs,
     ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
