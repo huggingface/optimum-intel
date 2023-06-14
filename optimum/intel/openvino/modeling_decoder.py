@@ -153,6 +153,12 @@ class OVBaseDecoderModel(OVModel):
             "trust_remote_code": trust_remote_code,
         }
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+
+        """
+        if model.config not in SUPPORTED_ARCHITECTURES:
+            raise ValueError(f"Unrecognized architecture {model.config}")
+        """
+
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
 
@@ -162,6 +168,15 @@ class OVBaseDecoderModel(OVModel):
 
         if model.config.model_type == "llama":
             model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+
+        if model.config.model_type == "blenderbot-small":
+            model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+
+        if model.config.model_type == "blenderbot":
+            model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+
+        if model.config.model_type == "opt":
+            model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
 
         # Export the model to the ONNX format
         export(model=model, config=onnx_config, output=save_dir_path / model_file_name)
