@@ -71,6 +71,21 @@ TEXT_GENERATION_EXAMPLE = r"""
     ```
 """
 
+_SUPPORTED_ARCHITECTURES = (
+    "bart",
+    "blenderbot",
+    "blenderbot-small",
+    "bloom",
+    "codegen",
+    "gpt2",
+    "gpt_neo",
+    "gpt_neox",
+    "llama",
+    "marian",
+    "opt",
+    "pegasus",
+)
+
 
 @add_start_docstrings(
     """
@@ -154,10 +169,8 @@ class OVBaseDecoderModel(OVModel):
         }
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
 
-        """
-        if model.config not in SUPPORTED_ARCHITECTURES:
-            raise ValueError(f"Unrecognized architecture {model.config}")
-        """
+        if model.config.model_type not in _SUPPORTED_ARCHITECTURES:
+            raise ValueError(f"Unrecognized architecture : {model.config.model_type}, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures are supported.")
 
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
