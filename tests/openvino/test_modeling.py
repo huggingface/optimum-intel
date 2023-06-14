@@ -845,7 +845,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**inputs)
 
         for input_type in ["pt", "np"]:
-            inputs = processor(self._generate_random_audio_data(), return_tensors=input_type)
+            inputs = preprocessor(self._generate_random_audio_data(), return_tensors=input_type)
             ov_outputs = ov_model(**inputs)
             self.assertIn("logits", ov_outputs)
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
