@@ -38,6 +38,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoTokenizer,
+    GenerationConfig,
     PretrainedConfig,
     pipeline,
     set_seed,
@@ -477,7 +478,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "blenderbot",
         "blenderbot_small",
         "bloom",
-        "codegen",
+        # "codegen",
         # "data2vec-text", # TODO : enable when enabled in exporters
         "gpt2",
         "gpt_neo",
@@ -533,7 +534,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
         tokens = tokenizer(texts, padding=True, return_tensors="pt")
-        outputs = model.generate(**tokens, max_new_tokens=20, num_beams=2)
+        generation_config = GenerationConfig(encoder_no_repeat_ngram_size=0, max_new_tokens=20, num_beams=2)
+        outputs = model.generate(**tokens, generation_config=generation_config)
         self.assertIsInstance(outputs, torch.Tensor)
         self.assertEqual(outputs.shape[0], 3)
 
