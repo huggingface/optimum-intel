@@ -20,7 +20,16 @@ INSTALL_REQUIRE = [
     "accelerate",  # transformers 4.29 require accelerate for PyTorch
 ]
 
-TESTS_REQUIRE = ["pytest", "parameterized", "Pillow", "evaluate", "diffusers", "py-cpuinfo"]
+TESTS_REQUIRE = [
+    "pytest",
+    "parameterized",
+    "Pillow",
+    "evaluate",
+    "diffusers",
+    "py-cpuinfo",
+    "sacremoses",
+    "torchaudio",
+]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
 

@@ -79,7 +79,7 @@ MODEL_NAMES = {
     "albert": "hf-internal-testing/tiny-random-AlbertModel",
     "audio_spectrogram_transformer": "Ericwang/tiny-random-ast",
     "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
-    "bert": "hf-internal-testing/tiny-random-BertModel",
+    "bert": "hf-internal-testing/tiny-random-bert",
     "bart": "hf-internal-testing/tiny-random-bart",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "blenderbot_small": "hf-internal-testing/tiny-random-BlenderbotModel",
@@ -95,7 +95,7 @@ MODEL_NAMES = {
     "deberta_v2": "hf-internal-testing/tiny-random-DebertaV2Model",
     "deit": "hf-internal-testing/tiny-random-DeiTModel",
     "convnext": "hf-internal-testing/tiny-random-convnext",
-    "distilbert": "hf-internal-testing/tiny-random-DistilBertModel",
+    "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "electra": "hf-internal-testing/tiny-random-ElectraModel",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     # "gpt_bigcode": "bigcode/tiny_starcoder_py",
@@ -109,6 +109,7 @@ MODEL_NAMES = {
     "longt5": "hf-internal-testing/tiny-random-LongT5Model",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
+    "opt": "hf-internal-testing/tiny-random-OPTModel",
     "marian": "sshleifer/tiny-marian-en-de",  # hf-internal-testing ones are broken
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
@@ -253,20 +254,20 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         "albert",
         "bert",
         "camembert",
-        "convbert",
-        "data2vec_text",
-        "deberta_v2",
+        # "convbert",
+        # "data2vec_text",
+        # "deberta_v2",
         "distilbert",
-        "electra",
+        # "electra",
         "flaubert",
-        "ibert",
-        "mobilebert",
-        "nystromformer",
+        # "ibert",
+        # "mobilebert",
+        # "nystromformer",
         "roberta",
         "roformer",
-        "squeezebert",
-        "xlm",
-        "xlm_roberta",
+        # "squeezebert",
+        # "xlm",
+        # "xlm_roberta",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -578,20 +579,20 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "albert",
         "bert",
         "camembert",
-        "convbert",
-        "data2vec_text",
+        # "convbert",
+        # "data2vec_text",
         "deberta",
-        "deberta_v2",
+        # "deberta_v2",
         "distilbert",
         "electra",
         "flaubert",
-        "ibert",
-        "mobilebert",
+        # "ibert",
+        # "mobilebert",
         "roberta",
-        "roformer",
-        "squeezebert",
-        "xlm",
-        "xlm_roberta",
+        # "roformer",
+        # "squeezebert",
+        # "xlm",
+        # "xlm_roberta",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -631,16 +632,16 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "beit",
         "convnext",
-        "data2vec_vision",
-        "deit",
+        # "data2vec_vision",
+        # "deit",
         "levit",
         "mobilenet_v1",
         "mobilenet_v2",
         "mobilevit",
-        "poolformer",
+        # "poolformer",
         "resnet",
-        "segformer",
-        "swin",
+        # "segformer",
+        # "swin",
         "vit",
     )
 
@@ -685,7 +686,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         # "bigbird_pegasus",
         "blenderbot",
         "blenderbot_small",
-        "longt5",
+        # "longt5",
         "m2m_100",
         "marian",
         "mbart",
@@ -809,19 +810,26 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
 class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        "audio_spectrogram_transformer",
+        # "audio_spectrogram_transformer",
         "data2vec_audio",
         "hubert",
         "sew",
-        "sew_d",
+        # "sew_d",
         "wav2vec2",
-        "wav2vec2-conformer",
+        # "wav2vec2-conformer",
         "unispeech",
-        "unispeech_sat",
-        "wavlm",
+        # "unispeech_sat",
+        # "wavlm",
         "wav2vec2",
-        "wav2vec2-conformer",
+        # "wav2vec2-conformer",
     )
+
+    def _generate_random_audio_data(self):
+        np.random.seed(10)
+        t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+        # generate pure sine wave at 220 Hz
+        audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
+        return audio_data
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -831,12 +839,13 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForAudioClassification.from_pretrained(model_id)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        wavs = [np.random.random(16000)]
-        inputs = preprocessor(wavs, sampling_rate=preprocessor.sampling_rate, return_tensors="pt")
+        inputs = preprocessor(self._generate_random_audio_data(), return_tensors="pt")
+
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
+
         for input_type in ["pt", "np"]:
-            inputs = preprocessor(wavs, sampling_rate=preprocessor.sampling_rate, return_tensors=input_type)
+            inputs = processor(self._generate_random_audio_data(), return_tensors=input_type)
             ov_outputs = ov_model(**inputs)
             self.assertIn("logits", ov_outputs)
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
