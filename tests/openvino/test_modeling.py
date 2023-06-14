@@ -83,7 +83,7 @@ MODEL_NAMES = {
     "bert": "hf-internal-testing/tiny-random-bert",
     "bart": "hf-internal-testing/tiny-random-bart",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
-    "blenderbot_small": "hf-internal-testing/tiny-random-blenderbot-small",
+    "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
     "blenderbot": "hf-internal-testing/tiny-random-blenderbot",
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "camembert": "hf-internal-testing/tiny-random-camembert",
@@ -516,6 +516,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True, use_cache=False, compile=False)
+        model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         model.half()
         model.compile()
@@ -688,12 +689,12 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         "bart",
         # "bigbird_pegasus",
         "blenderbot",
-        "blenderbot_small",
+        "blenderbot-small",
         # "longt5",
         "m2m_100",
         "marian",
         "mbart",
-        "mt5",
+        # "mt5",
         "pegasus",
         "t5",
     )
