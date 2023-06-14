@@ -473,7 +473,8 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        "bart" "blenderbot",
+        "bart",
+        "blenderbot",
         "blenderbot_small",
         "bloom",
         "codegen",
