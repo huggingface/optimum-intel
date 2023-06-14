@@ -76,26 +76,69 @@ from optimum.utils.testing_utils import require_diffusers
 
 
 MODEL_NAMES = {
+    "albert": "hf-internal-testing/tiny-random-AlbertModel",
+    "audio_spectrogram_transformer": "Ericwang/tiny-random-ast",
+    "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
+    "bert": "hf-internal-testing/tiny-random-BertModel",
     "bart": "hf-internal-testing/tiny-random-bart",
-    "bert": "hf-internal-testing/tiny-random-bert",
-    "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
-    "distilbert": "hf-internal-testing/tiny-random-distilbert",
+    "blenderbot_small": "hf-internal-testing/tiny-random-BlenderbotModel",
+    "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",
+    "bloom": "hf-internal-testing/tiny-random-BloomModel",
+    "camembert": "hf-internal-testing/tiny-random-camembert",
+    "convbert": "hf-internal-testing/tiny-random-ConvBertModel",
+    "codegen": "hf-internal-testing/tiny-random-CodeGenModel",
+    "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
+    "data2vec_vision": "hf-internal-testing/tiny-random-Data2VecVisionModel",
+    "data2vec_audio": "hf-internal-testing/tiny-random-Data2VecAudioModel",
+    "deberta": "hf-internal-testing/tiny-random-DebertaModel",
+    "deberta_v2": "hf-internal-testing/tiny-random-DebertaV2Model",
+    "deit": "hf-internal-testing/tiny-random-DeiTModel",
+    "convnext": "hf-internal-testing/tiny-random-convnext",
+    "distilbert": "hf-internal-testing/tiny-random-DistilBertModel",
+    "electra": "hf-internal-testing/tiny-random-ElectraModel",
+    "flaubert": "hf-internal-testing/tiny-random-flaubert",
     # "gpt_bigcode": "bigcode/tiny_starcoder_py",
-    "gptj": "hf-internal-testing/tiny-random-GPTJModel",
+    "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
-    "gpt2": "hf-internal-testing/tiny-random-gpt2",
-    "llama": "trl-internal-testing/tiny-random-LlamaForCausalLM",
-    "marian": "sshleifer/tiny-marian-en-de",
+    "gptj": "hf-internal-testing/tiny-random-GPTJModel",
+    "hubert": "hf-internal-testing/tiny-random-HubertModel",
+    "ibert": "hf-internal-testing/tiny-random-IBertModel",
+    "levit": "hf-internal-testing/tiny-random-LevitModel",
+    "longt5": "hf-internal-testing/tiny-random-LongT5Model",
+    "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
+    "marian": "sshleifer/tiny-marian-en-de",  # hf-internal-testing ones are broken
     "mbart": "hf-internal-testing/tiny-random-mbart",
-    "m2m_100": "valhalla/m2m100_tiny_random",
-    "roberta": "hf-internal-testing/tiny-random-roberta",
+    "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
+    "mobilenet_v1": "google/mobilenet_v1_0.75_192",
+    "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
+    "mobilevit": "hf-internal-testing/tiny-random-mobilevit",
+    "mt5": "lewtun/tiny-random-mt5",
+    "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
+    "pegasus": "hf-internal-testing/tiny-random-PegasusModel",
+    "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
+    "resnet": "hf-internal-testing/tiny-random-resnet",
+    "roberta": "hf-internal-testing/tiny-random-RobertaModel",
+    "roformer": "hf-internal-testing/tiny-random-RoFormerModel",
+    "segformer": "hf-internal-testing/tiny-random-SegformerModel",
+    "squeezebert": "hf-internal-testing/tiny-random-SqueezeBertModel",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
+    "sew": "hf-internal-testing/tiny-random-SEWModel",
+    "sew_d": "hf-internal-testing/tiny-random-SEWDModel",
+    "swin": "hf-internal-testing/tiny-random-SwinModel",
     "t5": "hf-internal-testing/tiny-random-t5",
+    "unispeech": "hf-internal-testing/tiny-random-unispeech",
+    "unispeech_sat": "hf-internal-testing/tiny-random-UnispeechSatModel",
     "vit": "hf-internal-testing/tiny-random-vit",
-    "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
+    "wavlm": "hf-internal-testing/tiny-random-WavlmModel",
+    "wav2vec2": "hf-internal-testing/tiny-random-Wav2Vec2Model",
+    "wav2vec2-conformer": "hf-internal-testing/tiny-random-wav2vec2-conformer",
+    "xlm": "hf-internal-testing/tiny-random-XLMModel",
+    "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
 }
+
 
 TENSOR_ALIAS_TO_TYPE = {
     "pt": torch.Tensor,
@@ -207,9 +250,23 @@ class OVModelIntegrationTest(unittest.TestCase):
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
+        "albert",
         "bert",
+        "camembert",
+        "convbert",
+        "data2vec_text",
+        "deberta_v2",
         "distilbert",
+        "electra",
+        "flaubert",
+        "ibert",
+        "mobilebert",
+        "nystromformer",
         "roberta",
+        "roformer",
+        "squeezebert",
+        "xlm",
+        "xlm_roberta",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -415,11 +472,18 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
+        "bart" "blenderbot",
+        "blenderbot_small",
         "bloom",
+        "codegen",
+        # "data2vec-text", # TODO : enable when enabled in exporters
         "gpt2",
         "gpt_neo",
         "gpt_neox",
         # "llama",
+        "marian",
+        "opt",
+        "pegasus",
     )
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.2
@@ -511,9 +575,23 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
+        "albert",
         "bert",
+        "camembert",
+        "convbert",
+        "data2vec_text",
+        "deberta",
+        "deberta_v2",
         "distilbert",
+        "electra",
+        "flaubert",
+        "ibert",
+        "mobilebert",
         "roberta",
+        "roformer",
+        "squeezebert",
+        "xlm",
+        "xlm_roberta",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -550,7 +628,21 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
 
 
 class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("vit",)
+    SUPPORTED_ARCHITECTURES = (
+        "beit",
+        "convnext",
+        "data2vec_vision",
+        "deit",
+        "levit",
+        "mobilenet_v1",
+        "mobilenet_v2",
+        "mobilevit",
+        "poolformer",
+        "resnet",
+        "segformer",
+        "swin",
+        "vit",
+    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -590,9 +682,15 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
 class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
+        # "bigbird_pegasus",
+        "blenderbot",
+        "blenderbot_small",
+        "longt5",
+        "m2m_100",
         "marian",
         "mbart",
-        "m2m_100",
+        "mt5",
+        "pegasus",
         "t5",
     )
 
@@ -710,7 +808,20 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
 
 class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("wav2vec2",)
+    SUPPORTED_ARCHITECTURES = (
+        "audio_spectrogram_transformer",
+        "data2vec_audio",
+        "hubert",
+        "sew",
+        "sew_d",
+        "wav2vec2",
+        "wav2vec2-conformer",
+        "unispeech",
+        "unispeech_sat",
+        "wavlm",
+        "wav2vec2",
+        "wav2vec2-conformer",
+    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
