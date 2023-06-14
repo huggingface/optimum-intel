@@ -29,6 +29,7 @@ TESTS_REQUIRE = [
     "py-cpuinfo",
     "sacremoses",
     "torchaudio",
+    "rjieba",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]

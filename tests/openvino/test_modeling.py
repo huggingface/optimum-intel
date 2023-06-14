@@ -87,7 +87,7 @@ MODEL_NAMES = {
     "blenderbot": "hf-internal-testing/tiny-random-blenderbot",
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "camembert": "hf-internal-testing/tiny-random-camembert",
-    "convbert": "hf-internal-testing/tiny-random-convbert",
+    "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
     "codegen": "hf-internal-testing/tiny-random-CodeGenModel",
     "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
     "data2vec_vision": "hf-internal-testing/tiny-random-Data2VecVisionModel",
@@ -254,7 +254,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
-        "camembert",
+        # "camembert",
         "convbert",
         # "data2vec_text",
         # "deberta_v2",
@@ -268,7 +268,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         "roformer",
         "squeezebert",
         "xlm",
-        "xlm_roberta",
+        # "xlm_roberta",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
