@@ -580,22 +580,22 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        # "albert",
+        "albert",
         "bert",
         # "camembert",
         # "convbert",
         # "data2vec_text",
-        # "deberta",
+        "deberta",
         # "deberta_v2",
         "distilbert",
-        # "electra",
-        # "flaubert",
-        # "ibert",
+        "electra",
+        "flaubert",
+        "ibert",
         # "mobilebert",
         "roberta",
-        # "roformer",
-        # "squeezebert",
-        # "xlm",
+        "roformer",
+        "squeezebert",
+        "xlm",
         # "xlm_roberta",
     )
 
