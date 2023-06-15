@@ -23,7 +23,6 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from openvino.runtime import Core
-from openvino.tools import mo
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
@@ -246,10 +245,7 @@ class OVBaseModel(PreTrainedModel):
             model_save_dir = Path(model_cache_path).parent
             file_name = file_names[0]
 
-        if from_onnx:
-            model = mo.convert_model(file_name)
-        else:
-            model = cls.load_model(file_name)
+        model = cls.load_model(file_name)
         return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
 
     @classmethod
