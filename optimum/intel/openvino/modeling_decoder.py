@@ -153,7 +153,7 @@ class OVBaseDecoderModel(OVModel):
     ):
         if config.model_type not in _SUPPORTED_ARCHITECTURES:
             logger.warning(
-                f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures was "
+                f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures were "
                 "validated, use at your own risk."
             )
 
