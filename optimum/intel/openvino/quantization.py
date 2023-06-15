@@ -224,7 +224,7 @@ class OVQuantizer(OptimumQuantizer):
 
         # Prefeth past_key_values
         self.model.compile()
-        subset_size = 300 if not kwargs.get("subset_size") else kwargs.get("subset_size")
+        subset_size = kwargs.get("subset_size", 300 )
         data_cache = []
 
         class InferRequestWrapper:
