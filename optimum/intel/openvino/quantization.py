@@ -135,6 +135,8 @@ class OVQuantizer(OptimumQuantizer):
         ```python
         >>> from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
         >>> from transformers import AutoModelForSequenceClassification
+        >>> model = OVModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english", export=True)
+        >>> # or
         >>> model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
         >>> OVQuantizer.from_pretrained(model, task="text-classification")
         >>> quantizer.quantize(calibration_dataset=calibration_dataset, save_directory="./quantized_model")
