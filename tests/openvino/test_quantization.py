@@ -106,7 +106,7 @@ class OVQuantizerTest(unittest.TestCase):
             expected_config = OVConfig()
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(expected_config.to_dict()["compression"], loaded_config.to_dict()["compression"])
-    
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
         task = model_cls.export_feature
@@ -177,7 +177,7 @@ class OVQuantizerQATest(unittest.TestCase):
                 model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
             except RuntimeError:
                 self.fail("Loading BERT QA model a second time failed")
-                
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_ovmodel_static_quantization(self, model_name):
         def preprocess_function(examples, tokenizer):
@@ -210,7 +210,6 @@ class OVQuantizerQATest(unittest.TestCase):
                 model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
             except RuntimeError:
                 self.fail("Loading BERT QA model a second time failed")
-
 
 
 class OVTrainerTest(unittest.TestCase):
