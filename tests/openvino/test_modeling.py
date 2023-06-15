@@ -476,7 +476,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
         "blenderbot",
-        "blenderbot_small",
+        "blenderbot-small",
         "bloom",
         # "codegen",
         # "data2vec-text", # TODO : enable when enabled in exporters
