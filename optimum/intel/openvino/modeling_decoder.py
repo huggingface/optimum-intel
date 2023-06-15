@@ -71,12 +71,12 @@ TEXT_GENERATION_EXAMPLE = r"""
     ```
 """
 
-_SUPPORTED_ARCHITECTURES = (
+_SUPPORTED_ARCHITECTURES = {
     "bart",
     "blenderbot",
     "blenderbot-small",
     "bloom",
-    # "codegen",
+    "codegen",
     "gpt2",
     "gpt_neo",
     "gpt_neox",
@@ -84,7 +84,7 @@ _SUPPORTED_ARCHITECTURES = (
     "marian",
     "opt",
     "pegasus",
-)
+}
 
 
 @add_start_docstrings(
@@ -151,6 +151,12 @@ class OVBaseDecoderModel(OVModel):
         trust_remote_code: bool = False,
         **kwargs,
     ):
+        if config.model_type not in _SUPPORTED_ARCHITECTURES:
+            logger.warning(
+                f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures was "
+                "validated, use at your own risk."
+            )
+
         model_file_name = ONNX_WEIGHTS_NAME
 
         if task is None:
@@ -170,12 +176,6 @@ class OVBaseDecoderModel(OVModel):
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         config.is_decoder = True
         config.is_encoder_decoder = False
-        if config.model_type not in _SUPPORTED_ARCHITECTURES:
-            raise ValueError(
-                f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures are "
-                "currently supported. To support this model, you can open a PR or an issue at https://github.com/huggingface/optimum-intel/"
-            )
-
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
 
