@@ -172,7 +172,8 @@ class OVBaseDecoderModel(OVModel):
         config.is_encoder_decoder = False
         if config.model_type not in _SUPPORTED_ARCHITECTURES:
             raise ValueError(
-                f"Unrecognized architecture : {config.model_type}, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures are supported."
+                f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures are currently supported. "
+                "To support this model, you can open a PR or an issue at https://github.com/huggingface/optimum-intel/"
             )
 
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
