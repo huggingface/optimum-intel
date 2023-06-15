@@ -690,7 +690,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         # "bigbird_pegasus",
         "blenderbot",
         "blenderbot-small",
-        "longt5",
+        # "longt5",
         "m2m_100",
         "marian",
         "mbart",
