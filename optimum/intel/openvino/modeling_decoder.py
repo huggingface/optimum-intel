@@ -236,6 +236,13 @@ class OVBaseDecoderModel(OVModel):
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
+    
+    def compile(self):
+        if self.request is None:
+            logger.info("Compiling the model...")
+            cache_dir = Path(self.model_save_dir).joinpath("model_cache")
+            ov_config = {**self.ov_config, "CACHE_DIR": str(cache_dir)}
+            self.request = core.compile_model(self.model, self._device, ov_config).create_infer_request()
 
 
 @add_start_docstrings(
@@ -273,7 +280,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if past_key_values is not None:
             # Flatten the past_key_values
             past_key_values = tuple(
-                np.array(past_key_value) for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
+                past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
             )
             # Add the past_key_values to the decoder inputs
             inputs = dict(zip(self.key_value_input_names, past_key_values))
@@ -301,14 +308,15 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             inputs["attention_mask"] = np.array(attention_mask)
 
         # Run inference
-        outputs = self.request(inputs, shared_memory=True)
+        self.request.start_async(inputs, shared_memory=True)
+        self.request.wait()
 
-        logits = torch.from_numpy(outputs["logits"]).to(self.device)
+        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
         if self.use_cache:
             # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
             past_key_values = tuple(
-                torch.from_numpy(outputs[key]).to(self.device) for key in self.key_value_output_names
+                self.request.get_tensor(key).data for key in self.key_value_output_names
             )
             # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
             past_key_values = tuple(
@@ -345,12 +353,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         [`~PreTrainedModel.beam_sample`] is called.
         This is required to match `past_key_values` with the correct beam_idx at every generation step.
         """
+        
         if self.config.model_type == "bloom":
             return self._reorder_cache_bloom(past_key_values, beam_idx)
 
         # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
         return tuple(
-            tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+            tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past)
             for layer_past in past_key_values
         )
 
@@ -365,16 +374,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         """
         standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
 
-        # Get a copy of `beam_idx` on all the devices where we need those indices.
-        device_to_beam_idx = {
-            past_state.device: beam_idx.to(past_state.device)
-            for layer_past in past_key_values
-            for past_state in layer_past
-        }
         reordered_past = tuple(
             (
-                layer_past[0].index_select(0, device_to_beam_idx[layer_past[0].device]),
-                layer_past[1].index_select(0, device_to_beam_idx[layer_past[0].device]),
+                np.take(layer_past[0], beam_idx, 0),
+                np.take(layer_past[1], beam_idx, 0),
             )
             for layer_past in standardized_past
         )
@@ -392,8 +395,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         # value: [batch_size, num_heads, seq_length, head_dim] -> [batch_size * num_heads, seq_length, head_dim]
         return tuple(
             (
-                layer_past[0].view(batch_size_times_num_heads, head_dim, seq_length),
-                layer_past[1].view(batch_size_times_num_heads, seq_length, head_dim),
+                layer_past[0].reshape((batch_size_times_num_heads, head_dim, seq_length)),
+                layer_past[1].reshape((batch_size_times_num_heads, seq_length, head_dim)),
             )
             for layer_past in past_key_value
         )
@@ -414,8 +417,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         # value: [batch_size * num_heads, seq_length, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
         return tuple(
             (
-                layer_past[0].view(batch_size, num_heads, head_dim, seq_length),
-                layer_past[1].view(batch_size, num_heads, seq_length, head_dim),
+                layer_past[0].reshape((batch_size, num_heads, head_dim, seq_length)),
+                layer_past[1].reshape((batch_size, num_heads, seq_length, head_dim)),
             )
             for layer_past in past_key_value
         )
