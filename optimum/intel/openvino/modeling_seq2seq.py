@@ -408,10 +408,7 @@ class OVDecoder:
 
         # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
         # self-attention layer and 2 to the cross-attention layer)
-        out_past_key_values = tuple(
-            self.request.get_tensor(key).data
-            for key in self.key_value_output_names
-        )
+        out_past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
 
         # Tuple of tuple of length `n_layers`, with each tuple of length equal to:
         # * 4 for the decoder without cache (k/v of self-attention + k/v of cross-attention)

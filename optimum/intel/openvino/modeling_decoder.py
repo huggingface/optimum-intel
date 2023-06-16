@@ -236,7 +236,7 @@ class OVBaseDecoderModel(OVModel):
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
-    
+
     def compile(self):
         if self.request is None:
             logger.info("Compiling the model...")
@@ -315,9 +315,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         if self.use_cache:
             # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
-            past_key_values = tuple(
-                self.request.get_tensor(key).data for key in self.key_value_output_names
-            )
+            past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
             # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
             past_key_values = tuple(
                 past_key_values[i : i + self.num_pkv] for i in range(0, len(past_key_values), self.num_pkv)
@@ -353,14 +351,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         [`~PreTrainedModel.beam_sample`] is called.
         This is required to match `past_key_values` with the correct beam_idx at every generation step.
         """
-        
+
         if self.config.model_type == "bloom":
             return self._reorder_cache_bloom(past_key_values, beam_idx)
 
         # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
         return tuple(
-            tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past)
-            for layer_past in past_key_values
+            tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past) for layer_past in past_key_values
         )
 
     # Copied from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
