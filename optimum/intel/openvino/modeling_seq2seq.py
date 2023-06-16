@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+import numpy as np
 import openvino
 import torch
 import transformers
@@ -249,7 +250,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         for layer_past in past:
             # Cached cross_attention states don't have to be reordered -> they are always the same
             reordered_past += (
-                tuple(past_state.index_select(0, beam_idx) for past_state in layer_past[:2]) + layer_past[2:],
+                tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past[:2]) + layer_past[2:],
             )
         return reordered_past
 
@@ -355,6 +356,8 @@ class OVDecoder:
         self.device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
+        self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
+        self.key_value_output_names = [key for key in self.output_names if "key_values" in key or "present" in key]
         is_legacy = any("past_key_values" in key.get_any_name() for key in self.model.outputs)
 
         if len(self.key_value_input_names) > 0 and not is_legacy:
@@ -399,15 +402,15 @@ class OVDecoder:
             inputs["encoder_hidden_states"] = encoder_hidden_states
 
         # Run inference
-        outputs = self.request(inputs, shared_memory=True)
-        logits = torch.from_numpy(outputs["logits"]).to(self.device)
+        self.request.start_async(inputs, shared_memory=True)
+        self.request.wait()
+        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
         # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
         # self-attention layer and 2 to the cross-attention layer)
         out_past_key_values = tuple(
-            torch.from_numpy(outputs[next(iter(key))]).to(self.device)
-            for key in outputs.names()
-            if ("key_values" in next(iter(key)) or "present" in next(iter(key)))
+            self.request.get_tensor(key).data
+            for key in self.key_value_output_names
         )
 
         # Tuple of tuple of length `n_layers`, with each tuple of length equal to:
@@ -432,4 +435,4 @@ class OVDecoder:
     def _compile(self):
         if self.request is None:
             logger.info("Compiling the decoder...")
-            self.request = core.compile_model(self.model, self._device, self.ov_config)
+            self.request = core.compile_model(self.model, self._device, self.ov_config).create_infer_request()
