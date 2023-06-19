@@ -380,7 +380,7 @@ class OVQuantizer(OptimumQuantizer):
             use_auth_token (`bool`, defaults to `False`):
                 Whether to use the token generated when running `transformers-cli login`.
             cache_dir (`str`, *optional*):
-                Directory to read/write data. Defaults to `"~/.cache/huggingface/datasets"`.
+                Caching directory for a calibration dataset.
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """

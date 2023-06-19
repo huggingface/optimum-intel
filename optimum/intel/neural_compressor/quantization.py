@@ -285,7 +285,6 @@ class INCQuantizer(OptimumQuantizer):
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
         use_auth_token: bool = False,
-        cache_dir: Optional[str] = None,
     ) -> Dataset:
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -306,8 +305,6 @@ class INCQuantizer(OptimumQuantizer):
                 Whether the `preprocess_function` should be batched.
             use_auth_token (`bool`, defaults to `False`):
                 Whether to use the token generated when running `transformers-cli login`.
-            cache_dir (`str`, *optional*):
-                Directory to read/write data. Defaults to `"~/.cache/huggingface/datasets"`.
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
@@ -316,7 +313,6 @@ class INCQuantizer(OptimumQuantizer):
             name=dataset_config_name,
             split=dataset_split,
             use_auth_token=use_auth_token,
-            cache_dir=cache_dir,
         )
 
         if num_samples is not None:
