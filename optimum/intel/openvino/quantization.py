@@ -15,11 +15,13 @@
 import inspect
 import io
 import logging
+from copy import deepcopy
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Callable, Dict, Optional, Tuple, Union, Any
 
 import nncf
+import numpy as np
 import openvino
 import torch
 import transformers
@@ -234,8 +236,17 @@ class OVQuantizer(OptimumQuantizer):
                 self.request = request
 
             def __call__(self, *args, **kwargs):
-                data_cache.append(*args)
+                data_cache.append(deepcopy(*args))
                 return self.request(*args, *kwargs)
+            
+            def start_async(
+                            self,
+                            inputs: Any = None,
+                            userdata: Any = None,
+                            shared_memory: bool = False,
+                        ) -> None:             
+                data_cache.append(inputs)
+                self.request.start_async(inputs, userdata, shared_memory)
 
             def __getattr__(self, attr):
                 if attr in self.__dict__:
@@ -243,8 +254,8 @@ class OVQuantizer(OptimumQuantizer):
                 return getattr(self.request, attr)
 
         self.model.request = InferRequestWrapper(self.model.request)
-        for i, data in enumerate(calibration_dataloader):
-            self.model.generate(**data, max_new_tokens=10)
+        for _, data in enumerate(calibration_dataloader):
+            self.model.generate(**data, max_new_tokens=100)
             if len(data_cache) >= subset_size:
                 break
         self.model.request = self.model.request.request
