@@ -358,6 +358,7 @@ class OVQuantizer(OptimumQuantizer):
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
         use_auth_token: bool = False,
+        cache_dir: Optional[str] = None,
     ) -> Dataset:
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -378,11 +379,17 @@ class OVQuantizer(OptimumQuantizer):
                 Whether the `preprocess_function` should be batched.
             use_auth_token (`bool`, defaults to `False`):
                 Whether to use the token generated when running `transformers-cli login`.
+            cache_dir (`str`, *optional*):
+                Caching directory for a calibration dataset.
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
         calibration_dataset = load_dataset(
-            dataset_name, name=dataset_config_name, split=dataset_split, use_auth_token=use_auth_token
+            dataset_name,
+            name=dataset_config_name,
+            split=dataset_split,
+            use_auth_token=use_auth_token,
+            cache_dir=cache_dir,
         )
 
         if num_samples is not None:
