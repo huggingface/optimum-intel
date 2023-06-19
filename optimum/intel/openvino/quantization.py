@@ -19,6 +19,7 @@ from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple, Union
 
+import nncf
 import openvino
 import torch
 import transformers
@@ -42,6 +43,8 @@ from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES
 from .configuration import OVConfig
+from .modeling_base import OVBaseModel
+from .modeling_decoder import OVBaseDecoderModel
 from .utils import (
     MAX_ONNX_OPSET,
     MIN_ONNX_QDQ_OPSET,
@@ -86,12 +89,12 @@ class OVQuantizer(OptimumQuantizer):
                 )
         self.task = task or feature
         self.seed = seed
+        self.input_names = None
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
         self._export_input_names = [
             column for column in self._signature_columns if column not in {"label", "labels", "label_ids"}
         ]
-        self.input_names = None
 
     @classmethod
     def from_pretrained(cls, model: PreTrainedModel, **kwargs):
@@ -104,9 +107,10 @@ class OVQuantizer(OptimumQuantizer):
         save_directory: Union[str, Path],
         quantization_config: OVConfig = None,
         file_name: Optional[str] = None,
-        batch_size: int = 8,
+        batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        **kwargs,
     ):
         """
         Quantize a model given the optimization specifications defined in `quantization_config`.
@@ -131,17 +135,151 @@ class OVQuantizer(OptimumQuantizer):
         ```python
         >>> from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
         >>> from transformers import AutoModelForSequenceClassification
+        >>> model = OVModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english", export=True)
+        >>> # or
         >>> model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
         >>> OVQuantizer.from_pretrained(model, task="text-classification")
         >>> quantizer.quantize(calibration_dataset=calibration_dataset, save_directory="./quantized_model")
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
         """
+        if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
+            self._quantize_ovcausallm(
+                calibration_dataset,
+                save_directory,
+                batch_size,
+                data_collator,
+                remove_unused_columns,
+                **kwargs,
+            )
+        elif isinstance(self.model, OVBaseModel):
+            self._quantize_ovbasemodel(
+                calibration_dataset,
+                save_directory,
+                batch_size,
+                data_collator,
+                remove_unused_columns,
+                **kwargs,
+            )
+        elif isinstance(self.model, torch.nn.Module):
+            self._quantize_torchmodel(
+                calibration_dataset,
+                save_directory,
+                quantization_config,
+                file_name,
+                batch_size,
+                data_collator,
+                remove_unused_columns,
+            )
+        else:
+            raise TypeError(f"Unsupported model type: {type(self.model)}")
+
+    def _quantize_ovbasemodel(
+        self,
+        calibration_dataset: Dataset,
+        save_directory: Union[str, Path],
+        batch_size: int = 1,
+        data_collator: Optional[DataCollator] = None,
+        remove_unused_columns: bool = True,
+        **kwargs,
+    ):
+        save_directory = Path(save_directory)
+        save_directory.mkdir(parents=True, exist_ok=True)
+
+        calibration_dataloader = self._get_calibration_dataloader(
+            calibration_dataset=calibration_dataset,
+            batch_size=batch_size,
+            remove_unused_columns=remove_unused_columns,
+            data_collator=data_collator,
+        )
+
+        quantization_dataset = nncf.Dataset(calibration_dataloader, lambda x: x)
+        quantized_model = nncf.quantize(
+            self.model.model,
+            quantization_dataset,
+            model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
+            fast_bias_correction=kwargs.get("fast_bias_correction", True),
+            subset_size=300 if not kwargs.get("subset_size") else kwargs.get("subset_size"),
+            **kwargs,
+        )
+        self.model.model = quantized_model
+        self.model.save_pretrained(save_directory)
+
+    def _quantize_ovcausallm(
+        self,
+        calibration_dataset: Dataset,
+        save_directory: Union[str, Path],
+        batch_size: int = 1,
+        data_collator: Optional[DataCollator] = None,
+        remove_unused_columns: bool = True,
+        **kwargs,
+    ):
+        save_directory = Path(save_directory)
+        save_directory.mkdir(parents=True, exist_ok=True)
+
+        calibration_dataloader = self._get_calibration_dataloader(
+            calibration_dataset=calibration_dataset,
+            batch_size=batch_size,
+            remove_unused_columns=remove_unused_columns,
+            data_collator=data_collator,
+        )
+
+        # Prefeth past_key_values
+        self.model.compile()
+        subset_size = kwargs.get("subset_size", 300)
+        data_cache = []
+
+        class InferRequestWrapper:
+            def __init__(self, request):
+                self.request = request
+
+            def __call__(self, *args, **kwargs):
+                data_cache.append(*args)
+                return self.request(*args, *kwargs)
+
+            def __getattr__(self, attr):
+                if attr in self.__dict__:
+                    return getattr(self, attr)
+                return getattr(self.request, attr)
+
+        self.model.request = InferRequestWrapper(self.model.request)
+        for i, data in enumerate(calibration_dataloader):
+            self.model.generate(**data, max_new_tokens=10)
+            if len(data_cache) >= subset_size:
+                break
+        self.model.request = self.model.request.request
+
+        # Actual model quantization
+        quantization_dataset = nncf.Dataset(data_cache, lambda x: x)
+        quantized_model = nncf.quantize(
+            self.model.model,
+            quantization_dataset,
+            model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
+            fast_bias_correction=True
+            if not kwargs.get("fast_bias_correction")
+            else kwargs.get("fast_bias_correction"),
+            subset_size=subset_size,
+            **kwargs,
+        )
+        self.model.model = quantized_model
+        self.model.save_pretrained(save_directory)
+
+    def _quantize_torchmodel(
+        self,
+        calibration_dataset: Dataset,
+        save_directory: Union[str, Path],
+        quantization_config: OVConfig = None,
+        file_name: Optional[str] = None,
+        batch_size: int = 1,
+        data_collator: Optional[DataCollator] = None,
+        remove_unused_columns: bool = True,
+    ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         file_name = file_name if file_name is not None else OV_XML_FILE_NAME
         output_path = save_directory.joinpath(file_name)
         output_path = output_path.with_suffix(".xml").as_posix()
+
         calibration_dataloader = self._get_calibration_dataloader(
             calibration_dataset=calibration_dataset,
             batch_size=batch_size,

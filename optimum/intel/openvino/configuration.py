@@ -30,8 +30,8 @@ DEFAULT_QUANTIZATION_CONFIG = {
     "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
     "ignored_scopes": [
         "{re}.*Embedding*",
-        "{re}.*__add___[0-1]",
-        "{re}.*layer_norm_0",
+        "{re}.*__add___*",
+        "{re}.*layer_norm_*",
         "{re}.*matmul_1",
         "{re}.*__truediv__*",
     ],
