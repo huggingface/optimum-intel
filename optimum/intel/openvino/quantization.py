@@ -15,9 +15,7 @@
 import inspect
 import io
 import logging
-from copy import deepcopy
 from itertools import chain
-import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
@@ -238,7 +236,7 @@ class OVQuantizer(OptimumQuantizer):
             def __call__(self, *args, **kwargs):
                 data_cache.append(*args)
                 return self.request(*args, *kwargs)
-            
+
             def infer(self, inputs: Any = None, shared_memory: bool = False):
                 data_cache.append(inputs)
                 return self.request.infer(inputs, shared_memory)
@@ -251,10 +249,10 @@ class OVQuantizer(OptimumQuantizer):
             ):
                 data_cache.append(inputs)
                 self.request.infer(inputs, shared_memory)
-                
+
             def wait(self):
                 pass
-                
+
             def get_tensor(self, name: str):
                 return Tensor(self.request.results[name])
 
