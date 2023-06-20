@@ -250,8 +250,7 @@ class OVQuantizer(OptimumQuantizer):
                 shared_memory: bool = False,
             ):
                 data_cache.append(inputs)
-                result = self.request.infer(inputs, shared_memory)
-                self.request._result = result
+                self.request.infer(inputs, shared_memory)
                 
             def wait(self):
                 pass
