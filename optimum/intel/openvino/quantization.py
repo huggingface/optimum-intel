@@ -269,8 +269,6 @@ class OVQuantizer(OptimumQuantizer):
             if len(data_cache) >= subset_size:
                 break
         self.model.request = self.model.request.request
-        
-        #   print("data_cache[1] ", data_cache[1])
 
         # Actual model quantization
         quantization_dataset = nncf.Dataset(data_cache, lambda x: x)
