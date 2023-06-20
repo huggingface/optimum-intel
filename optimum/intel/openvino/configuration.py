@@ -30,8 +30,8 @@ DEFAULT_QUANTIZATION_CONFIG = {
     "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
     "ignored_scopes": [
         "{re}.*Embedding*",
-        "{re}.*__add___[0-1]",
-        "{re}.*layer_norm_0",
+        "{re}.*__add___*",
+        "{re}.*layer_norm_*",
         "{re}.*matmul_1",
         "{re}.*__truediv__*",
     ],
@@ -56,10 +56,10 @@ class OVConfig(BaseConfig):
         self._enable_standard_onnx_export_option()
         self.optimum_version = kwargs.pop("optimum_version", None)
 
-    def add_input_info(self, model_inputs: Dict):
+    def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
         self.input_info = [
             {
-                "sample_size": list(value.shape),
+                "sample_size": [1] + list(value.shape[1:]) if force_batch_one else list(value.shape),
                 "type": "long" if value.dtype is torch.int64 else "float",
                 "keyword": name,
             }

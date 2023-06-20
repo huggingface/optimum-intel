@@ -38,6 +38,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoTokenizer,
+    GenerationConfig,
     PretrainedConfig,
     pipeline,
     set_seed,
@@ -76,24 +77,70 @@ from optimum.utils.testing_utils import require_diffusers
 
 
 MODEL_NAMES = {
-    "bart": "hf-internal-testing/tiny-random-bart",
+    "albert": "hf-internal-testing/tiny-random-albert",
+    "audio_spectrogram_transformer": "Ericwang/tiny-random-ast",
+    "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
     "bert": "hf-internal-testing/tiny-random-bert",
-    "bloom": "hf-internal-testing/tiny-random-BloomModel",
+    "bart": "hf-internal-testing/tiny-random-bart",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
+    "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
+    "blenderbot": "hf-internal-testing/tiny-random-blenderbot",
+    "bloom": "hf-internal-testing/tiny-random-BloomModel",
+    "camembert": "hf-internal-testing/tiny-random-camembert",
+    "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
+    "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
+    "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
+    "data2vec_vision": "hf-internal-testing/tiny-random-Data2VecVisionModel",
+    "data2vec_audio": "hf-internal-testing/tiny-random-Data2VecAudioModel",
+    "deberta": "hf-internal-testing/tiny-random-deberta",
+    "deberta_v2": "hf-internal-testing/tiny-random-DebertaV2Model",
+    "deit": "hf-internal-testing/tiny-random-deit",
+    "convnext": "hf-internal-testing/tiny-random-convnext",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
-    "gptj": "hf-internal-testing/tiny-random-GPTJModel",
+    "electra": "hf-internal-testing/tiny-random-electra",
+    "flaubert": "hf-internal-testing/tiny-random-flaubert",
+    # "gpt_bigcode": "bigcode/tiny_starcoder_py",
+    "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
-    "gpt2": "hf-internal-testing/tiny-random-gpt2",
-    "marian": "sshleifer/tiny-marian-en-de",
+    "gptj": "hf-internal-testing/tiny-random-GPTJModel",
+    "hubert": "hf-internal-testing/tiny-random-HubertModel",
+    "ibert": "hf-internal-testing/tiny-random-ibert",
+    "levit": "hf-internal-testing/tiny-random-LevitModel",
+    "longt5": "hf-internal-testing/tiny-random-longt5",
+    "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
+    "opt": "hf-internal-testing/tiny-random-OPTModel",
+    "marian": "sshleifer/tiny-marian-en-de",  # hf-internal-testing ones are broken
     "mbart": "hf-internal-testing/tiny-random-mbart",
-    "m2m_100": "valhalla/m2m100_tiny_random",
+    "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
+    "mobilenet_v1": "google/mobilenet_v1_0.75_192",
+    "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
+    "mobilevit": "hf-internal-testing/tiny-random-mobilevit",
+    "mt5": "stas/mt5-tiny-random",
+    "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
+    "pegasus": "hf-internal-testing/tiny-random-pegasus",
+    "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
+    "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
+    "roformer": "hf-internal-testing/tiny-random-roformer",
+    "segformer": "hf-internal-testing/tiny-random-SegformerModel",
+    "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
+    "sew": "hf-internal-testing/tiny-random-SEWModel",
+    "sew_d": "hf-internal-testing/tiny-random-SEWDModel",
+    "swin": "hf-internal-testing/tiny-random-SwinModel",
     "t5": "hf-internal-testing/tiny-random-t5",
+    "unispeech": "hf-internal-testing/tiny-random-unispeech",
+    "unispeech_sat": "hf-internal-testing/tiny-random-UnispeechSatModel",
     "vit": "hf-internal-testing/tiny-random-vit",
+    "wavlm": "hf-internal-testing/tiny-random-WavlmModel",
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
+    "wav2vec2-conformer": "hf-internal-testing/tiny-random-wav2vec2-conformer",
+    "xlm": "hf-internal-testing/tiny-random-xlm",
+    "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
 }
+
 
 TENSOR_ALIAS_TO_TYPE = {
     "pt": torch.Tensor,
@@ -205,9 +252,23 @@ class OVModelIntegrationTest(unittest.TestCase):
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
+        "albert",
         "bert",
+        # "camembert",
+        "convbert",
+        # "data2vec_text",
+        # "deberta_v2",
         "distilbert",
+        "electra",
+        "flaubert",
+        "ibert",
+        # "mobilebert",
+        # "nystromformer",
         "roberta",
+        "roformer",
+        "squeezebert",
+        "xlm",
+        # "xlm_roberta",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -413,10 +474,19 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
+        "bart",
+        "blenderbot",
+        "blenderbot-small",
         "bloom",
+        "codegen",
+        # "data2vec-text", # TODO : enable when enabled in exporters
         "gpt2",
         "gpt_neo",
         "gpt_neox",
+        # "llama",
+        "marian",
+        "opt",
+        "pegasus",
     )
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.2
@@ -429,15 +499,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample", return_tensors="pt")
+        tokens = tokenizer(
+            "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
+        )
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         # Compare tensor outputs
-        atol = 1e-1 if model_arch == "bloom" else 1e-4
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=atol))
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -445,6 +516,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True, use_cache=False, compile=False)
+        model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         model.half()
         model.compile()
@@ -463,7 +535,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
         tokens = tokenizer(texts, padding=True, return_tensors="pt")
-        outputs = model.generate(**tokens, max_new_tokens=20, num_beams=2)
+        generation_config = GenerationConfig(encoder_no_repeat_ngram_size=0, max_new_tokens=20, num_beams=2)
+        outputs = model.generate(**tokens, generation_config=generation_config)
         self.assertIsInstance(outputs, torch.Tensor)
         self.assertEqual(outputs.shape[0], 3)
 
@@ -507,9 +580,23 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
+        "albert",
         "bert",
+        # "camembert",
+        # "convbert",
+        # "data2vec_text",
+        "deberta",
+        # "deberta_v2",
         "distilbert",
+        "electra",
+        "flaubert",
+        "ibert",
+        # "mobilebert",
         "roberta",
+        "roformer",
+        "squeezebert",
+        "xlm",
+        # "xlm_roberta",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -546,7 +633,21 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
 
 
 class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("vit",)
+    SUPPORTED_ARCHITECTURES = (
+        "beit",
+        "convnext",
+        # "data2vec_vision",
+        # "deit",
+        "levit",
+        "mobilenet_v1",
+        "mobilenet_v2",
+        "mobilevit",
+        # "poolformer",
+        "resnet",
+        # "segformer",
+        # "swin",
+        "vit",
+    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -586,9 +687,15 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
 class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
+        # "bigbird_pegasus",
+        "blenderbot",
+        "blenderbot-small",
+        # "longt5",
+        "m2m_100",
         "marian",
         "mbart",
-        "m2m_100",
+        "mt5",
+        "pegasus",
         "t5",
     )
 
@@ -706,7 +813,26 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
 
 class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("wav2vec2",)
+    SUPPORTED_ARCHITECTURES = (
+        # "audio_spectrogram_transformer",
+        # "data2vec_audio",
+        # "hubert",
+        # "sew",
+        # "sew_d",
+        # "wav2vec2-conformer",
+        "unispeech",
+        # "unispeech_sat",
+        # "wavlm",
+        "wav2vec2",
+        # "wav2vec2-conformer",
+    )
+
+    def _generate_random_audio_data(self):
+        np.random.seed(10)
+        t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+        # generate pure sine wave at 220 Hz
+        audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
+        return audio_data
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -716,12 +842,13 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForAudioClassification.from_pretrained(model_id)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        wavs = [np.random.random(16000)]
-        inputs = preprocessor(wavs, sampling_rate=preprocessor.sampling_rate, return_tensors="pt")
+        inputs = preprocessor(self._generate_random_audio_data(), return_tensors="pt")
+
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
+
         for input_type in ["pt", "np"]:
-            inputs = preprocessor(wavs, sampling_rate=preprocessor.sampling_rate, return_tensors=input_type)
+            inputs = preprocessor(self._generate_random_audio_data(), return_tensors=input_type)
             ov_outputs = ov_model(**inputs)
             self.assertIn("logits", ov_outputs)
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
@@ -852,3 +979,22 @@ class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
         # Compare model outputs
         self.assertTrue(np.array_equal(outputs_1.images[0], outputs_2.images[0]))
         self.assertFalse(np.array_equal(outputs_1.images[0], outputs_3.images[0]))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_diffusers
+    def test_height_width_properties(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        batch_size = 1
+        num_images_per_prompt = 4
+        height = 128
+        width = 64
+        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, compile=False, dynamic=True)
+        self.assertTrue(pipeline.is_dynamic)
+        self.assertEqual(pipeline.height, -1)
+        self.assertEqual(pipeline.width, -1)
+        pipeline.reshape(
+            batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt
+        )
+        self.assertFalse(pipeline.is_dynamic)
+        self.assertEqual(pipeline.height, height)
+        self.assertEqual(pipeline.width, width)

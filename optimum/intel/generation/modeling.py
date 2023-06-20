@@ -31,6 +31,7 @@ from optimum.utils import NormalizedConfigManager
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_torch_version, is_transformers_version
+from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -88,7 +89,11 @@ def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     return traced_model
 
 
-class TSModelForCausalLM(OptimizedModel, GenerationMixin):
+class PreTrainedModel(OptimizedModel):
+    pass
+
+
+class TSModelForCausalLM(PreTrainedModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
     main_input_name = "input_ids"
@@ -139,6 +144,9 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+
         inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
@@ -220,17 +228,6 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
             model_save_dir = Path(model_cache_path).parent
             model = cls.load_model(model_cache_path)
 
-        # IPEX jit model need 2 iterations to convert model to int8 model
-        onnx_config_class = TasksManager.get_exporter_config_constructor(
-            model_type=config.model_type.replace("_", "-"),
-            exporter="onnx",
-            task=cls.export_feature,
-        )
-        onnx_config = onnx_config_class(config, use_past=use_cache)
-        model_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-        for i in range(2):
-            model(**model_inputs)
-
         return cls(
             model,
             config=config,
@@ -270,6 +267,13 @@ class TSModelForCausalLM(OptimizedModel, GenerationMixin):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+
+        if model.config.model_type == "bloom":
+            model.transformer._prepare_attn_mask = _prepare_attn_mask
+
+        if model.config.model_type == "llama":
+            model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+
         traced_model = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)

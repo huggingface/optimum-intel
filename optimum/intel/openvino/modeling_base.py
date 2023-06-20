@@ -55,12 +55,17 @@ _SUPPORTED_DEVICES = {
 }
 
 
+# workaround to enable compatibility between openvino models and transformers pipelines
+class PreTrainedModel(OptimizedModel):
+    pass
+
+
 @add_start_docstrings(
     """
     Base OVModel class.
     """,
 )
-class OVBaseModel(OptimizedModel):
+class OVBaseModel(PreTrainedModel):
     _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
     auto_model_class = None
     export_feature = None
@@ -109,11 +114,28 @@ class OVBaseModel(OptimizedModel):
             file_name (`str` or `Path`):
                 The path of the model ONNX or XML file.
         """
+
+        def fix_op_names_duplicates(model: openvino.runtime.Model):
+            names = set()
+            for op in model.get_ops():
+                friendly_name = op.get_friendly_name()
+                while True:
+                    if friendly_name not in names:
+                        break
+                    friendly_name += "_"
+                names.add(friendly_name)
+                op.set_friendly_name(friendly_name)
+            return model
+
         if isinstance(file_name, str):
             file_name = Path(file_name)
         bin_file_name = file_name.with_suffix(".bin") if file_name.suffix == ".xml" else None
 
-        return core.read_model(file_name, bin_file_name)
+        model = core.read_model(file_name, bin_file_name)
+        if file_name.suffix == ".onnx":
+            model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
+
+        return model
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
         """
@@ -182,7 +204,6 @@ class OVBaseModel(OptimizedModel):
                     "The file names `ov_model.xml` and `ov_model.bin` will be soon deprecated."
                     "Make sure to rename your file to respectively `openvino_model.xml` and `openvino_model.bin`"
                 )
-            model = cls.load_model(file_name)
             model_save_dir = model_id
         # Download the model from the hub
         else:
@@ -222,7 +243,9 @@ class OVBaseModel(OptimizedModel):
                     "Make sure to rename your file to respectively `openvino_model.xml` and `openvino_model.bin`"
                 )
             model_save_dir = Path(model_cache_path).parent
-            model = cls.load_model(file_names[0])
+            file_name = file_names[0]
+
+        model = cls.load_model(file_name)
         return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
 
     @classmethod
@@ -313,11 +336,10 @@ class OVBaseModel(OptimizedModel):
 
     def compile(self):
         if self.request is None:
-            logger.info("Compiling the model and creating the inference request ...")
+            logger.info("Compiling the model...")
             cache_dir = Path(self.model_save_dir).joinpath("model_cache")
             ov_config = {**self.ov_config, "CACHE_DIR": str(cache_dir)}
-            compiled_model = core.compile_model(self.model, self._device, ov_config)
-            self.request = compiled_model.create_infer_request()
+            self.request = core.compile_model(self.model, self._device, ov_config)
 
     def _reshape(
         self,

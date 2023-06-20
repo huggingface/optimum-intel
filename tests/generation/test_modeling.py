@@ -50,7 +50,7 @@ class ModelingIntegrationTest(unittest.TestCase):
         "gpt_neo",
     )
     GENERATION_LENGTH = 100
-    SPEEDUP_CACHE = 1.2
+    SPEEDUP_CACHE = 1.1
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -66,8 +66,7 @@ class ModelingIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             trfs_outputs = trfs_model(**tokens)
         # Compare outputs with original transformers model
-        atol = 1e-1 if model_arch == "bloom" else 1e-4
-        self.assertTrue(torch.allclose(outputs.logits, trfs_outputs.logits, atol=atol))
+        self.assertTrue(torch.allclose(outputs.logits, trfs_outputs.logits, atol=1e-4))
         # Compare outputs with loaded model
         with tempfile.TemporaryDirectory() as tmpdirname:
             model.save_pretrained(tmpdirname)

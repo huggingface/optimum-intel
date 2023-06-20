@@ -30,6 +30,7 @@ from optimum.exporters.onnx import export
 from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_transformers_version
+from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME
 
@@ -70,9 +71,20 @@ TEXT_GENERATION_EXAMPLE = r"""
     ```
 """
 
-
-def _contiguous_helper(tensor: np.ndarray) -> np.ndarray:
-    return tensor if tensor.flags["C_CONTIGUOUS"] else np.ascontiguousarray(tensor)
+_SUPPORTED_ARCHITECTURES = {
+    "bart",
+    "blenderbot",
+    "blenderbot-small",
+    "bloom",
+    "codegen",
+    "gpt2",
+    "gpt_neo",
+    "gpt_neox",
+    "llama",
+    "marian",
+    "opt",
+    "pegasus",
+}
 
 
 @add_start_docstrings(
@@ -139,6 +151,12 @@ class OVBaseDecoderModel(OVModel):
         trust_remote_code: bool = False,
         **kwargs,
     ):
+        if config.model_type not in _SUPPORTED_ARCHITECTURES:
+            logger.warning(
+                f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures were "
+                "validated, use at your own risk."
+            )
+
         model_file_name = ONNX_WEIGHTS_NAME
 
         if task is None:
@@ -156,8 +174,18 @@ class OVBaseDecoderModel(OVModel):
             "trust_remote_code": trust_remote_code,
         }
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+        config.is_decoder = True
+        config.is_encoder_decoder = False
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
+
+        # TODO : create ModelPatcher to patch each architecture
+        if config.model_type == "bloom":
+            model.transformer._prepare_attn_mask = _prepare_attn_mask
+        elif config.model_type == "llama":
+            model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+        elif config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
+            model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
 
         # Export the model to the ONNX format
         export(model=model, config=onnx_config, output=save_dir_path / model_file_name)
@@ -245,15 +273,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if past_key_values is not None:
             # Flatten the past_key_values
             past_key_values = tuple(
-                _contiguous_helper(np.array(past_key_value))
-                for pkv_per_layer in past_key_values
-                for past_key_value in pkv_per_layer
+                np.array(past_key_value) for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
             )
             # Add the past_key_values to the decoder inputs
-            inputs = {
-                input_name: Tensor(past_key_value, shared_memory=True)
-                for input_name, past_key_value in zip(self.key_value_input_names, past_key_values)
-            }
+            inputs = dict(zip(self.key_value_input_names, past_key_values))
 
         # Create empty past_key_values for decoder_with_past first generation step
         elif self.use_cache:
@@ -278,12 +301,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             inputs["attention_mask"] = np.array(attention_mask)
 
         # Run inference
-        self.request.start_async(inputs)
-        self.request.wait()
+        outputs = self.request(inputs, shared_memory=True)
 
-        outputs = {
-            key.get_any_name(): value.data for key, value in zip(self.request.model_outputs, self.request.outputs)
-        }
         logits = torch.from_numpy(outputs["logits"]).to(self.device)
 
         if self.use_cache:
