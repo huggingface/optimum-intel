@@ -17,6 +17,7 @@ import io
 import logging
 from copy import deepcopy
 from itertools import chain
+import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
@@ -235,17 +236,28 @@ class OVQuantizer(OptimumQuantizer):
                 self.request = request
 
             def __call__(self, *args, **kwargs):
-                data_cache.append(deepcopy(*args))
+                data_cache.append(*args)
                 return self.request(*args, *kwargs)
+            
+            def infer(self, inputs: Any = None, shared_memory: bool = False):
+                data_cache.append(inputs)
+                return self.request.infer(inputs, shared_memory)
 
             def start_async(
                 self,
                 inputs: Any = None,
                 userdata: Any = None,
                 shared_memory: bool = False,
-            ) -> None:
+            ):
                 data_cache.append(inputs)
-                self.request.start_async(inputs, userdata, shared_memory)
+                result = self.request.infer(inputs, shared_memory)
+                self.request._result = result
+                
+            def wait(self):
+                pass
+                
+            def get_tensor(self, name: str):
+                return self.request.get_otensor(name)
 
             def __getattr__(self, attr):
                 if attr in self.__dict__:
@@ -258,6 +270,8 @@ class OVQuantizer(OptimumQuantizer):
             if len(data_cache) >= subset_size:
                 break
         self.model.request = self.model.request.request
+        
+        print("data_cache[1] ", data_cache[1])
 
         # Actual model quantization
         quantization_dataset = nncf.Dataset(data_cache, lambda x: x)
