@@ -310,13 +310,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         # Run inference
         self.request.start_async(inputs, shared_memory=True)
         self.request.wait()
-        output = self.request.results
 
-        logits = torch.from_numpy(output["logits"]).to(self.device)
+        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
         if self.use_cache:
             # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
-            past_key_values = tuple(output[key] for key in self.key_value_output_names)
+            past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
             # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
             past_key_values = tuple(
                 past_key_values[i : i + self.num_pkv] for i in range(0, len(past_key_values), self.num_pkv)

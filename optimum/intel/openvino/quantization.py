@@ -33,7 +33,7 @@ from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_obj
 from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core
+from openvino.runtime import Core, Tensor
 from torch.onnx import export as onnx_export
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
@@ -256,7 +256,7 @@ class OVQuantizer(OptimumQuantizer):
                 pass
                 
             def get_tensor(self, name: str):
-                return self.request.get_otensor(name)
+                return Tensor(self.request.results[name])
 
             def __getattr__(self, attr):
                 if attr in self.__dict__:
@@ -270,7 +270,7 @@ class OVQuantizer(OptimumQuantizer):
                 break
         self.model.request = self.model.request.request
         
-        print("data_cache[1] ", data_cache[1])
+        #   print("data_cache[1] ", data_cache[1])
 
         # Actual model quantization
         quantization_dataset = nncf.Dataset(data_cache, lambda x: x)
