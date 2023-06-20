@@ -314,7 +314,6 @@ class OVBaseModel(PreTrainedModel):
         save_dir_path = Path(save_dir.name)
 
         # Export the model to the ONNX format
-        print(f"ONNX config: {onnx_config}")
         export(
             model=model,
             config=onnx_config,

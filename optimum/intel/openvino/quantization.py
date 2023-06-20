@@ -299,7 +299,6 @@ class OVQuantizer(OptimumQuantizer):
         controller, compressed_model = create_compressed_model(
             self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
         )
-        #controller.prepare_for_export()
         compressed_model = controller.strip(do_copy=False)
 
         self._set_task()
@@ -328,24 +327,17 @@ class OVQuantizer(OptimumQuantizer):
         # opset = opset if not quantization_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
         # _onnx_export_nncf_model(compressed_model, onnx_config, f, opset)
         
-        task =self.task
+        task = self.task
         model = self.model
 
         model_type = self.model.config.model_type.replace("_", "-")
-        # onnx_config_class = TasksManager.get_exporter_config_constructor(
-        #     exporter="onnx",
-        #     model=model,
-        #     task=task,
-        #     model_name=model_id,
-        #     model_type=model_type,
-        # )
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",
             model=self.model,
             task=self.task,
             model_type=model_type,
         )
-        #onnx_config = onnx_config_class(model.config)
+
         if task == "text-generation":
             onnx_config = onnx_config_class(model.config, use_past=model.config.use_cache)
         else:
@@ -354,17 +346,15 @@ class OVQuantizer(OptimumQuantizer):
         save_dir_path = Path(save_dir.name)
 
         # Export the model to the ONNX format
-        print(f"ONNX config: {onnx_config}")
         export(
             model=compressed_model,
             config=onnx_config,
             opset=onnx_config.DEFAULT_ONNX_OPSET,
             output=save_dir_path / ONNX_WEIGHTS_NAME,
         )
-        save_as_external_data = True
 
         # Load and save the compressed model
-        model = core.read_model(save_dir_path / ONNX_WEIGHTS_NAME) #core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
+        model = core.read_model(save_dir_path / ONNX_WEIGHTS_NAME)
         self._save_pretrained(model, output_path)
         quantization_config.save_pretrained(save_directory)
 

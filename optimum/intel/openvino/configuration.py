@@ -37,6 +37,41 @@ DEFAULT_QUANTIZATION_CONFIG = {
     ],
 }
 
+INT8_WIGHT_COMPRESSION_CONFIG = {
+    "algorithm": "quantization",
+    "weights": {
+        "mode": "asymmetric",
+        "bits": 8,
+        "target_scopes": [
+            "{re}.*embedding.*",
+            "{re}.*matmul.*",
+            "{re}.*addmm.*",
+            "{re}.*baddmm.*",
+            "{re}.*linear.*",
+        ],
+        "ignored_scopes": [
+            "{re}.*conv.*",
+        ],
+    },
+    "activations": {
+        "ignored_scopes": [
+            "{re}.*__add___.*",
+            "{re}.*__radd___.*",
+            "{re}.*layer_norm_.*",
+            "{re}.*__truediv__.*",
+            "{re}.*__mul___.*",
+            "{re}.*__rmul___.*",
+            "{re}.*tanh_.*",
+            "{re}.*pow_.*",
+            "{re}.*matmul.*",
+            "{re}.*addmm.*",
+            "{re}.*baddmm.*",
+            "{re}.*linear.*",
+            "{re}.*conv.*",
+        ],
+    },
+    "overflow_fix": "disable",
+}
 
 class OVConfig(BaseConfig):
     CONFIG_NAME = "openvino_config.json"
