@@ -342,8 +342,7 @@ class OVQuantizer(OptimumQuantizer):
         self,
         save_directory: Union[str, Path],
         quantization_config: OVConfig = None,
-        file_name: Optional[str] = None,
-        **kwargs,
+        file_name: Optional[str] = None
     ):
         """
         Compress weights to integer precision (8-bit by default) while keeping activations
@@ -367,20 +366,12 @@ class OVQuantizer(OptimumQuantizer):
         >>> optimized_model = OVModelForCausalLM.from_pretrained("./quantized_model")
         ```
         """
-        save_directory = Path(save_directory)
-        save_directory.mkdir(parents=True, exist_ok=True)
-        file_name = file_name if file_name is not None else OV_XML_FILE_NAME
-        output_path = save_directory.joinpath(file_name)
-        output_path = output_path.with_suffix(".xml").as_posix()
-        
+      
         if quantization_config is None:
             logger.info(
                 "No configuration describing the quantization process was provided, a default OVConfig will be generated."
             )
             quantization_config = OVConfig(compression=INT8_WIGHT_COMPRESSION_CONFIG)
-        
-        self._set_task()
-        model = self.model
         
         model_type = self.model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
@@ -389,44 +380,15 @@ class OVQuantizer(OptimumQuantizer):
             task=self.task,
             model_type=model_type,
         )
-
-        onnx_config = onnx_config_class(model.config)
-        model_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-        quantization_config.add_input_info(model_inputs)
-
+        onnx_config = onnx_config_class(self.model.config)
+        
         def collate_fn(batch):
             return onnx_config.generate_dummy_inputs(framework="pt")
         
-        init_dataloader = DataLoader(TensorDataset(torch.tensor([0.0, 1.0])), batch_size = 1, num_workers = 1, collate_fn = collate_fn)
-        calibration_dataloader = OVDataLoader(init_dataloader)
+        init_dataloader = TensorDataset(torch.tensor([0.0, 1.0]))
+        init_dataloader.column_names = []
+        self._quantize_torchmodel(init_dataloader, save_directory, quantization_config, file_name, data_collator=collate_fn, remove_unused_columns=False)
         
-        nncf_config = NNCFConfig.from_dict(quantization_config.__dict__)
-        nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
-        controller, compressed_model = create_compressed_model(
-            self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
-        )
-        compressed_model = controller.strip(do_copy=False)
-        
-        save_dir = save_directory / ONNX_WEIGHTS_NAME
-        save_dir_path = Path(save_dir.name)
-
-        # Export the model to the ONNX format
-        if self.task == "text-generation":
-            onnx_config = onnx_config_class(model.config, use_past=model.config.use_cache)
-        self.model.config.save_pretrained(save_directory)
-        opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
-        opset = max(opset, MIN_ONNX_QDQ_OPSET)
-        export(
-            model=compressed_model,
-            config=onnx_config,
-            opset=opset,
-            output=save_dir_path / ONNX_WEIGHTS_NAME,
-        )
-
-        # Load and save the compressed model
-        model = core.read_model(save_dir_path / ONNX_WEIGHTS_NAME)
-        self._save_pretrained(model, output_path)
-        quantization_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
