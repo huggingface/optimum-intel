@@ -13,9 +13,7 @@
 #  limitations under the License.
 
 import inspect
-import io
 import logging
-from itertools import chain
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
@@ -29,16 +27,13 @@ from nncf import NNCFConfig
 from nncf.torch import create_compressed_model, register_default_init_args
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
-from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, Tensor
-from torch.onnx import export as onnx_export
-from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler, TensorDataset
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import OnnxConfig, export
+from optimum.exporters.onnx import export
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES
