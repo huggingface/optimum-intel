@@ -146,8 +146,8 @@ class OVQuantizerTest(unittest.TestCase):
 class OVWeightCompressionTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS = (
-        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 32),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 21),
+        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 70),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 6),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS)
@@ -162,8 +162,8 @@ class OVWeightCompressionTest(unittest.TestCase):
                 tokenizer.pad_token = tokenizer.eos_token
             
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-            quantizer.compress_weights(save_directory=tmp_dir)
-            model = model_cls.from_pretrained(tmp_dir)
+            quantizer.compress_weights(save_directory="tmp_dir")
+            model = model_cls.from_pretrained("tmp_dir")
 
             # TODO: uncomment once move to a newer version of NNCF which has some fixes
             _, num_int8 = get_num_quantized_nodes(model)
@@ -175,7 +175,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             # Verify that that the configuration is correctly saved and loaded
             expected_config = OVConfig(compression=INT8_WIGHT_COMPRESSION_CONFIG)
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            loaded_config = OVConfig.from_pretrained("tmp_dir")
             self.assertEqual(expected_config.to_dict()["compression"], loaded_config.to_dict()["compression"])
 
 

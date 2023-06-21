@@ -307,6 +307,7 @@ class OVQuantizer(OptimumQuantizer):
         task = self.task
         model = self.model
 
+        self.model.config.save_pretrained(save_directory)
         model_type = self.model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",
@@ -323,10 +324,12 @@ class OVQuantizer(OptimumQuantizer):
         save_dir_path = Path(save_dir.name)
 
         # Export the model to the ONNX format
+        opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+        opset = max(opset, MIN_ONNX_QDQ_OPSET)
         export(
             model=compressed_model,
             config=onnx_config,
-            opset=onnx_config.DEFAULT_ONNX_OPSET,
+            opset=opset,
             output=save_dir_path / ONNX_WEIGHTS_NAME,
         )
 
@@ -402,16 +405,21 @@ class OVQuantizer(OptimumQuantizer):
         controller, compressed_model = create_compressed_model(
             self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
         )
-        
         compressed_model = controller.strip(do_copy=False)
+        
         save_dir = save_directory / ONNX_WEIGHTS_NAME
         save_dir_path = Path(save_dir.name)
 
         # Export the model to the ONNX format
+        if self.task == "text-generation":
+            onnx_config = onnx_config_class(model.config, use_past=model.config.use_cache)
+        self.model.config.save_pretrained(save_directory)
+        opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+        opset = max(opset, MIN_ONNX_QDQ_OPSET)
         export(
             model=compressed_model,
             config=onnx_config,
-            opset=onnx_config.DEFAULT_ONNX_OPSET,
+            opset=opset,
             output=save_dir_path / ONNX_WEIGHTS_NAME,
         )
 
