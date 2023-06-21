@@ -17,8 +17,9 @@ import io
 import logging
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
+import nncf
 import openvino
 import torch
 import transformers
@@ -30,7 +31,7 @@ from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_obj
 from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core
+from openvino.runtime import Core, Tensor
 from torch.onnx import export as onnx_export
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
