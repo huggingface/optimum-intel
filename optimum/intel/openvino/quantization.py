@@ -17,7 +17,7 @@ import io
 import logging
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import nncf
 import openvino
@@ -31,7 +31,7 @@ from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_obj
 from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core
+from openvino.runtime import Core, Tensor
 from torch.onnx import export as onnx_export
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
@@ -237,14 +237,33 @@ class OVQuantizer(OptimumQuantizer):
                 data_cache.append(*args)
                 return self.request(*args, *kwargs)
 
+            def infer(self, inputs: Any = None, shared_memory: bool = False):
+                data_cache.append(inputs)
+                return self.request.infer(inputs, shared_memory)
+
+            def start_async(
+                self,
+                inputs: Any = None,
+                userdata: Any = None,
+                shared_memory: bool = False,
+            ):
+                data_cache.append(inputs)
+                self.request.infer(inputs, shared_memory)
+
+            def wait(self):
+                pass
+
+            def get_tensor(self, name: str):
+                return Tensor(self.request.results[name])
+
             def __getattr__(self, attr):
                 if attr in self.__dict__:
                     return getattr(self, attr)
                 return getattr(self.request, attr)
 
         self.model.request = InferRequestWrapper(self.model.request)
-        for i, data in enumerate(calibration_dataloader):
-            self.model.generate(**data, max_new_tokens=10)
+        for _, data in enumerate(calibration_dataloader):
+            self.model.generate(**data, max_new_tokens=100)
             if len(data_cache) >= subset_size:
                 break
         self.model.request = self.model.request.request
