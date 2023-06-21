@@ -73,6 +73,7 @@ INT8_WIGHT_COMPRESSION_CONFIG = {
     "overflow_fix": "disable",
 }
 
+
 class OVConfig(BaseConfig):
     CONFIG_NAME = "openvino_config.json"
     FULL_CONFIGURATION_FILE = "openvino_config.json"

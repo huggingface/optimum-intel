@@ -817,7 +817,6 @@ def main():
         tomeov.patch_stable_diffusion(
             pipeline, ratio=args.tome_ratio, use_rand=False
         )  # Can also use pipe.unet in place of pipe here
-    
 
     # Load models and create wrapper for stable diffusion
     tokenizer = pipeline.tokenizer
@@ -827,7 +826,7 @@ def main():
     noise_scheduler = pipeline.scheduler
     if args.noise_scheduler:
         noise_scheduler = get_noise_scheduler(args)
-        
+
     export_pipeline = StableDiffusionPipeline(
         text_encoder=text_encoder,
         vae=vae,
@@ -837,7 +836,7 @@ def main():
         safety_checker=pipeline.safety_checker,
         feature_extractor=pipeline.feature_extractor,
     )
-    
+
     with tempfile.TemporaryDirectory() as tmpdirname:
         export_to_onnx(export_pipeline, tmpdirname)
         export_to_openvino(export_pipeline, tmpdirname, Path(args.output_dir) / "openvino")

@@ -33,17 +33,16 @@ from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core
 from torch.onnx import export as onnx_export
-from optimum.exporters.onnx import export
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler, TensorDataset
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import OnnxConfig
+from optimum.exporters.onnx import OnnxConfig, export
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES
-from .configuration import OVConfig, INT8_WIGHT_COMPRESSION_CONFIG
+from .configuration import INT8_WIGHT_COMPRESSION_CONFIG, OVConfig
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel
 from .utils import (
@@ -51,7 +50,6 @@ from .utils import (
     MIN_ONNX_QDQ_OPSET,
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
-    use_external_data_format,
 )
 
 
@@ -303,7 +301,7 @@ class OVQuantizer(OptimumQuantizer):
         compressed_model = controller.strip(do_copy=False)
 
         self._set_task()
-        
+
         task = self.task
         model = self.model
 
@@ -337,12 +335,9 @@ class OVQuantizer(OptimumQuantizer):
         model = core.read_model(save_dir_path / ONNX_WEIGHTS_NAME)
         self._save_pretrained(model, output_path)
         quantization_config.save_pretrained(save_directory)
-        
+
     def compress_weights(
-        self,
-        save_directory: Union[str, Path],
-        quantization_config: OVConfig = None,
-        file_name: Optional[str] = None
+        self, save_directory: Union[str, Path], quantization_config: OVConfig = None, file_name: Optional[str] = None
     ):
         """
         Compress weights to integer precision (8-bit by default) while keeping activations
@@ -366,13 +361,13 @@ class OVQuantizer(OptimumQuantizer):
         >>> optimized_model = OVModelForCausalLM.from_pretrained("./quantized_model")
         ```
         """
-      
+
         if quantization_config is None:
             logger.info(
                 "No configuration describing the quantization process was provided, a default OVConfig will be generated."
             )
             quantization_config = OVConfig(compression=INT8_WIGHT_COMPRESSION_CONFIG)
-        
+
         model_type = self.model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",
@@ -381,14 +376,20 @@ class OVQuantizer(OptimumQuantizer):
             model_type=model_type,
         )
         onnx_config = onnx_config_class(self.model.config)
-        
+
         def collate_fn(batch):
             return onnx_config.generate_dummy_inputs(framework="pt")
-        
+
         init_dataloader = TensorDataset(torch.tensor([0.0, 1.0]))
         init_dataloader.column_names = []
-        self._quantize_torchmodel(init_dataloader, save_directory, quantization_config, file_name, data_collator=collate_fn, remove_unused_columns=False)
-        
+        self._quantize_torchmodel(
+            init_dataloader,
+            save_directory,
+            quantization_config,
+            file_name,
+            data_collator=collate_fn,
+            remove_unused_columns=False,
+        )
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
@@ -499,18 +500,18 @@ def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Unio
         with torch.no_grad():
             model.eval()
             # Disable node additions to be exported in the graph
-            #model.disable_dynamic_graph_building()
+            # model.disable_dynamic_graph_building()
             print(f"Dynamic axes:\n {dict(chain(config.inputs.items(), config.outputs.items()))}")
-            #print(f"{config}")
-            
+            # print(f"{config}")
+
             onnx_export(
                 model,
                 model_inputs,
                 f=output,
-                input_names=input_names, #list(config.inputs.keys()),
-                output_names=output_names,#list(config.outputs.keys()),
+                input_names=input_names,  # list(config.inputs.keys()),
+                output_names=output_names,  # list(config.outputs.keys()),
                 dynamic_axes=dict(chain(config.inputs.items(), config.outputs.items())),
                 do_constant_folding=True,
                 opset_version=opset,
             )
-            #model.enable_dynamic_graph_building()
+            # model.enable_dynamic_graph_building()

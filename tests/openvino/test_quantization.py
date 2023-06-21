@@ -141,8 +141,8 @@ class OVQuantizerTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
-            
-            
+
+
 class OVWeightCompressionTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS = (
@@ -154,13 +154,13 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_automodel_weight_compression(self, model_cls, model_name, expected_int8):
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
-        
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             transformers_model = model_cls.auto_model_class.from_pretrained(model_name)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
-            
+
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
             quantizer.compress_weights(save_directory="tmp_dir")
             model = model_cls.from_pretrained("tmp_dir")
