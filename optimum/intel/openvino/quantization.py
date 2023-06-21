@@ -17,7 +17,7 @@ import io
 import logging
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import nncf
 import openvino
@@ -31,7 +31,7 @@ from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_obj
 from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core
+from openvino.runtime import Core, Tensor
 from torch.onnx import export as onnx_export
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler, TensorDataset
@@ -236,14 +236,33 @@ class OVQuantizer(OptimumQuantizer):
                 data_cache.append(*args)
                 return self.request(*args, *kwargs)
 
+            def infer(self, inputs: Any = None, shared_memory: bool = False):
+                data_cache.append(inputs)
+                return self.request.infer(inputs, shared_memory)
+
+            def start_async(
+                self,
+                inputs: Any = None,
+                userdata: Any = None,
+                shared_memory: bool = False,
+            ):
+                data_cache.append(inputs)
+                self.request.infer(inputs, shared_memory)
+
+            def wait(self):
+                pass
+
+            def get_tensor(self, name: str):
+                return Tensor(self.request.results[name])
+
             def __getattr__(self, attr):
                 if attr in self.__dict__:
                     return getattr(self, attr)
                 return getattr(self.request, attr)
 
         self.model.request = InferRequestWrapper(self.model.request)
-        for i, data in enumerate(calibration_dataloader):
-            self.model.generate(**data, max_new_tokens=10)
+        for _, data in enumerate(calibration_dataloader):
+            self.model.generate(**data, max_new_tokens=100)
             if len(data_cache) >= subset_size:
                 break
         self.model.request = self.model.request.request
@@ -418,6 +437,7 @@ class OVQuantizer(OptimumQuantizer):
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
         use_auth_token: bool = False,
+        cache_dir: Optional[str] = None,
     ) -> Dataset:
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -438,11 +458,17 @@ class OVQuantizer(OptimumQuantizer):
                 Whether the `preprocess_function` should be batched.
             use_auth_token (`bool`, defaults to `False`):
                 Whether to use the token generated when running `transformers-cli login`.
+            cache_dir (`str`, *optional*):
+                Caching directory for a calibration dataset.
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
         calibration_dataset = load_dataset(
-            dataset_name, name=dataset_config_name, split=dataset_split, use_auth_token=use_auth_token
+            dataset_name,
+            name=dataset_config_name,
+            split=dataset_split,
+            use_auth_token=use_auth_token,
+            cache_dir=cache_dir,
         )
 
         if num_samples is not None:
