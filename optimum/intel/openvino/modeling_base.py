@@ -305,11 +305,7 @@ class OVBaseModel(PreTrainedModel):
             model_type=model_type,
         )
 
-        # onnx_config = onnx_config_class(model.config)
-        if task == "text-generation":
-            onnx_config = onnx_config_class(model.config, use_past=model.config.use_cache)
-        else:
-            onnx_config = onnx_config_class(model.config)
+        onnx_config = onnx_config_class(model.config)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 

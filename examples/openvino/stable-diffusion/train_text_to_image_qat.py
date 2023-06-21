@@ -28,7 +28,7 @@ from typing import Iterable, Optional
 
 import numpy as np
 import requests
-import tomeov
+import tomesd
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
@@ -814,7 +814,7 @@ def main():
 
     if args.tome_ratio > 0:
         logger.info(f"Using Token Merging with ratio: {args.tome_ratio}")
-        tomeov.patch_stable_diffusion(
+        tomesd.apply_patch(
             pipeline, ratio=args.tome_ratio, use_rand=False
         )  # Can also use pipe.unet in place of pipe here
 
@@ -826,20 +826,6 @@ def main():
     noise_scheduler = pipeline.scheduler
     if args.noise_scheduler:
         noise_scheduler = get_noise_scheduler(args)
-
-    export_pipeline = StableDiffusionPipeline(
-        text_encoder=text_encoder,
-        vae=vae,
-        unet=unet,
-        tokenizer=tokenizer,
-        scheduler=noise_scheduler,
-        safety_checker=pipeline.safety_checker,
-        feature_extractor=pipeline.feature_extractor,
-    )
-
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        export_to_onnx(export_pipeline, tmpdirname)
-        export_to_openvino(export_pipeline, tmpdirname, Path(args.output_dir) / "openvino")
 
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
