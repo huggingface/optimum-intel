@@ -13,8 +13,8 @@
 #  limitations under the License.
 
 import inspect
-import os
 import logging
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
@@ -384,7 +384,7 @@ class OVQuantizer(OptimumQuantizer):
                 "No configuration describing the weight compression process was provided, a default INT8 quantization will be generated."
             )
             quantization_config = OVConfig(compression=INT8_WIGHT_COMPRESSION_CONFIG)
-            
+
         self._set_task()
 
         model_type = self.model.config.model_type.replace("_", "-")
