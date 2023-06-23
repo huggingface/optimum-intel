@@ -41,7 +41,7 @@ from optimum.intel import (
     OVQuantizer,
     OVTrainer,
 )
-from optimum.intel.openvino.configuration import INT8_WIGHT_COMPRESSION_CONFIG
+from optimum.intel.openvino.configuration import INT8_WEIGHT_COMPRESSION_CONFIG
 
 _TASK_TO_DATASET = {
     "text-generation": ("wikitext", "wikitext-2-raw-v1", "text"),
