@@ -146,14 +146,13 @@ class OVQuantizerTest(unittest.TestCase):
 class OVWeightCompressionTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS = (
-        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 70),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 6),
+        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 39),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 5),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS)
     def test_automodel_weight_compression(self, model_cls, model_name, expected_int8):
         task = model_cls.export_feature
-        dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             transformers_model = model_cls.auto_model_class.from_pretrained(model_name)
@@ -162,8 +161,8 @@ class OVWeightCompressionTest(unittest.TestCase):
                 tokenizer.pad_token = tokenizer.eos_token
 
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-            quantizer.compress_weights(save_directory="tmp_dir")
-            model = model_cls.from_pretrained("tmp_dir")
+            quantizer.compress_weights(save_directory=tmp_dir)
+            model = model_cls.from_pretrained(tmp_dir)
 
             # TODO: uncomment once move to a newer version of NNCF which has some fixes
             _, num_int8 = get_num_quantized_nodes(model)
@@ -175,7 +174,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             # Verify that that the configuration is correctly saved and loaded
             expected_config = OVConfig(compression=INT8_WIGHT_COMPRESSION_CONFIG)
-            loaded_config = OVConfig.from_pretrained("tmp_dir")
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(expected_config.to_dict()["compression"], loaded_config.to_dict()["compression"])
 
 

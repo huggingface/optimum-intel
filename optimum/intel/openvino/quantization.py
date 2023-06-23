@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import inspect
+import os
 import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
@@ -332,8 +333,8 @@ class OVQuantizer(OptimumQuantizer):
             onnx_config = onnx_config_class(model.config, use_past=model.config.use_cache)
         else:
             onnx_config = onnx_config_class(model.config)
-        save_dir = save_directory / ONNX_WEIGHTS_NAME
-        save_dir_path = Path(save_dir.name)
+
+        onnx_path = save_directory / ONNX_WEIGHTS_NAME
 
         # Export the model to the ONNX format
         opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
@@ -342,13 +343,15 @@ class OVQuantizer(OptimumQuantizer):
             model=compressed_model,
             config=onnx_config,
             opset=opset,
-            output=save_dir_path / ONNX_WEIGHTS_NAME,
+            output=onnx_path,
         )
 
         # Load and save the compressed model
-        model = core.read_model(save_dir_path / ONNX_WEIGHTS_NAME)
+        model = core.read_model(onnx_path)
         self._save_pretrained(model, output_path)
         quantization_config.save_pretrained(save_directory)
+        if not quantization_config.save_onnx_model:
+            os.remove(onnx_path)
 
     def compress_weights(
         self, save_directory: Union[str, Path], quantization_config: OVConfig = None, file_name: Optional[str] = None

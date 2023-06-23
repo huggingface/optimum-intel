@@ -40,7 +40,7 @@ DEFAULT_QUANTIZATION_CONFIG = {
 INT8_WIGHT_COMPRESSION_CONFIG = {
     "algorithm": "quantization",
     "weights": {
-        "mode": "asymmetric",
+        "mode": "symmetric",
         "bits": 8,
         "target_scopes": [
             "{re}.*Embedding.*",
