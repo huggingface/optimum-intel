@@ -381,9 +381,11 @@ class OVQuantizer(OptimumQuantizer):
 
         if quantization_config is None:
             logger.info(
-                "No configuration describing the quantization process was provided, a default OVConfig will be generated."
+                "No configuration describing the weight compression process was provided, a default INT8 quantization will be generated."
             )
             quantization_config = OVConfig(compression=INT8_WIGHT_COMPRESSION_CONFIG)
+            
+        self._set_task()
 
         model_type = self.model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
