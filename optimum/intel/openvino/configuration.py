@@ -37,7 +37,7 @@ DEFAULT_QUANTIZATION_CONFIG = {
     ],
 }
 
-INT8_WIGHT_COMPRESSION_CONFIG = {
+INT8_WEIGHT_COMPRESSION_CONFIG = {
     "algorithm": "quantization",
     "weights": {
         "mode": "symmetric",
