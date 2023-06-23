@@ -383,7 +383,7 @@ class OVQuantizer(OptimumQuantizer):
             logger.info(
                 "No configuration describing the weight compression process was provided, a default INT8 quantization will be generated."
             )
-            quantization_config = OVConfig(compression=INT8_WIGHT_COMPRESSION_CONFIG)
+            quantization_config = OVConfig(compression=INT8_WEIGHT_COMPRESSION_CONFIG)
 
         self._set_task()
 
