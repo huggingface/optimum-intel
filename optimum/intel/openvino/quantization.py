@@ -38,7 +38,7 @@ from optimum.exporters.onnx import export
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES
-from .configuration import INT8_WIGHT_COMPRESSION_CONFIG, OVConfig
+from .configuration import INT8_WEIGHT_COMPRESSION_CONFIG, OVConfig
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel
 from .utils import (
