@@ -173,7 +173,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertTrue("logits" in outputs)
 
             # Verify that that the configuration is correctly saved and loaded
-            expected_config = OVConfig(compression=INT8_WIGHT_COMPRESSION_CONFIG)
+            expected_config = OVConfig(compression=INT8_WEIGHT_COMPRESSION_CONFIG)
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(expected_config.to_dict()["compression"], loaded_config.to_dict()["compression"])
 
