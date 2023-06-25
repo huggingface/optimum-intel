@@ -301,7 +301,6 @@ class OVQuantizer(OptimumQuantizer):
             data_collator=data_collator,
         )
         model_inputs = next(iter(calibration_dataloader))
-        print("model_inputs: ", model_inputs)
         if quantization_config is None:
             logger.info(
                 "No configuration describing the quantization process was provided, a default OVConfig will be generated."
@@ -352,6 +351,11 @@ class OVQuantizer(OptimumQuantizer):
         quantization_config.save_pretrained(save_directory)
         if not quantization_config.save_onnx_model:
             os.remove(onnx_path)
+            try:
+                os.remove(f"{onnx_path}_data")
+            except FileNotFoundError:
+                pass
+
 
     def compress_weights(
         self, save_directory: Union[str, Path], quantization_config: OVConfig = None, file_name: Optional[str] = None
