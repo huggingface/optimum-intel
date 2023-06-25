@@ -356,7 +356,6 @@ class OVQuantizer(OptimumQuantizer):
             except FileNotFoundError:
                 pass
 
-
     def compress_weights(
         self, save_directory: Union[str, Path], quantization_config: OVConfig = None, file_name: Optional[str] = None
     ):
