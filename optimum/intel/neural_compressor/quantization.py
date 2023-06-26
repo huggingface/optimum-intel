@@ -168,7 +168,6 @@ class INCQuantizer(OptimumQuantizer):
         calibration_dataloader = None
         self._set_task()
 
-
         if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
             # Since PyTorch fx trace does not really require an example_inputs, only need calibration_dataset or calibration_fn here.
             if calibration_dataset is None and self.calibration_fn is None:
@@ -194,7 +193,11 @@ class INCQuantizer(OptimumQuantizer):
             )
             save_onnx_model = False
 
-        if quantization_config.backend == "ipex" and is_ipex_version("<", IPEX_MINIMUM_VERSION) and "generation" in self.task:
+        if (
+            quantization_config.backend == "ipex"
+            and is_ipex_version("<", IPEX_MINIMUM_VERSION)
+            and "generation" in self.task
+        ):
             raise ImportError(
                 f"Found an incompatible version of intel-extension-for-pytorch. Found version {_ipex_version}, "
                 f"but only version {IPEX_MINIMUM_VERSION} or higher is supported."
