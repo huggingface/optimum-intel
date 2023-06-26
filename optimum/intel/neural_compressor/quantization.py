@@ -192,7 +192,7 @@ class INCQuantizer(OptimumQuantizer):
             )
             save_onnx_model = False
 
-        if quantization_config.backend == "ipex" and is_ipex_version("<", IPEX_MINIMUM_VERSION):
+        if quantization_config.backend == "ipex" and is_ipex_version("<", IPEX_MINIMUM_VERSION) and "generation" in task:
             raise ImportError(
                 f"Found an incompatible version of intel-extension-for-pytorch. Found version {_ipex_version}, "
                 f"but only version {IPEX_MINIMUM_VERSION} or higher is supported."
