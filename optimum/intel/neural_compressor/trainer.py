@@ -637,7 +637,6 @@ class INCTrainer(Trainer):
 
         if self.dtype == "int8":
             torch_to_int8_onnx(
-                # fp32_model=self._compression_manager.model.fp32_model.to(device),
                 model,
                 q_config=self._compression_manager.model.q_config,
                 save_path=output_path,
@@ -649,7 +648,7 @@ class INCTrainer(Trainer):
             )
         else:
             torch_to_fp32_onnx(
-                fp32_model=model,
+                model,
                 save_path=output_path,
                 example_inputs=inputs,
                 opset_version=opset,
