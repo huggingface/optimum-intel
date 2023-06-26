@@ -122,7 +122,7 @@ class OptimizationTest(unittest.TestCase):
         model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         quantizer = INCQuantizer.from_pretrained(model, task=task)
-        save_onnx_model = "generation" in task
+        save_onnx_model = False
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantizer.quantize(
                 quantization_config=quantization_config,
@@ -226,11 +226,11 @@ class OptimizationTest(unittest.TestCase):
             quantizer.quantize(
                 quantization_config=quantization_config,
                 save_directory=tmp_dir,
-                save_onnx_model=True,
+                save_onnx_model=False,
             )
             loaded_model = INCModelForQuestionAnswering.from_pretrained(tmp_dir)
             inc_config = INCConfig.from_pretrained(tmp_dir)
-            self.assertTrue(inc_config.save_onnx_model)
+            self.assertFalse(inc_config.save_onnx_model)
             self.assertFalse(inc_config.quantization["is_static"])
 
         quantized_model_metric = eval_fn(loaded_model)

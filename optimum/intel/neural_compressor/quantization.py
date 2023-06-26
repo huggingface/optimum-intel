@@ -183,6 +183,13 @@ class INCQuantizer(OptimumQuantizer):
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
                 )
+        else:
+            if save_onnx_model:
+                logger.warning(
+                    "ONNX export for dynamic quantized model is no longer supported by neural-compressor>=2.2.0. "
+                    "To apply dynamic quantization on an ONNX model, you can use optimum.onnxruntime.ORTQuantizer"
+                )
+                save_onnx_model = False
 
         if quantization_config.backend == "ipex" and is_ipex_version("<", IPEX_MINIMUM_VERSION):
             raise ImportError(
