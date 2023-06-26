@@ -596,6 +596,11 @@ class INCTrainer(Trainer):
                 state_dict["best_configure"] = self._compression_manager.model.q_config
         torch.save(state_dict, output_model_file)
 
+        # Disable ONNX export for quantized model as deprecated in neural-compressor>=2.2.0
+        if save_onnx_model and self.dtype == "int8":
+            logger.warning("ONNX export for quantized model is no longer supported by neural-compressor>=2.2.0. ")
+            save_onnx_model = False
+
         # Export the compressed model to the ONNX format
         if save_onnx_model:
             self._set_task()
@@ -637,8 +642,7 @@ class INCTrainer(Trainer):
 
         if self.dtype == "int8":
             torch_to_int8_onnx(
-                fp32_model=self._compression_manager.model.fp32_model.to(device),
-                int8_model=model,
+                model,
                 q_config=self._compression_manager.model.q_config,
                 save_path=output_path,
                 example_inputs=inputs,
@@ -649,7 +653,7 @@ class INCTrainer(Trainer):
             )
         else:
             torch_to_fp32_onnx(
-                fp32_model=model,
+                model,
                 save_path=output_path,
                 example_inputs=inputs,
                 opset_version=opset,

@@ -79,7 +79,8 @@ class INCConfig(BaseConfig):
     @staticmethod
     def _create_distillation_config(config: Union[Dict, DistillationConfig]):
         if isinstance(config, DistillationConfig):
-            criterion = next(iter(config.criterion.values()))
+            criterion = getattr(config.criterion, "config", config.criterion)
+            criterion = next(iter(criterion.values()))
             config = {
                 "teacher_model_name_or_path": config.teacher_model.config._name_or_path,
                 "temperature": criterion.temperature,
