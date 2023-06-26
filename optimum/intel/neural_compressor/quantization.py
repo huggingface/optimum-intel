@@ -166,6 +166,8 @@ class INCQuantizer(OptimumQuantizer):
         save_onnx_model = kwargs.pop("save_onnx_model", False)
         output_path = save_directory.joinpath(file_name or WEIGHTS_NAME)
         calibration_dataloader = None
+        self._set_task()
+
 
         if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
             # Since PyTorch fx trace does not really require an example_inputs, only need calibration_dataset or calibration_fn here.
@@ -192,7 +194,7 @@ class INCQuantizer(OptimumQuantizer):
             )
             save_onnx_model = False
 
-        if quantization_config.backend == "ipex" and is_ipex_version("<", IPEX_MINIMUM_VERSION) and "generation" in task:
+        if quantization_config.backend == "ipex" and is_ipex_version("<", IPEX_MINIMUM_VERSION) and "generation" in self.task:
             raise ImportError(
                 f"Found an incompatible version of intel-extension-for-pytorch. Found version {_ipex_version}, "
                 f"but only version {IPEX_MINIMUM_VERSION} or higher is supported."
@@ -223,7 +225,6 @@ class INCQuantizer(OptimumQuantizer):
         self._quantized_model = compressed_model._model
 
         if save_onnx_model:
-            self._set_task()
             model_type = self._original_model.config.model_type.replace("_", "-")
             model_name = getattr(self._original_model, "name", None)
             onnx_config_class = TasksManager.get_exporter_config_constructor(
@@ -284,8 +285,9 @@ class INCQuantizer(OptimumQuantizer):
         if self.task is None:
             self.task = HfApi().model_info(self._original_model.config._name_or_path).pipeline_tag
             if self.task is None:
-                raise ValueError(
-                    "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
+                self.task = "default"
+                logger.warning(
+                    f"The task defining the model topology could not be extracted and will be set to '{self.task}'."
                 )
 
         self.task = _TASK_ALIASES.get(self.task, self.task)
