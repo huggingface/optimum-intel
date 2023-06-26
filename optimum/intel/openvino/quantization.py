@@ -194,7 +194,6 @@ class OVQuantizer(OptimumQuantizer):
             quantization_dataset,
             model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
             fast_bias_correction=kwargs.get("fast_bias_correction", True),
-            subset_size=300 if not kwargs.get("subset_size") else kwargs.get("subset_size"),
             **kwargs,
         )
         self.model.model = quantized_model
@@ -258,7 +257,7 @@ class OVQuantizer(OptimumQuantizer):
 
         self.model.request = InferRequestWrapper(self.model.request)
         for _, data in enumerate(calibration_dataloader):
-            self.model.generate(**data, max_new_tokens=100)
+            self.model.generate(**data, max_new_tokens=10)
             if len(data_cache) >= subset_size:
                 break
         self.model.request = self.model.request.request
@@ -272,7 +271,6 @@ class OVQuantizer(OptimumQuantizer):
             fast_bias_correction=True
             if not kwargs.get("fast_bias_correction")
             else kwargs.get("fast_bias_correction"),
-            subset_size=subset_size,
             **kwargs,
         )
         self.model.model = quantized_model
@@ -374,8 +372,8 @@ class OVQuantizer(OptimumQuantizer):
         Example:
         ```python
         >>> from optimum.intel.openvino import OVQuantizer, OVModelForCausalLM
-        >>> from transformers import AutoModelForSequenceClassification
-        >>> model = OVModelForCausalLM.from_pretrained("databricks/dolly-v2-3b")
+        >>> from transformers import AutoModelForCausalLM
+        >>> model = AutoModelForCausalLM.from_pretrained("databricks/dolly-v2-3b")
         >>> OVQuantizer.from_pretrained(model)
         >>> quantizer.compress_weights(save_directory="./quantized_model")
         >>> optimized_model = OVModelForCausalLM.from_pretrained("./quantized_model")

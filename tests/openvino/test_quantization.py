@@ -94,7 +94,7 @@ class OVQuantizerTest(unittest.TestCase):
 
             model = model_cls.from_pretrained(tmp_dir)
 
-            # TODO: uncomment once move to a newer version of NNCF which has some fixes
+            # TODO: uncomment once move to a newer version of NNCF which has some fixes (addmm, baddmm)
             # num_fake_quantize, num_int8 = get_num_quantized_nodes(model)
             # self.assertEqual(expected_fake_quantize, num_fake_quantize)
             # self.assertEqual(expected_int8, num_int8)
