@@ -264,7 +264,7 @@ class INCQuantizer(OptimumQuantizer):
         config: OnnxConfig,
         output_path: Union[str, Path],
     ):
-        opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
+        opset = max(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
         dynamic_axes = dict(chain(config.inputs.items(), config.outputs.items()))
         inputs = config.generate_dummy_inputs(framework="pt")
         device = model.model.device
