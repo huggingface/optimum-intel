@@ -183,13 +183,14 @@ class INCQuantizer(OptimumQuantizer):
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
                 )
-        else:
-            if save_onnx_model:
-                logger.warning(
-                    "ONNX export for dynamic quantized model is no longer supported by neural-compressor>=2.2.0. "
-                    "To apply dynamic quantization on an ONNX model, you can use optimum.onnxruntime.ORTQuantizer"
-                )
-                save_onnx_model = False
+
+        # Disable ONNX export for post-training quantized model as deprecated in neural-compressor>=2.2.0
+        if save_onnx_model:
+            logger.warning(
+                "ONNX export for post-training quantized model is no longer supported by neural-compressor>=2.2.0. "
+                "To apply quantization on an ONNX model, check out optimum.onnxruntime.ORTQuantizer"
+            )
+            save_onnx_model = False
 
         if quantization_config.backend == "ipex" and is_ipex_version("<", IPEX_MINIMUM_VERSION):
             raise ImportError(
@@ -267,6 +268,7 @@ class INCQuantizer(OptimumQuantizer):
         inputs = config.generate_dummy_inputs(framework="pt")
         device = model.model.device
         inputs = {k: v.to(device) for k, v in inputs.items()}
+
         torch_to_int8_onnx(
             model.model,
             q_config=model.q_config,

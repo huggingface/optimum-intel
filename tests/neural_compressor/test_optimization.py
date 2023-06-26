@@ -150,7 +150,7 @@ class OptimizationTest(unittest.TestCase):
 
         quantizer = INCQuantizer.from_pretrained(model, task=task)
         calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
-        save_onnx_model = task != "text-generation"
+        save_onnx_model = False
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantizer.quantize(
@@ -281,7 +281,7 @@ class OptimizationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, task, model_name, expected_quantized_matmuls):
         quantization_config = QuantizationAwareTrainingConfig()
-        save_onnx_model = True
+        save_onnx_model = False
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             trainer = self.get_trainer(
@@ -312,7 +312,7 @@ class OptimizationTest(unittest.TestCase):
             target_sparsity=target_sparsity,
             pruning_scope="local",
         )
-        save_onnx_model = True
+        save_onnx_model = False
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             trainer = self.get_trainer(
@@ -401,7 +401,6 @@ class OptimizationTest(unittest.TestCase):
 
     def test_seq2seq_aware_training_quantization(self):
         quantization_config = QuantizationAwareTrainingConfig()
-        save_onnx_model = True
         batch_size = 2
         train_dataset = load_dataset("cnn_dailymail", "3.0.0", split="train[:1%]")
         val_dataset = load_dataset("cnn_dailymail", "3.0.0", split="validation[:1%]")
