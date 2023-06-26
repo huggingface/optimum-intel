@@ -24,7 +24,7 @@ from typing import Callable, ClassVar, Dict, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
