@@ -286,11 +286,13 @@ class INCQuantizer(OptimumQuantizer):
 
     def _set_task(self):
         if self.task is None:
-            self.task = HfApi().model_info(self._original_model.config._name_or_path).pipeline_tag
-            if self.task is None:
+            try:
+                self.task = TasksManager.infer_task_from_model(self._original_model.config._name_or_path)
+            except Exception as e:
                 self.task = "default"
                 logger.warning(
-                    f"The task defining the model topology could not be extracted and will be set to '{self.task}'."
+                    f"The task could not be automatically inferred and will be set to {self.task}. "
+                    f"Please provide the task argument with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
                 )
 
         self.task = _TASK_ALIASES.get(self.task, self.task)
