@@ -45,8 +45,8 @@ python run_glue_post_training.py \
 In order to apply dynamic or static, `quantization_approach` must be set to respectively `dynamic` or `static`.
 
 
-### Quantization with Multi-node
-To speedup the accuracy-aware tuning process, you can use the [distributed quantization]().
+### Distributed Quantization with Multi-node
+To speedup the accuracy-aware tuning process, you can use the [distributed quantization](https://github.com/intel/neural-compressor/blob/master/docs/source/tuning_strategies.md#distributed-tuning).
 
 - Prerequisites:
     - [Open MPI](https://www.open-mpi.org/faq/?category=building#easy-build)
@@ -55,7 +55,7 @@ To speedup the accuracy-aware tuning process, you can use the [distributed quant
 
 > **_Note:_** User can also install Open MPI with [Conda](https://anaconda.org/conda-forge/openmpi).
 
-In `run_glue_post_training.py`, set `quant_level` to 1 as the following statement.
+In `run_glue_post_training.py`, set `quant_level` to 1 as the following statement:
 
 ```python
 from neural_compressor import PostTrainingQuantConfig
@@ -71,13 +71,13 @@ mpirun -np <NUM_PROCESS> \
         --host <HOSTNAME1>,<HOSTNAME2>,<HOSTNAME3>... \
         bash run_task_in_distributed_mode.sh
 ```
-`<NUM_PROCESS>` is the number of processes, which is recommended to set to be equal to the number of hosts.
+`<NUM_PROCESS>` is the number of processes. recommend to set it with the number of hosts plus one.
 
-`<MAX_NUM_THREADS>` is the number of threads, which is recommended to set to be equal to the number of physical cores on one node.
+`<MAX_NUM_THREADS>` is the number of threads, recommend to set it with the number of physical cores on one node.
 
-`<HOSTNAME>` is the host name, and argument --host `<HOSTNAME>`,`<HOSTNAME>`... can be replaced with `--hostfile <HOSTFILE>`, when each line in <HOSTFILE> is a host name.
+`<HOSTNAME>` is the host name, and argument --host `<HOSTNAME>`,`<HOSTNAME>`... can be replaced with `--hostfile <HOSTFILE>`, when each line in `<HOSTFILE>` is a host name.
 
-`-mca btl_tcp_if_include <NETWORK_INTERFACE>` is used to set the network communication interface between hosts. For example, `<NETWORK_INTERFACE>` can be set to 192.168.20.0/24 to allow the MPI communication between all hosts under the 192.168.20.* network segment.
+`-mca btl_tcp_if_include <NETWORK_INTERFACE>` is used to set the network communication interface between hosts. For example, `<NETWORK_INTERFACE>` can be set to `192.168.20.0/24` to allow MPI communication between all hosts under `192.168.20.*`network segment.
 
 ### Knowledge Distillation with Quantization Aware Training
 
