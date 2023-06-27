@@ -71,7 +71,7 @@ mpirun -np <NUM_PROCESS> \
         --host <HOSTNAME1>,<HOSTNAME2>,<HOSTNAME3>... \
         bash run_task_in_distributed_mode.sh
 ```
-`<NUM_PROCESS>` is the number of processes. recommend to set it with the number of hosts plus one.
+`<NUM_PROCESS>` is the number of processes, recommend to set it with the number of hosts plus one.
 
 `<MAX_NUM_THREADS>` is the number of threads, recommend to set it with the number of physical cores on one node.
 
