@@ -162,9 +162,7 @@ class INCModelForCausalLM(INCBaseModel, BaseModelForCausalLM):
             outputs = self.model(**inputs)
         if isinstance(outputs, list) or isinstance(outputs, tuple):
             return CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
-        elif isinstance(outputs, CausalLMOutputWithPast):
-            return outputs
         else:
-            raise ValueError(
-                f"output should be a list or an instance of CausalLMOutputWithPast, but got {type(outputs)}"
+            return CausalLMOutputWithPast(
+                logits=outputs["logits"], past_key_values=outputs["past_key_values"] if self.use_cache else None
             )
