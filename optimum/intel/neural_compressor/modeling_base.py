@@ -106,14 +106,6 @@ class INCBaseModel:
             self.model.save(save_directory)
         elif self.config.torchscript:
             torch.jit.save(self.model, os.path.join(save_directory, file_name))
-        elif isinstance(self.model, IPEXModel):
-            self.model._model.save(os.path.join(save_directory, file_name))
-        elif isinstance(self.model, PyTorchModel):
-            state_dict = self.model._model.state_dict()
-
-            if hasattr(self.model, "q_config"):
-                state_dict["best_configure"] = self.model.q_config
-            torch.save(state_dict, os.path.join(save_directory, file_name))
         else:
             state_dict = self.model.state_dict()
             torch.save(state_dict, os.path.join(save_directory, file_name))

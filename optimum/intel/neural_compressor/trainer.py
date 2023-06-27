@@ -144,14 +144,15 @@ class INCTrainer(Trainer):
         # Attach dtype and architecture to the config
         if quantization_config is not None:
             self.dtype = "int8"
+            self.model.config.backend = quantization_config.backend
         else:
             if isinstance(self.model, INCBaseModel):
                 self.dtype = str(get_parameter_dtype(self.model.model)).split(".")[1]
             else:
                 self.dtype = str(get_parameter_dtype(self.model)).split(".")[1]
+            self.model.config.backend = "default"
         self.model.config.torch_dtype = self.dtype
         self.model.config.framework = "pytorch_fx"
-        self.model.config.backend = "default"
         self.model.config.architectures = [self.model.__class__.__name__]
 
         self._set_signature_columns_if_needed()

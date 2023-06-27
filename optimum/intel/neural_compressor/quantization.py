@@ -198,10 +198,12 @@ class INCQuantizer(OptimumQuantizer):
                 " accuracy tolerance has been found. Either the tolerance or the number of trials need to be increased."
             )
         if isinstance(self._original_model.config, PretrainedConfig):
-            original_dtype = self._original_model.config.torch_dtype
-            self._original_model.config.torch_dtype = "int8"
-            self._original_model.config.save_pretrained(save_directory)
-            self._original_model.config.torch_dtype = original_dtype
+            model_config = copy.deepcopy(self._original_model.config)
+            model_config.torch_dtype = "int8"
+            if isinstance(compressed_model, IPEXModel):
+                model_config.torchscript = True
+                model_config.backend = "ipex"
+            model_config.save_pretrained(save_directory)
 
         self._quantized_model = compressed_model._model
 
@@ -556,7 +558,7 @@ class INCModel:
         except Exception:
             logger.info("Couldn't verify torch version.")
 
-        if getattr(config, "backend", None) == "ipex":
+        if getattr(config, "torchscript", False):
             # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.
             # return load(state_dict_path)
             load_model = torch.jit.load(state_dict_path)

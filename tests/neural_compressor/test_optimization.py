@@ -32,6 +32,7 @@ from neural_compressor.config import (
 )
 from onnx import load as onnx_load
 from transformers import (
+    AutoModelForCausalLM,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -44,6 +45,7 @@ from transformers import (
 
 from optimum.intel import (
     INCConfig,
+    INCModelForCausalLM,
     INCModelForQuestionAnswering,
     INCModelForSequenceClassification,
     INCQuantizer,
@@ -52,6 +54,7 @@ from optimum.intel import (
 )
 from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
 from optimum.onnxruntime import ORTModelForSequenceClassification
+from optimum.utils import NormalizedConfigManager
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -64,6 +67,35 @@ def num_quantized_matmul_onnx_model(onnx_model):
         if "MatMul" in initializer.name and "quantized" in initializer.name:
             num_quantized_matmul += 1
     return num_quantized_matmul
+
+
+def generate_dummy_past_key_values(input_bs, user_model):
+        normalized_config = NormalizedConfigManager.get_normalized_config_class(
+            user_model.config.model_type
+        )(user_model.config)
+        nb_pkv = 2
+        num_layers = normalized_config.num_layers
+        num_attention_heads = normalized_config.num_attention_heads
+        hidden_size = normalized_config.hidden_size
+        d_k = hidden_size // num_attention_heads
+
+        if user_model.config.model_type != "bloom":
+            new_shape = [input_bs, num_attention_heads, 1, d_k]
+            dummy_tensor = torch.ones(size=new_shape)
+            past_key_values = tuple(
+                tuple(dummy_tensor for _ in range(nb_pkv)) for _ in range(num_layers)
+            )
+            pkv = tuple(dummy_tensor for _ in range(nb_pkv))
+        else:
+            pkv = ()
+            for nb_pkv in range(nb_pkv):
+                if nb_pkv % 2 == 0:
+                    new_shape = [input_bs * num_attention_heads, d_k, 1]
+                else:
+                    new_shape = [input_bs * num_attention_heads, 1, d_k]
+                pkv = pkv + (torch.ones(size=new_shape),)
+        past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
+        return past_key_values
 
 
 class QuantizationTest(unittest.TestCase):
@@ -369,6 +401,41 @@ class QuantizationTest(unittest.TestCase):
             loaded_pipe_outputs = loaded_pipeline(latents=torch.from_numpy(latents), **kwargs).images
         # Compare model outputs
         self.assertTrue(np.allclose(loaded_pipe_outputs, outputs, atol=1e-4))
+
+    def test_quantize_text_generate_model_quantize(self):
+        model_id = "EleutherAI/gpt-neo-125m"
+        set_seed(42)
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample", return_tensors="pt")
+        input_ids = model.dummy_inputs["input_ids"]
+        input_bs, input_len = input_ids.shape
+        past_key_values = generate_dummy_past_key_values(input_bs, model)
+        attention_mask = torch.ones(input_bs, input_len + 1)
+        attention_mask[:,0] = 0
+        example_inputs = (
+            input_ids,
+            tuple(past_key_values),
+            attention_mask,
+        )
+        def calibration_fn(p_model):
+            tmp_model = INCModelForCausalLM(p_model, model.config)
+            tmp_model.generate(
+                **tokens, max_new_tokens=32, do_sample=False
+            )
+        quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex", example_inputs=example_inputs)
+        model.config.return_dict = False
+        quantizer = INCQuantizer.from_pretrained(model, calibration_fn=calibration_fn)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                save_directory=tmp_dir,
+                save_onnx_model=False,
+            )
+            model = INCModelForCausalLM.from_pretrained(tmp_dir)
+
+        outputs = model.generate(**tokens, do_sample=False, num_beams=1, temperature=0.9, min_length=20, max_length=20)
+        self.assertIsInstance(outputs, torch.Tensor)
 
 
 class PruningTest(unittest.TestCase):

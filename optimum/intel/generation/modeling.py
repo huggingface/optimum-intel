@@ -23,8 +23,7 @@ import torch
 from huggingface_hub import hf_hub_download
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.utils import WEIGHTS_NAME
-
+from transformers.utils import is_ipex_available, WEIGHTS_NAME
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
@@ -108,6 +107,13 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
+        if self.config.backend == "ipex":
+            if not is_ipex_available():
+                raise ImportError("Intel PyTorch Extensions was not found."
+                                  "please make sure you've installed the package or run "
+                                  "pip install intel_extension_for_pytorch")
+            else:
+                import intel_extension_for_pytorch
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
