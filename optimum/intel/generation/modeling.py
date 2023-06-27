@@ -113,7 +113,7 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
-        if self.config.backend == "ipex":
+        if getattr(self.config, "backend", None) == "ipex":
             if not is_ipex_available():
                 raise ImportError(
                     "Intel PyTorch Extensions was not found."
@@ -121,7 +121,11 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
                     "pip install intel_extension_for_pytorch"
                 )
             else:
-                pass
+                # Need import intel_extension_for_pytorch for ipex model
+                import intel_extension_for_pytorch as ipex
+
+                # Just to avoid to change by ruff.
+                logger.info("intel_extension_for_pytorch version is ", ipex.__version__)
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None

@@ -101,9 +101,9 @@ class INCBaseModel:
         return model
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = WEIGHTS_NAME, **kwargs):
-        if self.config.backend == "neural_engine":
+        if getattr(self.config, "backend", None) == "neural_engine":
             self.model.save(save_directory)
-        elif self.config.torchscript:
+        elif getattr(self.config, "torchscript", False):
             torch.jit.save(self.model, os.path.join(save_directory, file_name))
         else:
             state_dict = self.model.state_dict()
