@@ -598,6 +598,8 @@ def main():
         else:
             if optim_args.smooth_quant:
                 recipes = {"smooth_quant": True, "smooth_quant_args": {"alpha": optim_args.smooth_quant_alpha}}
+            else:
+                recipes = {}
             quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach, recipes=recipes)
 
     if optim_args.apply_pruning:

@@ -24,7 +24,7 @@ from typing import Callable, ClassVar, Dict, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
@@ -60,8 +60,10 @@ from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME
 from ..utils.import_utils import (
+    _ipex_version,
     _neural_compressor_version,
     _torch_version,
+    is_ipex_version,
     is_neural_compressor_version,
     is_torch_version,
 )
@@ -72,6 +74,7 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 logger = logging.getLogger(__name__)
 
 NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
+IPEX_MINIMUM_VERSION = "2.1.0"
 
 if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
     raise ImportError(
@@ -163,6 +166,7 @@ class INCQuantizer(OptimumQuantizer):
         save_onnx_model = kwargs.pop("save_onnx_model", False)
         output_path = save_directory.joinpath(file_name or WEIGHTS_NAME)
         calibration_dataloader = None
+        self._set_task()
 
         if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
             # Since PyTorch fx trace does not really require an example_inputs, only need calibration_dataset or calibration_fn here.
@@ -180,6 +184,24 @@ class INCQuantizer(OptimumQuantizer):
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
                 )
+
+        # Disable ONNX export for post-training quantized model as deprecated in neural-compressor>=2.2.0
+        if save_onnx_model:
+            logger.warning(
+                "ONNX export for post-training quantized model is no longer supported by neural-compressor>=2.2.0. "
+                "To apply quantization on an ONNX model, check out optimum.onnxruntime.ORTQuantizer"
+            )
+            save_onnx_model = False
+
+        if (
+            quantization_config.backend == "ipex"
+            and is_ipex_version("<", IPEX_MINIMUM_VERSION)
+            and "generation" in self.task
+        ):
+            raise ImportError(
+                f"Found an incompatible version of intel-extension-for-pytorch. Found version {_ipex_version}, "
+                f"but only version {IPEX_MINIMUM_VERSION} or higher is supported."
+            )
 
         if isinstance(self._original_model.config, PretrainedConfig):
             self._original_model.config.backend = quantization_config.backend
@@ -208,7 +230,6 @@ class INCQuantizer(OptimumQuantizer):
         self._quantized_model = compressed_model._model
 
         if save_onnx_model:
-            self._set_task()
             model_type = self._original_model.config.model_type.replace("_", "-")
             model_name = getattr(self._original_model, "name", None)
             onnx_config_class = TasksManager.get_exporter_config_constructor(
@@ -248,14 +269,14 @@ class INCQuantizer(OptimumQuantizer):
         config: OnnxConfig,
         output_path: Union[str, Path],
     ):
-        opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
+        opset = max(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
         dynamic_axes = dict(chain(config.inputs.items(), config.outputs.items()))
         inputs = config.generate_dummy_inputs(framework="pt")
         device = model.model.device
         inputs = {k: v.to(device) for k, v in inputs.items()}
+
         torch_to_int8_onnx(
-            fp32_model=self._original_model.to(device),
-            int8_model=model.model,
+            model.model,
             q_config=model.q_config,
             save_path=str(output_path),
             example_inputs=inputs,
@@ -267,10 +288,13 @@ class INCQuantizer(OptimumQuantizer):
 
     def _set_task(self):
         if self.task is None:
-            self.task = HfApi().model_info(self._original_model.config._name_or_path).pipeline_tag
-            if self.task is None:
-                raise ValueError(
-                    "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
+            try:
+                self.task = TasksManager.infer_task_from_model(self._original_model.config._name_or_path)
+            except Exception as e:
+                self.task = "default"
+                logger.warning(
+                    f"The task could not be automatically inferred and will be set to {self.task}. "
+                    f"Please provide the task argument with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
                 )
 
         self.task = _TASK_ALIASES.get(self.task, self.task)
