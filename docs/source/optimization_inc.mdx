@@ -108,6 +108,26 @@ The [SmoothQuant](https://arxiv.org/abs/2211.10438) methodology is available for
 ```
 Please refer to INC [documentation](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md) and the list of [models](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md#validated-models) quantized with the methodology for more details. 
 
+
+### Distributed Quantization
+Distributed tuning speeds up the tuning process by leveraging a multi-node cluster, seamlessly parallelizing it across multiple nodes using MPI. This scaling capability allows the tuning process to significantly accelerate, and more efficient utilization of computing resources.
+
+To utilize distributed quantization, please set the `quant_lvel` to `1` and run it with `mpirun` with specified the number of processes.
+
+
+```diff
+- quantization_config = PostTrainingQuantConfig(approach="static")
++ quantization_config = PostTrainingQuantConfig(approach="static", quant_level=1)
+```
+
+```shell
+mpirun -np <number_of_processes> <RUN_CMD>
+```
+
+Please refer to INC [documentation](https://github.com/intel/neural-compressor/blob/master/docs/source/tuning_strategies.md#distributed-tuning) and [text-classification](https://github.com/intel/neural-compressor/tree/master/examples/pytorch/nlp/huggingface_models/text-classification/quantization/ptq_static/fx#12-quantization-with-multi-node) example for more details. 
+{/* #TODO replace the model with the optimum model */}
+
+
 ## During training optimization
 
 The [`INCTrainer`] class provides an API to train your model while combining different compression techniques such as knowledge distillation, pruning and quantization.

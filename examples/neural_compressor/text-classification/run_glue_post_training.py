@@ -20,14 +20,9 @@
 import logging
 import os
 
-# Disable the initialization of torch distribution
-for env_var in ["PMI_SIZE", "OMPI_COMM_WORLD_SIZE", "MV2_COMM_WORLD_SIZE", "WORLD_SIZE"]: 
-    print(os.environ.get(env_var, -1))
-    if os.environ.get(env_var, -1) != -1:
-        print(f"P{env_var}： {os.environ.get(env_var, -1)}")
-        os.environ[env_var] = '-1'
-    print(os.environ.get(env_var, -1))
-os.environ['USE_DISTRIBUTED']='0'
+# Disable the initialization of the torch distribution
+if os.environ.get('OMPI_COMM_WORLD_SIZE', -1) != -1:
+    os.environ['OMPI_COMM_WORLD_SIZE'] = '-1'
 
 import sys
 from dataclasses import dataclass, field
@@ -453,7 +448,7 @@ def main():
             f"Unknown quantization approach. Supported approach are {supported_approach}."
             f"{optim_args.quantization_approach} was given."
         )
-    quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
+    quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach, quant_level=1)
 
     # Apply post-training quantization
     quantizer = INCQuantizer.from_pretrained(model)
