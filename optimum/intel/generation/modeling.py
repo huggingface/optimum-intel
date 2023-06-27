@@ -23,7 +23,8 @@ import torch
 from huggingface_hub import hf_hub_download
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.utils import is_ipex_available, WEIGHTS_NAME
+from transformers.utils import WEIGHTS_NAME, is_ipex_available
+
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
@@ -114,11 +115,13 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
         self.model_dtype = kwargs.get("model_dtype", None)
         if self.config.backend == "ipex":
             if not is_ipex_available():
-                raise ImportError("Intel PyTorch Extensions was not found."
-                                  "please make sure you've installed the package or run "
-                                  "pip install intel_extension_for_pytorch")
+                raise ImportError(
+                    "Intel PyTorch Extensions was not found."
+                    "please make sure you've installed the package or run "
+                    "pip install intel_extension_for_pytorch"
+                )
             else:
-                import intel_extension_for_pytorch
+                pass
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None

@@ -88,32 +88,30 @@ def num_quantized_matmul_onnx_model(onnx_model):
 
 
 def generate_dummy_past_key_values(input_bs, user_model):
-        normalized_config = NormalizedConfigManager.get_normalized_config_class(
-            user_model.config.model_type
-        )(user_model.config)
-        nb_pkv = 2
-        num_layers = normalized_config.num_layers
-        num_attention_heads = normalized_config.num_attention_heads
-        hidden_size = normalized_config.hidden_size
-        d_k = hidden_size // num_attention_heads
+    normalized_config = NormalizedConfigManager.get_normalized_config_class(user_model.config.model_type)(
+        user_model.config
+    )
+    nb_pkv = 2
+    num_layers = normalized_config.num_layers
+    num_attention_heads = normalized_config.num_attention_heads
+    hidden_size = normalized_config.hidden_size
+    d_k = hidden_size // num_attention_heads
 
-        if user_model.config.model_type != "bloom":
-            new_shape = [input_bs, num_attention_heads, 1, d_k]
-            dummy_tensor = torch.ones(size=new_shape)
-            past_key_values = tuple(
-                tuple(dummy_tensor for _ in range(nb_pkv)) for _ in range(num_layers)
-            )
-            pkv = tuple(dummy_tensor for _ in range(nb_pkv))
-        else:
-            pkv = ()
-            for nb_pkv in range(nb_pkv):
-                if nb_pkv % 2 == 0:
-                    new_shape = [input_bs * num_attention_heads, d_k, 1]
-                else:
-                    new_shape = [input_bs * num_attention_heads, 1, d_k]
-                pkv = pkv + (torch.ones(size=new_shape),)
-        past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
-        return past_key_values
+    if user_model.config.model_type != "bloom":
+        new_shape = [input_bs, num_attention_heads, 1, d_k]
+        dummy_tensor = torch.ones(size=new_shape)
+        past_key_values = tuple(tuple(dummy_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
+        pkv = tuple(dummy_tensor for _ in range(nb_pkv))
+    else:
+        pkv = ()
+        for nb_pkv in range(nb_pkv):
+            if nb_pkv % 2 == 0:
+                new_shape = [input_bs * num_attention_heads, d_k, 1]
+            else:
+                new_shape = [input_bs * num_attention_heads, 1, d_k]
+            pkv = pkv + (torch.ones(size=new_shape),)
+    past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
+    return past_key_values
 
 
 def _preprocess_function(examples, tokenizer, column_name):
@@ -319,17 +317,17 @@ class OptimizationTest(unittest.TestCase):
         input_bs, input_len = input_ids.shape
         past_key_values = generate_dummy_past_key_values(input_bs, model)
         attention_mask = torch.ones(input_bs, input_len + 1)
-        attention_mask[:,0] = 0
+        attention_mask[:, 0] = 0
         example_inputs = (
             input_ids,
             tuple(past_key_values),
             attention_mask,
         )
+
         def calibration_fn(p_model):
             tmp_model = INCModelForCausalLM(p_model, model.config)
-            tmp_model.generate(
-                **tokens, max_new_tokens=32, do_sample=False
-            )
+            tmp_model.generate(**tokens, max_new_tokens=32, do_sample=False)
+
         quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex", example_inputs=example_inputs)
         model.config.return_dict = False
         quantizer = INCQuantizer.from_pretrained(model, calibration_fn=calibration_fn)

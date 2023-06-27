@@ -22,7 +22,6 @@ from typing import Optional, Union
 import torch
 from huggingface_hub import hf_hub_download
 from intel_extension_for_transformers.backends.neural_engine.compile import compile
-from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.utils.pytorch import load
 from transformers import AutoModel, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
