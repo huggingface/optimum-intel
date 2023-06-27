@@ -74,7 +74,7 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 logger = logging.getLogger(__name__)
 
 NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
-IPEX_MINIMUM_VERSION = "2.1.0"
+IPEX_MINIMUM_VERSION = "2.0.100"
 
 if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
     raise ImportError(
