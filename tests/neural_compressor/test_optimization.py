@@ -328,7 +328,7 @@ class OptimizationTest(unittest.TestCase):
             tmp_model = INCModelForCausalLM(p_model, model.config)
             tmp_model.generate(**tokens, max_new_tokens=32, do_sample=False)
 
-        quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex", example_inputs=example_inputs)
+        quantization_config = PostTrainingQuantConfig(approach="static", example_inputs=example_inputs)
         model.config.return_dict = False
         quantizer = INCQuantizer.from_pretrained(model, calibration_fn=calibration_fn)
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -337,7 +337,7 @@ class OptimizationTest(unittest.TestCase):
                 save_directory=tmp_dir,
                 save_onnx_model=False,
             )
-            model = INCModelForCausalLM.from_pretrained(tmp_dir)
+            model = INCModelForCausalLM.from_pretrained(tmp_dir, export=True)
 
         outputs = model.generate(**tokens, do_sample=False, num_beams=1, temperature=0.9, min_length=20, max_length=20)
         self.assertIsInstance(outputs, torch.Tensor)

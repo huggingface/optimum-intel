@@ -125,7 +125,7 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
                 import intel_extension_for_pytorch as ipex
 
                 # Just to avoid to change by ruff.
-                logger.info("intel_extension_for_pytorch version is ", ipex.__version__)
+                logger.info("intel_extension_for_pytorch version is " + ipex.__version__)
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
