@@ -45,8 +45,8 @@ python run_glue_post_training.py \
 In order to apply dynamic or static, `quantization_approach` must be set to respectively `dynamic` or `static`.
 
 
-### Distributed Quantization with Multi-node
-To speedup the accuracy-aware tuning process, you can use the [distributed quantization](https://github.com/intel/neural-compressor/blob/master/docs/source/tuning_strategies.md#distributed-tuning).
+### Distributed Tuning with Multi-node
+To speedup the accuracy-aware tuning process, you can use the [distributed tuning](https://github.com/intel/neural-compressor/blob/master/docs/source/tuning_strategies.md#distributed-tuning).
 
 - Prerequisites:
     - [Open MPI](https://www.open-mpi.org/faq/?category=building#easy-build)

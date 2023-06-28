@@ -109,10 +109,10 @@ The [SmoothQuant](https://arxiv.org/abs/2211.10438) methodology is available for
 Please refer to INC [documentation](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md) and the list of [models](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md#validated-models) quantized with the methodology for more details. 
 
 
-### Distributed Quantization
-Distributed quantization speeds up the tuning process by leveraging a multi-node cluster, seamlessly parallelizing it across multiple nodes using MPI. This scaling capability allows the tuning process to significantly accelerate, enabling more efficient utilization of computing resources.
+### Distributed Acuracy-aware Tuning
+One challenge in model quantization is identifying the optimal configuration that balances accuracy and performance. Distributed tuning speeds up this time-consuming process by parallelizing it across multiple nodes, which accelerate tuning process in linear scaling.
 
-To utilize distributed quantization, please set the `quant_level` to `1` and run it with `mpirun`.
+To utilize distributed tuning, please set the `quant_level` to `1` and run it with `mpirun`.
 
 
 ```diff
