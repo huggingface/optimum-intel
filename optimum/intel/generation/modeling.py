@@ -20,11 +20,11 @@ from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
 
 import torch
-from huggingface_hub import hf_hub_download
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
+from huggingface_hub import hf_hub_download
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
@@ -160,14 +160,7 @@ class TSModelForCausalLM(PreTrainedModel, GenerationMixin):
                 hidden_size = self.normalized_config.hidden_size
                 d_k = hidden_size // num_attention_heads
 
-                if self.config.model_type != "bloom":
-                    new_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
-                    empty_tensor = torch.empty(size=new_shape)
-                    if self.model_dtype is not None:
-                        empty_tensor = empty_tensor.to(self.model_dtype)
-                    past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
-                    pkv = tuple(empty_tensor for _ in range(nb_pkv))
-                else:
+                if self.config.model_type == "bloom":
                     pkv = ()
                     for nb_pkv in range(nb_pkv):
                         if nb_pkv % 2 == 0:
@@ -178,6 +171,18 @@ class TSModelForCausalLM(PreTrainedModel, GenerationMixin):
                         if self.model_dtype is not None:
                             empty_tensor = empty_tensor.to(self.model_dtype)
                         pkv = pkv + (empty_tensor,)
+                elif self.config.model_type == "mpt":
+                    new_key_shape = [input_ids.shape[0], num_attention_heads, d_k, 0]
+                    new_value_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
+                    empty_key_tensor = torch.empty(size=new_key_shape)
+                    empty_value_tensor = torch.empty(size=new_value_shape)
+                    pkv = tuple([empty_key_tensor, empty_value_tensor])
+                else:
+                    new_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
+                    empty_tensor = torch.empty(size=new_shape)
+                    if self.model_dtype is not None:
+                        empty_tensor = empty_tensor.to(self.model_dtype)
+                    pkv = tuple(empty_tensor for _ in range(nb_pkv))
                 past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
 
             inputs["past_key_values"] = past_key_values
