@@ -62,22 +62,20 @@ from neural_compressor import PostTrainingQuantConfig
 quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach, quant_level=1)
 ```
 
-And then, run the following command:
+> **_Note:_** Please also add below code snippet at the beginning of the example to disable the initialization of torch distribution.
+> 
+>`os.environ.setdefault('OMPI_COMM_WORLD_SIZE', '-1') if os.environ.get('OMPI_COMM_WORLD_SIZE', -1) != -1 else None`
 
-```shell
-mpirun -np <NUM_PROCESS> \
-        -mca btl_tcp_if_include <NETWORK_INTERFACE> \
-        -x OMP_NUM_THREADS=<MAX_NUM_THREADS> \
-        --host <HOSTNAME1>,<HOSTNAME2>,<HOSTNAME3>... \
-        bash run_task_in_distributed_mode.sh
-```
-`<NUM_PROCESS>` is the number of processes, recommend to set it with the number of hosts plus one.
+And then, modify the run_task_in_distributed_mode.sh according to the cluster information. Below is the explanation for each parameter.
 
-`<MAX_NUM_THREADS>` is the number of threads, recommend to set it with the number of physical cores on one node.
+- `<NUM_PROCESS>` is the number of processes, recommend to set it with the number of hosts plus one.
 
-`<HOSTNAME>` is the host name, and argument --host `<HOSTNAME>`,`<HOSTNAME>`... can be replaced with `--hostfile <HOSTFILE>`, when each line in `<HOSTFILE>` is a host name.
+- `<MAX_NUM_THREADS>` is the number of threads, recommend to set it with the number of physical cores on one node.
 
-`-mca btl_tcp_if_include <NETWORK_INTERFACE>` is used to set the network communication interface between hosts. For example, `<NETWORK_INTERFACE>` can be set to `192.168.20.0/24` to allow MPI communication between all hosts under `192.168.20.*`network segment.
+- `<HOSTNAME>` is the host name, and argument --host `<HOSTNAME>`,`<HOSTNAME>`... can be replaced with `--hostfile <HOSTFILE>`, when each line in `<HOSTFILE>` is a host name.
+
+- `-mca btl_tcp_if_include <NETWORK_INTERFACE>` is used to set the network communication interface between hosts. For example, `<NETWORK_INTERFACE>` can be set to `192.168.20.0/24` to allow MPI communication between all hosts under `192.168.20.*`network segment.
+
 
 ### Knowledge Distillation with Quantization Aware Training
 
