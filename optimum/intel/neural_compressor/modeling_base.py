@@ -269,9 +269,11 @@ class INCBaseModel:
                         logger.error(e.args)
                         raise
                 else:
-                    model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+                    raise Exception(
+                        "Couldn't load quantized model correctly, "
+                        "Please ensure the best_configure is in model state dict!"
+                    )
 
-                msg = None
                 try:
                     inc_config = INCConfig.from_pretrained(model_id)
                     if not is_torch_version("==", inc_config.torch_version):
@@ -403,23 +405,6 @@ class INCBaseModel:
         Get the task corresponding to a class (for example AutoModelForXXX in transformers).
         """
         return cls._AUTOMODELS_TO_TASKS[auto_model_class.__name__]
-
-    def can_generate(self) -> bool:
-        """
-        Returns whether this model can generate sequences with `.generate()`.
-        """
-        if isinstance(self, GenerationMixin):
-            return True
-        return False
-
-    @property
-    def device(self) -> torch.device:
-        return self._device
-
-    def to(self, device: Union[torch.device, str]):
-        self._device = device if isinstance(device, torch.device) else torch.device(device)
-        self.model.to(self._device)
-        return self
 
     def eval(self):
         self.model.eval()

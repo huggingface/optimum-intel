@@ -244,6 +244,11 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
             for layer_past in past_key_value
         )
 
+    def to(self, device: Union[torch.device, str]):
+        self._device = device if isinstance(device, torch.device) else torch.device(device)
+        self.model.to(self._device)
+        return self
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -326,14 +331,13 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
         else:
             outputs = self.model(**inputs)
 
-        if isinstance(outputs, tuple):
-            outputs = CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
+        if isinstance(outputs, (list, tuple)):
+            logits = outputs[0]
+            past_key_values = outputs[1] if self.use_cache else None
         else:
-            outputs = CausalLMOutputWithPast(
-                logits=outputs["logits"], past_key_values=outputs["past_key_values"] if self.use_cache else None
-            )
-
-        return outputs
+            logits = outputs["logits"]
+            past_key_values = outputs["past_key_values"] if self.use_cache else None
+        return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
 
 class TSModelForCausalLM(BaseModelForCausalLM):
@@ -352,11 +356,6 @@ class TSModelForCausalLM(BaseModelForCausalLM):
             model=model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs
         )
         self.model.to(self._device)
-
-    def to(self, device: Union[torch.device, str]):
-        self._device = device if isinstance(device, torch.device) else torch.device(device)
-        self.model.to(self._device)
-        return self
 
     @classmethod
     def _from_pretrained(

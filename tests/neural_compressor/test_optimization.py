@@ -308,27 +308,17 @@ class OptimizationTest(unittest.TestCase):
         self.assertTrue(np.allclose(loaded_pipe_outputs, outputs, atol=1e-4))
 
     def test_quantize_text_generate_model(self):
-        model_id = "EleutherAI/gpt-neo-125m"
+        model_id = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
         set_seed(42)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample", return_tensors="pt")
-        input_ids = model.dummy_inputs["input_ids"]
-        input_bs, input_len = input_ids.shape
-        past_key_values = generate_dummy_past_key_values(input_bs, model)
-        attention_mask = torch.ones(input_bs, input_len + 1)
-        attention_mask[:, 0] = 0
-        example_inputs = (
-            input_ids,
-            tuple(past_key_values),
-            attention_mask,
-        )
 
         def calibration_fn(p_model):
             tmp_model = INCModelForCausalLM(p_model, model.config)
             tmp_model.generate(**tokens, max_new_tokens=32, do_sample=False)
 
-        quantization_config = PostTrainingQuantConfig(approach="static", example_inputs=example_inputs)
+        quantization_config = PostTrainingQuantConfig(approach="static")
         model.config.return_dict = False
         quantizer = INCQuantizer.from_pretrained(model, calibration_fn=calibration_fn)
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -339,8 +329,11 @@ class OptimizationTest(unittest.TestCase):
             )
             model = INCModelForCausalLM.from_pretrained(tmp_dir, export=True)
 
+        pre_outputs = quantizer._quantized_model.generate(
+            **tokens, do_sample=False, num_beams=1, temperature=0.9, min_length=20, max_length=20
+        )
         outputs = model.generate(**tokens, do_sample=False, num_beams=1, temperature=0.9, min_length=20, max_length=20)
-        self.assertIsInstance(outputs, torch.Tensor)
+        self.assertTrue(torch.equal(pre_outputs, outputs))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, task, model_name, expected_quantized_matmuls):
