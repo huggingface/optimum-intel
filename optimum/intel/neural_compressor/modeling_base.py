@@ -37,11 +37,6 @@ from .configuration import INCConfig
 from .utils import ENGINE_MODEL_CONFIG, ENGINE_MODEL_NAME, WEIGHTS_NAME
 
 
-if is_transformers_version("<", "4.25.0"):
-    from transformers.generation_utils import GenerationMixin
-else:
-    from transformers.generation import GenerationMixin
-
 logger = logging.getLogger(__name__)
 
 

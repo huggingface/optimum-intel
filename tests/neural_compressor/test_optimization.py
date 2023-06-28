@@ -87,33 +87,6 @@ def num_quantized_matmul_onnx_model(onnx_model):
     return num_quantized_matmul
 
 
-def generate_dummy_past_key_values(input_bs, user_model):
-    normalized_config = NormalizedConfigManager.get_normalized_config_class(user_model.config.model_type)(
-        user_model.config
-    )
-    nb_pkv = 2
-    num_layers = normalized_config.num_layers
-    num_attention_heads = normalized_config.num_attention_heads
-    hidden_size = normalized_config.hidden_size
-    d_k = hidden_size // num_attention_heads
-
-    if user_model.config.model_type != "bloom":
-        new_shape = [input_bs, num_attention_heads, 1, d_k]
-        dummy_tensor = torch.ones(size=new_shape)
-        past_key_values = tuple(tuple(dummy_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
-        pkv = tuple(dummy_tensor for _ in range(nb_pkv))
-    else:
-        pkv = ()
-        for nb_pkv in range(nb_pkv):
-            if nb_pkv % 2 == 0:
-                new_shape = [input_bs * num_attention_heads, d_k, 1]
-            else:
-                new_shape = [input_bs * num_attention_heads, 1, d_k]
-            pkv = pkv + (torch.ones(size=new_shape),)
-    past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
-    return past_key_values
-
-
 def _preprocess_function(examples, tokenizer, column_name):
     return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
 
@@ -143,6 +116,11 @@ class OptimizationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS + (
         ("fill-mask", "hf-internal-testing/tiny-random-DistilBertForMaskedLM", 30),
         ("token-classification", "hf-internal-testing/tiny-random-AlbertForTokenClassification", 30),
+    )
+
+    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
+        "hf-internal-testing/tiny-random-bloom",
+        "hf-internal-testing/tiny-random-GPTNeoForCausalLM",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_DYNAMIC)
@@ -307,8 +285,8 @@ class OptimizationTest(unittest.TestCase):
         # Compare model outputs
         self.assertTrue(np.allclose(loaded_pipe_outputs, outputs, atol=1e-4))
 
-    def test_quantize_text_generate_model(self):
-        model_id = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
+    @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
+    def test_quantize_text_generate_model(self, model_id):
         set_seed(42)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
