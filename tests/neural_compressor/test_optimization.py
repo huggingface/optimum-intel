@@ -307,7 +307,7 @@ class OptimizationTest(unittest.TestCase):
         # Compare model outputs
         self.assertTrue(np.allclose(loaded_pipe_outputs, outputs, atol=1e-4))
 
-    def test_quantize_text_generate_model_quantize(self):
+    def test_quantize_text_generate_model(self):
         model_id = "EleutherAI/gpt-neo-125m"
         set_seed(42)
         model = AutoModelForCausalLM.from_pretrained(model_id)

@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import inspect
 import logging
 import os
 from pathlib import Path
@@ -26,11 +25,14 @@ from neural_compressor.utils.pytorch import load
 from transformers import AutoModel, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.modeling_utils import no_init_weights
+from transformers.utils import is_ipex_available
 from transformers.utils.generic import ContextManagers
 
 from optimum.exporters import TasksManager
 
+from ..generation.modeling import jit_trace
 from ..utils.import_utils import _torch_version, is_torch_version, is_transformers_version
+from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .configuration import INCConfig
 from .utils import ENGINE_MODEL_CONFIG, ENGINE_MODEL_NAME, WEIGHTS_NAME
 
@@ -94,11 +96,30 @@ class INCBaseModel:
     auto_model_class = AutoModel
     export_feature = None
 
-    @staticmethod
-    def load_model(file_name: Union[str, Path]):
-        model = torch.jit.load(file_name)
-        torch.jit.freeze(model.eval())
-        return model
+    def __init__(
+        self,
+        model,
+        config: PretrainedConfig = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        use_cache: bool = True,
+        **kwargs,
+    ):
+        super(INCBaseModel, self).__init__(
+            model=model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs
+        )
+        if getattr(self.config, "backend", None) == "ipex":
+            if not is_ipex_available():
+                raise ImportError(
+                    "Intel PyTorch Extensions was not found."
+                    "please make sure you've installed the package or run "
+                    "pip install intel_extension_for_pytorch"
+                )
+            else:
+                # Need import intel_extension_for_pytorch for ipex model
+                import intel_extension_for_pytorch as ipex
+
+                # Just to avoid to change by ruff.
+                logger.info("intel_extension_for_pytorch version is " + ipex.__version__)
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = WEIGHTS_NAME, **kwargs):
         if getattr(self.config, "backend", None) == "neural_engine":
@@ -212,95 +233,43 @@ class INCBaseModel:
                 "torch_dtype": torch_dtype,
             }
             task = cls.export_feature
-            if config.torch_dtype != "int8":
+            if config.torch_dtype != "int8" and config.torch_dtype != torch.int8:
                 model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
             else:
-                state_dict_path = kwargs.get("state_dict_path", None)
-                import copy
-
-                from transformers.models.auto.auto_factory import _get_model_class
-                from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
-
-                model_class = _get_model_class(config, cls.auto_model_class._model_mapping)
-                keys_to_ignore_on_load_unexpected = copy.deepcopy(
-                    getattr(model_class, "_keys_to_ignore_on_load_unexpected", None)
-                )
-                keys_to_ignore_on_load_missing = copy.deepcopy(
-                    getattr(model_class, "_keys_to_ignore_on_load_missing", None)
-                )
-                # Avoid unnecessary warnings resulting from quantized model initialization
-                quantized_keys_to_ignore_on_load = [
-                    r"zero_point",
-                    r"scale",
-                    r"packed_params",
-                    r"constant",
-                    r"module",
-                    r"best_configure",
-                    r"max_val",
-                    r"min_val",
-                    r"eps",
-                    r"fake_quant_enabled",
-                    r"observer_enabled",
-                ]
-                if keys_to_ignore_on_load_unexpected is None:
-                    model_class._keys_to_ignore_on_load_unexpected = quantized_keys_to_ignore_on_load
+                file_name = kwargs.get("file_name", WEIGHTS_NAME)
+                # Load the model from local directory
+                if os.path.isdir(model_id):
+                    state_dict_path = os.path.join(model_id, file_name)
+                # Download the model from the hub
                 else:
-                    model_class._keys_to_ignore_on_load_unexpected.extend(quantized_keys_to_ignore_on_load)
-                missing_keys_to_ignore_on_load = [r"weight", r"bias"]
-                if keys_to_ignore_on_load_missing is None:
-                    model_class._keys_to_ignore_on_load_missing = missing_keys_to_ignore_on_load
-                else:
-                    model_class._keys_to_ignore_on_load_missing.extend(missing_keys_to_ignore_on_load)
-
-                try:
-                    model = model_class.from_pretrained(model_id, **kwargs)
-                except AttributeError:
+                    state_dict_path = hf_hub_download(
+                        repo_id=model_id,
+                        filename=file_name,
+                        use_auth_token=use_auth_token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                    )
+                # Load the state dictionary of the model to verify whether the model is quantized or not
+                state_dict = torch.load(state_dict_path, map_location="cpu")
+                if "best_configure" in state_dict and state_dict["best_configure"] is not None:
+                    subfolder = kwargs.get("subfolder", "")
+                    arg_framework = kwargs.get("framework", None)
+                    framework = TasksManager.determine_framework(
+                        model_id, subfolder=subfolder, framework=arg_framework
+                    )
+                    model_class = TasksManager.get_model_class_for_task(task, framework)
                     init_contexts = [no_init_weights(_enable=True)]
                     with ContextManagers(init_contexts):
-                        model = model_class(config, **kwargs)
-
-                model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
-                model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
-
-                if state_dict_path is None:
-                    revision = model_kwargs.get("revision", None)
-                    if os.path.isdir(model_id):
-                        state_dict_path = os.path.join(model_id, file_name)
-                    elif os.path.isfile(model_id):
-                        state_dict_path = model_id
-                    else:
-                        local_files_only = False
-                        if is_offline_mode():
-                            logger.info("Offline mode: forcing local_files_only=True")
-                            local_files_only = True
-                        cache_dir = model_kwargs.get("cache_dir", None)
-                        if cache_dir is None:
-                            cache_dir = TRANSFORMERS_CACHE
-                        if isinstance(cache_dir, Path):
-                            cache_dir = str(cache_dir)
-                        try:
-                            state_dict_path = hf_hub_download(
-                                repo_id=model_id,
-                                filename=file_name,
-                                revision=revision,
-                                cache_dir=cache_dir,
-                                local_files_only=local_files_only,
-                            )
-                        except EnvironmentError as err:
-                            logger.error(err)
-                            msg = (
-                                f"Can't load config for '{model_id}'. Make sure that:\n\n"
-                                f"-'{model_id}' is a correct model identifier listed on 'https://huggingface.co/models'\n\n"
-                                f"-or '{model_id}' is a correct path to a directory containing a {file_name} file\n\n"
-                            )
-
-                            if revision is not None:
-                                msg += (
-                                    f"- or '{revision}' is a valid git identifier (branch name, a tag name, or a commit id) that "
-                                    f"exists for this model name as listed on its model page on 'https://huggingface.co/models'\n\n"
-                                )
-
-                            raise EnvironmentError(msg)
+                        model = model_class.from_pretrained(model_id, **model_kwargs)
+                    try:
+                        model = load(state_dict_path, model)
+                    except Exception as e:
+                        logger.error(e.args)
+                        raise
+                else:
+                    model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
 
                 msg = None
                 try:
@@ -310,17 +279,6 @@ class INCBaseModel:
                         logger.warning(f"{msg}")
                 except Exception:
                     logger.info("Couldn't verify torch version.")
-
-                # Load the state dictionary of the model to verify whether the model is quantized or not
-                state_dict = torch.load(state_dict_path, map_location="cpu")
-
-                if "best_configure" in state_dict and state_dict["best_configure"] is not None:
-                    try:
-                        model = load(state_dict_path, model)
-                    except Exception as e:
-                        if msg is not None:
-                            e.args += (msg,)
-                        raise
 
             model.eval()
 
@@ -416,19 +374,12 @@ class INCBaseModel:
                     raise
             else:
                 model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        model.config.return_dict = False
-        signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
-        onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_class(model.config, use_past=use_cache)
-        dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-        model_inputs = {
-            key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None
-        }
-        if use_cache:
-            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()))
-        else:
-            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs)
-        traced_model = torch.jit.freeze(traced_model.eval())
+        if model.config.model_type == "bloom":
+            model.transformer._prepare_attn_mask = _prepare_attn_mask
+
+        if model.config.model_type == "llama":
+            model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+        traced_model = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)

@@ -23,7 +23,7 @@ import torch
 from huggingface_hub import hf_hub_download
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from transformers.utils import WEIGHTS_NAME, is_ipex_available
+from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
@@ -105,27 +105,13 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
         use_cache: bool = True,
         **kwargs,
     ):
-        self.model = model
-        self.config = config
+        super(BaseModelForCausalLM, self).__init__(model=model, config=config)
         self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
         self.use_cache = use_cache
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
-        if getattr(self.config, "backend", None) == "ipex":
-            if not is_ipex_available():
-                raise ImportError(
-                    "Intel PyTorch Extensions was not found."
-                    "please make sure you've installed the package or run "
-                    "pip install intel_extension_for_pytorch"
-                )
-            else:
-                # Need import intel_extension_for_pytorch for ipex model
-                import intel_extension_for_pytorch as ipex
-
-                # Just to avoid to change by ruff.
-                logger.info("intel_extension_for_pytorch version is " + ipex.__version__)
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
@@ -258,6 +244,97 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
             for layer_past in past_key_value
         )
 
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        **kwargs,
+    ) -> CausalLMOutputWithPast:
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        nb_pkv = 2
+        num_layers = self.normalized_config.num_layers
+        first_token = False
+        backend = getattr(self.config, "backend", None)
+        if self.use_cache:
+            if past_key_values is None:
+                first_token = True
+                num_attention_heads = self.normalized_config.num_attention_heads
+                hidden_size = self.normalized_config.hidden_size
+                d_k = hidden_size // num_attention_heads
+
+                if self.config.model_type != "bloom":
+                    if backend == "neural_engine":
+                        new_shape = [input_ids.shape[0], 0, num_attention_heads, d_k]
+                    else:
+                        new_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
+                    empty_tensor = torch.empty(size=new_shape)
+                    if self.model_dtype is not None:
+                        empty_tensor = empty_tensor.to(self.model_dtype)
+                    past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
+                    pkv = tuple(empty_tensor for _ in range(nb_pkv))
+                else:
+                    pkv = ()
+                    for nb_pkv in range(nb_pkv):
+                        if nb_pkv % 2 == 0:
+                            new_shape = [input_ids.shape[0] * num_attention_heads, d_k, 0]
+                        else:
+                            new_shape = [input_ids.shape[0] * num_attention_heads, 0, d_k]
+                        empty_tensor = torch.empty(size=new_shape)
+                        if self.model_dtype is not None:
+                            empty_tensor = empty_tensor.to(self.model_dtype)
+                        pkv = pkv + (empty_tensor,)
+                past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
+
+            inputs["past_key_values"] = past_key_values
+        if backend == "neural_engine":
+            past_key_values = [past_key_values[i][j] for i in range(num_layers) for j in range(nb_pkv)]
+            predictions = self.model.inference([input_ids] + past_key_values + [attention_mask])
+            for key in predictions:
+                predictions[key] = torch.from_numpy(predictions[key])
+
+            torchout = CausalLMOutputWithPast()
+            torchout.logits = list(predictions.values())[0]
+            torchout.past_key_values = [
+                (list(predictions.values())[2 * i + 1], list(predictions.values())[2 * i + 2])
+                for i in range(num_layers)
+            ]
+            outputs = torchout
+            if first_token:
+                input_bs = input_ids.size()[0]
+                seq_len = input_ids.size()[1]
+                outputs.logits = outputs.logits.expand(input_bs, seq_len, -1)
+                past_key_values = []
+                for key, value in outputs.past_key_values:
+                    key_dim = key.dim()
+                    value_dim = value.dim()
+                    key = key.expand(input_bs, -1, -1, -1).contiguous()
+                    value = value.expand(input_bs, -1, -1, -1).contiguous()
+                    if key_dim == 3:
+                        key = key.view(key.size(1) * key.size(0), key.size(2), key.size(3))
+                    if value_dim == 3:
+                        value = value.view(value.size(1) * value.size(0), value.size(2), value.size(3))
+                    past_key_values.append((key, value))
+                outputs.past_key_values = tuple(past_key_values)
+        else:
+            outputs = self.model(**inputs)
+
+        if isinstance(outputs, tuple):
+            outputs = CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
+        else:
+            outputs = CausalLMOutputWithPast(
+                logits=outputs["logits"], past_key_values=outputs["past_key_values"] if self.use_cache else None
+            )
+
+        return outputs
+
 
 class TSModelForCausalLM(BaseModelForCausalLM):
     auto_model_class = AutoModelForCausalLM
@@ -280,61 +357,6 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         self._device = device if isinstance(device, torch.device) else torch.device(device)
         self.model.to(self._device)
         return self
-
-    def forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-        **kwargs,
-    ) -> CausalLMOutputWithPast:
-        if attention_mask is None:
-            attention_mask = torch.ones_like(input_ids)
-
-        inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-        }
-
-        if self.use_cache:
-            if past_key_values is None:
-                nb_pkv = 2
-                num_layers = self.normalized_config.num_layers
-                num_attention_heads = self.normalized_config.num_attention_heads
-                hidden_size = self.normalized_config.hidden_size
-                d_k = hidden_size // num_attention_heads
-
-                if self.config.model_type != "bloom":
-                    new_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
-                    empty_tensor = torch.empty(size=new_shape)
-                    if self.model_dtype is not None:
-                        empty_tensor = empty_tensor.to(self.model_dtype)
-                    past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
-                    pkv = tuple(empty_tensor for _ in range(nb_pkv))
-                else:
-                    pkv = ()
-                    for nb_pkv in range(nb_pkv):
-                        if nb_pkv % 2 == 0:
-                            new_shape = [input_ids.shape[0] * num_attention_heads, d_k, 0]
-                        else:
-                            new_shape = [input_ids.shape[0] * num_attention_heads, 0, d_k]
-                        empty_tensor = torch.empty(size=new_shape)
-                        if self.model_dtype is not None:
-                            empty_tensor = empty_tensor.to(self.model_dtype)
-                        pkv = pkv + (empty_tensor,)
-                past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
-
-            inputs["past_key_values"] = past_key_values
-        outputs = self.model(**inputs)
-
-        if isinstance(outputs, tuple):
-            outputs = CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
-        else:
-            outputs = CausalLMOutputWithPast(
-                logits=outputs["logits"], past_key_values=outputs["past_key_values"] if self.use_cache else None
-            )
-
-        return outputs
 
     @classmethod
     def _from_pretrained(
