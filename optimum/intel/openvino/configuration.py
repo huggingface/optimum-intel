@@ -29,12 +29,48 @@ DEFAULT_QUANTIZATION_CONFIG = {
     },
     "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
     "ignored_scopes": [
-        "{re}.*Embedding*",
-        "{re}.*__add___*",
-        "{re}.*layer_norm_*",
+        "{re}.*Embedding.*",
+        "{re}.*add___.*",
+        "{re}.*layer_norm_.*",
         "{re}.*matmul_1",
-        "{re}.*__truediv__*",
+        "{re}.*__truediv__.*",
     ],
+}
+
+INT8_WEIGHT_COMPRESSION_CONFIG = {
+    "algorithm": "quantization",
+    "weights": {
+        "mode": "symmetric",
+        "bits": 8,
+        "target_scopes": [
+            "{re}.*Embedding.*",
+            "{re}.*matmul_.*",
+            "{re}.*addmm_.*",
+            "{re}.*baddmm_.*",
+            "{re}.*linear_.*",
+        ],
+        "ignored_scopes": [
+            "{re}.*conv_*",
+        ],
+    },
+    "activations": {
+        "ignored_scopes": [
+            "{re}.*add___.*",
+            "{re}.*__radd___.*",
+            "{re}.*layer_norm_.*",
+            "{re}.*__truediv__.*",
+            "{re}.*__mul___.*",
+            "{re}.*__rmul___.*",
+            "{re}.*tanh_.*",
+            "{re}.*pow_.*",
+            "{re}.*matmul_.*",
+            "{re}.*addmm_.*",
+            "{re}.*baddmm_.*",
+            "{re}.*linear_.*",
+            "{re}.*conv_.*",
+        ],
+    },
+    "overflow_fix": "disable",
 }
 
 
