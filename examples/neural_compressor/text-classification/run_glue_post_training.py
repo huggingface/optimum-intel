@@ -20,9 +20,10 @@
 import logging
 import os
 
+
 # Disable the initialization of the torch distribution
-if os.environ.get('OMPI_COMM_WORLD_SIZE', -1) != -1:
-    os.environ['OMPI_COMM_WORLD_SIZE'] = '-1'
+if os.environ.get("OMPI_COMM_WORLD_SIZE", -1) != -1:
+    os.environ["OMPI_COMM_WORLD_SIZE"] = "-1"
 
 import sys
 from dataclasses import dataclass, field
