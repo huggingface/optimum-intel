@@ -66,7 +66,7 @@ quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_a
 > 
 >`os.environ.setdefault('OMPI_COMM_WORLD_SIZE', '-1') if os.environ.get('OMPI_COMM_WORLD_SIZE', -1) != -1 else None`
 
-And then, modify the run_task_in_distributed_mode.sh according to the cluster information. Below is the explanation for each parameter.
+And then, modify the `run_task_in_distributed_mode.sh` according to the cluster information. Below is the explanation for each parameter.
 
 - `<NUM_PROCESS>` is the number of processes, recommend to set it with the number of hosts plus one.
 
