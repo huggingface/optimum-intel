@@ -74,7 +74,7 @@ And then, modify the `run_task_in_distributed_mode.sh` according to the cluster 
 
 - `<HOSTNAME>` is the host name, and argument --host `<HOSTNAME>`,`<HOSTNAME>`... can be replaced with `--hostfile <HOSTFILE>`, when each line in `<HOSTFILE>` is a host name.
 
-- `-mca btl_tcp_if_include <NETWORK_INTERFACE>` is used to set the network communication interface between hosts. For example, `<NETWORK_INTERFACE>` can be set to `192.168.20.0/24` to allow MPI communication between all hosts under `192.168.20.*`network segment.
+- `-mca btl_tcp_if_include <NETWORK_INTERFACE>` is used to set the network communication interface between hosts. For example, `<NETWORK_INTERFACE>` can be set to `192.168.20.0/24` to allow MPI communication between all hosts under `192.168.20.*` network segment.
 
 
 ### Knowledge Distillation with Quantization Aware Training
