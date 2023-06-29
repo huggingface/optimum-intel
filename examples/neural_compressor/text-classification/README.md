@@ -62,7 +62,7 @@ from neural_compressor import PostTrainingQuantConfig
 quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach, quant_level=1)
 ```
 
-> **_Note:_** Please also add below code snippet at the beginning of the example to disable the initialization of torch distribution.
+> **_Note:_** Please also add the below code snippet at the beginning of the example to disable the initialization of torch distribution.
 > 
 >`os.environ.setdefault('OMPI_COMM_WORLD_SIZE', '-1') if os.environ.get('OMPI_COMM_WORLD_SIZE', -1) != -1 else None`
 
