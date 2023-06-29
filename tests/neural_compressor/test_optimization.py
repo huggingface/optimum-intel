@@ -119,7 +119,7 @@ class OptimizationTest(unittest.TestCase):
     )
 
     TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
-        "hf-internal-testing/tiny-random-bloom",
+        "hf-internal-testing/tiny-random-BloomForCausalLM",
         "hf-internal-testing/tiny-random-GPTNeoForCausalLM",
     )
 
