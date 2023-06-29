@@ -2,9 +2,9 @@
     {
         "algorithm": "movement_sparsity",
         "params": {
-            "warmup_start_epoch": 3,
-            "warmup_end_epoch": 8,
-            "importance_regularization_factor": 0.1,
+            "warmup_start_epoch": 1,
+            "warmup_end_epoch": 6,
+            "importance_regularization_factor": 0.045,
             "enable_structured_masking": true
         },
         "sparse_structure_by_scopes": [
@@ -39,8 +39,12 @@
         "overflow_fix": "enable",
         "initializer": {
             "range": {
-                "num_init_samples": 300,
-                "type": "mean_min_max"
+                "num_init_samples": 512,
+                "type": "percentile",
+                "params": {
+                    "min_percentile": 0.01,
+                    "max_percentile": 99.99
+                }
             },
             "batchnorm_adaptation": {
                 "num_bn_adaptation_samples": 0
@@ -54,7 +58,6 @@
             }
         },
         "ignored_scopes": [
-            "{re}.*feature_extractor.*",
             "{re}.*__add___[0-1]",
             "{re}.*layer_norm_0"
         ]
