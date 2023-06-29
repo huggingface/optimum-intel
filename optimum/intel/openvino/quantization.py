@@ -157,11 +157,17 @@ class OVQuantizer(OptimumQuantizer):
         if weights_only:
             if isinstance(self.model, OVBaseModel):
                 raise ValueError(
-                    "`weights_only` currently not supported for `OVModels`, only available for torch.nn.Module"
+                    "`weights_only` currently not supported for `OVModels`, only available for torch.nn.Module."
                 )
             if calibration_dataset is not None:
                 logger.warning(
-                    "`calibration_dataset` was provided but will not be used as `weights_only` is set to `True`"
+                    "`calibration_dataset` was provided but will not be used as `weights_only` is set to `True`."
+                )
+        else:
+            if calibration_dataset is None:
+                raise ValueError(
+                    "`calibration_dataset` is needed to compute the activations range during the calibration step and was not provided. "
+                    "In case you only want to apply quantization on the weights, please set `weights_only=True`."
                 )
 
         if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
