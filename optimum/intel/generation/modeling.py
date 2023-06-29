@@ -249,6 +249,44 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
         self.model.to(self._device)
         return self
 
+    # only for neural_engine forward
+    def neural_engine_forward(self, inputs, nb_pkv, num_layers, first_token):
+        past_key_values = [inputs["past_key_values"][i][j] for i in range(num_layers) for j in range(nb_pkv)]
+        predictions = self.model.inference([inputs["input_ids"]] + past_key_values + [inputs["attention_mask"]])
+        for key in predictions:
+            predictions[key] = torch.from_numpy(predictions[key])
+
+        logits = list(predictions.values())[0]
+        if self.use_cache:
+            past_key_values = [
+                (list(predictions.values())[2 * i + 1], list(predictions.values())[2 * i + 2])
+                for i in range(num_layers)
+            ]
+        else:
+            past_key_values = []
+
+        shape = inputs["input_ids"].shape
+        batch_size = shape[0]
+        seq_length = shape[1]
+
+        if first_token:
+            logits = logits.expand(batch_size, seq_length, -1)
+            pkv = []
+            for key, value in past_key_values:
+                key_dim = key.dim()
+                value_dim = value.dim()
+                key = key.expand(batch_size, -1, -1, -1).contiguous()
+                value = value.expand(batch_size, -1, -1, -1).contiguous()
+                if key_dim == 3:
+                    key = key.view(key.size(1) * key.size(0), key.size(2), key.size(3))
+                if value_dim == 3:
+                    value = value.view(value.size(1) * value.size(0), value.size(2), value.size(3))
+                pkv.append((key, value))
+            past_key_values = tuple(pkv) if self.use_cache else None
+        else:
+            logits = logits.expand(batch_size, seq_length, -1)
+        return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -300,34 +338,7 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
 
             inputs["past_key_values"] = past_key_values
         if backend == "neural_engine":
-            past_key_values = [past_key_values[i][j] for i in range(num_layers) for j in range(nb_pkv)]
-            predictions = self.model.inference([input_ids] + past_key_values + [attention_mask])
-            for key in predictions:
-                predictions[key] = torch.from_numpy(predictions[key])
-
-            torchout = CausalLMOutputWithPast()
-            torchout.logits = list(predictions.values())[0]
-            torchout.past_key_values = [
-                (list(predictions.values())[2 * i + 1], list(predictions.values())[2 * i + 2])
-                for i in range(num_layers)
-            ]
-            outputs = torchout
-            if first_token:
-                input_bs = input_ids.size()[0]
-                seq_len = input_ids.size()[1]
-                outputs.logits = outputs.logits.expand(input_bs, seq_len, -1)
-                past_key_values = []
-                for key, value in outputs.past_key_values:
-                    key_dim = key.dim()
-                    value_dim = value.dim()
-                    key = key.expand(input_bs, -1, -1, -1).contiguous()
-                    value = value.expand(input_bs, -1, -1, -1).contiguous()
-                    if key_dim == 3:
-                        key = key.view(key.size(1) * key.size(0), key.size(2), key.size(3))
-                    if value_dim == 3:
-                        value = value.view(value.size(1) * value.size(0), value.size(2), value.size(3))
-                    past_key_values.append((key, value))
-                outputs.past_key_values = tuple(past_key_values)
+            return self.neural_engine_forward(inputs, nb_pkv, num_layers, first_token)
         else:
             outputs = self.model(**inputs)
 

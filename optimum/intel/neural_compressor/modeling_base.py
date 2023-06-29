@@ -40,9 +40,6 @@ from .utils import ENGINE_MODEL_CONFIG, ENGINE_MODEL_NAME, WEIGHTS_NAME
 logger = logging.getLogger(__name__)
 
 
-_TOKENIZER_FOR_DOC = "AutoTokenizer"
-_FEATURE_EXTRACTOR_FOR_DOC = "AutoFeatureExtractor"
-
 MODEL_START_DOCSTRING = r"""
     This model check the superclass documentation for the generic methods the
     library implements for all its model (such as downloading or saving)
@@ -52,31 +49,6 @@ MODEL_START_DOCSTRING = r"""
             is the Model configuration class with all the parameters of the model.
         device (`str`, defaults to `"cpu"`):
             The device type for which the model will be optimized for. The resulting compiled model will contains nodes specific to this device.
-"""
-
-INPUTS_DOCSTRING = r"""
-    Args:
-        input_ids (`torch.Tensor`):
-            Indices of input sequence tokens in the vocabulary.
-            Indices can be obtained using [`AutoTokenizer`](https://huggingface.co/docs/transformers/autoclass_tutorial#autotokenizer).
-            [What are input IDs?](https://huggingface.co/docs/transformers/glossary#input-ids)
-        attention_mask (`torch.Tensor`), *optional*):
-            Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
-            - 1 for tokens that are **not masked**,
-            - 0 for tokens that are **masked**.
-            [What are attention masks?](https://huggingface.co/docs/transformers/glossary#attention-mask)
-        token_type_ids (`torch.Tensor`, *optional*):
-            Segment token indices to indicate first and second portions of the inputs. Indices are selected in `[0, 1]`:
-            - 1 for tokens that are **sentence A**,
-            - 0 for tokens that are **sentence B**.
-            [What are token type IDs?](https://huggingface.co/docs/transformers/glossary#token-type-ids)
-"""
-
-IMAGE_INPUTS_DOCSTRING = r"""
-    Args:
-        pixel_values (`torch.Tensor`):
-            Pixel values corresponding to the images in the current batch.
-            Pixel values can be obtained from encoded images using [`AutoFeatureExtractor`](https://huggingface.co/docs/transformers/autoclass_tutorial#autofeatureextractor).
 """
 
 
