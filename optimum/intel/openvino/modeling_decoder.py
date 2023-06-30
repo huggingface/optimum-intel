@@ -156,12 +156,7 @@ class OVBaseDecoderModel(OVModel):
                 f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures were "
                 "validated, use at your own risk."
             )
-
-        model_file_name = ONNX_WEIGHTS_NAME
-
-        if task is None:
-            task = cls._auto_model_to_task(cls.auto_model_class)
-
+        task = task or cls.export_feature
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         model_kwargs = {
@@ -188,7 +183,7 @@ class OVBaseDecoderModel(OVModel):
             model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
 
         # Export the model to the ONNX format
-        export(model=model, config=onnx_config, output=save_dir_path / model_file_name)
+        export(model=model, config=onnx_config, output=save_dir_path / ONNX_WEIGHTS_NAME)
 
         return cls._from_pretrained(
             model_id=save_dir_path,
@@ -198,7 +193,7 @@ class OVBaseDecoderModel(OVModel):
             revision=revision,
             force_download=force_download,
             cache_dir=cache_dir,
-            file_name=model_file_name,
+            file_name=ONNX_WEIGHTS_NAME,
             local_files_only=local_files_only,
             use_cache=use_cache,
             **kwargs,

@@ -263,8 +263,7 @@ class OVBaseModel(PreTrainedModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        if task is None:
-            task = cls._auto_model_to_task(cls.auto_model_class)
+        task = task or cls.export_feature
 
         model_kwargs = {
             "revision": revision,
@@ -277,8 +276,8 @@ class OVBaseModel(PreTrainedModel):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-
         model_type = model.config.model_type.replace("_", "-")
+
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",
             model=model,
