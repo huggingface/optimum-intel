@@ -93,7 +93,6 @@ _SUPPORTED_ARCHITECTURES = {
     """,
 )
 class OVBaseDecoderModel(OVModel):
-
     def __init__(
         self,
         model: openvino.runtime.Model,
