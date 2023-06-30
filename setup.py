@@ -37,7 +37,6 @@ QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
 EXTRAS_REQUIRE = {
     "neural-compressor": [
         "neural-compressor>=2.2.0",
-        "intel-extension-for-transformers",
         "onnx",
         "onnxruntime<1.15.0",
     ],
