@@ -20,7 +20,6 @@ from typing import Optional, Union
 
 import torch
 from huggingface_hub import hf_hub_download
-from intel_extension_for_transformers.backends.neural_engine.compile import compile
 from neural_compressor.utils.pytorch import load
 from transformers import AutoModel, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
@@ -89,9 +88,7 @@ class INCBaseModel:
                 logger.info("intel_extension_for_pytorch version is " + ipex.__version__)
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = WEIGHTS_NAME, **kwargs):
-        if getattr(self.config, "backend", None) == "neural_engine":
-            self.model.save(save_directory)
-        elif getattr(self.config, "torchscript", False):
+        if getattr(self.config, "torchscript", False):
             torch.jit.save(self.model, os.path.join(save_directory, file_name))
         else:
             state_dict = self.model.state_dict()
@@ -139,56 +136,24 @@ class INCBaseModel:
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
-        backend = getattr(config, "backend", None)
-
-        if getattr(config, "torchscript", None) or backend == "neural_engine":
+        if getattr(config, "torchscript", None):
             # Load the model from local directory
             if os.path.isdir(model_id):
-                if backend == "neural_engine":
-                    file_name = model_id
-                else:
-                    file_name = os.path.join(model_id, file_name)
-                    model_save_dir = model_id
+                file_name = os.path.join(model_id, file_name)
+                model_save_dir = model_id
             # Download the model from the hub
             else:
-                if backend == "neural_engine":
-                    model_file_names = {"model": ENGINE_MODEL_NAME, "config": ENGINE_MODEL_CONFIG}
-                    try:
-                        for name, file_name in model_file_names.items():
-                            model_cache_path = hf_hub_download(
-                                repo_id=model_id,
-                                filename=file_name,
-                                use_auth_token=use_auth_token,
-                                revision=revision,
-                                cache_dir=cache_dir,
-                                force_download=force_download,
-                                local_files_only=local_files_only,
-                            )
-                        file_name = Path(model_cache_path).parent
-                    except Exception:
-                        logger.warning(
-                            f"The file names {ENGINE_MODEL_NAME} or {ENGINE_MODEL_CONFIG} was not found! Please check it!"
-                        )
-                        raise Exception
-                else:
-                    model_cache_path = hf_hub_download(
-                        repo_id=model_id,
-                        filename=file_name,
-                        use_auth_token=use_auth_token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                    )
+                model_cache_path = hf_hub_download(
+                    repo_id=model_id,
+                    filename=file_name,
+                    use_auth_token=use_auth_token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
                 model_save_dir = Path(model_cache_path).parent
-            try:
-                model = compile(file_name)
-                config.torchscript = False
-                config.backend = "neural_engine"
-            except Exception as e:
-                logger.warning(e)
-                logger.info("Compile model with neural engine failed! Inference with original model.")
-                model = cls.load_model(file_name)
+            model = cls.load_model(file_name)
         else:
             model_save_dir = None
             model_kwargs = {
