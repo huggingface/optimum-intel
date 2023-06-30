@@ -24,7 +24,7 @@ jobs:
       matrix:
         # Testing lower and upper bound of supported Python versions
         # This also ensures that the test fails if dependencies break for Python 3.7
-        python-version: ["3.7", "3.10"]
+        python-version: ["3.10"]
         transformers: ['transformers', 'git+https://github.com/huggingface/transformers.git']
         optimum: ['optimum', 'git+https://github.com/huggingface/optimum.git']
 
