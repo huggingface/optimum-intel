@@ -288,8 +288,8 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
     ):
         if is_torch_version(">", "1.13.1") and is_torch_version("<=", "2.0.1"):
             register_custom_scaled_dot_product_attention_export()
-        if task is None:
-            task = cls._auto_model_to_task(cls.auto_model_class)
+        task = task or cls.export_feature
+
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 

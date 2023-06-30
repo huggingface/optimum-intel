@@ -297,9 +297,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         encoder_file_name = os.path.join("encoder", ONNX_ENCODER_NAME)
         decoder_file_name = os.path.join("decoder", ONNX_DECODER_NAME)
         decoder_with_past_file_name = os.path.join("decoder_with_past", ONNX_DECODER_WITH_PAST_NAME)
-
-        if task is None:
-            task = cls._auto_model_to_task(cls.auto_model_class)
+        task = task or cls.export_feature
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
