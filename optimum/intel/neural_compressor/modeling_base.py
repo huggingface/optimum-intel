@@ -33,7 +33,7 @@ from ..generation.modeling import jit_trace
 from ..utils.import_utils import _torch_version, is_torch_version
 from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .configuration import INCConfig
-from .utils import ENGINE_MODEL_CONFIG, ENGINE_MODEL_NAME, WEIGHTS_NAME
+from .utils import WEIGHTS_NAME
 
 
 logger = logging.getLogger(__name__)
