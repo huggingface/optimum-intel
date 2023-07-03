@@ -20,7 +20,7 @@ from typing import Optional, Union
 
 import torch
 from huggingface_hub import hf_hub_download
-from transformers import AutoModel, PretrainedConfig
+from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.utils import is_ipex_available
 
@@ -56,7 +56,6 @@ MODEL_START_DOCSTRING = r"""
 class INCBaseModel(INCModel):
     _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
     base_model_prefix = "inc_model"
-    auto_model_class = AutoModel
     export_feature = None
 
     def __init__(
