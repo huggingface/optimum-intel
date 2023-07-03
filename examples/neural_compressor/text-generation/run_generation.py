@@ -24,7 +24,9 @@ import tempfile
 
 import numpy as np
 import torch
+from datasets import load_dataset
 from neural_compressor import PostTrainingQuantConfig
+from torch.utils.data import DataLoader
 from transformers import (
     CTRLLMHeadModel,
     CTRLTokenizer,
@@ -156,6 +158,55 @@ def adjust_length_to_model(length, max_sequence_length):
     return length
 
 
+class datasets_processor:
+    def __init__(
+        self,
+        dataset,
+        tokenizer,
+        batch_size=8,
+        pad_val=1,
+        pad_max=512,
+        is_calib=False,
+    ):
+        self.dataset = dataset
+        self.tokenizer = tokenizer
+        self.batch_size = batch_size
+        self.pad_val = pad_val
+        self.pad_max = pad_max
+        self.is_calib = is_calib
+
+        # tokenize the dataset
+        self.dataset = self.dataset.map(self.tokenize_function, batched=True)
+        self.dataset.set_format(type="torch", columns=["input_ids"])
+
+    @torch.no_grad()
+    def tokenize_function(self, examples):
+        example = self.tokenizer(examples["text"])
+        return example
+
+    @torch.no_grad()
+    def collate_batch(self, batch):
+        input_ids_padded = []
+        last_ind = []
+        for text in batch:
+            input_ids = text["input_ids"]
+            pad_len = self.pad_max - input_ids.shape[0]
+            last_ind.append(input_ids.shape[0] - 1)
+            if self.is_calib:
+                input_ids = (
+                    input_ids[: self.pad_max]
+                    if len(input_ids) > self.pad_max
+                    else input_ids
+                )
+            else:
+                input_ids = pad(input_ids, (0, pad_len), value=self.pad_val)
+            input_ids_padded.append(input_ids)
+        return  (
+            torch.vstack(input_ids_padded),
+            torch.tensor(last_ind),
+        )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -210,16 +261,31 @@ def main():
         help="Output directory where to save the resulting model",
     )
     parser.add_argument(
-        "apply_quantization",
+        "--apply_quantization",
         action="store_true",
         help="Whether or not to apply quantization.",
     )
     parser.add_argument(
-        "quantization_approach",
+        "--quantization_approach",
         default="static",
         type=str,
         help="Quantization approach. Supported approach are static, dynamic.",
     )
+    parser.add_argument(
+        "--smooth_quant",
+        action="store_true",
+        help="Whether or not to quantize with smooth quant.",
+    )
+    parser.add_argument(
+        "--smooth_quant_alpha",
+        default=0.6,
+        type=float,
+        help="Set alpha of smooth quant argument.",
+    )
+    parser.add_argument(
+        "--dataset_name", nargs="?", default="NeelNanda/pile-10k", const="NeelNanda/pile-10k"
+    )
+    parser.add_argument("--calib_iters", default=100, type=int, help="calibration iters.")
     args = parser.parse_args()
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -254,13 +320,45 @@ def main():
     if args.apply_quantization:
         # This is just an example for calibration_fn. If you want to achieve good accuracy,
         # you must perform a calibration on your real dataset.
-        tokens = tokenizer("This is a sample", return_tensors="pt")
+        calib_dataset = load_dataset(args.dataset_name, split="train")
+        calib_dataset = calib_dataset.shuffle(seed=42)
+        calib_dataset = datasets_processor(
+            calib_dataset,
+            tokenizer,
+            1,
+            is_calib=True,
+        )
+        calib_size = 1
+        calib_dataloader = DataLoader(
+            calib_dataset.dataset,
+            batch_size=calib_size,
+            shuffle=False,
+            collate_fn=calib_dataset.collate_batch,
+        )
 
         def calibration_fn(p_model):
             tmp_model = INCModelForCausalLM(p_model, model.config, use_cache=False)
-            tmp_model.generate(**tokens, max_new_tokens=32, do_sample=False)
+            for i, (input_ids, last_ind) in enumerate(calib_dataloader):
+                input_bs, input_len = input_ids.shape
+                attention_mask = torch.ones(input_bs, input_len)
+                if i >= args.calib_iters:
+                    break
+                tmp_model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=32,
+                      temperature=0.9,
+                      num_beams=4,
+                    do_sample=False,
+                )
 
-        quantization_config = PostTrainingQuantConfig(approach=args.quantization_approach)
+        example_inputs = {"input_ids": torch.randint(100, (1, 32)), "attention_mask": torch.ones(1, 32)}
+        quantization_config = PostTrainingQuantConfig(
+            approach=args.quantization_approach,
+            recipes = {"smooth_quant": args.smooth_quant,
+                       "smooth_quant_args": {"alpha": args.smooth_quant_alpha, "folding": True}},
+            example_inputs=example_inputs
+        )
         model.config.return_dict = False
         quantizer = INCQuantizer.from_pretrained(model, calibration_fn=calibration_fn)
         with tempfile.TemporaryDirectory() as tmp_dir:

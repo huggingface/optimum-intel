@@ -29,7 +29,9 @@ python run_generation.py \
     --model_type=gptj \
     --model_name_or_path=EleutherAI/gpt-j-6b \
     --apply_quantization \
-    --quantization_approach \
+    --quantization_approach static\
+    --smooth_quant \
+    --smooth_quant_alpha 0.6
 ```
 
 ### Use JIT model and apply_quantization with post-training static
@@ -38,6 +40,8 @@ python run_generation.py \
     --model_type=gptj \
     --model_name_or_path=EleutherAI/gpt-j-6b \
     --apply_quantization \
-    --quantization_approach \
+    --quantization_approach static\
+    --smooth_quant \
+    --smooth_quant_alpha 0.6 \
     --jit
 ```
