@@ -261,6 +261,8 @@ class OVBaseModel(PreTrainedModel):
         local_files_only: bool = False,
         task: Optional[str] = None,
         trust_remote_code: bool = False,
+        use_safetensors: bool = None,
+        num_lables: int = None,
         **kwargs,
     ):
         """
@@ -291,8 +293,12 @@ class OVBaseModel(PreTrainedModel):
             "local_files_only": local_files_only,
             "force_download": force_download,
             "trust_remote_code": trust_remote_code,
+            "use_safetensors": use_safetensors
         }
 
+        if num_lables:
+            model_kwargs["num_lables"] = num_lables
+            
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         model_type = model.config.model_type.replace("_", "-")
 
