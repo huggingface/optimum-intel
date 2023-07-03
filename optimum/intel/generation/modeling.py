@@ -94,6 +94,8 @@ class PreTrainedModel(OptimizedModel):
 
 
 class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
+    auto_model_class = AutoModelForCausalLM
+    export_feature = "text-generation"
     main_input_name = "input_ids"
     base_model_prefix = "torch_script_model"
 
@@ -264,10 +266,10 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
             "attention_mask": attention_mask,
         }
 
-        nb_pkv = 2
-        num_layers = self.normalized_config.num_layers
         if self.use_cache:
             if past_key_values is None:
+                nb_pkv = 2
+                num_layers = self.normalized_config.num_layers
                 num_attention_heads = self.normalized_config.num_attention_heads
                 hidden_size = self.normalized_config.hidden_size
                 d_k = hidden_size // num_attention_heads
@@ -305,9 +307,6 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
 
 
 class TSModelForCausalLM(BaseModelForCausalLM):
-    auto_model_class = AutoModelForCausalLM
-    export_feature = "text-generation"
-
     def __init__(
         self,
         model,

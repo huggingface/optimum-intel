@@ -30,8 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 CONFIG_NAME = "best_configure.yaml"
-ENGINE_MODEL_NAME = "model.bin"
-ENGINE_MODEL_CONFIG = "conf.yaml"
+
 
 _HEAD_TO_AUTOMODELS = {
     "fill-mask": "INCModelForMaskedLM",

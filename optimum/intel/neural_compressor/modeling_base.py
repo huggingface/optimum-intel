@@ -20,19 +20,16 @@ from typing import Optional, Union
 
 import torch
 from huggingface_hub import hf_hub_download
-from neural_compressor.utils.pytorch import load
 from transformers import AutoModel, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
-from transformers.modeling_utils import no_init_weights
 from transformers.utils import is_ipex_available
-from transformers.utils.generic import ContextManagers
 
 from optimum.exporters import TasksManager
 
 from ..generation.modeling import jit_trace
-from ..utils.import_utils import _torch_version, is_torch_version
+from ..utils.import_utils import is_torch_version
 from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
-from .configuration import INCConfig
+from .quantization import INCModel
 from .utils import WEIGHTS_NAME
 
 
@@ -56,7 +53,7 @@ MODEL_START_DOCSTRING = r"""
     Base INCBaseModel class.
     """,
 )
-class INCBaseModel:
+class INCBaseModel(INCModel):
     _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
     base_model_prefix = "inc_model"
     auto_model_class = AutoModel
@@ -136,6 +133,13 @@ class INCBaseModel:
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
+        model_kwargs = {
+            "revision": revision,
+            "use_auth_token": use_auth_token,
+            "cache_dir": cache_dir,
+            "local_files_only": local_files_only,
+            "force_download": force_download,
+        }
         if getattr(config, "torchscript", None):
             # Load the model from local directory
             if os.path.isdir(model_id):
@@ -146,73 +150,17 @@ class INCBaseModel:
                 model_cache_path = hf_hub_download(
                     repo_id=model_id,
                     filename=file_name,
-                    use_auth_token=use_auth_token,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
+                    **model_kwargs,
                 )
                 model_save_dir = Path(model_cache_path).parent
             model = cls.load_model(file_name)
         else:
             model_save_dir = None
-            model_kwargs = {
-                "revision": revision,
-                "use_auth_token": use_auth_token,
-                "cache_dir": cache_dir,
-                "local_files_only": local_files_only,
-                "force_download": force_download,
-                "torch_dtype": torch_dtype,
-            }
             task = cls.export_feature
             if config.torch_dtype != "int8" and config.torch_dtype != torch.int8:
-                model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+                model = TasksManager.get_model_from_task(task, model_id, torch_dtype=torch_dtype, **model_kwargs)
             else:
-                file_name = kwargs.get("file_name", WEIGHTS_NAME)
-                # Load the model from local directory
-                if os.path.isdir(model_id):
-                    state_dict_path = os.path.join(model_id, file_name)
-                # Download the model from the hub
-                else:
-                    state_dict_path = hf_hub_download(
-                        repo_id=model_id,
-                        filename=file_name,
-                        use_auth_token=use_auth_token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                    )
-                # Load the state dictionary of the model to verify whether the model is quantized or not
-                state_dict = torch.load(state_dict_path, map_location="cpu")
-                if "best_configure" in state_dict and state_dict["best_configure"] is not None:
-                    subfolder = kwargs.get("subfolder", "")
-                    arg_framework = kwargs.get("framework", None)
-                    framework = TasksManager.determine_framework(
-                        model_id, subfolder=subfolder, framework=arg_framework
-                    )
-                    model_class = TasksManager.get_model_class_for_task(task, framework)
-                    init_contexts = [no_init_weights(_enable=True)]
-                    with ContextManagers(init_contexts):
-                        model = model_class.from_pretrained(model_id, **model_kwargs)
-                    try:
-                        model = load(state_dict_path, model)
-                    except Exception as e:
-                        logger.error(e.args)
-                        raise
-                else:
-                    raise Exception(
-                        "Couldn't load quantized model correctly, "
-                        "Please ensure the best_configure is in model state dict!"
-                    )
-
-                try:
-                    inc_config = INCConfig.from_pretrained(model_id)
-                    if not is_torch_version("==", inc_config.torch_version):
-                        msg = f"Quantized model was obtained with torch version {inc_config.torch_version} but {_torch_version} was found."
-                        logger.warning(f"{msg}")
-                except Exception:
-                    logger.info("Couldn't verify torch version.")
+                model = INCModel.from_pretrained(model_id, q_model_name=file_name, **model_kwargs)
 
             model.eval()
 
@@ -277,37 +225,8 @@ class INCBaseModel:
             model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         else:
             file_name = kwargs.get("file_name", WEIGHTS_NAME)
-            # Load the model from local directory
-            if os.path.isdir(model_id):
-                state_dict_path = os.path.join(model_id, file_name)
-            # Download the model from the hub
-            else:
-                state_dict_path = hf_hub_download(
-                    repo_id=model_id,
-                    filename=file_name,
-                    use_auth_token=use_auth_token,
-                    revision=revision,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
-                )
-            # Load the state dictionary of the model to verify whether the model is quantized or not
-            state_dict = torch.load(state_dict_path, map_location="cpu")
-            if "best_configure" in state_dict and state_dict["best_configure"] is not None:
-                subfolder = kwargs.get("subfolder", "")
-                arg_framework = kwargs.get("framework", None)
-                framework = TasksManager.determine_framework(model_id, subfolder=subfolder, framework=arg_framework)
-                model_class = TasksManager.get_model_class_for_task(task, framework)
-                init_contexts = [no_init_weights(_enable=True)]
-                with ContextManagers(init_contexts):
-                    model = model_class.from_pretrained(model_id, **model_kwargs)
-                try:
-                    model = load(state_dict_path, model)
-                except Exception as e:
-                    logger.error(e.args)
-                    raise
-            else:
-                model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+            model = INCModel.from_pretrained(model_id, q_model_name=file_name, **model_kwargs)
+
         if model.config.model_type == "bloom":
             model.transformer._prepare_attn_mask = _prepare_attn_mask
 

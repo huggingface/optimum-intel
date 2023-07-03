@@ -20,22 +20,24 @@ Based on the script [`run_generation.py`](https://github.com/huggingface/transfo
 
 The original generation task only supported the PyTorch eager model. By calling the `TSModelForCausalLM` class, we can now support a TorchScript model for generation tasks.
 
-Example usage:
-
-```bash
-python run_generation.py \
-    --model_type=gpt2 \
-    --model_name_or_path=gpt2 \
-    --jit
-```
-
-We also support sparsity kernel by calling the `INCModelForCausalLM`.
+This example also allows us to apply different quantization approaches (such as dynamic, static, The example applies post-training static quantization on a gptj model).
 
 Example usage:
-
+### apply_quantization with post-training static
 ```bash
 python run_generation.py \
     --model_type=gptj \
     --model_name_or_path=EleutherAI/gpt-j-6b \
-    --run_sparsity
+    --apply_quantization \
+    --quantization_approach \
+```
+
+### Use JIT model and apply_quantization with post-training static
+```bash
+python run_generation.py \
+    --model_type=gptj \
+    --model_name_or_path=EleutherAI/gpt-j-6b \
+    --apply_quantization \
+    --quantization_approach \
+    --jit
 ```

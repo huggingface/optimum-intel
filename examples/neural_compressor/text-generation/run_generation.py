@@ -20,14 +20,17 @@
 
 import argparse
 import logging
+import tempfile
 
 import numpy as np
 import torch
+from neural_compressor import PostTrainingQuantConfig
 from transformers import (
     CTRLLMHeadModel,
     CTRLTokenizer,
     GPT2LMHeadModel,
     GPT2Tokenizer,
+    GPTJForCausalLM,
     OpenAIGPTLMHeadModel,
     OpenAIGPTTokenizer,
     TransfoXLLMHeadModel,
@@ -38,7 +41,7 @@ from transformers import (
     XLNetTokenizer,
 )
 
-from optimum.intel.generation.modeling import TSModelForCausalLM
+from optimum.intel.neural_compressor import INCModelForCausalLM, INCQuantizer
 
 
 logging.basicConfig(
@@ -51,6 +54,7 @@ logger = logging.getLogger(__name__)
 MAX_LENGTH = int(10000)  # Hardcoded max length to avoid infinite loop
 
 MODEL_CLASSES = {
+    "gptj": (GPTJForCausalLM, GPT2Tokenizer),
     "gpt2": (GPT2LMHeadModel, GPT2Tokenizer),
     "ctrl": (CTRLLMHeadModel, CTRLTokenizer),
     "openai-gpt": (OpenAIGPTLMHeadModel, OpenAIGPTTokenizer),
@@ -205,6 +209,17 @@ def main():
         type=str,
         help="Output directory where to save the resulting model",
     )
+    parser.add_argument(
+        "apply_quantization",
+        action="store_true",
+        help="Whether or not to apply quantization.",
+    )
+    parser.add_argument(
+        "quantization_approach",
+        default="static",
+        type=str,
+        help="Quantization approach. Supported approach are static, dynamic.",
+    )
     args = parser.parse_args()
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -223,8 +238,10 @@ def main():
 
     tokenizer = tokenizer_class.from_pretrained(args.model_name_or_path)
 
-    if args.jit:
-        model = TSModelForCausalLM.from_pretrained(args.model_name_or_path, export=True)
+    if args.apply_quantization:
+        model = model_class.from_pretrained(args.model_name_or_path)
+    elif args.jit:
+        model = INCModelForCausalLM.from_pretrained(args.model_name_or_path, export=True)
     else:
         model = model_class.from_pretrained(args.model_name_or_path)
 
@@ -233,6 +250,29 @@ def main():
         tokenizer.save_pretrained(args.output_dir)
 
     model.to(args.device)
+
+    if args.apply_quantization:
+        # This is just an example for calibration_fn. If you want to achieve good accuracy,
+        # you must perform a calibration on your real dataset.
+        tokens = tokenizer("This is a sample", return_tensors="pt")
+
+        def calibration_fn(p_model):
+            tmp_model = INCModelForCausalLM(p_model, model.config, use_cache=False)
+            tmp_model.generate(**tokens, max_new_tokens=32, do_sample=False)
+
+        quantization_config = PostTrainingQuantConfig(approach=args.quantization_approach)
+        model.config.return_dict = False
+        quantizer = INCQuantizer.from_pretrained(model, calibration_fn=calibration_fn)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                save_directory=tmp_dir,
+                save_onnx_model=False,
+            )
+            if args.jit:
+                model = INCModelForCausalLM.from_pretrained(tmp_dir, export=True)
+            else:
+                model = INCModelForCausalLM.from_pretrained(tmp_dir)
 
     args.length = adjust_length_to_model(
         args.length,

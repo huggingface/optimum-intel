@@ -17,7 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Union
 
-from transformers import AutoModelForCausalLM, PretrainedConfig
+from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from optimum.intel.generation import BaseModelForCausalLM
@@ -62,9 +62,6 @@ TEXT_GENERATION_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class INCModelForCausalLM(INCBaseModel, BaseModelForCausalLM):
-    export_feature = "text-generation"
-    auto_model_class = AutoModelForCausalLM
-
     def __init__(
         self,
         model,
