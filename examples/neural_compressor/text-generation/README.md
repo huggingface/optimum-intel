@@ -31,7 +31,7 @@ python run_generation.py \
     --apply_quantization \
     --quantization_approach static\
     --smooth_quant \
-    --smooth_quant_alpha 0.6
+    --smooth_quant_alpha 0.7
 ```
 
 ### Use JIT model and apply_quantization with post-training static
@@ -42,6 +42,6 @@ python run_generation.py \
     --apply_quantization \
     --quantization_approach static\
     --smooth_quant \
-    --smooth_quant_alpha 0.6 \
+    --smooth_quant_alpha 0.7 \
     --jit
 ```

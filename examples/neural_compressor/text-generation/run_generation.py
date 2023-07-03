@@ -347,8 +347,8 @@ def main():
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     max_new_tokens=32,
-                      temperature=0.9,
-                      num_beams=4,
+                    temperature=0.9,
+                    num_beams=4,
                     do_sample=False,
                 )
 
