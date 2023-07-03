@@ -26,6 +26,7 @@ import numpy as np
 import torch
 from datasets import load_dataset
 from neural_compressor import PostTrainingQuantConfig
+from torch.nn.functional import pad
 from torch.utils.data import DataLoader
 from transformers import (
     CTRLLMHeadModel,
@@ -193,15 +194,11 @@ class datasets_processor:
             pad_len = self.pad_max - input_ids.shape[0]
             last_ind.append(input_ids.shape[0] - 1)
             if self.is_calib:
-                input_ids = (
-                    input_ids[: self.pad_max]
-                    if len(input_ids) > self.pad_max
-                    else input_ids
-                )
+                input_ids = input_ids[: self.pad_max] if len(input_ids) > self.pad_max else input_ids
             else:
                 input_ids = pad(input_ids, (0, pad_len), value=self.pad_val)
             input_ids_padded.append(input_ids)
-        return  (
+        return (
             torch.vstack(input_ids_padded),
             torch.tensor(last_ind),
         )
@@ -282,9 +279,7 @@ def main():
         type=float,
         help="Set alpha of smooth quant argument.",
     )
-    parser.add_argument(
-        "--dataset_name", nargs="?", default="NeelNanda/pile-10k", const="NeelNanda/pile-10k"
-    )
+    parser.add_argument("--dataset_name", nargs="?", default="NeelNanda/pile-10k", const="NeelNanda/pile-10k")
     parser.add_argument("--calib_iters", default=100, type=int, help="calibration iters.")
     args = parser.parse_args()
 
@@ -355,9 +350,11 @@ def main():
         example_inputs = {"input_ids": torch.randint(100, (1, 32)), "attention_mask": torch.ones(1, 32)}
         quantization_config = PostTrainingQuantConfig(
             approach=args.quantization_approach,
-            recipes = {"smooth_quant": args.smooth_quant,
-                       "smooth_quant_args": {"alpha": args.smooth_quant_alpha, "folding": True}},
-            example_inputs=example_inputs
+            recipes={
+                "smooth_quant": args.smooth_quant,
+                "smooth_quant_args": {"alpha": args.smooth_quant_alpha, "folding": True},
+            },
+            example_inputs=example_inputs,
         )
         model.config.return_dict = False
         quantizer = INCQuantizer.from_pretrained(model, calibration_fn=calibration_fn)
