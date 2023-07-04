@@ -141,7 +141,6 @@ class INCQuantizer(OptimumQuantizer):
         batch_size: int = 8,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
-        file_name: str = None,
         **kwargs,
     ):
         """
@@ -164,7 +163,7 @@ class INCQuantizer(OptimumQuantizer):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         save_onnx_model = kwargs.pop("save_onnx_model", False)
-        output_path = save_directory.joinpath(file_name or WEIGHTS_NAME)
+        output_path = save_directory.joinpath(WEIGHTS_NAME)
         calibration_dataloader = None
         self._set_task()
 
@@ -220,11 +219,15 @@ class INCQuantizer(OptimumQuantizer):
                 " accuracy tolerance has been found. Either the tolerance or the number of trials need to be increased."
             )
         if isinstance(self._original_model.config, PretrainedConfig):
+            # If backend is IPEX, then the quantized model is JIT model which will drop the config attribute,
+            # so need set config from original_model.
             model_config = copy.deepcopy(self._original_model.config)
             model_config.torch_dtype = "int8"
             if isinstance(compressed_model, IPEXModel):
                 model_config.torchscript = True
                 model_config.backend = "ipex"
+            else:
+                compressed_model._model.config = model_config
             model_config.save_pretrained(save_directory)
 
         self._quantized_model = compressed_model._model
@@ -483,6 +486,8 @@ class INCModel:
         Returns:
             q_model: Quantized model.
         """
+        if q_model_name is not None:
+            logger.warning("The argument of `q_model_name` will be deprecated in next release.")
         download_kwarg_default = [
             ("cache_dir", None),
             ("force_download", False),

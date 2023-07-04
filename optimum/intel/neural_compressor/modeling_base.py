@@ -82,12 +82,12 @@ class INCBaseModel:
                 # Just to avoid to change by ruff.
                 logger.info("intel_extension_for_pytorch version is " + ipex.__version__)
 
-    def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = WEIGHTS_NAME, **kwargs):
+    def _save_pretrained(self, save_directory: Union[str, Path], **kwargs):
         if getattr(self.config, "torchscript", False):
-            torch.jit.save(self.model, os.path.join(save_directory, file_name))
+            torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
         else:
             state_dict = self.model.state_dict()
-            torch.save(state_dict, os.path.join(save_directory, file_name))
+            torch.save(state_dict, os.path.join(save_directory, WEIGHTS_NAME))
         logger.info(f"Model weights saved to {save_directory}")
 
     @classmethod
@@ -99,7 +99,7 @@ class INCBaseModel:
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
         cache_dir: Optional[str] = None,
-        file_name: Optional[str] = WEIGHTS_NAME,
+        file_name: Optional[str] = None,
         local_files_only: bool = False,
         use_cache: bool = True,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
@@ -127,10 +127,14 @@ class INCBaseModel:
                 cached versions if they exist.
             file_name(`str`, *optional*):
                 The file name of the model to load. Overwrites the default file name and allows one to load the model
-                with a different name.
+                with a different name. This argument will be deprecated in next release.
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
+        if file_name is not None:
+            logger.warning("The argument of `file_name` will be deprecated in next release.")
+        else:
+            file_name = WEIGHTS_NAME
         model_kwargs = {
             "revision": revision,
             "use_auth_token": use_auth_token,
@@ -223,7 +227,9 @@ class INCBaseModel:
         if config.torch_dtype != "int8" and config.torch_dtype != torch.int8:
             model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         else:
-            file_name = kwargs.get("file_name", WEIGHTS_NAME)
+            file_name = kwargs.get("file_name", None)
+            if file_name is not None:
+                logger.warning("The argument of `file_name` will be deprecated in next release.")
             INCModel.TRANSFORMERS_AUTO_CLASS = cls.auto_model_class
             model = INCModel.from_pretrained(model_id, q_model_name=file_name, **model_kwargs)
 
