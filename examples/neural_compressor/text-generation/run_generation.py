@@ -364,10 +364,7 @@ def main():
                 save_directory=tmp_dir,
                 save_onnx_model=False,
             )
-            if args.jit:
-                model = INCModelForCausalLM.from_pretrained(tmp_dir, export=True)
-            else:
-                model = INCModelForCausalLM.from_pretrained(tmp_dir)
+            model = INCModelForCausalLM.from_pretrained(tmp_dir, export=args.jit)
 
     args.length = adjust_length_to_model(
         args.length,

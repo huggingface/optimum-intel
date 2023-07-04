@@ -66,7 +66,6 @@ from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME, ONNX_WEIGHTS_NAME
 from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
 from optimum.pipelines import ORT_SUPPORTED_TASKS
-from optimum.utils import NormalizedConfigManager
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""

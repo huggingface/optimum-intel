@@ -450,9 +450,7 @@ class INCModel:
     TRANSFORMERS_AUTO_CLASS: ClassVar = AutoModel
 
     @classmethod
-    def from_pretrained(
-        cls, model_name_or_path: str, q_model_name: Optional[str] = None, export=False, **kwargs
-    ) -> torch.nn.Module:
+    def from_pretrained(cls, model_name_or_path: str, q_model_name: Optional[str] = None, **kwargs) -> torch.nn.Module:
         """
         Instantiate a quantized pytorch model from a given Intel Neural Compressor configuration file.
         Arguments:
@@ -578,7 +576,7 @@ class INCModel:
         except Exception:
             logger.info("Couldn't verify torch version.")
 
-        if getattr(config, "torchscript", False):
+        if getattr(config, "backend", None) == "ipex" or getattr(config, "torchscript", False):
             # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.
             # return load(state_dict_path)
             load_model = torch.jit.load(state_dict_path)

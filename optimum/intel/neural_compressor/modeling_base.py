@@ -53,10 +53,9 @@ MODEL_START_DOCSTRING = r"""
     Base INCBaseModel class.
     """,
 )
-class INCBaseModel(INCModel):
+class INCBaseModel:
     _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
     base_model_prefix = "inc_model"
-    export_feature = None
 
     def __init__(
         self,
@@ -159,6 +158,7 @@ class INCBaseModel(INCModel):
             if config.torch_dtype != "int8" and config.torch_dtype != torch.int8:
                 model = TasksManager.get_model_from_task(task, model_id, torch_dtype=torch_dtype, **model_kwargs)
             else:
+                INCModel.TRANSFORMERS_AUTO_CLASS = cls.auto_model_class
                 model = INCModel.from_pretrained(model_id, q_model_name=file_name, **model_kwargs)
 
             model.eval()
@@ -224,6 +224,7 @@ class INCBaseModel(INCModel):
             model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         else:
             file_name = kwargs.get("file_name", WEIGHTS_NAME)
+            INCModel.TRANSFORMERS_AUTO_CLASS = cls.auto_model_class
             model = INCModel.from_pretrained(model_id, q_model_name=file_name, **model_kwargs)
 
         if model.config.model_type == "bloom":

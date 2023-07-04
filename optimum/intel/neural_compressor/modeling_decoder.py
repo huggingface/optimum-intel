@@ -17,7 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Union
 
-from transformers import AutoModelForCausalLM, PretrainedConfig
+from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from optimum.intel.generation import BaseModelForCausalLM
@@ -28,32 +28,6 @@ from .modeling_base import MODEL_START_DOCSTRING, INCBaseModel
 logger = logging.getLogger(__name__)
 
 
-TEXT_GENERATION_EXAMPLE = r"""
-    Example of text generation:
-    ```python
-    >>> from transformers import {processor_class}
-    >>> from optimum.intel import {model_class}
-
-    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
-    >>> inputs = tokenizer("I love this story because", return_tensors="pt")
-    >>> gen_tokens = model.generate(**inputs, do_sample=True, temperature=0.9, min_length=20, max_length=20)
-    >>> tokenizer.batch_decode(gen_tokens)
-    ```
-    Example using `transformers.pipelines`:
-    ```python
-    >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel import {model_class}
-
-    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
-    >>> gen_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer)
-    >>> text = "I love this story because"
-    >>> gen = gen_pipeline(text)
-    ```
-"""
-
-
 @add_start_docstrings(
     """
     Neural-compressor Model with a causal language modeling head on top (linear layer with weights tied to the input
@@ -62,8 +36,6 @@ TEXT_GENERATION_EXAMPLE = r"""
     MODEL_START_DOCSTRING,
 )
 class INCModelForCausalLM(INCBaseModel, BaseModelForCausalLM):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
-
     def __init__(
         self,
         model,
