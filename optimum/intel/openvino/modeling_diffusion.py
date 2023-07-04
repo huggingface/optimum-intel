@@ -80,19 +80,19 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         self.vae_decoder = OVModelVaeDecoder(
             vae_decoder,
             self,
-            {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)},
+            {**self.ov_config} if "CACHE_DIR" in self.ov_config.keys() else {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)},
         )
         self.text_encoder = OVModelTextEncoder(
             text_encoder,
             self,
-            {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER)},
+            {**self.ov_config} if "CACHE_DIR" in self.ov_config.keys() else {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER)},
         )
         self.unet = OVModelUnet(
             unet,
             self,
-            {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_UNET_SUBFOLDER)},
+            {**self.ov_config} if "CACHE_DIR" in self.ov_config.keys() else {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_UNET_SUBFOLDER)},
         )
-        vae_ov_config = {
+        vae_ov_config = {**self.ov_config} if "CACHE_DIR" in self.ov_config.keys() else {
             **self.ov_config,
             "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER),
         }

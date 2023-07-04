@@ -85,6 +85,11 @@ class OVBaseModel(PreTrainedModel):
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {"PERFORMANCE_HINT": "LATENCY"}
+
+        if "CACHE_DIR" not in self.ov_config.keys():
+            cache_dir = Path(self.model_save_dir).joinpath("model_cache")
+            self.ov_config["CACHE_DIR"] = str(cache_dir)
+            logger.info(f"Set CACHE_DIR to {str(cache_dir)}")
         self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
 
@@ -332,13 +337,7 @@ class OVBaseModel(PreTrainedModel):
     def compile(self):
         if self.request is None:
             logger.info("Compiling the model...")
-            ov_config = {**self.ov_config}
-            if "CACHE_DIR" not in ov_config.keys():
-                cache_dir = Path(self.model_save_dir).joinpath("model_cache")
-                ov_config["CACHE_DIR"] = str(cache_dir)
-                logger.info(f"Set CACHE_DIR to {str(cache_dir)}")
-
-            self.request = core.compile_model(self.model, self._device, ov_config)
+            self.request = core.compile_model(self.model, self._device, self.ov_config)
 
     def _reshape(
         self,
