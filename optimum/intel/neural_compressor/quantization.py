@@ -449,6 +449,12 @@ def _apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> t
 class INCModel:
     TRANSFORMERS_AUTO_CLASS: ClassVar = AutoModel
 
+    def __init__(self, *args, **kwargs):
+        raise EnvironmentError(
+            f"{self.__class__.__name__} is designed to be instantiated using the"
+            f"`{self.__class__.__name__}.from_pretrained(model_name_or_path)` method."
+        )
+
     @classmethod
     def from_pretrained(cls, model_name_or_path: str, q_model_name: Optional[str] = None, **kwargs) -> torch.nn.Module:
         """
