@@ -72,6 +72,7 @@ class OVQuantizerTest(unittest.TestCase):
     def test_automodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
+        file_name = "openvino_quantized_model.xml"
 
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
@@ -90,9 +91,8 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=10,
                 dataset_split="train",
             )
-            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
-
-            model = model_cls.from_pretrained(tmp_dir)
+            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, file_name=file_name)
+            model = model_cls.from_pretrained(tmp_dir, file_name=file_name)
 
             # TODO: uncomment once move to a newer version of NNCF which has some fixes (addmm, baddmm)
             # num_fake_quantize, num_int8 = get_num_quantized_nodes(model)
