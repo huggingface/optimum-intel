@@ -37,7 +37,7 @@ class INCStableDiffusionPipeline(StableDiffusionPipeline):
                 name_or_path = component.name_or_path
             if os.path.isdir(name_or_path):
                 folder_contents = os.listdir(name_or_path)
-                file_name = DIFFUSION_WEIGHTS_NAME if DIFFUSION_WEIGHTS_NAME in folder_contents else WEIGHTS_NAME
+                file_name = WEIGHTS_NAME if WEIGHTS_NAME in folder_contents else DIFFUSION_WEIGHTS_NAME
                 state_dict_path = os.path.join(name_or_path, file_name)
                 if os.path.exists(state_dict_path) and INCConfig.CONFIG_NAME in folder_contents:
                     msg = None
