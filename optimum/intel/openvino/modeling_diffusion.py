@@ -39,7 +39,6 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
-from ..utils import is_torch_version
 from .modeling_base import OVBaseModel
 from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME
 
@@ -123,49 +122,28 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
 
         self._internal_dict.pop("vae", None)
 
-    def _save_pretrained(
-        self,
-        save_directory: Union[str, Path],
-        vae_decoder_file_name: str = OV_XML_FILE_NAME,
-        text_encoder_file_name: str = OV_XML_FILE_NAME,
-        unet_file_name: str = OV_XML_FILE_NAME,
-        vae_encoder_file_name: str = OV_XML_FILE_NAME,
-        **kwargs,
-    ):
+    def _save_pretrained(self, save_directory: Union[str, Path]):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
         [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
 
         Arguments:
             save_directory (`str` or `Path`):
-                The directory where to save the model files.
-            vae_decoder_file_name (`str`, defaults to `optimum.intel.openvino.utils.OV_XML_FILE_NAME`):
-                The VAE decoder model file name. Overwrites the default file name and allows one to save the VAE decoder model
-                with a different name.
-            text_encoder_file_name (`str`, defaults to `optimum.intel.openvino.utils.OV_XML_FILE_NAME`):
-                The text encoder model file name. Overwrites the default file name and allows one to save the text encoder model
-                with a different name.
-            unet_file_name (`str`, defaults to `optimum.intel.openvino.utils.OV_XML_FILE_NAME`):
-                The U-NET model file name. Overwrites the default file name and allows one to save the U-NET model
-                with a different name.
-            vae_encoder_file_name (`str`, defaults to `optimum.intel.openvino.utils.OV_XML_FILE_NAME`):
-                The VAE encoder model file name. Overwrites the default file name and allows one to save the VAE decoder model
-                with a different name.
+                The directory where to save the model files
         """
         save_directory = Path(save_directory)
         src_to_dst_file = {
-            self.vae_decoder.model: save_directory / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
-            self.text_encoder.model: save_directory / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
-            self.unet.model: save_directory / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name,
+            self.vae_decoder.model: save_directory / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / OV_XML_FILE_NAME,
+            self.text_encoder.model: save_directory / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / OV_XML_FILE_NAME,
+            self.unet.model: save_directory / DIFFUSION_MODEL_UNET_SUBFOLDER / OV_XML_FILE_NAME,
         }
         if self.vae_encoder is not None:
             src_to_dst_file[self.vae_encoder.model] = (
-                save_directory / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name
+                save_directory / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / OV_XML_FILE_NAME
             )
-
         for src_file, dst_path in src_to_dst_file.items():
             dst_path.parent.mkdir(parents=True, exist_ok=True)
-            openvino.runtime.serialize(src_file, str(dst_path), str(dst_path.with_suffix(".bin")))
+            openvino.runtime.serialize(src_file, str(dst_path))
 
         self.tokenizer.save_pretrained(save_directory.joinpath("tokenizer"))
         self.scheduler.save_pretrained(save_directory.joinpath("scheduler"))
@@ -286,10 +264,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         **kwargs,
     ):
-        if is_torch_version(">", "1.13.1") and is_torch_version("<=", "2.0.1"):
-            register_custom_scaled_dot_product_attention_export()
         task = task or cls.export_feature
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
@@ -580,130 +555,3 @@ class OVModelVaeEncoder(OVModelPart):
         }
         outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
-
-
-def register_custom_scaled_dot_product_attention_export():
-    import torch
-
-    @torch.onnx.symbolic_helper.parse_args("v", "v", "v", "v", "f", "b", "v")
-    def scaled_dot_product_attention(
-        g: torch.onnx._internal.jit_utils.GraphContext,
-        query: torch._C.Value,
-        key: torch._C.Value,
-        value: torch._C.Value,
-        attn_mask: Optional[torch._C.Value] = None,
-        dropout_p: float = 0.0,
-        is_causal: bool = False,
-        scale: Optional[torch._C.Value] = None,
-    ):
-        assert (not is_causal) or (
-            is_causal and torch.onnx.symbolic_helper._is_none(attn_mask)
-        ), "is_causal and attn_mask cannot be set at the same time"
-
-        scale = torch.onnx.symbolic_helper._maybe_get_const(scale, "f")
-        if scale is None:
-            scale = _attention_scale(g, query)
-
-        if is_causal:
-            attn_mask = _causal_attention_mask(g, query, key)
-        key_shape_builtin = torch.onnx.symbolic_helper._get_tensor_rank(key)
-        key_transposed_axes = list(range(key_shape_builtin))
-        key_transposed_axes[-1], key_transposed_axes[-2] = (
-            key_transposed_axes[-2],
-            key_transposed_axes[-1],
-        )
-        key_transposed = g.op("Transpose", key, perm_i=key_transposed_axes)
-        query_scaled = g.op("Mul", query, g.op("Sqrt", scale))
-        key_transposed_scaled = g.op("Mul", key_transposed, g.op("Sqrt", scale))
-        mul_qk = g.op("MatMul", query_scaled, key_transposed_scaled)
-        if attn_mask is None or torch.onnx.symbolic_helper._is_none(attn_mask):
-            mul_qk_add = mul_qk
-        elif torch.onnx._type_utils.JitScalarType.from_value(attn_mask) == torch.onnx._type_utils.JitScalarType.BOOL:
-            # Turn the Boolean mask to float: attn_mask.masked_fill(not attn_mask, -float('inf'))
-            const_zero = g.op("Constant", value_t=torch.tensor([0.0]))
-            const_neg_inf = g.op("Constant", value_t=torch.tensor([-float("inf")]))
-            attn_mask = g.op("Where", attn_mask, const_zero, const_neg_inf)
-            mul_qk_add = g.op("Add", mul_qk, attn_mask)
-        elif torch.onnx._type_utils.JitScalarType.from_value(attn_mask) == torch.onnx._type_utils.JitScalarType.FLOAT:
-            mul_qk_add = g.op("Add", mul_qk, attn_mask)
-        else:
-            raise ValueError(
-                f"Unsupported type for attn_mask: {torch.onnx._type_utils.JitScalarType.from_value(attn_mask)}"
-            )
-
-        attn_weight = g.op("Softmax", mul_qk_add, axis_i=-1)
-
-        if dropout_p != 0:
-            attn_weight = g.op(
-                "Dropout",
-                attn_weight,
-                g.op("Constant", value_t=torch.tensor(dropout_p, dtype=torch.float)),
-            )
-
-        return g.op("MatMul", attn_weight, value)
-
-    def _attention_scale(g: torch.onnx._internal.jit_utils.GraphContext, query: torch._C.Value) -> torch._C.Value:
-        """Calculate the scale factor for the attention result.
-
-        Args:
-            query: Tensor of shape [..., L, E]
-
-        Returns:
-            Scalar scale factor := 1 / math.sqrt(query.size(-1))
-        """
-        query_shape = g.op("Shape", query)
-        query_shape_last = g.op(
-            "Slice",
-            query_shape,
-            g.op("Constant", value_t=torch.tensor([-1], dtype=torch.int64)),
-            g.op("Constant", value_t=torch.tensor([torch.onnx._constants.INT64_MAX], dtype=torch.int64)),
-        )
-        embedding_size = g.op(
-            "Cast",
-            query_shape_last,
-            to_i=torch.onnx._type_utils.JitScalarType.from_value(query).onnx_type(),
-        )
-        const_one = g.op("Constant", value_t=torch.tensor([1.0], dtype=torch.float))
-        scale = g.op("Div", const_one, g.op("Sqrt", embedding_size))
-        return scale
-
-    def _causal_attention_mask(
-        g: torch.onnx._internal.jit_utils.GraphContext, query: torch._C.Value, key: torch._C.Value
-    ) -> torch._C.Value:
-        """Create a causal mask for the given query and key tensors.
-
-        Equivalent to::
-            mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
-            attn_mask = torch.zeros(L, S, dtype=torch.float)
-            attn_mask = attn_mask.masked_fill(not mask, -float('inf'))
-
-        Args:
-            query: Tensor of shape [..., L, E]
-            key: Tensor of shape [..., S, E]
-
-        Returns:
-            Tensor of shape [L, S]
-        """
-
-        query_shape = g.op("Shape", query)
-        key_shape = g.op("Shape", key)
-
-        last_idx = g.op("Constant", value_t=torch.tensor([-1], dtype=torch.int64))
-        second_last_idx = g.op("Constant", value_t=torch.tensor([-2], dtype=torch.int64))
-        target_length = g.op("Slice", query_shape, second_last_idx, last_idx)
-        source_length = g.op("Slice", key_shape, second_last_idx, last_idx)
-        # attn_mask = torch.ones(L, S) := {
-        size = g.op("Concat", target_length, source_length, axis_i=0)
-        const_one = g.op("Constant", value_t=torch.tensor([1.0]))
-        attn_mask = g.op("Expand", const_one, size)
-        # }
-        attn_mask = g.op("Trilu", attn_mask, upper_i=0)
-        # The causal mask has 0s in the lower triangle and -inf in the upper triangle.
-        const_zero = g.op("Constant", value_t=torch.tensor([0.0]))
-        const_neg_inf = g.op("Constant", value_t=torch.tensor([-float("inf")]))
-        attn_mask = g.op("Where", g.op("Equal", attn_mask, const_zero), const_neg_inf, const_zero)
-        return attn_mask
-
-    torch.onnx.register_custom_op_symbolic(
-        "aten::scaled_dot_product_attention", scaled_dot_product_attention, opset_version=14
-    )

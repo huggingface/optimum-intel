@@ -20,7 +20,6 @@ from typing import Dict, Optional, Union
 
 import openvino
 from huggingface_hub import hf_hub_download
-from huggingface_hub.utils import EntryNotFoundError
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
@@ -88,14 +87,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
             self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
-    def _save_pretrained(
-        self,
-        save_directory: Union[str, Path],
-        encoder_file_name: Optional[str] = None,
-        decoder_file_name: Optional[str] = None,
-        decoder_with_past_file_name: Optional[str] = None,
-        **kwargs,
-    ):
+    def _save_pretrained(self, save_directory: Union[str, Path]):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
         [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
@@ -103,25 +95,16 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         Arguments:
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
-            encoder_file_name(`str`, *optional*):
-                The encoder model file name. Overwrites the default file name and allows one to save the encoder model
-                with a different name.
-            decoder_file_name(`str`, *optional*):
-                The decoder model file name. Overwrites the default file name and allows one to save the decoder model
-                with a different name.
-            decoder_with_past_file_name(`str`, *optional*):
-                The decoder with past key values model file name overwriting the default file name, allowing to save
-                the decoder model with a different name.
         """
         src_files = [self.encoder_model, self.decoder_model]
-        dst_file_names = [encoder_file_name or OV_ENCODER_NAME, decoder_file_name or OV_DECODER_NAME]
+        dst_file_names = [OV_ENCODER_NAME, OV_DECODER_NAME]
         if self.use_cache:
             src_files.append(self.decoder_with_past_model)
-            dst_file_names.append(decoder_with_past_file_name or OV_DECODER_WITH_PAST_NAME)
+            dst_file_names.append(OV_DECODER_WITH_PAST_NAME)
 
         for src_file, dst_file_name in zip(src_files, dst_file_names):
             dst_path = os.path.join(save_directory, dst_file_name)
-            openvino.runtime.serialize(src_file, dst_path, dst_path.replace(".xml", ".bin"))
+            openvino.runtime.serialize(src_file, dst_path)
 
     @classmethod
     def _from_pretrained(
@@ -181,16 +164,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
         # Load model from a local directory
         if os.path.isdir(model_id):
-            if os.path.isfile(os.path.join(model_id, "ov_encoder_model.xml")):
-                encoder_file_name = "ov_encoder_model.xml"
-                encoder_file_name = "ov_decoder_model.xml"
-                encoder_file_name = "ov_decoder_with_past_model.xml"
-                logger.warning(
-                    "The file names `ov_encoder_model.xml`, `ov_decoder_model.xml` and `ov_decoder_with_past_model.xml` "
-                    "will be soon deprecated. Make sure to rename your file to respectively `openvino_encoder_model.xml`, "
-                    "`openvino_decoder_model.xml` and `openvino_decoder_with_past_model.xml`"
-                )
-
             encoder = cls.load_model(os.path.join(model_id, encoder_file_name))
             decoder = cls.load_model(os.path.join(model_id, decoder_file_name))
             decoder_with_past = (
@@ -209,41 +182,17 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 for key in list(model_file_names.keys()):
                     model_file_names[key + "_bin"] = model_file_names[key].replace(".xml", ".bin")
             file_names = model_file_names.copy()
-            try:
-                for name, file_name in model_file_names.items():
-                    model_cache_path = hf_hub_download(
-                        repo_id=model_id,
-                        filename=file_name,
-                        use_auth_token=use_auth_token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                    )
-                    file_names[name] = model_cache_path
-            except EntryNotFoundError:
-                model_file_names = {"encoder": "ov_encoder_model.xml", "decoder": "ov_decoder_model.xml"}
-                if use_cache:
-                    model_file_names["decoder_with_past"] = "ov_decoder_with_past_model.xml"
-                for key in list(model_file_names.keys()):
-                    model_file_names[key + "_bin"] = model_file_names[key].replace(".xml", ".bin")
-                file_names = model_file_names.copy()
-                for name, file_name in model_file_names.items():
-                    model_cache_path = hf_hub_download(
-                        repo_id=model_id,
-                        filename=file_name,
-                        use_auth_token=use_auth_token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                    )
-                    file_names[name] = model_cache_path
-                logger.warning(
-                    "The file names `ov_encoder_model.xml`, `ov_decoder_model.xml` and `ov_decoder_with_past_model.xml` "
-                    "will be soon deprecated. Make sure to rename your file to respectively `openvino_encoder_model.xml`, "
-                    "`openvino_decoder_model.xml` and `openvino_decoder_with_past_model.xml`"
+            for name, file_name in model_file_names.items():
+                model_cache_path = hf_hub_download(
+                    repo_id=model_id,
+                    filename=file_name,
+                    use_auth_token=use_auth_token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
                 )
+                file_names[name] = model_cache_path
 
             model_save_dir = Path(model_cache_path).parent
             encoder = cls.load_model(file_names["encoder"])

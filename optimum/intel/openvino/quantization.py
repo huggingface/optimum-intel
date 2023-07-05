@@ -401,7 +401,7 @@ class OVQuantizer(OptimumQuantizer):
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
         compress_quantize_weights_transformation(model)
-        openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
+        openvino.runtime.serialize(model, output_path)
 
     def _set_task(self):
         if self.task is None:
