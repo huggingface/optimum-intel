@@ -27,6 +27,8 @@ For pruning, we support snip_momentum(default), snip_momentum_progressive, magni
 
 > **_Note:_** At present, neural_compressor only support to prune linear and conv ops. So if we set a target sparsity is 0.9, it means that the pruning op's sparsity will be 0.9, not the whole model's sparsity is 0.9. For example: the embedding ops will not be pruned in the model.
 
+### Post-training Quantization
+
 The following example applies post-training static quantization on a DistilBERT fine-tuned on the sst-2 task.
 
 ```bash
@@ -41,6 +43,41 @@ python run_glue_post_training.py \
     --output_dir /tmp/sst2_output
 ```
 In order to apply dynamic or static, `quantization_approach` must be set to respectively `dynamic` or `static`.
+
+
+### Distributed Tuning with Multi-node
+To speedup the accuracy-aware tuning process, you can use the [distributed tuning](https://github.com/intel/neural-compressor/blob/master/docs/source/tuning_strategies.md#distributed-tuning).
+
+- Prerequisites:
+    - [Open MPI](https://www.open-mpi.org/faq/?category=building#easy-build)
+    - [mpi4py](https://mpi4py.readthedocs.io/en/stable/install.html#using-pip)
+
+
+> **_Note:_** User can also install Open MPI with [Conda](https://anaconda.org/conda-forge/openmpi).
+
+In `run_glue_post_training.py`, set `quant_level` to 1 as the following statement:
+
+```python
+from neural_compressor import PostTrainingQuantConfig
+quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach, quant_level=1)
+```
+
+> **_Note:_** Please also add the below code snippet at the beginning of the example to disable the initialization of torch distribution.
+> 
+>`os.environ.setdefault('OMPI_COMM_WORLD_SIZE', '-1') if os.environ.get('OMPI_COMM_WORLD_SIZE', -1) != -1 else None`
+
+And then, modify the `run_task_in_distributed_mode.sh` according to the cluster information. Below is the explanation for each parameter.
+
+- `<NUM_PROCESS>` is the number of processes, recommend to set it with the number of hosts plus one.
+
+- `<MAX_NUM_THREADS>` is the number of threads, recommend to set it with the number of physical cores on one node.
+
+- `<HOSTNAME>` is the host name, and argument --host `<HOSTNAME>`,`<HOSTNAME>`... can be replaced with `--hostfile <HOSTFILE>`, when each line in `<HOSTFILE>` is a host name.
+
+- `-mca btl_tcp_if_include <NETWORK_INTERFACE>` is used to set the network communication interface between hosts. For example, `<NETWORK_INTERFACE>` can be set to `192.168.20.0/24` to allow MPI communication between all hosts under `192.168.20.*` network segment.
+
+
+### Knowledge Distillation with Quantization Aware Training
 
 The following example fine-tunes DistilBERT on the sst-2 task while applying knowledge distillation with quantization aware training.
 

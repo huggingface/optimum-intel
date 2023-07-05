@@ -19,6 +19,12 @@
 
 import logging
 import os
+
+
+# Disable the initialization of the torch distribution
+if os.environ.get("OMPI_COMM_WORLD_SIZE", -1) != -1:
+    os.environ["OMPI_COMM_WORLD_SIZE"] = "-1"
+
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
@@ -443,7 +449,7 @@ def main():
             f"Unknown quantization approach. Supported approach are {supported_approach}."
             f"{optim_args.quantization_approach} was given."
         )
-    quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach)
+    quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach, quant_level=1)
 
     # Apply post-training quantization
     quantizer = INCQuantizer.from_pretrained(model)
