@@ -220,10 +220,16 @@ class INCQuantizer(OptimumQuantizer):
                 " accuracy tolerance has been found. Either the tolerance or the number of trials need to be increased."
             )
         if isinstance(self._original_model.config, PretrainedConfig):
-            original_dtype = self._original_model.config.torch_dtype
-            self._original_model.config.torch_dtype = "int8"
-            self._original_model.config.save_pretrained(save_directory)
-            self._original_model.config.torch_dtype = original_dtype
+            # If backend is IPEX, then the quantized model is JIT model which will drop the config attribute,
+            # so need set config from original_model.
+            model_config = copy.deepcopy(self._original_model.config)
+            model_config.torch_dtype = "int8"
+            if isinstance(compressed_model, IPEXModel):
+                model_config.torchscript = True
+                model_config.backend = "ipex"
+            else:
+                compressed_model._model.config = model_config
+            model_config.save_pretrained(save_directory)
 
         self._quantized_model = compressed_model._model
 
@@ -481,6 +487,8 @@ class INCModel:
         Returns:
             q_model: Quantized model.
         """
+        if q_model_name is not None:
+            logger.warning("The argument of `q_model_name` will be deprecated in next release.")
         download_kwarg_default = [
             ("cache_dir", None),
             ("force_download", False),
@@ -580,7 +588,7 @@ class INCModel:
         except Exception:
             logger.info("Couldn't verify torch version.")
 
-        if getattr(config, "backend", None) == "ipex":
+        if getattr(config, "backend", None) == "ipex" or getattr(config, "torchscript", False):
             # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.
             # return load(state_dict_path)
             load_model = torch.jit.load(state_dict_path)
@@ -619,10 +627,6 @@ class INCModelForMultipleChoice(INCModel):
 
 class INCModelForSeq2SeqLM(INCModel):
     TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
-
-
-class INCModelForCausalLM(INCModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
 
 
 class INCModelForMaskedLM(INCModel):
