@@ -273,6 +273,7 @@ class OptimizationTest(unittest.TestCase):
             quantizer.quantize(
                 quantization_config=quantization_config,
                 save_directory=os.path.join(tmp_dir, "unet"),
+                file_name=DIFFUSION_WEIGHTS_NAME,
             )
             loaded_pipeline = INCStableDiffusionPipeline.from_pretrained(tmp_dir)
             loaded_pipeline.to("cpu")
