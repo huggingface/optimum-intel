@@ -146,10 +146,7 @@ class INCTrainer(Trainer):
             self.dtype = "int8"
             self.model.config.backend = quantization_config.backend
         else:
-            if isinstance(self.model, INCBaseModel):
-                self.dtype = str(get_parameter_dtype(self.model.model)).split(".")[1]
-            else:
-                self.dtype = str(get_parameter_dtype(self.model)).split(".")[1]
+            self.dtype = str(get_parameter_dtype(self.model)).split(".")[1]
             self.model.config.backend = "default"
         self.model.config.torch_dtype = self.dtype
         self.model.config.framework = "pytorch_fx"
