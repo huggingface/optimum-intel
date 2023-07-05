@@ -290,7 +290,7 @@ class OVBaseModel(PreTrainedModel):
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
-            "trust_remote_code": trust_remote_code
+            "trust_remote_code": trust_remote_code,
         }
 
         if model_id.startswith("timm/"):
