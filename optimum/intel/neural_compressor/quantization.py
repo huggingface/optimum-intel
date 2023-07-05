@@ -141,6 +141,7 @@ class INCQuantizer(OptimumQuantizer):
         batch_size: int = 8,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        file_name: str = None,
         **kwargs,
     ):
         """
@@ -163,7 +164,7 @@ class INCQuantizer(OptimumQuantizer):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         save_onnx_model = kwargs.pop("save_onnx_model", False)
-        output_path = save_directory.joinpath(WEIGHTS_NAME)
+        output_path = save_directory.joinpath(file_name or WEIGHTS_NAME)
         calibration_dataloader = None
         self._set_task()
 
