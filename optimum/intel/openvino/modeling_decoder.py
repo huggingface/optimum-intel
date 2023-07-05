@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import os
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -20,7 +21,9 @@ from typing import Dict, Optional, Tuple, Union
 import numpy as np
 import openvino
 import torch
-from openvino.runtime import Core, Tensor
+from openvino.runtime import Core, Tensor, Type
+from openvino.preprocess import PrePostProcessor
+
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -248,6 +251,59 @@ class OVBaseDecoderModel(OVModel):
 class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     export_feature = "text-generation"
     auto_model_class = AutoModelForCausalLM
+    
+    def __init__(self,
+                 model: openvino.runtime.Model,
+                 config: PretrainedConfig = None,
+                 device: str = "CPU",
+                 dynamic_shapes: bool = True,
+                 ov_config: Dict[str, str] | None = None,
+                 model_save_dir: str | Path | TemporaryDirectory | None = None,
+                 **kwargs):
+        model = self._try_modify_model_io_to_bf16(model, ov_config, device, **kwargs)
+        super().__init__(model, config, device, dynamic_shapes, ov_config, model_save_dir, **kwargs)
+
+    def _try_modify_model_io_to_bf16(self,
+                                     model: openvino.runtime.Model,
+                                     ov_config: Dict[str, str] | None = None,
+                                     device: str = "CPU",
+                                     **kwargs):
+        if device == 'CPU':
+            # if INFERENCE_PRECISION_HINT in ov_config equals to bf16, pastkv will use bf16
+            pastkv_will_use = Type.bf16 if ov_config and ov_config.get("INFERENCE_PRECISION_HINT", "") == "bf16" else Type.f32
+
+            # for batch testsing can set INFERENCE_PRECISION_HINT in enviroment, pastkv will try to use the specific precision
+            if "INFERENCE_PRECISION_HINT" in os.environ:
+                hint = os.environ["INFERENCE_PRECISION_HINT"]
+                if hint == "bf16":
+                    pastkv_will_use = Type.bf16
+                else:
+                    logger.warning(
+                        f"Unknown precision type {hint} in INFERENCE_PRECISION_HINT, will be ignored."
+                    )
+            use_cache = kwargs.get("use_cache", True)
+            has_pastkv = any("past_key_values" in key.get_any_name() for key in model.inputs)
+            if pastkv_will_use != Type.f32 and use_cache and has_pastkv:
+                ppp = PrePostProcessor(model)
+                need_gen = False
+                for key in model.inputs:
+                    if "past_key_values" in key.get_any_name() and pastkv_will_use != key.get_element_type():
+                        need_gen = True
+                        ppp.input(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
+                for key in model.outputs:
+                    if "present" in key.get_any_name() and pastkv_will_use != key.get_element_type():
+                        need_gen = True
+                        ppp.output(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
+                if need_gen:
+                    model = ppp.build()
+
+            self.pastkv_will_use = Type.f32
+            for key in model.inputs:
+                if "past_key_values" in key.get_any_name():
+                    self.pastkv_will_use = key.get_element_type()
+                    break
+
+        return model
 
     @add_start_docstrings_to_model_forward(
         INPUTS_DOCSTRING.format("batch_size, sequence_length")
@@ -271,10 +327,16 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         inputs = {}
         if past_key_values is not None:
-            # Flatten the past_key_values
-            past_key_values = tuple(
-                past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
-            )
+            if self.pastkv_will_use == Type.bf16:
+                # output is u16, should change to bf16
+                past_key_values = tuple(
+                    Tensor(past_key_value, past_key_value.shape, Type.bf16) for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
+                )
+            else:
+                # Flatten the past_key_values
+                past_key_values = tuple(
+                    past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
+                )
             # Add the past_key_values to the decoder inputs
             inputs = dict(zip(self.key_value_input_names, past_key_values))
 
