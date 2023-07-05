@@ -62,7 +62,6 @@ from transformers.training_args import TrainingArguments
 from transformers.utils import is_apex_available, is_sagemaker_mp_enabled, logging
 
 from optimum.exporters import TasksManager
-from optimum.intel.neural_compressor.modeling_base import INCBaseModel
 
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 from ..utils.import_utils import is_neural_compressor_version
