@@ -13,9 +13,8 @@
 #  limitations under the License.
 
 import inspect
-import io
 import logging
-from itertools import chain
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
@@ -24,25 +23,21 @@ import openvino
 import torch
 import transformers
 from datasets import Dataset, load_dataset
-from huggingface_hub import HfApi
 from nncf import NNCFConfig
 from nncf.torch import create_compressed_model, register_default_init_args
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
-from nncf.torch.nncf_network import NNCFNetwork
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, Tensor
-from torch.onnx import export as onnx_export
-from torch.utils._pytree import tree_map
-from torch.utils.data import DataLoader, RandomSampler
+from torch.utils.data import DataLoader, RandomSampler, TensorDataset
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import OnnxConfig
+from optimum.exporters.onnx import export
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES
-from .configuration import OVConfig
+from .configuration import INT8_WEIGHT_COMPRESSION_CONFIG, OVConfig
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel
 from .utils import (
@@ -50,7 +45,6 @@ from .utils import (
     MIN_ONNX_QDQ_OPSET,
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
-    use_external_data_format,
 )
 
 
@@ -83,10 +77,10 @@ class OVQuantizer(OptimumQuantizer):
         feature = kwargs.pop("feature", None)
         if feature is not None:
             logger.warning("`feature` is deprecated and will be removed in a future version. Use `task` instead.")
-            if task is not None and task != feature:
-                logger.warning(
-                    f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export."
-                )
+        if task is not None and task != feature:
+            logger.warning(
+                f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export."
+            )
         self.task = task or feature
         self.seed = seed
         self.input_names = None
@@ -103,13 +97,14 @@ class OVQuantizer(OptimumQuantizer):
 
     def quantize(
         self,
-        calibration_dataset: Dataset,
-        save_directory: Union[str, Path],
+        calibration_dataset: Dataset = None,
+        save_directory: Union[str, Path] = None,
         quantization_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        weights_only: bool = False,
         **kwargs,
     ):
         """
@@ -130,19 +125,51 @@ class OVQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether or not to remove the columns unused by the model forward method.
+            weights_only (`bool`, defaults to `False`):
+                Compress weights to integer precision (8-bit by default) while keeping activations
+                floating-point. Fits best for LLM footprint reduction and performance acceleration.
 
-        Example:
+        Examples:
         ```python
         >>> from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
         >>> from transformers import AutoModelForSequenceClassification
         >>> model = OVModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english", export=True)
         >>> # or
         >>> model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
-        >>> OVQuantizer.from_pretrained(model, task="text-classification")
+        >>> quantizer = OVQuantizer.from_pretrained(model, task="text-classification")
         >>> quantizer.quantize(calibration_dataset=calibration_dataset, save_directory="./quantized_model")
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
+
+        ```python
+        >>> from optimum.intel.openvino import OVQuantizer, OVModelForCausalLM
+        >>> from transformers import AutoModelForCausalLM
+        >>> model = AutoModelForCausalLM.from_pretrained("databricks/dolly-v2-3b")
+        >>> quantizer = OVQuantizer.from_pretrained(model, task="text-generation")
+        >>> quantizer.quantize(save_directory="./quantized_model", weights_only=True)
+        >>> optimized_model = OVModelForCausalLM.from_pretrained("./quantized_model")
+        ```
         """
+        if save_directory is None:
+            # TODO : can be set to self.model.config.name_or_path for OVModels when not provided
+            raise ValueError("`save_directory` needs to be specified")
+
+        if weights_only:
+            if isinstance(self.model, OVBaseModel):
+                raise ValueError(
+                    "`weights_only` currently not supported for `OVModels`, only available for torch.nn.Module."
+                )
+            if calibration_dataset is not None:
+                logger.warning(
+                    "`calibration_dataset` was provided but will not be used as `weights_only` is set to `True`."
+                )
+        else:
+            if calibration_dataset is None:
+                raise ValueError(
+                    "`calibration_dataset` is needed to compute the activations range during the calibration step and was not provided. "
+                    "In case you only want to apply quantization on the weights, please set `weights_only=True`."
+                )
+
         if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
             self._quantize_ovcausallm(
                 calibration_dataset,
@@ -170,6 +197,7 @@ class OVQuantizer(OptimumQuantizer):
                 batch_size,
                 data_collator,
                 remove_unused_columns,
+                weights_only,
             )
         else:
             raise TypeError(f"Unsupported model type: {type(self.model)}")
@@ -199,7 +227,6 @@ class OVQuantizer(OptimumQuantizer):
             quantization_dataset,
             model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
             fast_bias_correction=kwargs.get("fast_bias_correction", True),
-            subset_size=300 if not kwargs.get("subset_size") else kwargs.get("subset_size"),
             **kwargs,
         )
         self.model.model = quantized_model
@@ -263,7 +290,7 @@ class OVQuantizer(OptimumQuantizer):
 
         self.model.request = InferRequestWrapper(self.model.request)
         for _, data in enumerate(calibration_dataloader):
-            self.model.generate(**data, max_new_tokens=100)
+            self.model.generate(**data, max_new_tokens=10)
             if len(data_cache) >= subset_size:
                 break
         self.model.request = self.model.request.request
@@ -277,7 +304,6 @@ class OVQuantizer(OptimumQuantizer):
             fast_bias_correction=True
             if not kwargs.get("fast_bias_correction")
             else kwargs.get("fast_bias_correction"),
-            subset_size=subset_size,
             **kwargs,
         )
         self.model.model = quantized_model
@@ -292,36 +318,15 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        weights_only: bool = False,
     ):
+        self._set_task()
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         file_name = file_name if file_name is not None else OV_XML_FILE_NAME
         output_path = save_directory.joinpath(file_name)
         output_path = output_path.with_suffix(".xml").as_posix()
 
-        calibration_dataloader = self._get_calibration_dataloader(
-            calibration_dataset=calibration_dataset,
-            batch_size=batch_size,
-            remove_unused_columns=remove_unused_columns,
-            data_collator=data_collator,
-        )
-        model_inputs = next(iter(calibration_dataloader))
-        if quantization_config is None:
-            logger.info(
-                "No configuration describing the quantization process was provided, a default OVConfig will be generated."
-            )
-            quantization_config = OVConfig()
-        quantization_config.add_input_info(model_inputs)
-        nncf_config = NNCFConfig.from_dict(quantization_config.__dict__)
-        nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
-        controller, compressed_model = create_compressed_model(
-            self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
-        )
-        controller.prepare_for_export()
-
-        self._set_task()
-
-        self.model.config.save_pretrained(save_directory)
         model_type = self.model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",
@@ -330,34 +335,77 @@ class OVQuantizer(OptimumQuantizer):
             model_type=model_type,
         )
 
-        if self.task == "text-generation":
-            onnx_config = onnx_config_class(self.model.config, use_past=self.model.config.use_cache)
-        else:
+        if weights_only:
+            calibration_dataset = TensorDataset(torch.tensor([0.0, 1.0]))
+            calibration_dataset.column_names = []
+            remove_unused_columns = False
             onnx_config = onnx_config_class(self.model.config)
 
-        compressed_model.eval()
-        num_parameters = compressed_model.num_parameters()
-        save_as_external_data = use_external_data_format(num_parameters) or quantization_config.save_onnx_model
-        f = io.BytesIO() if not save_as_external_data else save_directory / ONNX_WEIGHTS_NAME
+            def data_collator(batch):
+                return onnx_config.generate_dummy_inputs(framework="pt")
 
-        # Export the compressed model to the ONNX format
+        calibration_dataloader = self._get_calibration_dataloader(
+            calibration_dataset=calibration_dataset,
+            batch_size=batch_size,
+            remove_unused_columns=remove_unused_columns,
+            data_collator=data_collator,
+        )
+
+        if quantization_config is None:
+            logger.info(
+                "No configuration describing the quantization process was provided, a default OVConfig will be generated."
+            )
+            quantization_config = OVConfig(compression=INT8_WEIGHT_COMPRESSION_CONFIG) if weights_only else OVConfig()
+
+        model_inputs = next(iter(calibration_dataloader))
+        quantization_config.add_input_info(model_inputs)
+        nncf_config = NNCFConfig.from_dict(quantization_config.__dict__)
+        nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
+        controller, compressed_model = create_compressed_model(
+            self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
+        )
+        compressed_model = controller.strip(do_copy=False)
+
+        task = self.task
+        model = self.model
+        self.model.config.save_pretrained(save_directory)
+
+        if task == "text-generation":
+            onnx_config = onnx_config_class(model.config, use_past=model.config.use_cache)
+        else:
+            onnx_config = onnx_config_class(model.config)
+
+        onnx_path = save_directory / ONNX_WEIGHTS_NAME
+
+        # Export the model to the ONNX format
         opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
-        opset = opset if not quantization_config.save_onnx_model else max(opset, MIN_ONNX_QDQ_OPSET)
-        _onnx_export_nncf_model(compressed_model, onnx_config, f, opset)
+        opset = max(opset, MIN_ONNX_QDQ_OPSET)
+        export(
+            model=compressed_model,
+            config=onnx_config,
+            opset=opset,
+            output=onnx_path,
+        )
 
         # Load and save the compressed model
-        model = core.read_model(f) if save_as_external_data else core.read_model(f.getvalue(), b"")
+        model = core.read_model(onnx_path)
         self._save_pretrained(model, output_path)
         quantization_config.save_pretrained(save_directory)
+        if not quantization_config.save_onnx_model:
+            os.remove(onnx_path)
+            try:
+                os.remove(f"{onnx_path}_data")
+            except FileNotFoundError:
+                pass
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
         compress_quantize_weights_transformation(model)
-        openvino.runtime.serialize(model, output_path, output_path.replace(".xml", ".bin"))
+        openvino.runtime.serialize(model, output_path)
 
     def _set_task(self):
         if self.task is None:
-            self.task = HfApi().model_info(self.model.config._name_or_path).pipeline_tag
+            self.task = TasksManager.infer_task_from_model(self.model.config._name_or_path)
             if self.task is None:
                 raise ValueError(
                     "The task defining the model topology could not be extracted and needs to be specified for the ONNX export."
@@ -442,36 +490,3 @@ class OVQuantizer(OptimumQuantizer):
     def _remove_unused_columns(self, dataset: Dataset):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
-
-
-def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Union[str, io.BytesIO], opset: int = None):
-    signature = inspect.signature(model.forward)
-    signature = list(signature.parameters.keys())
-    opset = opset or config.DEFAULT_ONNX_OPSET
-    model_inputs = config.generate_dummy_inputs(framework="pt")
-    # Create ordered inputs for the ONNX export of NNCFNetwork as keyword arguments are currently not supported
-    model_inputs = tuple(model_inputs.pop(key, None) for key in signature if len(model_inputs) != 0)
-    device = model.device
-
-    def remap(value):
-        if isinstance(value, torch.Tensor):
-            value = value.to(device)
-        return value
-
-    with config.patch_model_for_export(model):
-        model_inputs = tree_map(remap, model_inputs)
-        with torch.no_grad():
-            model.eval()
-            # Disable node additions to be exported in the graph
-            model.disable_dynamic_graph_building()
-            onnx_export(
-                model,
-                model_inputs,
-                f=output,
-                input_names=list(config.inputs.keys()),
-                output_names=list(config.outputs.keys()),
-                dynamic_axes=dict(chain(config.inputs.items(), config.outputs.items())),
-                do_constant_folding=True,
-                opset_version=opset,
-            )
-            model.enable_dynamic_graph_building()

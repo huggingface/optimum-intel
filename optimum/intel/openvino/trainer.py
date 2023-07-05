@@ -19,6 +19,7 @@ import os
 import sys
 import time
 from collections import defaultdict
+from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Type, Union
 
@@ -36,6 +37,7 @@ from nncf.experimental.torch.sparsity.movement.scheduler import MovementSchedule
 from nncf.torch import create_compressed_model
 from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmController
 from nncf.torch.compression_method_api import PTCompressionAlgorithmController
+from nncf.torch.nncf_network import NNCFNetwork
 from nncf.torch.quantization.algo import QuantizationController
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, PartialShape, serialize
@@ -44,6 +46,8 @@ from openvino.tools.mo.back.offline_transformations import (
     apply_moc_transformations,
     apply_user_transformations,
 )
+from torch.onnx import export as onnx_export
+from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, Dataset, RandomSampler
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
@@ -75,11 +79,12 @@ from transformers.utils import (
 )
 
 from optimum.exporters import TasksManager
+from optimum.exporters.onnx import OnnxConfig
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_transformers_version
 from .configuration import OVConfig
-from .quantization import OVDataLoader, _onnx_export_nncf_model
+from .quantization import OVDataLoader
 from .training_args import OVTrainingArguments
 from .utils import (
     MAX_ONNX_OPSET,
@@ -107,6 +112,40 @@ logger.setLevel(logging.INFO)
 # NNCF Error to be shown on stdout
 # set_log_level(logging.ERROR)
 NNCF_LOG_FILE_NAME = "nncf_output.log"
+
+
+def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Union[str, io.BytesIO], opset: int = None):
+    # TODO: remove it when fix controller.strip(copy=True) behavior
+    signature = inspect.signature(model.forward)
+    signature = list(signature.parameters.keys())
+    opset = opset or config.DEFAULT_ONNX_OPSET
+    model_inputs = config.generate_dummy_inputs(framework="pt")
+    # Create ordered inputs for the ONNX export of NNCFNetwork as keyword arguments are currently not supported
+    model_inputs = tuple(model_inputs.pop(key, None) for key in signature if len(model_inputs) != 0)
+    device = model.device
+
+    def remap(value):
+        if isinstance(value, torch.Tensor):
+            value = value.to(device)
+        return value
+
+    with config.patch_model_for_export(model):
+        model_inputs = tree_map(remap, model_inputs)
+        with torch.no_grad():
+            model.eval()
+            # Disable node additions to be exported in the graph
+            model.disable_dynamic_graph_building()
+            onnx_export(
+                model,
+                model_inputs,
+                f=output,
+                input_names=list(config.inputs.keys()),
+                output_names=list(config.outputs.keys()),
+                dynamic_axes=dict(chain(config.inputs.items(), config.outputs.items())),
+                do_constant_folding=True,
+                opset_version=opset,
+            )
+            model.enable_dynamic_graph_building()
 
 
 class OVTrainer(Trainer):
@@ -733,7 +772,7 @@ class OVTrainer(Trainer):
                     compress_quantize_weights_transformation(ov_model)
 
             # Serialize IR xml and bin
-            serialize(ov_model, output_path, output_path.replace(".xml", ".bin"))
+            serialize(ov_model, output_path)
 
     def _get_compression_controller_by_cls(
         self, controller_cls: Type[PTCompressionAlgorithmController]

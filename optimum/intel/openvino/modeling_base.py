@@ -20,7 +20,6 @@ from typing import Dict, Optional, Union
 
 import openvino
 from huggingface_hub import hf_hub_download
-from huggingface_hub.utils import EntryNotFoundError
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from openvino.runtime import Core
 from transformers import PretrainedConfig
@@ -137,7 +136,7 @@ class OVBaseModel(PreTrainedModel):
 
         return model
 
-    def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
+    def _save_pretrained(self, save_directory: Union[str, Path]):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
         [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
@@ -145,12 +144,9 @@ class OVBaseModel(PreTrainedModel):
         Arguments:
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
-            file_name(`str`, *optional*):
-                The model file name to use when saving the model. Overwrites the default file names.
         """
-        file_name = file_name if file_name is not None else OV_XML_FILE_NAME
-        dst_path = os.path.join(save_directory, file_name)
-        openvino.runtime.serialize(self.model, dst_path, dst_path.replace(".xml", ".bin"))
+        dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
+        openvino.runtime.serialize(self.model, dst_path)
 
     @classmethod
     def _from_pretrained(
@@ -198,12 +194,6 @@ class OVBaseModel(PreTrainedModel):
         # Load the model from local directory
         if os.path.isdir(model_id):
             file_name = os.path.join(model_id, file_name)
-            if os.path.isfile(os.path.join(model_id, "ov_model.xml")):
-                file_name = os.path.join(model_id, "ov_model.xml")
-                logger.warning(
-                    "The file names `ov_model.xml` and `ov_model.bin` will be soon deprecated."
-                    "Make sure to rename your file to respectively `openvino_model.xml` and `openvino_model.bin`"
-                )
             model_save_dir = model_id
         # Download the model from the hub
         else:
@@ -212,36 +202,17 @@ class OVBaseModel(PreTrainedModel):
             if not from_onnx:
                 model_file_names.append(file_name.replace(".xml", ".bin"))
             file_names = []
-            try:
-                for file_name in model_file_names:
-                    model_cache_path = hf_hub_download(
-                        repo_id=model_id,
-                        filename=file_name,
-                        use_auth_token=use_auth_token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                    )
-                    file_names.append(model_cache_path)
-            except EntryNotFoundError:
-                file_names = []
-                model_file_names = ["ov_model.xml", "ov_model.bin"]
-                for file_name in model_file_names:
-                    model_cache_path = hf_hub_download(
-                        repo_id=model_id,
-                        filename=file_name,
-                        use_auth_token=use_auth_token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                    )
-                    file_names.append(model_cache_path)
-                logger.warning(
-                    "The file names `ov_model.xml` and `ov_model.bin` will be soon deprecated."
-                    "Make sure to rename your file to respectively `openvino_model.xml` and `openvino_model.bin`"
+            for file_name in model_file_names:
+                model_cache_path = hf_hub_download(
+                    repo_id=model_id,
+                    filename=file_name,
+                    use_auth_token=use_auth_token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
                 )
+                file_names.append(model_cache_path)
             model_save_dir = Path(model_cache_path).parent
             file_name = file_names[0]
 
@@ -281,8 +252,7 @@ class OVBaseModel(PreTrainedModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        if task is None:
-            task = cls._auto_model_to_task(cls.auto_model_class)
+        task = task or cls.export_feature
 
         model_kwargs = {
             "revision": revision,
@@ -295,8 +265,8 @@ class OVBaseModel(PreTrainedModel):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-
         model_type = model.config.model_type.replace("_", "-")
+
         onnx_config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",
             model=model,
