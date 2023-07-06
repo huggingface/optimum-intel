@@ -19,7 +19,7 @@ from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
 import openvino
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, model_info
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from openvino.runtime import Core
 from transformers import PretrainedConfig
@@ -264,7 +264,8 @@ class OVBaseModel(PreTrainedModel):
             "trust_remote_code": trust_remote_code,
         }
 
-        if model_id.startswith("timm/"):
+        # Fix the mismatch between timm_config and huggingface_config
+        if not os.path.isdir(model_id) and model_info(model_id).library_name == "timm":
             model_kwargs["use_safetensors"] = False
             model_kwargs["num_labels"] = config.num_classes
             
