@@ -263,12 +263,10 @@ class OVBaseModel(PreTrainedModel):
             "force_download": force_download,
             "trust_remote_code": trust_remote_code,
         }
-
         # Fix the mismatch between timm_config and huggingface_config
         if not os.path.isdir(model_id) and model_info(model_id).library_name == "timm":
             model_kwargs["use_safetensors"] = False
             model_kwargs["num_labels"] = config.num_classes
-            
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         model_type = model.config.model_type.replace("_", "-")
 
