@@ -251,7 +251,7 @@ class OVBaseDecoderModel(OVModel):
 class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     export_feature = "text-generation"
     auto_model_class = AutoModelForCausalLM
-    
+
     def __init__(self,
                  model: openvino.runtime.Model,
                  config: PretrainedConfig = None,
@@ -260,27 +260,37 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                  ov_config: Dict[str, str] | None = None,
                  model_save_dir: str | Path | TemporaryDirectory | None = None,
                  **kwargs):
-        model = self._try_modify_model_io_to_bf16(model, ov_config, device, **kwargs)
+        model = self._try_modify_model_io_to_lowprecision(model, ov_config, device, **kwargs)
         super().__init__(model, config, device, dynamic_shapes, ov_config, model_save_dir, **kwargs)
 
-    def _try_modify_model_io_to_bf16(self,
+    def _try_modify_model_io_to_lowprecision(self,
                                      model: openvino.runtime.Model,
                                      ov_config: Dict[str, str] | None = None,
                                      device: str = "CPU",
                                      **kwargs):
         if device == 'CPU':
-            # if INFERENCE_PRECISION_HINT in ov_config equals to bf16, pastkv will use bf16
-            pastkv_will_use = Type.bf16 if ov_config and ov_config.get("INFERENCE_PRECISION_HINT", "") == "bf16" else Type.f32
+            pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
+            # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
+            if ov_config:
+                user_hint = ov_config.get("INFERENCE_PRECISION_HINT", "")
+                openvino_types_str_map = {
+                    "boolean": Type.boolean,
+                    "f16": Type.f16,
+                    "f32": Type.f32,
+                    "f64": Type.f64,
+                    "i8": Type.i8,
+                    "i16": Type.i16,
+                    "i32": Type.i32,
+                    "i64": Type.i64,
+                    "u8": Type.u8,
+                    "u16": Type.u16,
+                    "u32": Type.u32,
+                    "u64": Type.u64,
+                    "bf16": Type.bf16
+                }
+                if user_hint in openvino_types_str_map:
+                    pastkv_will_use = openvino_types_str_map[user_hint]
 
-            # for batch testsing can set INFERENCE_PRECISION_HINT in enviroment, pastkv will try to use the specific precision
-            if "INFERENCE_PRECISION_HINT" in os.environ:
-                hint = os.environ["INFERENCE_PRECISION_HINT"]
-                if hint == "bf16":
-                    pastkv_will_use = Type.bf16
-                else:
-                    logger.warning(
-                        f"Unknown precision type {hint} in INFERENCE_PRECISION_HINT, will be ignored."
-                    )
             use_cache = kwargs.get("use_cache", True)
             has_pastkv = any("past_key_values" in key.get_any_name() for key in model.inputs)
             if pastkv_will_use != Type.f32 and use_cache and has_pastkv:
@@ -327,10 +337,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         inputs = {}
         if past_key_values is not None:
-            if self.pastkv_will_use == Type.bf16:
+            if self.pastkv_will_use != Type.f32:
                 # output is u16, should change to bf16
                 past_key_values = tuple(
-                    Tensor(past_key_value, past_key_value.shape, Type.bf16) for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
+                    Tensor(past_key_value, past_key_value.shape, self.pastkv_will_use) for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
                 )
             else:
                 # Flatten the past_key_values
