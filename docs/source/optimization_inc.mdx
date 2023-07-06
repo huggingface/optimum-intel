@@ -108,6 +108,25 @@ The [SmoothQuant](https://arxiv.org/abs/2211.10438) methodology is available for
 ```
 Please refer to INC [documentation](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md) and the list of [models](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md#validated-models) quantized with the methodology for more details. 
 
+
+### Distributed Acuracy-aware Tuning
+One challenge in model quantization is identifying the optimal configuration that balances accuracy and performance. Distributed tuning speeds up this time-consuming process by parallelizing it across multiple nodes, which accelerates the tuning process in linear scaling.
+
+To utilize distributed tuning, please set the `quant_level` to `1` and run it with `mpirun`.
+
+
+```diff
+- quantization_config = PostTrainingQuantConfig(approach="static")
++ quantization_config = PostTrainingQuantConfig(approach="static", quant_level=1)
+```
+
+```shell
+mpirun -np <number_of_processes> <RUN_CMD>
+```
+
+Please refer to INC [documentation](https://github.com/intel/neural-compressor/blob/master/docs/source/tuning_strategies.md#distributed-tuning) and [text-classification](https://github.com/huggingface/optimum-intel/tree/main/examples/neural_compressor/text-classification) example for more details. 
+
+
 ## During training optimization
 
 The [`INCTrainer`] class provides an API to train your model while combining different compression techniques such as knowledge distillation, pruning and quantization.

@@ -35,6 +35,7 @@ from neural_compressor.config import (
 from onnx import load as onnx_load
 from parameterized import parameterized
 from transformers import (
+    AutoModelForCausalLM,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -114,6 +115,11 @@ class OptimizationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS + (
         ("fill-mask", "hf-internal-testing/tiny-random-DistilBertForMaskedLM", 30),
         ("token-classification", "hf-internal-testing/tiny-random-AlbertForTokenClassification", 30),
+    )
+
+    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
+        "hf-internal-testing/tiny-random-BloomForCausalLM",
+        "hf-internal-testing/tiny-random-GPTNeoForCausalLM",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_DYNAMIC)
@@ -277,6 +283,34 @@ class OptimizationTest(unittest.TestCase):
             loaded_pipe_outputs = loaded_pipeline(latents=torch.from_numpy(latents), **kwargs).images
         # Compare model outputs
         self.assertTrue(np.allclose(loaded_pipe_outputs, outputs, atol=1e-4))
+
+    @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
+    def test_quantize_text_generate_model(self, model_id):
+        set_seed(42)
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample", return_tensors="pt")
+
+        def calibration_fn(p_model):
+            tmp_model = INCModelForCausalLM(p_model, model.config)
+            tmp_model.generate(**tokens, max_new_tokens=32, do_sample=False)
+
+        quantization_config = PostTrainingQuantConfig(approach="static")
+        model.config.return_dict = False
+        quantizer = INCQuantizer.from_pretrained(model, calibration_fn=calibration_fn)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                save_directory=tmp_dir,
+                save_onnx_model=False,
+            )
+            model = INCModelForCausalLM.from_pretrained(tmp_dir, export=True)
+
+        pre_outputs = quantizer._quantized_model.generate(
+            **tokens, do_sample=False, num_beams=1, temperature=0.9, min_length=20, max_length=20
+        )
+        outputs = model.generate(**tokens, do_sample=False, num_beams=1, temperature=0.9, min_length=20, max_length=20)
+        self.assertTrue(torch.equal(pre_outputs, outputs))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, task, model_name, expected_quantized_matmuls):

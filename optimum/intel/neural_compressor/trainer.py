@@ -141,10 +141,14 @@ class INCTrainer(Trainer):
         self.deepspeed = None
 
         # Attach dtype and architecture to the config
-        self.dtype = "int8" if quantization_config is not None else str(get_parameter_dtype(self.model)).split(".")[1]
+        if quantization_config is not None:
+            self.dtype = "int8"
+            self.model.config.backend = quantization_config.backend
+        else:
+            self.dtype = str(get_parameter_dtype(self.model)).split(".")[1]
+            self.model.config.backend = "default"
         self.model.config.torch_dtype = self.dtype
         self.model.config.framework = "pytorch_fx"
-        self.model.config.backend = "default"
         self.model.config.architectures = [self.model.__class__.__name__]
 
         self._set_signature_columns_if_needed()

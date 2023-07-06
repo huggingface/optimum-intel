@@ -93,7 +93,7 @@ class PreTrainedModel(OptimizedModel):
     pass
 
 
-class TSModelForCausalLM(PreTrainedModel, GenerationMixin):
+class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
     main_input_name = "input_ids"
@@ -107,13 +107,11 @@ class TSModelForCausalLM(PreTrainedModel, GenerationMixin):
         use_cache: bool = True,
         **kwargs,
     ):
-        self.model = model
-        self.config = config
+        super(BaseModelForCausalLM, self).__init__(model=model, config=config)
         self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
         self.use_cache = use_cache
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.model.to(self._device)
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
 
@@ -128,6 +126,13 @@ class TSModelForCausalLM(PreTrainedModel, GenerationMixin):
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
 
+    def can_generate(self) -> bool:
+        return True
+
+    @property
+    def device(self) -> torch.device:
+        return self._device
+
     @staticmethod
     def load_model(file_name: Union[str, Path]):
         model = torch.jit.load(file_name)
@@ -136,173 +141,6 @@ class TSModelForCausalLM(PreTrainedModel, GenerationMixin):
 
     def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
         torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
-
-    def forward(
-        self,
-        input_ids: torch.LongTensor = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-        **kwargs,
-    ) -> CausalLMOutputWithPast:
-        if attention_mask is None:
-            attention_mask = torch.ones_like(input_ids)
-
-        inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-        }
-
-        if self.use_cache:
-            if past_key_values is None:
-                nb_pkv = 2
-                num_layers = self.normalized_config.num_layers
-                num_attention_heads = self.normalized_config.num_attention_heads
-                hidden_size = self.normalized_config.hidden_size
-                d_k = hidden_size // num_attention_heads
-
-                if self.config.model_type != "bloom":
-                    new_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
-                    empty_tensor = torch.empty(size=new_shape)
-                    if self.model_dtype is not None:
-                        empty_tensor = empty_tensor.to(self.model_dtype)
-                    past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
-                    pkv = tuple(empty_tensor for _ in range(nb_pkv))
-                else:
-                    pkv = ()
-                    for nb_pkv in range(nb_pkv):
-                        if nb_pkv % 2 == 0:
-                            new_shape = [input_ids.shape[0] * num_attention_heads, d_k, 0]
-                        else:
-                            new_shape = [input_ids.shape[0] * num_attention_heads, 0, d_k]
-                        empty_tensor = torch.empty(size=new_shape)
-                        if self.model_dtype is not None:
-                            empty_tensor = empty_tensor.to(self.model_dtype)
-                        pkv = pkv + (empty_tensor,)
-                past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
-
-            inputs["past_key_values"] = past_key_values
-        outputs = self.model(**inputs)
-
-        if isinstance(outputs, tuple):
-            outputs = CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1] if self.use_cache else None)
-        else:
-            outputs = CausalLMOutputWithPast(
-                logits=outputs["logits"], past_key_values=outputs["past_key_values"] if self.use_cache else None
-            )
-
-        return outputs
-
-    @classmethod
-    def _from_pretrained(
-        cls,
-        model_id: Union[str, Path],
-        config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str, None]] = None,
-        revision: Optional[Union[str, None]] = None,
-        force_download: bool = False,
-        cache_dir: Optional[str] = None,
-        file_name: Optional[str] = WEIGHTS_NAME,
-        local_files_only: bool = False,
-        use_cache: bool = True,
-        **kwargs,
-    ):
-        if not getattr(config, "torchscript", False):
-            raise ValueError("`torchscript` should be set to True to load TorchScript model")
-
-        # Load the model from local directory
-        if os.path.isdir(model_id):
-            file_name = os.path.join(model_id, file_name)
-            model = cls.load_model(file_name)
-            model_save_dir = model_id
-        # Download the model from the hub
-        else:
-            model_cache_path = hf_hub_download(
-                repo_id=model_id,
-                filename=file_name,
-                use_auth_token=use_auth_token,
-                revision=revision,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                local_files_only=local_files_only,
-            )
-            model_save_dir = Path(model_cache_path).parent
-            model = cls.load_model(model_cache_path)
-
-        return cls(
-            model,
-            config=config,
-            model_save_dir=model_save_dir,
-            use_cache=use_cache,
-            **kwargs,
-        )
-
-    @classmethod
-    def _from_transformers(
-        cls,
-        model_id: str,
-        config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: Optional[str] = None,
-        subfolder: str = "",
-        local_files_only: bool = False,
-        use_cache: bool = True,
-        torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
-        **kwargs,
-    ):
-        if is_torch_version("<", "2.0.0"):
-            raise ImportError("`torch>=2.0.0` is needed to trace your model")
-
-        task = cls.export_feature
-        model_kwargs = {
-            "revision": revision,
-            "use_auth_token": use_auth_token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "use_cache": use_cache,
-            "torch_dtype": torch_dtype,
-        }
-
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-
-        if model.config.model_type == "bloom":
-            model.transformer._prepare_attn_mask = _prepare_attn_mask
-
-        if model.config.model_type == "llama":
-            model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
-
-        traced_model = jit_trace(model, task, use_cache)
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
-        torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
-        config.torchscript = True
-
-        return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            use_cache=use_cache,
-            use_auth_token=use_auth_token,
-            revision=revision,
-            force_download=force_download,
-            cache_dir=cache_dir,
-            local_files_only=local_files_only,
-            **kwargs,
-        )
-
-    def can_generate(self) -> bool:
-        return True
-
-    @property
-    def device(self) -> torch.device:
-        return self._device
-
-    def to(self, device: Union[torch.device, str]):
-        self._device = device if isinstance(device, torch.device) else torch.device(device)
-        self.model.to(self._device)
-        return self
 
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
@@ -406,4 +244,178 @@ class TSModelForCausalLM(PreTrainedModel, GenerationMixin):
                 layer_past[1].view(batch_size, num_heads, seq_length, head_dim),
             )
             for layer_past in past_key_value
+        )
+
+    def to(self, device: Union[torch.device, str]):
+        self._device = device if isinstance(device, torch.device) else torch.device(device)
+        self.model.to(self._device)
+        return self
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        **kwargs,
+    ) -> CausalLMOutputWithPast:
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        if self.use_cache:
+            if past_key_values is None:
+                nb_pkv = 2
+                num_layers = self.normalized_config.num_layers
+                num_attention_heads = self.normalized_config.num_attention_heads
+                hidden_size = self.normalized_config.hidden_size
+                d_k = hidden_size // num_attention_heads
+
+                if self.config.model_type != "bloom":
+                    new_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
+                    empty_tensor = torch.empty(size=new_shape)
+                    if self.model_dtype is not None:
+                        empty_tensor = empty_tensor.to(self.model_dtype)
+                    past_key_values = tuple(tuple(empty_tensor for _ in range(nb_pkv)) for _ in range(num_layers))
+                    pkv = tuple(empty_tensor for _ in range(nb_pkv))
+                else:
+                    pkv = ()
+                    for nb_pkv in range(nb_pkv):
+                        if nb_pkv % 2 == 0:
+                            new_shape = [input_ids.shape[0] * num_attention_heads, d_k, 0]
+                        else:
+                            new_shape = [input_ids.shape[0] * num_attention_heads, 0, d_k]
+                        empty_tensor = torch.empty(size=new_shape)
+                        if self.model_dtype is not None:
+                            empty_tensor = empty_tensor.to(self.model_dtype)
+                        pkv = pkv + (empty_tensor,)
+                past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
+
+            inputs["past_key_values"] = past_key_values
+        outputs = self.model(**inputs)
+
+        if isinstance(outputs, (list, tuple)):
+            logits = outputs[0]
+            past_key_values = outputs[1] if self.use_cache else None
+        else:
+            logits = outputs["logits"]
+            past_key_values = outputs["past_key_values"] if self.use_cache else None
+        return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+
+
+class TSModelForCausalLM(BaseModelForCausalLM):
+    def __init__(
+        self,
+        model,
+        config: PretrainedConfig = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        use_cache: bool = True,
+        **kwargs,
+    ):
+        super(TSModelForCausalLM, self).__init__(
+            model=model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs
+        )
+        self.model.to(self._device)
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: PretrainedConfig,
+        use_auth_token: Optional[Union[bool, str, None]] = None,
+        revision: Optional[Union[str, None]] = None,
+        force_download: bool = False,
+        cache_dir: Optional[str] = None,
+        file_name: Optional[str] = WEIGHTS_NAME,
+        local_files_only: bool = False,
+        use_cache: bool = True,
+        **kwargs,
+    ):
+        if not getattr(config, "torchscript", False):
+            raise ValueError("`torchscript` should be set to True to load TorchScript model")
+
+        # Load the model from local directory
+        if os.path.isdir(model_id):
+            file_name = os.path.join(model_id, file_name)
+            model = cls.load_model(file_name)
+            model_save_dir = model_id
+        # Download the model from the hub
+        else:
+            model_cache_path = hf_hub_download(
+                repo_id=model_id,
+                filename=file_name,
+                use_auth_token=use_auth_token,
+                revision=revision,
+                cache_dir=cache_dir,
+                force_download=force_download,
+                local_files_only=local_files_only,
+            )
+            model_save_dir = Path(model_cache_path).parent
+            model = cls.load_model(model_cache_path)
+
+        return cls(
+            model,
+            config=config,
+            model_save_dir=model_save_dir,
+            use_cache=use_cache,
+            **kwargs,
+        )
+
+    @classmethod
+    def _from_transformers(
+        cls,
+        model_id: str,
+        config: PretrainedConfig,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: Optional[str] = None,
+        subfolder: str = "",
+        local_files_only: bool = False,
+        use_cache: bool = True,
+        torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
+        **kwargs,
+    ):
+        if is_torch_version("<", "2.0.0"):
+            raise ImportError("`torch>=2.0.0` is needed to trace your model")
+
+        task = cls.export_feature
+        model_kwargs = {
+            "revision": revision,
+            "use_auth_token": use_auth_token,
+            "cache_dir": cache_dir,
+            "subfolder": subfolder,
+            "local_files_only": local_files_only,
+            "force_download": force_download,
+            "use_cache": use_cache,
+            "torch_dtype": torch_dtype,
+        }
+
+        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+
+        if model.config.model_type == "bloom":
+            model.transformer._prepare_attn_mask = _prepare_attn_mask
+
+        if model.config.model_type == "llama":
+            model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+
+        traced_model = jit_trace(model, task, use_cache)
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
+        torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
+        config.torchscript = True
+
+        return cls._from_pretrained(
+            model_id=save_dir_path,
+            config=config,
+            use_cache=use_cache,
+            use_auth_token=use_auth_token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            **kwargs,
         )

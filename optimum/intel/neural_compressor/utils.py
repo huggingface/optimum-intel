@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 CONFIG_NAME = "best_configure.yaml"
 
+
 _HEAD_TO_AUTOMODELS = {
     "fill-mask": "INCModelForMaskedLM",
     "text-generation": "INCModelForCausalLM",
