@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import os
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -21,9 +20,8 @@ from typing import Dict, Optional, Tuple, Union
 import numpy as np
 import openvino
 import torch
-from openvino.runtime import Core, Tensor, Type
 from openvino.preprocess import PrePostProcessor
-
+from openvino.runtime import Core, Tensor, Type
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -252,25 +250,25 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     export_feature = "text-generation"
     auto_model_class = AutoModelForCausalLM
 
-    def __init__(self,
-                 model: openvino.runtime.Model,
-                 config: PretrainedConfig = None,
-                 device: str = "CPU",
-                 dynamic_shapes: bool = True,
-                 ov_config: Optional[Dict[str, str]] = None,
-                 model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-                 **kwargs):
+    def __init__(
+        self,
+        model: openvino.runtime.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        **kwargs,
+    ):
         model = self._try_modify_pastkv_to_lowprecision(model, ov_config, device, **kwargs)
         super().__init__(model, config, device, dynamic_shapes, ov_config, model_save_dir, **kwargs)
 
-    def _try_modify_pastkv_to_lowprecision(self,
-                                     model: openvino.runtime.Model,
-                                     ov_config: Optional[Dict[str, str]] = None,
-                                     device: str = "CPU",
-                                     **kwargs):
+    def _try_modify_pastkv_to_lowprecision(
+        self, model: openvino.runtime.Model, ov_config: Optional[Dict[str, str]] = None, device: str = "CPU", **kwargs
+    ):
         self.pastkv_will_use = Type.f32
         device = device.upper() if device else device
-        if device == 'CPU':
+        if device == "CPU":
             pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
             # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
             if ov_config:
@@ -288,7 +286,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     "u16": Type.u16,
                     "u32": Type.u32,
                     "u64": Type.u64,
-                    "bf16": Type.bf16
+                    "bf16": Type.bf16,
                 }
                 if user_hint in openvino_types_str_map:
                     pastkv_will_use = openvino_types_str_map[user_hint]
@@ -341,7 +339,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             if self.pastkv_will_use == Type.bf16:
                 # numpy does not support bf16, pretending u16, should change to bf16
                 past_key_values = tuple(
-                    Tensor(past_key_value, past_key_value.shape, Type.bf16) for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
+                    Tensor(past_key_value, past_key_value.shape, Type.bf16)
+                    for pkv_per_layer in past_key_values
+                    for past_key_value in pkv_per_layer
                 )
             else:
                 # Flatten the past_key_values
