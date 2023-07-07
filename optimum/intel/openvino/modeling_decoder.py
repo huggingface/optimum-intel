@@ -257,17 +257,19 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                  config: PretrainedConfig = None,
                  device: str = "CPU",
                  dynamic_shapes: bool = True,
-                 ov_config: Dict[str, str] | None = None,
-                 model_save_dir: str | Path | TemporaryDirectory | None = None,
+                 ov_config: Dict[str, str] = None,
+                 model_save_dir: str | Path | TemporaryDirectory = None,
                  **kwargs):
-        model = self._try_modify_model_io_to_lowprecision(model, ov_config, device, **kwargs)
+        model = self._try_modify_pastkv_to_lowprecision(model, ov_config, device, **kwargs)
         super().__init__(model, config, device, dynamic_shapes, ov_config, model_save_dir, **kwargs)
 
-    def _try_modify_model_io_to_lowprecision(self,
+    def _try_modify_pastkv_to_lowprecision(self,
                                      model: openvino.runtime.Model,
-                                     ov_config: Dict[str, str] | None = None,
+                                     ov_config: Dict[str, str] = None,
                                      device: str = "CPU",
                                      **kwargs):
+        self.pastkv_will_use = Type.f32
+        device = device.upper()
         if device == 'CPU':
             pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
             # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
@@ -307,7 +309,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 if need_gen:
                     model = ppp.build()
 
-            self.pastkv_will_use = Type.f32
             for key in model.inputs:
                 if "past_key_values" in key.get_any_name():
                     self.pastkv_will_use = key.get_element_type()
