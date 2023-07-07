@@ -257,19 +257,19 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                  config: PretrainedConfig = None,
                  device: str = "CPU",
                  dynamic_shapes: bool = True,
-                 ov_config: Dict[str, str] = None,
-                 model_save_dir: str | Path | TemporaryDirectory = None,
+                 ov_config: Optional[Dict[str, str]] = None,
+                 model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
                  **kwargs):
         model = self._try_modify_pastkv_to_lowprecision(model, ov_config, device, **kwargs)
         super().__init__(model, config, device, dynamic_shapes, ov_config, model_save_dir, **kwargs)
 
     def _try_modify_pastkv_to_lowprecision(self,
                                      model: openvino.runtime.Model,
-                                     ov_config: Dict[str, str] = None,
+                                     ov_config: Optional[Dict[str, str]] = None,
                                      device: str = "CPU",
                                      **kwargs):
         self.pastkv_will_use = Type.f32
-        device = device.upper()
+        device = device.upper() if device else device
         if device == 'CPU':
             pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
             # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
@@ -338,10 +338,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         inputs = {}
         if past_key_values is not None:
-            if self.pastkv_will_use != Type.f32:
-                # output is u16, should change to bf16
+            if self.pastkv_will_use == Type.bf16:
+                # numpy does not support bf16, pretending u16, should change to bf16
                 past_key_values = tuple(
-                    Tensor(past_key_value, past_key_value.shape, self.pastkv_will_use) for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
+                    Tensor(past_key_value, past_key_value.shape, Type.bf16) for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
                 )
             else:
                 # Flatten the past_key_values
