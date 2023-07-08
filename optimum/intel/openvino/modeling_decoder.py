@@ -266,7 +266,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     def _try_modify_pastkv_to_lowprecision(
         self, model: openvino.runtime.Model, ov_config: Optional[Dict[str, str]] = None, device: str = "CPU", **kwargs
     ):
-        self.pastkv_will_use = Type.f32
         device = device.upper() if device else device
         if device == "CPU":
             pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
@@ -307,11 +306,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 if need_gen:
                     model = ppp.build()
 
-            for key in model.inputs:
-                if "past_key_values" in key.get_any_name():
-                    self.pastkv_will_use = key.get_element_type()
-                    break
-
         return model
 
     @add_start_docstrings_to_model_forward(
@@ -336,7 +330,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         inputs = {}
         if past_key_values is not None:
-            if self.pastkv_will_use == Type.bf16:
+            if len(self.key_value_input_names):
+                pastkv_will_use = self.model.input(self.key_value_input_names[0]).get_element_type()
+            else:
+                pastkv_will_use = Type.f32
+            if pastkv_will_use == Type.bf16:
                 # numpy does not support bf16, pretending u16, should change to bf16
                 past_key_values = tuple(
                     Tensor(past_key_value, past_key_value.shape, Type.bf16)
