@@ -274,7 +274,7 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
                 hidden_size = self.normalized_config.hidden_size
                 d_k = hidden_size // num_attention_heads
                 if self.config.model_type == "gpt_bigcode":
-                    new_shape = [input_ids.shape[0], 0, d_k // 2]
+                    new_shape = [input_ids.shape[0], 0, d_k * 2]
                     empty_tensor = torch.empty(size=new_shape)
                     if self.model_dtype is not None:
                         empty_tensor = empty_tensor.to(self.model_dtype)
