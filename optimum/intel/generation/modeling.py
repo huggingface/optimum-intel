@@ -20,11 +20,11 @@ from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
 
 import torch
+from huggingface_hub import hf_hub_download
 from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
-from huggingface_hub import hf_hub_download
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
