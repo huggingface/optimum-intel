@@ -81,7 +81,7 @@ _TASK_TO_DATASET = {
 def num_quantized_matmul_onnx_model(onnx_model):
     num_quantized_matmul = 0
     for initializer in onnx_model.graph.initializer:
-        if "MatMul" in initializer.name and "quantized" in initializer.name:
+        if "QuantizeLinear" in initializer.name:
             num_quantized_matmul += 1
     return num_quantized_matmul
 
@@ -108,13 +108,13 @@ def _generate_dataset(quantizer, tokenizer, num_samples=10):
 
 class OptimizationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("text-classification", "hf-internal-testing/tiny-random-bert", 30),
+        ("text-classification", "hf-internal-testing/tiny-random-bert", 34),
         # ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 1), # TODO : enable causal lm task once INC ONNX export fixed
     )
 
     SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS + (
-        ("fill-mask", "hf-internal-testing/tiny-random-DistilBertForMaskedLM", 30),
-        ("token-classification", "hf-internal-testing/tiny-random-AlbertForTokenClassification", 30),
+        ("fill-mask", "hf-internal-testing/tiny-random-DistilBertForMaskedLM", 34),
+        ("token-classification", "hf-internal-testing/tiny-random-AlbertForTokenClassification", 34),
     )
 
     TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
@@ -148,33 +148,33 @@ class OptimizationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_static_quantization(self, task, model_name, expected_quantized_matmuls):
         num_samples = 10
-        quantization_config = PostTrainingQuantConfig(approach="static")
         model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-
         quantizer = INCQuantizer.from_pretrained(model, task=task)
         calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
-        save_onnx_model = False
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer.quantize(
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-                save_directory=tmp_dir,
-                save_onnx_model=save_onnx_model,
-            )
-            self.check_model_outputs(
-                q_model=quantizer._quantized_model,
-                task=task,
-                tokenizer=tokenizer,
-                save_directory=tmp_dir,
-                expected_quantized_matmuls=expected_quantized_matmuls,
-                is_static=True,
-                num_samples=num_samples,
-                load_onnx_model=save_onnx_model,
-            )
+        for save_onnx_model in (True, False):
+            op_type_dict = {"Embedding": {"weight": {"dtype": ["fp32"]}, "activation": {"dtype": ["fp32"]}}} if save_onnx_model else None
+            quantization_config = PostTrainingQuantConfig(approach="static", op_type_dict=op_type_dict)
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                quantizer.quantize(
+                    quantization_config=quantization_config,
+                    calibration_dataset=calibration_dataset,
+                    save_directory=tmp_dir,
+                    save_onnx_model=save_onnx_model,
+                )
+                self.check_model_outputs(
+                    q_model=quantizer._quantized_model,
+                    task=task,
+                    tokenizer=tokenizer,
+                    save_directory=tmp_dir,
+                    expected_quantized_matmuls=expected_quantized_matmuls,
+                    is_static=True,
+                    num_samples=num_samples,
+                    load_onnx_model=save_onnx_model,
+                )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_ipex_static_quantization_with_smoothquant(self, task, model_name, expected_quantized_matmuls):

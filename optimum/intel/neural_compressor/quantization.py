@@ -184,14 +184,19 @@ class INCQuantizer(OptimumQuantizer):
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
                 )
+            op_type_dict = getattr(quantization_config, "op_type_dict", None)
+            if op_type_dict is None or "Embedding" not in op_type_dict:
+                logger.warning("ONNX export is no supported for model with quantized embeddings")
+                save_onnx_model = False
 
-        # Disable ONNX export for post-training quantized model as deprecated in neural-compressor>=2.2.0
-        if save_onnx_model:
-            logger.warning(
-                "ONNX export for post-training quantized model is no longer supported by neural-compressor>=2.2.0. "
-                "To apply quantization on an ONNX model, check out optimum.onnxruntime.ORTQuantizer"
-            )
-            save_onnx_model = False
+        else:
+            # Disable ONNX export for dynamically quantized model as deprecated in neural-compressor>=2.2.0
+            if save_onnx_model:
+                logger.warning(
+                    "ONNX export for dynamic quantized model is no longer supported by neural-compressor>=2.2.0. "
+                    "To apply dynamic quantization on an ONNX model, you can use optimum.onnxruntime.ORTQuantizer"
+                )
+                save_onnx_model = False
 
         if (
             quantization_config.backend == "ipex"
