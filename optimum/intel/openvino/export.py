@@ -29,6 +29,10 @@ if is_torch_available():
     import torch
     import torch.nn as nn
     from transformers.modeling_utils import PreTrainedModel
+<<<<<<< HEAD
+=======
+    from transformers.pytorch_utils import is_torch_less_than_1_11
+>>>>>>> switch on pytorch frontend
 
 if is_diffusers_available():
     from diffusers import ModelMixin
@@ -36,13 +40,19 @@ if is_diffusers_available():
 if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> switch on pytorch frontend
 def is_torch_model(model):
     if not is_torch_available():
         return False
     return isinstance(model, nn.Module)
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> switch on pytorch frontend
 def export(
     model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"],
     config: OnnxConfig,
@@ -50,7 +60,10 @@ def export(
     opset: Optional[int] = None,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
+<<<<<<< HEAD
     model_kwargs: Optional[Dict[str, Any]] = None,
+=======
+>>>>>>> switch on pytorch frontend
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an ONNX Intermediate Representation.
@@ -84,9 +97,13 @@ def export(
         raise ImportError("The pip package `diffusers` is required to export stable diffusion models to ONNX.")
 
     if is_torch_available() and isinstance(model, nn.Module):
+<<<<<<< HEAD
         return export_pytorch(
             model, config, opset, output, device=device, input_shapes=input_shapes, model_kwargs=model_kwargs
         )
+=======
+        return export_pytorch(model, config, opset, output, device=device, input_shapes=input_shapes)
+>>>>>>> switch on pytorch frontend
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +112,11 @@ def export(
         if device == "cuda":
             raise RuntimeError("`tf2onnx` does not support export on CUDA device.")
         if input_shapes is not None:
+<<<<<<< HEAD
             logger.info("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
+=======
+            print("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
+>>>>>>> switch on pytorch frontend
         return export_tensorflow(model, config, opset, output)
 
     else:
@@ -111,7 +132,10 @@ def export_pytorch(
     output: Path,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
+<<<<<<< HEAD
     model_kwargs: Optional[Dict[str, Any]] = None,
+=======
+>>>>>>> switch on pytorch frontend
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an ONNX Intermediate Representation.
@@ -136,6 +160,7 @@ def export_pytorch(
         the ONNX configuration.
     """
     import torch
+<<<<<<< HEAD
     from torch.utils._pytree import tree_map
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
@@ -145,13 +170,29 @@ def export_pytorch(
         model.config.return_dict = True
         custom_patcher = type(config).patch_model_for_export != OnnxConfig.patch_model_for_export
         model.config.torchscript = not custom_patcher
+=======
+    from torch.onnx import export as onnx_export
+    from torch.utils._pytree import tree_map
+
+    print(f"Using framework PyTorch: {torch.__version__}")
+
+    with torch.no_grad():
+        model.config.return_dict = True
+        model.config.torchscript = True
+>>>>>>> switch on pytorch frontend
         model.eval()
 
         # Check if we need to override certain configuration item
         if config.values_override is not None:
+<<<<<<< HEAD
             logger.info(f"Overriding {len(config.values_override)} configuration item(s)")
             for override_config_key, override_config_value in config.values_override.items():
                 logger.info(f"\t- {override_config_key} -> {override_config_value}")
+=======
+            print(f"Overriding {len(config.values_override)} configuration item(s)")
+            for override_config_key, override_config_value in config.values_override.items():
+                print(f"\t- {override_config_key} -> {override_config_value}")
+>>>>>>> switch on pytorch frontend
                 setattr(model.config, override_config_key, override_config_value)
 
         if input_shapes is None:
@@ -169,11 +210,19 @@ def export_pytorch(
         inputs = config.ordered_inputs(model)
         input_names = list(inputs.keys())
         output_names = list(config.outputs.keys())
+<<<<<<< HEAD
+=======
+
+        if hasattr(config, "patch_ops"):
+            config.patch_ops()
+        
+>>>>>>> switch on pytorch frontend
         if hasattr(model, "forward"):
             sig = inspect.signature(model.forward)
         else:
             sig = inspect.signature(model.call)
 
+<<<<<<< HEAD
         dummy_inputs = remove_none_from_dummy_inputs(dummy_inputs)
         input_info = get_input_shapes(dummy_inputs, inputs)
         try:
@@ -209,6 +258,17 @@ def export_pytorch(
             if idx < len(output_names):
                 out_tensor.get_tensor().set_names({output_names[idx]})
 
+=======
+        input_info = get_input_shapes(dummy_inputs, inputs)
+        start0 = time.perf_counter()
+        ov_model = mo.convert_model(model, example_input=dummy_inputs, input=input_info)
+        end0 = time.perf_counter()
+        print(f"Convert model took {end0 - start0}s")
+        ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
+        ordered_input_names = list(inputs)
+        flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
+                
+>>>>>>> switch on pytorch frontend
         for idx, inp_tensor in enumerate(ov_model.inputs):
             input_name = ordered_input_names[idx]
             inp_tensor.get_tensor().set_names({input_name})
@@ -217,6 +277,7 @@ def export_pytorch(
             dims = inputs[input_name]
 
             for dim in dims:
+<<<<<<< HEAD
                 static_shape[dim] = -1
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
@@ -231,6 +292,24 @@ def clear_class_registry():
     torch._C._jit_clear_class_registry()
     torch.jit._recursive.concrete_type_store = torch.jit._recursive.ConcreteTypeStore()
     torch.jit._state._clear_class_state()
+=======
+                static_shape[dim] = -1 
+            inp_tensor.get_node().set_partial_shape(static_shape)
+            inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
+
+        for idx, out_tensor in enumerate(ov_model.outputs):
+            if idx < len(output_names):
+                out_tensor.get_tensor().set_names({output_names[idx]})
+        ov_model.validate_nodes_and_infer_types()
+        start1 = time.perf_counter()
+        serialize(ov_model, output.parent / OV_XML_FILE_NAME)
+        end1 = time.perf_counter()
+        print(f"Serailize model took {end1 - start1}s")
+        if hasattr(config, "restore_ops"):
+            config.restore_ops()
+
+    return input_names, output_names
+>>>>>>> switch on pytorch frontend
 
 
 def export_models(
@@ -242,8 +321,36 @@ def export_models(
     output_names: Optional[List[str]] = None,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
+<<<<<<< HEAD
     model_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[List[str]], List[List[str]]]:
+=======
+) -> Tuple[List[List[str]], List[List[str]]]:
+    """
+    Exports a Pytorch or TensorFlow encoder decoder model to an ONNX Intermediate Representation.
+    The following method exports the encoder and decoder components of the model as separate
+    ONNX files.
+
+    Args:
+        models_and_onnx_configs (`Dict[str, Tuple[Union[`PreTrainedModel`, `TFPreTrainedModel`], `OnnxConfig`]]):
+            A dictionnary containing the models to export and their corresponding onnx configs.
+        output_dir (`Path`):
+            Output directory to store the exported ONNX models.
+        opset (`Optional[int]`, defaults to `None`):
+            The version of the ONNX operator set to use.
+        output_names (`Optional[List[str]]`, defaults to `None`):
+            The names to use for the exported ONNX files. The order must be the same as the order of submodels in the ordered dict `models_and_onnx_configs`.
+            If None, will use the keys from `models_and_onnx_configs` as names.
+        device (`str`, defaults to `"cpu"`):
+            The device on which the ONNX model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
+            export on CUDA devices.
+        input_shapes (`Optional[Dict]`, defaults to `None`):
+            If specified, allows to use specific shapes for the example input provided to the ONNX exporter.
+    Returns:
+        `Tuple[List[List[str]], List[List[str]]]`: A tuple with an ordered list of the model's inputs, and the named
+        inputs from the ONNX configuration.
+    """
+>>>>>>> switch on pytorch frontend
     outputs = []
 
     if output_names is not None and len(output_names) != len(models_and_onnx_configs):
@@ -264,7 +371,10 @@ def export_models(
                 opset=opset,
                 device=device,
                 input_shapes=input_shapes,
+<<<<<<< HEAD
                 model_kwargs=model_kwargs,
+=======
+>>>>>>> switch on pytorch frontend
             )
         )
 
@@ -275,8 +385,11 @@ def export_models(
 def flattenize_inputs(inputs):
     flatten_inputs = []
     for input_data in inputs:
+<<<<<<< HEAD
         if input_data is None:
             continue
+=======
+>>>>>>> switch on pytorch frontend
         if isinstance(input_data, (list, tuple)):
             flatten_inputs.extend(flattenize_inputs(input_data))
         else:
@@ -284,6 +397,7 @@ def flattenize_inputs(inputs):
     return flatten_inputs
 
 
+<<<<<<< HEAD
 def remove_none_from_dummy_inputs(dummy_inputs):
     def remove_none_from_list_tuple(item):
         new_item = [i for i in item if i is not None]
@@ -308,6 +422,12 @@ def get_input_shapes(dummy_inputs, inputs):
     input_info = []
     for input_name, data in dummy_inputs.items():
         if isinstance(data, (tuple, list, dict)):
+=======
+def get_input_shapes(dummy_inputs, inputs):
+    input_info = []
+    for input_name, data in dummy_inputs.items():
+        if isinstance(data, (tuple, list)):
+>>>>>>> switch on pytorch frontend
             return None
         static_shape = PartialShape(data.shape)
         if input_name in inputs:
@@ -315,6 +435,7 @@ def get_input_shapes(dummy_inputs, inputs):
             for dim in dynamic_dims:
                 static_shape[dim] = -1
         input_info.append((input_name, static_shape))
+<<<<<<< HEAD
     return input_info
 
 
@@ -516,3 +637,6 @@ def main_export(
         device=device,
         model_kwargs=model_kwargs,
     )
+=======
+    return input_info
+>>>>>>> switch on pytorch frontend

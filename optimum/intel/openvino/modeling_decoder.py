@@ -28,6 +28,7 @@ from transformers.file_utils import add_start_docstrings, add_start_docstrings_t
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from optimum.exporters import TasksManager
+from optimum.exporters.onnx import export
 from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_transformers_version
@@ -234,7 +235,7 @@ class OVBaseDecoderModel(OVModel):
         # TODO : create ModelPatcher to patch each architecture
         if config.model_type == "bloom":
             model.transformer._prepare_attn_mask = _prepare_attn_mask
-        elif config.model_type == "llama":
+        elif config.model_type in {"llama", "longllama"}:
             model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
         elif config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
             model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
