@@ -156,7 +156,11 @@ class OptimizationTest(unittest.TestCase):
         calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
 
         for save_onnx_model in (True, False):
-            op_type_dict = {"Embedding": {"weight": {"dtype": ["fp32"]}, "activation": {"dtype": ["fp32"]}}} if save_onnx_model else None
+            op_type_dict = (
+                {"Embedding": {"weight": {"dtype": ["fp32"]}, "activation": {"dtype": ["fp32"]}}}
+                if save_onnx_model
+                else None
+            )
             quantization_config = PostTrainingQuantConfig(approach="static", op_type_dict=op_type_dict)
             with tempfile.TemporaryDirectory() as tmp_dir:
                 quantizer.quantize(
@@ -571,7 +575,8 @@ class OptimizationTest(unittest.TestCase):
         with torch.no_grad():
             model_outputs = q_model(**tokens)
             inc_model_outputs = inc_model(**tokens)
-        self.assertTrue(torch.equal(model_outputs["logits"], inc_model_outputs["logits"]))
+        outputs = model_outputs["logits"] if isinstance(model_outputs, dict) else model_outputs[0]
+        self.assertTrue(torch.equal(outputs, inc_model_outputs["logits"]))
         # self.assertTrue(torch.allclose(ort_outputs.logits, inc_model_outputs.logits, atol=1e-4))
 
     @staticmethod
