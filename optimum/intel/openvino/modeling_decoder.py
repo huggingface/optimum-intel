@@ -27,8 +27,8 @@ from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
+from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
-from optimum.exporters.tasks import TasksManager
 from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_transformers_version
@@ -234,7 +234,7 @@ class OVBaseDecoderModel(OVModel):
         # TODO : create ModelPatcher to patch each architecture
         if config.model_type == "bloom":
             model.transformer._prepare_attn_mask = _prepare_attn_mask
-        elif config.model_type == "llama":
+        elif config.model_type in {"llama", "longllama"}:
             model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
         elif config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
             model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
@@ -245,12 +245,12 @@ class OVBaseDecoderModel(OVModel):
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
-            from_onnx=True,
+            from_onnx=not is_torch_model(model),
             use_auth_token=use_auth_token,
             revision=revision,
             force_download=force_download,
             cache_dir=cache_dir,
-            file_name=ONNX_WEIGHTS_NAME,
+            file_name=ONNX_WEIGHTS_NAME if not is_torch_model(model) else OV_XML_FILE_NAME,
             local_files_only=local_files_only,
             use_cache=use_cache,
             **kwargs,

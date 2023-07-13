@@ -41,7 +41,7 @@ from nncf.torch.nncf_network import NNCFNetwork
 from nncf.torch.quantization.algo import QuantizationController
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, PartialShape, serialize
-from openvino.tools.mo.back.offline_transformations import (
+from openvino.tools.ovc.moc_frontend.offline_transformations import (
     apply_fused_names_cleanup,
     apply_moc_transformations,
     apply_user_transformations,

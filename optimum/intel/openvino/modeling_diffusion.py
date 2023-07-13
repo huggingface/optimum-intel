@@ -51,6 +51,7 @@ from optimum.utils import (
 )
 
 from .loaders import OVTextualInversionLoaderMixin
+from .export import export_models
 from .modeling_base import OVBaseModel
 from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME
 
@@ -312,7 +313,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
-            from_onnx=True,
+            from_onnx=False,
             use_auth_token=use_auth_token,
             revision=revision,
             force_download=force_download,
