@@ -285,6 +285,10 @@ class OVBaseModel(PreTrainedModel):
             )
 
         onnx_config = onnx_config_class(model.config)
+
+        print("################################")
+        print(onnx_config_class)
+        print("################################")
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
