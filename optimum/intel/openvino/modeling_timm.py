@@ -1,6 +1,8 @@
 import os
 import timm
 import torch
+from timm.layers.config import set_fused_attn
+set_fused_attn(False, False)
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers.modeling_outputs import BaseModelOutput, ImageClassifierOutput
 from collections import OrderedDict
@@ -129,6 +131,7 @@ class TimmModel(TimmPreTrainedModel):
                                            num_classes = self.config.num_labels,
                                            pretrained = pretrained,
                                            in_chans = in_chans)
+        self.timm_model.eval()
 
     @classmethod
     def from_pretrained(cls, model_name_or_path, **kwargs):

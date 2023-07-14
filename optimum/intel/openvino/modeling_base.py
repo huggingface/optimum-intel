@@ -291,14 +291,25 @@ class OVBaseModel(PreTrainedModel):
         print("################################")
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
-
+        import torch
+        dummy_input = torch.randn(1, 3, 224, 224)
+        input_node = "images"
+        output_node = "output"
         # Export the model to the ONNX format
-        export(
-            model=model,
-            config=onnx_config,
-            opset=onnx_config.DEFAULT_ONNX_OPSET,
-            output=save_dir_path / ONNX_WEIGHTS_NAME,
-        )
+        torch.onnx.export(model, 
+                  dummy_input, 
+                  save_dir_path / ONNX_WEIGHTS_NAME,
+                  input_names=[input_node],
+                  output_names=[output_node],
+                  dynamic_axes=None,
+                  opset_version=13,
+)
+        # export(
+        #     model=model,
+        #     config=onnx_config,
+        #     opset=onnx_config.DEFAULT_ONNX_OPSET,
+        #     output=save_dir_path / ONNX_WEIGHTS_NAME,
+        # )
 
         return cls._from_pretrained(
             model_id=save_dir_path,
