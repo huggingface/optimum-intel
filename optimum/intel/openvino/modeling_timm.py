@@ -90,7 +90,7 @@ class TimmConfig(PretrainedConfig):
         return cls.from_dict(config_dict, **kwargs)
 
 class TimmOnnxConfig(ViTOnnxConfig):
-    pass
+    outputs= OrderedDict([('logits', {0: 'batch_size'})])
 
 # class TimmOnnxConfig(OnnxConfig):    
 #     DEFAULT_ONNX_OPSET = 12
