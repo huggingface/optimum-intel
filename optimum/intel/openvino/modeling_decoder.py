@@ -33,7 +33,7 @@ from optimum.utils import NormalizedConfigManager
 from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .utils import ONNX_WEIGHTS_NAME
+from .utils import ONNX_WEIGHTS_NAME, STR_TO_OV_TYPE
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -267,28 +267,16 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         self, model: openvino.runtime.Model, ov_config: Optional[Dict[str, str]] = None, device: str = "CPU", **kwargs
     ):
         device = device.upper() if device else device
-        if device == "CPU":
+        if device:
             pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
             # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
             if ov_config:
-                user_hint = ov_config.get("INFERENCE_PRECISION_HINT", "")
-                openvino_types_str_map = {
-                    "boolean": Type.boolean,
-                    "f16": Type.f16,
-                    "f32": Type.f32,
-                    "f64": Type.f64,
-                    "i8": Type.i8,
-                    "i16": Type.i16,
-                    "i32": Type.i32,
-                    "i64": Type.i64,
-                    "u8": Type.u8,
-                    "u16": Type.u16,
-                    "u32": Type.u32,
-                    "u64": Type.u64,
-                    "bf16": Type.bf16,
-                }
-                if user_hint in openvino_types_str_map:
-                    pastkv_will_use = openvino_types_str_map[user_hint]
+                user_precision_hint = ov_config.get("INFERENCE_PRECISION_HINT", "")
+                user_mode_hint = ov_config.get("EXECUTION_MODE_HINT", "")
+                if user_precision_hint in STR_TO_OV_TYPE:
+                    pastkv_will_use = STR_TO_OV_TYPE[user_precision_hint]
+                if user_mode_hint.upper() == "ACCURACY":
+                    pastkv_will_use = Type.f32
 
             use_cache = kwargs.get("use_cache", True)
             has_pastkv = any("past_key_values" in key.get_any_name() for key in model.inputs)
@@ -330,10 +318,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         inputs = {}
         if past_key_values is not None:
-            if len(self.key_value_input_names):
-                pastkv_will_use = self.model.input(self.key_value_input_names[0]).get_element_type()
-            else:
-                pastkv_will_use = Type.f32
+            pastkv_will_use = self.model.input(self.key_value_input_names[0]).get_element_type()
             if pastkv_will_use == Type.bf16:
                 # numpy does not support bf16, pretending u16, should change to bf16
                 past_key_values = tuple(

@@ -14,6 +14,7 @@
 
 
 import numpy as np
+from openvino.runtime import Type
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 
@@ -47,6 +48,23 @@ OV_TO_NP_TYPE = {
     "f16": np.float16,
     "f32": np.float32,
     "f64": np.float64,
+}
+
+
+STR_TO_OV_TYPE = {
+    "boolean": Type.boolean,
+    "f16": Type.f16,
+    "f32": Type.f32,
+    "f64": Type.f64,
+    "i8": Type.i8,
+    "i16": Type.i16,
+    "i32": Type.i32,
+    "i64": Type.i64,
+    "u8": Type.u8,
+    "u16": Type.u16,
+    "u32": Type.u32,
+    "u64": Type.u64,
+    "bf16": Type.bf16,
 }
 
 
