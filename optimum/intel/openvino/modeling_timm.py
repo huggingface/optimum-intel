@@ -1,19 +1,21 @@
 import os
-import timm
-import torch
-from timm.layers.config import set_fused_attn
-set_fused_attn(False, False)
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-from transformers.modeling_outputs import BaseModelOutput, ImageClassifierOutput
-from collections import OrderedDict
-from typing import Mapping, Any, Dict, List, Optional, Tuple, Union, Callable
 from pathlib import Path
 from packaging import version
-from timm.models._hub import load_model_config_from_hf
+from collections import OrderedDict
+from typing import Mapping, Any, Dict, List, Optional, Tuple, Union, Callable
+
+import torch
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from optimum.exporters import TasksManager
-from transformers import PreTrainedModel, PretrainedConfig
 from optimum.exporters.onnx.model_configs import ViTOnnxConfig
 
+import timm
+from timm.layers.config import set_fused_attn
+from timm.models._hub import load_model_config_from_hf
+from transformers import PreTrainedModel, PretrainedConfig
+from transformers.modeling_outputs import BaseModelOutput, ImageClassifierOutput
+
+set_fused_attn(False, False)
 ExportConfigConstructor = Callable[[PretrainedConfig], "ExportConfig"]
 
 def get_model_from_timm(
@@ -117,21 +119,26 @@ class TimmPreTrainedModel(PreTrainedModel):
     main_input_name = "pixel_values"
 
 class TimmModel(TimmPreTrainedModel):
-    def __init__(self, config: TimmConfig, feature_only : bool = True, pretrained : bool = True, in_chans : int = 3, **kwargs):
+    def __init__(self, 
+                config: TimmConfig, 
+                feature_only : bool = True, 
+                pretrained : bool = True, 
+                in_chans : int = 3, 
+                **kwargs):
         super().__init__(config)
 
         self.config = config
         if feature_only:
-            self.timm_model = timm.create_model("hf-hub" + self.config.hf_hub_id,
+            self.timm_model = timm.create_model("hf-hub:" + self.config.hf_hub_id,
                                            num_classes = 0,
                                            pretrained = pretrained,
                                            in_chans = in_chans)
         else:
-            self.timm_model = timm.create_model("hf-hub" + self.config.hf_hub_id,
+            self.timm_model = timm.create_model("hf-hub:" + self.config.hf_hub_id,
                                            num_classes = self.config.num_labels,
                                            pretrained = pretrained,
                                            in_chans = in_chans)
-        self.timm_model.eval()
+        
 
     @classmethod
     def from_pretrained(cls, model_name_or_path, **kwargs):
@@ -172,6 +179,7 @@ class TimmForImageClassification(TimmPreTrainedModel):
         if num_labels:
             config.num_labels = num_labels
         self.timm = TimmModel(config, feature_only = False)
+        self.timm.eval()
 
     @classmethod
     def from_pretrained(cls, model_name_or_path, **kwargs):
