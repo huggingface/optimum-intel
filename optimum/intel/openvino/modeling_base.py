@@ -25,11 +25,11 @@ from openvino.runtime import Core
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-# from optimum.exporters import TasksManager
+from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
 from optimum.modeling_base import OptimizedModel
 
-from .modeling_timm import TasksManager
+# from .modeling_timm import TasksManager
 from ..utils.import_utils import is_transformers_version
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
@@ -293,15 +293,15 @@ class OVBaseModel(PreTrainedModel):
         save_dir_path = Path(save_dir.name)
         import torch
         dummy_input = torch.randn(1, 3, 224, 224)
-        input_node = "images"
-        output_node = "output"
+        input_node = 'pixel_values'
+        output_node = 'logits'
         # Export the model to the ONNX format
         torch.onnx.export(model, 
                   dummy_input, 
                   save_dir_path / ONNX_WEIGHTS_NAME,
                   input_names=[input_node],
                   output_names=[output_node],
-                  dynamic_axes=None,
+                  dynamic_axes={'pixel_values': {0: 'batch_size', 1: 'num_channels', 2: 'height', 3: 'width'}, 'logits': {0: 'batch_size'}},
                   opset_version=13,
 )
         # export(

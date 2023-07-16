@@ -2,10 +2,13 @@ import os
 from pathlib import Path
 from packaging import version
 from collections import OrderedDict
+from tempfile import TemporaryDirectory
 from typing import Mapping, Any, Dict, List, Optional, Tuple, Union, Callable
 
 import torch
+import torch.nn as nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+# from optimum.intel import OVConfig
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.model_configs import ViTOnnxConfig
 
@@ -14,6 +17,10 @@ from timm.layers.config import set_fused_attn
 from timm.models._hub import load_model_config_from_hf
 from transformers import PreTrainedModel, PretrainedConfig
 from transformers.modeling_outputs import BaseModelOutput, ImageClassifierOutput
+
+# from .modeling_base import OVBaseModel
+from .modeling import OVModelForImageClassification
+from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
 set_fused_attn(False, False)
 ExportConfigConstructor = Callable[[PretrainedConfig], "ExportConfig"]
@@ -65,6 +72,7 @@ def get_timm_exporter_config_constructor(
 TasksManager.get_model_from_timm = staticmethod(get_model_from_timm)
 TasksManager.get_timm_exporter_config_constructor = staticmethod(get_timm_exporter_config_constructor)
 
+
 class TimmConfig(PretrainedConfig):
     model_type = "timm"
 
@@ -85,13 +93,12 @@ class TimmConfig(PretrainedConfig):
         kwargs["local_files_only"] = local_files_only
         kwargs["revision"] = revision
 
-
         config_dict = load_model_config_from_hf(pretrained_model_name_or_path)[0]
         config_dict["num_labels"] = config_dict.pop("num_classes")
         config_dict["image_size"] = config_dict.get("input_size")[-1]
 
-        # print(config_dict)
         return cls.from_dict(config_dict, **kwargs)
+
 
 class TimmOnnxConfig(ViTOnnxConfig):
     outputs= OrderedDict([('logits', {0: 'batch_size'})])
@@ -118,6 +125,7 @@ class TimmPreTrainedModel(PreTrainedModel):
     base_model_prefix = "timm"
     main_input_name = "pixel_values"
 
+
 class TimmModel(TimmPreTrainedModel):
     def __init__(self, 
                 config: TimmConfig, 
@@ -139,6 +147,15 @@ class TimmModel(TimmPreTrainedModel):
                                            pretrained = pretrained,
                                            in_chans = in_chans)
         
+        # self.timm_model.eval()
+        # for module in self.timm_model.modules():
+        #     print(module)
+        #     print("@@@@@@")
+        #     if isinstance(module, nn.modules.batchnorm._BatchNorm):
+        #         print(module.track_running_stats, module.running_var, module.running_mean)
+                # module.track_running_stats = False
+                # module.running_var = None
+                # module.running_mean = None
 
     @classmethod
     def from_pretrained(cls, model_name_or_path, **kwargs):
@@ -174,12 +191,11 @@ class TimmModel(TimmPreTrainedModel):
 
 class TimmForImageClassification(TimmPreTrainedModel):
     def __init__(self, config: TimmConfig, num_labels: int = None, **kwargs) -> None:
-        super().__init__(config)
+        super().__init__(config, **kwargs)
 
         if num_labels:
             config.num_labels = num_labels
         self.timm = TimmModel(config, feature_only = False)
-        self.timm.eval()
 
     @classmethod
     def from_pretrained(cls, model_name_or_path, **kwargs):
@@ -238,3 +254,179 @@ class TimmForImageClassification(TimmPreTrainedModel):
             logits = logits.last_hidden_state,
         )
 
+
+class OVModelForTimm(OVModelForImageClassification):
+
+    @classmethod
+    def _from_transformers(
+        cls,
+        model_id: str,
+        config: PretrainedConfig,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: Optional[str] = None,
+        subfolder: str = "",
+        local_files_only: bool = False,
+        task: Optional[str] = None,
+        trust_remote_code: bool = False,
+        **kwargs,
+    ):
+        """
+        Export a vanilla Transformers model into an ONNX model using `transformers.onnx.export_onnx`.
+
+        Arguments:
+            model_id (`str` or `Path`):
+                The directory from which to load the model.
+                Can be either:
+                    - The model id of a pretrained model hosted inside a model repo on huggingface.co.
+                    - The path to a directory containing the model weights.            save_dir (`str` or `Path`):
+                The directory where the exported ONNX model should be saved, default to
+                `transformers.file_utils.default_cache_path`, which is the cache directory for transformers.
+            use_auth_token (`str` or `bool`):
+                Is needed to load models from a private repository
+            revision (`str`):
+                Revision is the specific model version to use. It can be a branch name, a tag name, or a commit id
+            kwargs (`Dict`, *optional*):
+                kwargs will be passed to the model during initialization
+        """
+        task = task or cls.export_feature
+
+        model_kwargs = {
+            "revision": revision,
+            "use_auth_token": use_auth_token,
+            "cache_dir": cache_dir,
+            "subfolder": subfolder,
+            "local_files_only": local_files_only,
+            "force_download": force_download,
+            "trust_remote_code": trust_remote_code,
+        }
+
+
+        model = TasksManager.get_model_from_timm(task, model_id, **model_kwargs)
+        # onnx_config_class = TasksManager.get_timm_exporter_config_constructor(
+        #     exporter="onnx",
+        #     task=task,
+        # )
+
+        # onnx_config = onnx_config_class(model.config)
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
+        dummy_input = torch.randn(1, 3, 224, 224)
+        input_node = 'pixel_values'
+        output_node = 'logits'
+
+        # Export the model to the ONNX format
+        torch.onnx.export(
+                    model, 
+                    dummy_input, 
+                    save_dir_path / ONNX_WEIGHTS_NAME,
+                    input_names=[input_node],
+                    output_names=[output_node],
+                    dynamic_axes={'pixel_values': {0: 'batch_size', 1: 'num_channels', 2: 'height', 3: 'width'}, 'logits': {0: 'batch_size'}},
+                    opset_version=13,
+            )
+
+        return cls._from_pretrained(
+            model_id=save_dir_path,
+            config=config,
+            from_onnx=True,
+            use_auth_token=use_auth_token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            **kwargs,
+        )
+
+    @classmethod
+    def _load_config(cls, model_id,**kwargs):
+
+        return TimmConfig.from_pretrained(model_id, **kwargs)
+
+    # @classmethod
+    # def from_pretrained(
+    #     cls,
+    #     model_id: Union[str, Path],
+    #     export: bool = False,
+    #     force_download: bool = False,
+    #     use_auth_token: Optional[str] = None,
+    #     cache_dir: Optional[str] = None,
+    #     subfolder: str = "",
+    #     config: Optional["PretrainedConfig"] = None,
+    #     local_files_only: bool = False,
+    #     trust_remote_code: bool = False,
+    #     revision: Optional[str] = None,
+    #     **kwargs,
+    # ) -> "OptimizedModel":
+    #     """
+    #     Returns:
+    #         `OptimizedModel`: The loaded optimized model.
+    #     """
+    #     if isinstance(model_id, Path):
+    #         model_id = model_id.as_posix()
+
+    #     from_transformers = kwargs.pop("from_transformers", None)
+    #     if from_transformers is not None:
+    #         logger.warning(
+    #             "The argument `from_transformers` is deprecated, and will be removed in optimum 2.0.  Use `export` instead"
+    #         )
+    #         export = from_transformers
+
+    #     if len(model_id.split("@")) == 2:
+    #         if revision is not None:
+    #             logger.warning(
+    #                 f"The argument `revision` was set to {revision} but will be ignored for {model_id.split('@')[1]}"
+    #             )
+    #         model_id, revision = model_id.split("@")
+
+    #     if config is None:
+    #         if os.path.isdir(os.path.join(model_id, subfolder)) and cls.config_name == CONFIG_NAME:
+    #             if CONFIG_NAME in os.listdir(os.path.join(model_id, subfolder)):
+    #                 config = AutoConfig.from_pretrained(os.path.join(model_id, subfolder, CONFIG_NAME))
+    #             elif CONFIG_NAME in os.listdir(model_id):
+    #                 config = AutoConfig.from_pretrained(os.path.join(model_id, CONFIG_NAME))
+    #                 logger.info(
+    #                     f"config.json not found in the specified subfolder {subfolder}. Using the top level config.json."
+    #                 )
+    #             else:
+    #                 raise OSError(f"config.json not found in {model_id} local folder")
+    #         else:
+    #             config = cls._load_config(
+    #                 model_id,
+    #                 revision=revision,
+    #                 cache_dir=cache_dir,
+    #                 use_auth_token=use_auth_token,
+    #                 force_download=force_download,
+    #                 subfolder=subfolder,
+    #             )
+    #     elif isinstance(config, (str, os.PathLike)):
+    #         config = cls._load_config(
+    #             config,
+    #             revision=revision,
+    #             cache_dir=cache_dir,
+    #             use_auth_token=use_auth_token,
+    #             force_download=force_download,
+    #             subfolder=subfolder,
+    #         )
+
+    #     if not export and trust_remote_code:
+    #         logger.warning(
+    #             "The argument `trust_remote_code` is to be used along with export=True. It will be ignored."
+    #         )
+    #     elif export and trust_remote_code is None:
+    #         trust_remote_code = False
+
+    #     from_pretrained_method = cls._from_transformers if export else cls._from_pretrained
+    #     return from_pretrained_method(
+    #         model_id=model_id,
+    #         config=config,
+    #         revision=revision,
+    #         cache_dir=cache_dir,
+    #         force_download=force_download,
+    #         use_auth_token=use_auth_token,
+    #         subfolder=subfolder,
+    #         local_files_only=local_files_only,
+    #         trust_remote_code=trust_remote_code,
+    #         **kwargs,
+    #     )

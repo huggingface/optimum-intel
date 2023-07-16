@@ -44,6 +44,7 @@ from .modeling import (
 )
 from .modeling_decoder import OVModelForCausalLM
 from .modeling_seq2seq import OVModelForSeq2SeqLM
+from .modeling_timm import OVModelForTimm
 
 
 if is_diffusers_available():
