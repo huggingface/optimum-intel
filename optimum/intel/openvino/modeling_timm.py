@@ -304,12 +304,12 @@ class OVModelForTimm(OVModelForImageClassification):
 
 
         model = TasksManager.get_model_from_timm(task, model_id, **model_kwargs)
-        # onnx_config_class = TasksManager.get_timm_exporter_config_constructor(
-        #     exporter="onnx",
-        #     task=task,
-        # )
+        onnx_config_class = TasksManager.get_timm_exporter_config_constructor(
+            exporter="onnx",
+            task=task,
+        )
 
-        # onnx_config = onnx_config_class(model.config)
+        onnx_config = onnx_config_class(model.config)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         dummy_input = torch.randn(1, 3, 224, 224)
@@ -317,15 +317,25 @@ class OVModelForTimm(OVModelForImageClassification):
         output_node = 'logits'
 
         # Export the model to the ONNX format
-        torch.onnx.export(
-                    model, 
-                    dummy_input, 
-                    save_dir_path / ONNX_WEIGHTS_NAME,
-                    input_names=[input_node],
-                    output_names=[output_node],
-                    dynamic_axes={'pixel_values': {0: 'batch_size', 1: 'num_channels', 2: 'height', 3: 'width'}, 'logits': {0: 'batch_size'}},
-                    opset_version=13,
-            )
+        # torch.onnx.export(
+        #             model, 
+        #             dummy_input, 
+        #             f=save_dir_path / ONNX_WEIGHTS_NAME,
+        #             input_names=[input_node],
+        #             output_names=[output_node],
+        #             dynamic_axes={'pixel_values': {0: 'batch_size', 1: 'num_channels', 2: 'height', 3: 'width'}, 'logits': {0: 'batch_size'}},
+        #             do_constant_folding=True,
+        #             opset_version=13,
+        #             use_external_data_format=True,
+        #     )
+
+        from optimum.exporters.onnx import export
+        export(
+            model=model,
+            config=onnx_config,
+            opset=onnx_config.DEFAULT_ONNX_OPSET,
+            output=save_dir_path / ONNX_WEIGHTS_NAME,
+        )
 
         return cls._from_pretrained(
             model_id=save_dir_path,
