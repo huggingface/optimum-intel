@@ -266,33 +266,32 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     def _try_modify_pastkv_to_lowprecision(
         self, model: openvino.runtime.Model, ov_config: Optional[Dict[str, str]] = None, device: str = "CPU", **kwargs
     ):
-        device = device.upper() if device else device
-        if device:
-            pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
-            # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
-            if ov_config:
-                user_precision_hint = ov_config.get("INFERENCE_PRECISION_HINT", "")
-                user_mode_hint = ov_config.get("EXECUTION_MODE_HINT", "")
-                if user_precision_hint in STR_TO_OV_TYPE:
-                    pastkv_will_use = STR_TO_OV_TYPE[user_precision_hint]
-                if user_mode_hint.upper() == "ACCURACY":
-                    pastkv_will_use = Type.f32
+        device = device.upper()
+        pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
+        # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
+        if ov_config:
+            user_precision_hint = ov_config.get("INFERENCE_PRECISION_HINT", "")
+            user_mode_hint = ov_config.get("EXECUTION_MODE_HINT", "")
+            if user_precision_hint in STR_TO_OV_TYPE:
+                pastkv_will_use = STR_TO_OV_TYPE[user_precision_hint]
+            if user_mode_hint.upper() == "ACCURACY":
+                pastkv_will_use = Type.f32
 
-            use_cache = kwargs.get("use_cache", True)
-            has_pastkv = any("past_key_values" in key.get_any_name() for key in model.inputs)
-            if pastkv_will_use != Type.f32 and use_cache and has_pastkv:
-                ppp = PrePostProcessor(model)
-                need_gen = False
-                for key in model.inputs:
-                    if "past_key_values" in key.get_any_name() and pastkv_will_use != key.get_element_type():
-                        need_gen = True
-                        ppp.input(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
-                for key in model.outputs:
-                    if "present" in key.get_any_name() and pastkv_will_use != key.get_element_type():
-                        need_gen = True
-                        ppp.output(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
-                if need_gen:
-                    model = ppp.build()
+        use_cache = kwargs.get("use_cache", True)
+        has_pastkv = any("past_key_values" in key.get_any_name() for key in model.inputs)
+        if pastkv_will_use != Type.f32 and use_cache and has_pastkv:
+            ppp = PrePostProcessor(model)
+            need_gen = False
+            for key in model.inputs:
+                if "past_key_values" in key.get_any_name() and pastkv_will_use != key.get_element_type():
+                    need_gen = True
+                    ppp.input(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
+            for key in model.outputs:
+                if "present" in key.get_any_name() and pastkv_will_use != key.get_element_type():
+                    need_gen = True
+                    ppp.output(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
+            if need_gen:
+                model = ppp.build()
 
         return model
 
