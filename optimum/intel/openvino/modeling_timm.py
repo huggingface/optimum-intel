@@ -101,6 +101,7 @@ class TimmConfig(PretrainedConfig):
 
 
 class TimmOnnxConfig(ViTOnnxConfig):
+    DEFAULT_TIMM_ONNX_OPSET = 13
     outputs= OrderedDict([('logits', {0: 'batch_size'})])
 
 
@@ -297,7 +298,7 @@ class OVModelForTimm(OVModelForImageClassification):
             export(
                 model=model,
                 config=onnx_config,
-                opset=onnx_config.DEFAULT_ONNX_OPSET,
+                opset=onnx_config.DEFAULT_TIMM_ONNX_OPSET,
                 output=save_dir_path / ONNX_WEIGHTS_NAME,
             )
 
