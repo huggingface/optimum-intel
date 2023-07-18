@@ -8,8 +8,8 @@ from typing import Mapping, Any, Dict, List, Optional, Tuple, Union, Callable
 import torch
 import torch.nn as nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-# from optimum.intel import OVConfig
 from optimum.exporters import TasksManager
+from optimum.exporters.onnx import export
 from optimum.exporters.onnx.model_configs import ViTOnnxConfig
 
 import timm
@@ -103,21 +103,6 @@ class TimmConfig(PretrainedConfig):
 class TimmOnnxConfig(ViTOnnxConfig):
     outputs= OrderedDict([('logits', {0: 'batch_size'})])
 
-# class TimmOnnxConfig(OnnxConfig):    
-#     DEFAULT_ONNX_OPSET = 12
-#     torch_onnx_minimum_version = version.parse("1.11")
-
-#     @property
-#     def inputs(self) -> Mapping[str, Mapping[int, str]]:
-#         return OrderedDict(
-#             [
-#                 ("pixel_values", {0: "batch", 1: "num_channels", 2: "height", 3: "width"}),
-#             ]
-#         )
-
-#     @property
-#     def atol_for_validation(self) -> float:
-#         return 1e-4
 
 
 class TimmPreTrainedModel(PreTrainedModel):
@@ -147,15 +132,7 @@ class TimmModel(TimmPreTrainedModel):
                                            pretrained = pretrained,
                                            in_chans = in_chans)
         
-        # self.timm_model.eval()
-        # for module in self.timm_model.modules():
-        #     print(module)
-        #     print("@@@@@@")
-        #     if isinstance(module, nn.modules.batchnorm._BatchNorm):
-        #         print(module.track_running_stats, module.running_var, module.running_mean)
-                # module.track_running_stats = False
-                # module.running_var = None
-                # module.running_mean = None
+        self.timm_model.eval()
 
     @classmethod
     def from_pretrained(cls, model_name_or_path, **kwargs):
@@ -311,43 +288,30 @@ class OVModelForTimm(OVModelForImageClassification):
 
         onnx_config = onnx_config_class(model.config)
         save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
-        dummy_input = torch.randn(1, 3, 224, 224)
-        input_node = 'pixel_values'
-        output_node = 'logits'
+        
+        # dummy_input = torch.randn(1, 3, 224, 224)
+        # input_node = 'pixel_values'
+        # output_node = 'logits'
+        with TemporaryDirectory() as save_dir:
+            save_dir_path = Path(save_dir)
+            export(
+                model=model,
+                config=onnx_config,
+                opset=onnx_config.DEFAULT_ONNX_OPSET,
+                output=save_dir_path / ONNX_WEIGHTS_NAME,
+            )
 
-        # Export the model to the ONNX format
-        # torch.onnx.export(
-        #             model, 
-        #             dummy_input, 
-        #             f=save_dir_path / ONNX_WEIGHTS_NAME,
-        #             input_names=[input_node],
-        #             output_names=[output_node],
-        #             dynamic_axes={'pixel_values': {0: 'batch_size', 1: 'num_channels', 2: 'height', 3: 'width'}, 'logits': {0: 'batch_size'}},
-        #             do_constant_folding=True,
-        #             opset_version=13,
-        #             use_external_data_format=True,
-        #     )
-
-        from optimum.exporters.onnx import export
-        export(
-            model=model,
-            config=onnx_config,
-            opset=onnx_config.DEFAULT_ONNX_OPSET,
-            output=save_dir_path / ONNX_WEIGHTS_NAME,
-        )
-
-        return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            from_onnx=True,
-            use_auth_token=use_auth_token,
-            revision=revision,
-            force_download=force_download,
-            cache_dir=cache_dir,
-            local_files_only=local_files_only,
-            **kwargs,
-        )
+            return cls._from_pretrained(
+                model_id=save_dir_path,
+                config=config,
+                from_onnx=True,
+                use_auth_token=use_auth_token,
+                revision=revision,
+                force_download=force_download,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+                **kwargs,
+            )
 
     @classmethod
     def _load_config(cls, model_id,**kwargs):
