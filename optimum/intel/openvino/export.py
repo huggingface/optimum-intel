@@ -26,13 +26,15 @@ from .utils import OV_XML_FILE_NAME
 logger = logging.getLogger(__name__)
 
 if is_torch_available():
-    import torch
     import torch.nn as nn
     from transformers.modeling_utils import PreTrainedModel
+<<<<<<< HEAD
 <<<<<<< HEAD
 =======
     from transformers.pytorch_utils import is_torch_less_than_1_11
 >>>>>>> switch on pytorch frontend
+=======
+>>>>>>> fixes for seq2seq
 
 if is_diffusers_available():
     from diffusers import ModelMixin
@@ -133,9 +135,13 @@ def export_pytorch(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
 <<<<<<< HEAD
+<<<<<<< HEAD
     model_kwargs: Optional[Dict[str, Any]] = None,
 =======
 >>>>>>> switch on pytorch frontend
+=======
+    model_kwargs: Optional[Dict[str, Any]] = None,
+>>>>>>> fixes for seq2seq
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an ONNX Intermediate Representation.
@@ -178,8 +184,13 @@ def export_pytorch(
 
     with torch.no_grad():
         model.config.return_dict = True
+<<<<<<< HEAD
         model.config.torchscript = True
 >>>>>>> switch on pytorch frontend
+=======
+        custom_patcher = type(config).patch_model_for_export != OnnxConfig.patch_model_for_export
+        model.config.torchscript = not custom_patcher
+>>>>>>> fixes for seq2seq
         model.eval()
 
         # Check if we need to override certain configuration item
@@ -211,17 +222,21 @@ def export_pytorch(
         input_names = list(inputs.keys())
         output_names = list(config.outputs.keys())
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 
         if hasattr(config, "patch_ops"):
             config.patch_ops()
         
 >>>>>>> switch on pytorch frontend
+=======
+>>>>>>> fixes for seq2seq
         if hasattr(model, "forward"):
             sig = inspect.signature(model.forward)
         else:
             sig = inspect.signature(model.call)
 
+<<<<<<< HEAD
 <<<<<<< HEAD
         dummy_inputs = remove_none_from_dummy_inputs(dummy_inputs)
         input_info = get_input_shapes(dummy_inputs, inputs)
@@ -259,14 +274,39 @@ def export_pytorch(
                 out_tensor.get_tensor().set_names({output_names[idx]})
 
 =======
+=======
+        dummy_inputs = remove_none_from_dummy_inputs(dummy_inputs)
+>>>>>>> fixes for seq2seq
         input_info = get_input_shapes(dummy_inputs, inputs)
         start0 = time.perf_counter()
-        ov_model = mo.convert_model(model, example_input=dummy_inputs, input=input_info)
+        try:
+            if custom_patcher:
+                patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
+                patched_forward = patcher.patched_forward
+                @functools.wraps(patched_forward)
+                def ts_patched_forward(*args, **kwargs):
+                    outputs = patched_forward(*args, **kwargs)
+                    return tuple(outputs.values())
+                patcher.patched_forward = ts_patched_forward
+                with patcher:
+                    ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
+            else:
+                ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
+        except Exception:
+            onnx_output = output.with_suffix(".onnx")
+            input_names, output_names = export_pytorch_to_onnx(model, config, opset, onnx_output, device, input_shapes, model_kwargs)
+            ov_model = convert_model(onnx_output)
+            serialize(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
+            return input_names, output_names
+
         end0 = time.perf_counter()
         print(f"Convert model took {end0 - start0}s")
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         ordered_input_names = list(inputs)
         flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
+        for idx, out_tensor in enumerate(ov_model.outputs):
+            if idx < len(output_names):
+                out_tensor.get_tensor().set_names({output_names[idx]})
                 
 >>>>>>> switch on pytorch frontend
         for idx, inp_tensor in enumerate(ov_model.inputs):
@@ -296,18 +336,11 @@ def clear_class_registry():
                 static_shape[dim] = -1 
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
-
-        for idx, out_tensor in enumerate(ov_model.outputs):
-            if idx < len(output_names):
-                out_tensor.get_tensor().set_names({output_names[idx]})
         ov_model.validate_nodes_and_infer_types()
         start1 = time.perf_counter()
-        serialize(ov_model, output.parent / OV_XML_FILE_NAME)
+        serialize(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
         end1 = time.perf_counter()
         print(f"Serailize model took {end1 - start1}s")
-        if hasattr(config, "restore_ops"):
-            config.restore_ops()
-
     return input_names, output_names
 >>>>>>> switch on pytorch frontend
 
@@ -386,10 +419,15 @@ def flattenize_inputs(inputs):
     flatten_inputs = []
     for input_data in inputs:
 <<<<<<< HEAD
+<<<<<<< HEAD
         if input_data is None:
             continue
 =======
 >>>>>>> switch on pytorch frontend
+=======
+        if input_data is None:
+            continue
+>>>>>>> fixes for seq2seq
         if isinstance(input_data, (list, tuple)):
             flatten_inputs.extend(flattenize_inputs(input_data))
         else:
@@ -398,11 +436,15 @@ def flattenize_inputs(inputs):
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> fixes for seq2seq
 def remove_none_from_dummy_inputs(dummy_inputs):
     def remove_none_from_list_tuple(item):
         new_item = [i for i in item if i is not None]
         return type(item)(new_item)
 
+<<<<<<< HEAD
     upd_dummy = {}
     for k, v in dummy_inputs.items():
         if v is None:
@@ -411,18 +453,27 @@ def remove_none_from_dummy_inputs(dummy_inputs):
             for kk, vv in v.items():
                 upd_dummy[kk] = vv
             continue
+=======
+    upd_dummy = {} 
+    for k, v in dummy_inputs.items():
+        if v is None:
+            continue
+>>>>>>> fixes for seq2seq
         if isinstance(v, (tuple, list)):
             upd_dummy[k] = remove_none_from_list_tuple(v)
             continue
         upd_dummy[k] = v
     return upd_dummy
 
+<<<<<<< HEAD
 
 def get_input_shapes(dummy_inputs, inputs):
     input_info = []
     for input_name, data in dummy_inputs.items():
         if isinstance(data, (tuple, list, dict)):
 =======
+=======
+>>>>>>> fixes for seq2seq
 def get_input_shapes(dummy_inputs, inputs):
     input_info = []
     for input_name, data in dummy_inputs.items():

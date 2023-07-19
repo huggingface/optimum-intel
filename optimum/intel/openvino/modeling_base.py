@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
+import time
 
 import openvino
 from huggingface_hub import hf_hub_download
