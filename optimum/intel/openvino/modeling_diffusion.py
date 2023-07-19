@@ -15,13 +15,20 @@
 import importlib
 import logging
 import os
+import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import openvino
-from diffusers import DDIMScheduler, LMSDiscreteScheduler, PNDMScheduler, StableDiffusionPipeline
+from diffusers import (
+    DDIMScheduler,
+    LMSDiscreteScheduler,
+    PNDMScheduler,
+    StableDiffusionPipeline,
+    StableDiffusionXLPipeline,
+)
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME
 from huggingface_hub import snapshot_download
@@ -29,10 +36,14 @@ from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
 
-from optimum.exporters import TasksManager
-from optimum.exporters.onnx import export_models, get_stable_diffusion_models_for_export
+from optimum.exporters.onnx import main_export
 from optimum.pipelines.diffusers.pipeline_stable_diffusion import StableDiffusionPipelineMixin
+from optimum.pipelines.diffusers.pipeline_stable_diffusion_img2img import StableDiffusionImg2ImgPipelineMixin
+from optimum.pipelines.diffusers.pipeline_stable_diffusion_inpaint import StableDiffusionInpaintPipelineMixin
+from optimum.pipelines.diffusers.pipeline_stable_diffusion_xl import StableDiffusionXLPipelineMixin
+from optimum.pipelines.diffusers.pipeline_stable_diffusion_xl_img2img import StableDiffusionXLImg2ImgPipelineMixin
 from optimum.utils import (
+    DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
@@ -48,7 +59,7 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
-class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
+class OVStableDiffusionPipelineBase(OVBaseModel):
     auto_model_class = StableDiffusionPipeline
     config_name = "model_index.json"
     export_feature = "stable-diffusion"
@@ -63,6 +74,8 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"],
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         vae_encoder: Optional[openvino.runtime.Model] = None,
+        text_encoder_2: Optional[openvino.runtime.Model] = None,
+        tokenizer_2: Optional["CLIPTokenizer"] = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
         compile: bool = True,
@@ -74,44 +87,30 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {}
-        model_save_dir = model_save_dir.name if isinstance(model_save_dir, TemporaryDirectory) else model_save_dir
+        self._model_save_dir = (
+            Path(model_save_dir.name) if isinstance(model_save_dir, TemporaryDirectory) else model_save_dir
+        )
+        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
+        self.unet = OVModelUnet(unet, self)
+        self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
+        self.text_encoder_2 = (
+            OVModelTextEncoder(text_encoder_2, self, model_name=DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER)
+            if text_encoder_2 is not None
+            else None
+        )
+        self.vae_encoder = OVModelVaeEncoder(vae_encoder, self) if vae_encoder is not None else None
 
-        self.vae_decoder = OVModelVaeDecoder(
-            vae_decoder,
-            self,
-            {**self.ov_config}
-            if "CACHE_DIR" in self.ov_config.keys()
-            else {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)},
-        )
-        self.text_encoder = OVModelTextEncoder(
-            text_encoder,
-            self,
-            {**self.ov_config}
-            if "CACHE_DIR" in self.ov_config.keys()
-            else {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER)},
-        )
-        self.unet = OVModelUnet(
-            unet,
-            self,
-            {**self.ov_config}
-            if "CACHE_DIR" in self.ov_config.keys()
-            else {**self.ov_config, "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_UNET_SUBFOLDER)},
-        )
-        vae_ov_config = (
-            {**self.ov_config}
-            if "CACHE_DIR" in self.ov_config.keys()
-            else {
-                **self.ov_config,
-                "CACHE_DIR": os.path.join(model_save_dir, DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER),
-            }
-        )
-        self.vae_encoder = OVModelVaeEncoder(vae_encoder, self, vae_ov_config) if vae_encoder is not None else None
+        if "block_out_channels" in self.vae_decoder.config:
+            self.vae_scale_factor = 2 ** (len(self.vae_decoder.config["block_out_channels"]) - 1)
+        else:
+            self.vae_scale_factor = 8
+
         self.tokenizer = tokenizer
+        self.tokenizer_2 = tokenizer_2
         self.scheduler = scheduler
         self.feature_extractor = feature_extractor
         self.safety_checker = None
         self.preprocessors = []
-        self._vae_scale_factor = 8
 
         if self.is_dynamic:
             self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
@@ -124,6 +123,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             DIFFUSION_MODEL_UNET_SUBFOLDER: self.unet,
             DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER: self.vae_decoder,
             DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER: self.vae_encoder,
+            DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER: self.text_encoder_2,
         }
         for name in sub_models.keys():
             self._internal_dict[name] = (
@@ -142,23 +142,31 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
                 The directory where to save the model files
         """
         save_directory = Path(save_directory)
-        src_to_dst_file = {
-            self.vae_decoder.model: save_directory / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / OV_XML_FILE_NAME,
-            self.text_encoder.model: save_directory / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / OV_XML_FILE_NAME,
-            self.unet.model: save_directory / DIFFUSION_MODEL_UNET_SUBFOLDER / OV_XML_FILE_NAME,
-        }
-        if self.vae_encoder is not None:
-            src_to_dst_file[self.vae_encoder.model] = (
-                save_directory / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / OV_XML_FILE_NAME
-            )
-        for src_file, dst_path in src_to_dst_file.items():
-            dst_path.parent.mkdir(parents=True, exist_ok=True)
-            openvino.runtime.serialize(src_file, str(dst_path))
 
-        self.tokenizer.save_pretrained(save_directory.joinpath("tokenizer"))
-        self.scheduler.save_pretrained(save_directory.joinpath("scheduler"))
+        sub_models_to_save = {
+            self.unet: DIFFUSION_MODEL_UNET_SUBFOLDER,
+            self.vae_decoder: DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
+            self.vae_encoder: DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
+            self.text_encoder: DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+            self.text_encoder_2: DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
+        }
+
+        for ov_model, dst_path in sub_models_to_save.items():
+            if ov_model is not None:
+                dst_path = save_directory / dst_path / OV_XML_FILE_NAME
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                openvino.runtime.serialize(ov_model.model, dst_path)
+                config_path = Path(ov_model.config["_name_or_path"]) / ov_model.CONFIG_NAME
+                if config_path.is_file():
+                    shutil.copyfile(config_path, dst_path.parent / ov_model.CONFIG_NAME)
+
+        self.scheduler.save_pretrained(save_directory / "scheduler")
         if self.feature_extractor is not None:
-            self.feature_extractor.save_pretrained(save_directory.joinpath("feature_extractor"))
+            self.feature_extractor.save_pretrained(save_directory / "feature_extractor")
+        if self.tokenizer is not None:
+            self.tokenizer.save_pretrained(save_directory / "tokenizer")
+        if self.tokenizer_2 is not None:
+            self.tokenizer_2.save_pretrained(save_directory / "tokenizer_2")
 
     @classmethod
     def _from_pretrained(
@@ -172,6 +180,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         text_encoder_file_name: Optional[str] = None,
         unet_file_name: Optional[str] = None,
         vae_encoder_file_name: Optional[str] = None,
+        text_encoder_2_file_name: Optional[str] = None,
         local_files_only: bool = False,
         from_onnx: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
@@ -180,24 +189,26 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         vae_decoder_file_name = vae_decoder_file_name or default_file_name
         text_encoder_file_name = text_encoder_file_name or default_file_name
+        text_encoder_2_file_name = text_encoder_2_file_name or default_file_name
         unet_file_name = unet_file_name or default_file_name
         vae_encoder_file_name = vae_encoder_file_name or default_file_name
         model_id = str(model_id)
-        sub_models_to_load, _, _ = cls.extract_init_dict(config)
-        sub_models_names = set(sub_models_to_load.keys()).intersection({"feature_extractor", "tokenizer", "scheduler"})
+        patterns = set(config.keys())
+        sub_models_names = patterns.intersection({"feature_extractor", "tokenizer", "tokenizer_2", "scheduler"})
 
         if not os.path.isdir(model_id):
-            patterns = set(config.keys())
             patterns.update({"vae_encoder", "vae_decoder"})
             allow_patterns = {os.path.join(k, "*") for k in patterns if not k.startswith("_")}
             allow_patterns.update(
                 {
                     vae_decoder_file_name,
                     text_encoder_file_name,
+                    text_encoder_2_file_name,
                     unet_file_name,
                     vae_encoder_file_name,
                     vae_decoder_file_name.replace(".xml", ".bin"),
                     text_encoder_file_name.replace(".xml", ".bin"),
+                    text_encoder_2_file_name.replace(".xml", ".bin"),
                     unet_file_name.replace(".xml", ".bin"),
                     vae_encoder_file_name.replace(".xml", ".bin"),
                     SCHEDULER_CONFIG_NAME,
@@ -221,7 +232,7 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             # Check if the subcomponent needs to be loaded
             if kwargs.get(name, None) is not None:
                 continue
-            library_name, library_classes = sub_models_to_load[name]
+            library_name, library_classes = config[name]
             if library_classes is not None:
                 library = importlib.import_module(library_name)
                 class_obj = getattr(library, library_classes)
@@ -232,28 +243,32 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
                 else:
                     kwargs[name] = load_method(new_model_save_dir)
 
-        vae_decoder = cls.load_model(
-            new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name
-        )
-        text_encoder = cls.load_model(
-            new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name
-        )
         unet = cls.load_model(new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name)
-        vae_encoder_path = new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name
-        vae_encoder = cls.load_model(vae_encoder_path) if vae_encoder_path.is_file() else None
+
+        components = {
+            "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
+            "vae_decoder": new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
+            "text_encoder": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
+            "text_encoder_2": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
+        }
+
+        for key, value in components.items():
+            components[key] = cls.load_model(value) if value.is_file() else None
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
         return cls(
-            vae_decoder=vae_decoder,
-            text_encoder=text_encoder,
+            vae_decoder=components["vae_decoder"],
+            text_encoder=components["text_encoder"],
             unet=unet,
             config=config,
-            tokenizer=kwargs.pop("tokenizer"),
+            tokenizer=kwargs.pop("tokenizer", None),
             scheduler=kwargs.pop("scheduler"),
             feature_extractor=kwargs.pop("feature_extractor", None),
-            vae_encoder=vae_encoder,
+            vae_encoder=components["vae_encoder"],
+            text_encoder_2=components["text_encoder_2"],
+            tokenizer_2=kwargs.pop("tokenizer_2", None),
             model_save_dir=model_save_dir,
             **kwargs,
         )
@@ -268,38 +283,25 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         force_download: bool = False,
         cache_dir: Optional[str] = None,
         local_files_only: bool = False,
-        task: Optional[str] = None,
         tokenizer: "CLIPTokenizer" = None,
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         **kwargs,
     ):
-        task = task or cls.export_feature
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
-        model_kwargs = {
-            "revision": revision,
-            "use_auth_token": use_auth_token,
-            "cache_dir": cache_dir,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "config": config,
-        }
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-
-        output_names = [
-            os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER, ONNX_WEIGHTS_NAME),
-            os.path.join(DIFFUSION_MODEL_UNET_SUBFOLDER, ONNX_WEIGHTS_NAME),
-            os.path.join(DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER, ONNX_WEIGHTS_NAME),
-            os.path.join(DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER, ONNX_WEIGHTS_NAME),
-        ]
-        models_and_onnx_configs = get_stable_diffusion_models_for_export(model)
-        model.save_config(save_dir_path)
-        export_models(
-            models_and_onnx_configs=models_and_onnx_configs,
-            output_dir=save_dir_path,
-            output_names=output_names,
+        main_export(
+            model_name_or_path=model_id,
+            output=save_dir_path,
+            task=cls.export_feature,
+            do_validation=False,
+            no_post_process=True,
+            revision=revision,
+            cache_dir=cache_dir,
+            use_auth_token=use_auth_token,
+            local_files_only=local_files_only,
+            force_download=force_download,
         )
 
         return cls._from_pretrained(
@@ -312,9 +314,9 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             cache_dir=cache_dir,
             local_files_only=local_files_only,
             model_save_dir=save_dir,
-            tokenizer=tokenizer or model.tokenizer,
-            scheduler=scheduler or model.scheduler,
-            feature_extractor=feature_extractor or model.feature_extractor,
+            tokenizer=tokenizer,
+            scheduler=scheduler,
+            feature_extractor=feature_extractor,
             **kwargs,
         )
 
@@ -332,14 +334,14 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         height = self.unet.model.inputs[0].get_partial_shape()[2]
         if height.is_dynamic:
             return -1
-        return height.get_length() * self._vae_scale_factor
+        return height.get_length() * self.vae_scale_factor
 
     @property
     def width(self) -> int:
         width = self.unet.model.inputs[0].get_partial_shape()[3]
         if width.is_dynamic:
             return -1
-        return width.get_length() * self._vae_scale_factor
+        return width.get_length() * self.vae_scale_factor
 
     def _reshape_unet(
         self,
@@ -355,15 +357,20 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
             # The factor of 2 comes from the guidance scale > 1
             batch_size = 2 * batch_size * num_images_per_prompt
 
-        height = height // 8 if height > 0 else height
-        width = width // 8 if width > 0 else width
+        requires_aesthetics_score = getattr(self.config, "requires_aesthetics_score", False)
+        height = height // self.vae_scale_factor if height > 0 else height
+        width = width // self.vae_scale_factor if width > 0 else width
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
-            if inputs.get_any_name().startswith("timestep"):
+            if inputs.get_any_name() == "timestep":
                 shapes[inputs][0] = 1
-            elif inputs.get_any_name().startswith("sample"):
-                shapes[inputs] = [batch_size, 4, height, width]
+            elif inputs.get_any_name() == "sample":
+                shapes[inputs] = [batch_size, self.unet.config["in_channels"], height, width]
+            elif inputs.get_any_name() == "text_embeds":
+                shapes[inputs] = [batch_size, self.text_encoder_2.config["projection_dim"]]
+            elif inputs.get_any_name() == "time_ids":
+                shapes[inputs] = [batch_size, 5 if requires_aesthetics_score else 6]
             else:
                 shapes[inputs][0] = batch_size
                 shapes[inputs][1] = self.tokenizer.model_max_length
@@ -377,9 +384,16 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         return model
 
     def _reshape_vae_decoder(self, model: openvino.runtime.Model, height: int = -1, width: int = -1):
-        height = height // 8 if height > -1 else height
-        width = width // 8 if width > -1 else width
-        shapes = {model.inputs[0]: [1, 4, height, width]}
+        height = height // self.vae_scale_factor if height > -1 else height
+        width = width // self.vae_scale_factor if width > -1 else width
+        shapes = {model.inputs[0]: [1, self.vae_decoder.config["latent_channels"], height, width]}
+        model.reshape(shapes)
+        return model
+
+    def _reshape_vae_encoder(
+        self, model: openvino.runtime.Model, batch_size: int = -1, height: int = -1, width: int = -1
+    ):
+        shapes = {model.inputs[0]: [batch_size, self.vae_encoder.config["in_channels"], height, width]}
         model.reshape(shapes)
         return model
 
@@ -391,9 +405,18 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         num_images_per_prompt: int = -1,
     ):
         self.is_dynamic = -1 in {batch_size, height, width, num_images_per_prompt}
-        self.text_encoder.model = self._reshape_text_encoder(self.text_encoder.model, batch_size)
         self.vae_decoder.model = self._reshape_vae_decoder(self.vae_decoder.model, height, width)
         self.unet.model = self._reshape_unet(self.unet.model, batch_size, height, width, num_images_per_prompt)
+
+        if self.text_encoder is not None:
+            self.text_encoder.model = self._reshape_text_encoder(self.text_encoder.model, batch_size)
+
+        if self.text_encoder_2 is not None:
+            self.text_encoder_2.model = self._reshape_text_encoder(self.text_encoder_2.model, batch_size)
+
+        if self.vae_encoder is not None:
+            self.vae_encoder.model = self._reshape_vae_encoder(self.vae_encoder.model, batch_size, height, width)
+
         self.clear_requests()
         return self
 
@@ -402,66 +425,26 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
         compress_model_transformation(self.vae_decoder.model)
-        compress_model_transformation(self.text_encoder.model)
         compress_model_transformation(self.unet.model)
+        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
+            if component is not None:
+                compress_model_transformation(component.model)
         self.clear_requests()
         return self
 
     def clear_requests(self):
-        self.text_encoder.request = None
         self.vae_decoder.request = None
         self.unet.request = None
+        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
+            if component is not None:
+                component.request = None
 
     def compile(self):
-        self.text_encoder._compile()
         self.vae_decoder._compile()
         self.unet._compile()
-
-    def __call__(
-        self,
-        prompt: Union[str, List[str]],
-        height: Optional[int] = 512,
-        width: Optional[int] = 512,
-        num_inference_steps: Optional[int] = 50,
-        guidance_scale: Optional[float] = 7.5,
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        num_images_per_prompt: Optional[int] = 1,
-        **kwargs,
-    ):
-        _height = self.height
-        _width = self.width
-
-        if _height != -1 and height != _height:
-            logger.warning(
-                f"`height` was set to {height} but the static model will output images of height {_height}."
-                "To fix the height, please reshape your model accordingly using the `.reshape()` method."
-            )
-            height = _height
-
-        if _width != -1 and width != _width:
-            logger.warning(
-                f"`width` was set to {width} but the static model will output images of width {_width}."
-                "To fix the width, please reshape your model accordingly using the `.reshape()` method."
-            )
-            width = _width
-
-        if guidance_scale is not None and guidance_scale <= 1 and not self.is_dynamic:
-            raise ValueError(
-                f"`guidance_scale` was set to {guidance_scale}, static shapes are only supported for `guidance_scale` > 1, "
-                "please set `dynamic_shapes` to `True` when loading the model."
-            )
-
-        return StableDiffusionPipelineMixin.__call__(
-            self,
-            prompt=prompt,
-            height=height,
-            width=width,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=num_images_per_prompt,
-            **kwargs,
-        )
+        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
+            if component is not None:
+                component._compile
 
     @classmethod
     def _load_config(cls, config_name_or_path: Union[str, os.PathLike], **kwargs):
@@ -472,12 +455,15 @@ class OVStableDiffusionPipeline(OVBaseModel, StableDiffusionPipelineMixin):
 
 
 class OVModelPart:
+    CONFIG_NAME = "config.json"
+
     def __init__(
         self,
         model: openvino.runtime.Model,
         parent_model: OVBaseModel,
         ov_config: Optional[Dict[str, str]] = None,
         model_name: str = "encoder",
+        model_dir: str = None,
     ):
         self.model = model
         self.parent_model = parent_model
@@ -486,9 +472,16 @@ class OVModelPart:
             inputs.get_any_name(): OV_TO_NP_TYPE[inputs.get_element_type().get_type_name()]
             for inputs in self.model.inputs
         }
-        self.ov_config = ov_config or self.parent_model.ov_config
+        self.ov_config = ov_config or {**self.parent_model.ov_config}
         self.request = None
         self._model_name = model_name
+        self._model_dir = Path(model_dir or parent_model._model_save_dir)
+        config_path = self._model_dir / model_name / self.CONFIG_NAME
+        self.config = self.parent_model._dict_from_json_file(config_path) if config_path.is_file() else {}
+
+        # TODO : disable if self._model_dir tmp directory
+        if "CACHE_DIR" not in self.ov_config:
+            self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name)
 
     def _compile(self):
         if self.request is None:
@@ -502,9 +495,13 @@ class OVModelPart:
 
 class OVModelTextEncoder(OVModelPart):
     def __init__(
-        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+        self,
+        model: openvino.runtime.Model,
+        parent_model: OVBaseModel,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_name: str = "text_encoder",
     ):
-        super().__init__(model, parent_model, ov_config, "text_encoder")
+        super().__init__(model, parent_model, ov_config, model_name)
 
     def __call__(self, input_ids: np.ndarray):
         self._compile()
@@ -522,7 +519,14 @@ class OVModelUnet(OVModelPart):
     ):
         super().__init__(model, parent_model, ov_config, "unet")
 
-    def __call__(self, sample: np.ndarray, timestep: np.ndarray, encoder_hidden_states: np.ndarray):
+    def __call__(
+        self,
+        sample: np.ndarray,
+        timestep: np.ndarray,
+        encoder_hidden_states: np.ndarray,
+        text_embeds: Optional[np.ndarray] = None,
+        time_ids: Optional[np.ndarray] = None,
+    ):
         self._compile()
 
         inputs = {
@@ -530,6 +534,11 @@ class OVModelUnet(OVModelPart):
             "timestep": timestep,
             "encoder_hidden_states": encoder_hidden_states,
         }
+
+        if text_embeds is not None:
+            inputs["text_embeds"] = text_embeds
+        if time_ids is not None:
+            inputs["time_ids"] = time_ids
 
         outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
@@ -565,3 +574,88 @@ class OVModelVaeEncoder(OVModelPart):
         }
         outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
+
+
+class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPipelineMixin):
+    def __call__(
+        self,
+        prompt: Optional[Union[str, List[str]]] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 7.5,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: int = 1,
+        **kwargs,
+    ):
+        height = height or self.unet.config["sample_size"] * self.vae_scale_factor
+        width = width or self.unet.config["sample_size"] * self.vae_scale_factor
+        _height = self.height
+        _width = self.width
+
+        if _height != -1 and height != _height:
+            logger.warning(
+                f"`height` was set to {height} but the static model will output images of height {_height}."
+                "To fix the height, please reshape your model accordingly using the `.reshape()` method."
+            )
+            height = _height
+
+        if _width != -1 and width != _width:
+            logger.warning(
+                f"`width` was set to {width} but the static model will output images of width {_width}."
+                "To fix the width, please reshape your model accordingly using the `.reshape()` method."
+            )
+            width = _width
+
+        if guidance_scale is not None and guidance_scale <= 1 and not self.is_dynamic:
+            raise ValueError(
+                f"`guidance_scale` was set to {guidance_scale}, static shapes are only supported for `guidance_scale` > 1, "
+                "please set `dynamic_shapes` to `True` when loading the model."
+            )
+
+        return StableDiffusionPipelineMixin.__call__(
+            self,
+            prompt=prompt,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            negative_prompt=negative_prompt,
+            num_images_per_prompt=num_images_per_prompt,
+            **kwargs,
+        )
+
+
+class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiffusionImg2ImgPipelineMixin):
+    def __call__(self, *args, **kwargs):
+        # TODO : add default height and width if model statically reshaped
+        # resize image if doesn't match height and width given during reshaping
+        return StableDiffusionImg2ImgPipelineMixin.__call__(self, *args, **kwargs)
+
+
+class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiffusionInpaintPipelineMixin):
+    def __call__(self, *args, **kwargs):
+        # TODO : add default height and width if model statically reshaped
+        return StableDiffusionInpaintPipelineMixin.__call__(self, *args, **kwargs)
+
+
+class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
+    auto_model_class = StableDiffusionXLPipeline
+    export_feature = "stable-diffusion-xl"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # additional invisible-watermark dependency for SD XL
+        from optimum.pipelines.diffusers.watermark import StableDiffusionXLWatermarker
+
+        self.watermark = StableDiffusionXLWatermarker()
+
+
+class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLPipelineMixin):
+    def __call__(self, *args, **kwargs):
+        return StableDiffusionXLPipelineMixin.__call__(self, *args, **kwargs)
+
+
+class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLImg2ImgPipelineMixin):
+    def __call__(self, *args, **kwargs):
+        return StableDiffusionXLImg2ImgPipelineMixin.__call__(self, *args, **kwargs)
