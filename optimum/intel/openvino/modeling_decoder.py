@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
@@ -33,7 +34,7 @@ from optimum.utils import NormalizedConfigManager
 from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .utils import ONNX_WEIGHTS_NAME, STR_TO_OV_TYPE
+from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -279,8 +280,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         use_cache = kwargs.get("use_cache", True)
         has_pastkv = any("past_key_values" in key.get_any_name() for key in model.inputs)
+        self.model_org = model
         if pastkv_will_use != Type.f32 and use_cache and has_pastkv:
-            ppp = PrePostProcessor(model)
+            ppp = PrePostProcessor(model.clone())
             need_gen = False
             for key in model.inputs:
                 if "past_key_values" in key.get_any_name() and pastkv_will_use != key.get_element_type():
@@ -294,6 +296,21 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 model = ppp.build()
 
         return model
+
+    def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
+        """
+        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
+        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
+
+        Arguments:
+            save_directory (`str` or `Path`):
+                The directory where to save the model files.
+            file_name(`str`, *optional*):
+                The model file name to use when saving the model. Overwrites the default file names.
+        """
+        file_name = file_name if file_name is not None else OV_XML_FILE_NAME
+        dst_path = os.path.join(save_directory, file_name)
+        openvino.runtime.serialize(self.model_org, dst_path, dst_path.replace(".xml", ".bin"))
 
     @add_start_docstrings_to_model_forward(
         INPUTS_DOCSTRING.format("batch_size, sequence_length")
