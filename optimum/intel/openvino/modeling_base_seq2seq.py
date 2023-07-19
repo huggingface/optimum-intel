@@ -24,8 +24,9 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export
-from optimum.exporters.tasks import TasksManager
+from optimum.exporters import TasksManager
+from optimum.exporters.onnx import get_encoder_decoder_models_for_export
+from .export import export_models
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
@@ -243,9 +244,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        encoder_file_name = os.path.join("encoder", ONNX_ENCODER_NAME)
-        decoder_file_name = os.path.join("decoder", ONNX_DECODER_NAME)
-        decoder_with_past_file_name = os.path.join("decoder_with_past", ONNX_DECODER_WITH_PAST_NAME)
         task = task or cls.export_feature
 
         save_dir = TemporaryDirectory()
@@ -265,6 +263,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
         models_and_onnx_configs = get_encoder_decoder_models_for_export(model, onnx_config)
+        encoder_file_name = os.path.join("encoder", OV_ENCODER_NAME)
+        decoder_file_name = os.path.join("decoder", OV_DECODER_NAME)
+        decoder_with_past_file_name = os.path.join("decoder_with_past", OV_DECODER_WITH_PAST_NAME)
 
         output_names = [encoder_file_name, decoder_file_name]
         if use_cache is True:
@@ -281,7 +282,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             model_id=save_dir_path,
             config=config,
             use_cache=use_cache,
-            from_onnx=True,
+            from_onnx=False,
             use_auth_token=use_auth_token,
             revision=revision,
             force_download=force_download,

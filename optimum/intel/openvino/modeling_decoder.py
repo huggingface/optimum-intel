@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
+import time
 
 import numpy as np
 import openvino
@@ -30,6 +31,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
 from optimum.utils import NormalizedConfigManager
+#from optimum.exporters.onnx import export
 
 from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
@@ -225,7 +227,10 @@ class OVBaseDecoderModel(OVModel):
             "force_download": force_download,
             "trust_remote_code": trust_remote_code,
         }
+        start0 = time.perf_counter()
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+        end0 = time.perf_counter()
+        print(f"Reading PT model took {end0 - start0}")
         config.is_decoder = True
         config.is_encoder_decoder = False
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)

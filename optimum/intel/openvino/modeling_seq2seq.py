@@ -413,6 +413,7 @@ class OVDecoder:
         if "encoder_hidden_states" in self.input_names and encoder_hidden_states is not None:
             inputs["encoder_hidden_states"] = encoder_hidden_states
 
+        print(self.model)
         # Run inference
         self.request.start_async(inputs, shared_memory=True)
         self.request.wait()
