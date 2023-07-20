@@ -110,6 +110,8 @@ class OVBaseDecoderModel(OVModel):
                 "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
             )
 
+        model = self._try_modify_pastkv_to_lowprecision(model, ov_config, device)
+
         super().__init__(
             model,
             config,
@@ -136,6 +138,50 @@ class OVBaseDecoderModel(OVModel):
                 f"once again with `use_cache={use_cache}` when calling the `from_pretrained` method. "
                 "To export your model, simply set `export=True`."
             )
+
+    def _try_modify_pastkv_to_lowprecision(
+        self, model: openvino.runtime.Model, ov_config: Optional[Dict[str, str]] = None, device: str = "CPU"
+    ):
+        device = device.upper()
+        pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
+        # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
+        if ov_config:
+            user_precision_hint = ov_config.get("INFERENCE_PRECISION_HINT", "")
+            user_mode_hint = ov_config.get("EXECUTION_MODE_HINT", "")
+            if user_precision_hint in STR_TO_OV_TYPE:
+                pastkv_will_use = STR_TO_OV_TYPE[user_precision_hint]
+            elif user_mode_hint.upper() == "ACCURACY":
+                pastkv_will_use = Type.f32
+
+        use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs)
+        self.model_org = model
+        if pastkv_will_use != Type.f32 and use_cache:
+            ppp = PrePostProcessor(model.clone())
+            need_gen = False
+            for key in model.inputs:
+                if "past_key_values" in key.get_any_name() and pastkv_will_use != key.get_element_type():
+                    need_gen = True
+                    ppp.input(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
+            for key in model.outputs:
+                if "present" in key.get_any_name() and pastkv_will_use != key.get_element_type():
+                    need_gen = True
+                    ppp.output(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
+            if need_gen:
+                model = ppp.build()
+
+        return model
+
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        """
+        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
+        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
+
+        Arguments:
+            save_directory (`str` or `Path`):
+                The directory where to save the model files.
+        """
+        dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
+        openvino.runtime.serialize(self.model_org, dst_path)
 
     @classmethod
     def _from_transformers(
@@ -250,67 +296,6 @@ class OVBaseDecoderModel(OVModel):
 class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     export_feature = "text-generation"
     auto_model_class = AutoModelForCausalLM
-
-    def __init__(
-        self,
-        model: openvino.runtime.Model,
-        config: PretrainedConfig = None,
-        device: str = "CPU",
-        dynamic_shapes: bool = True,
-        ov_config: Optional[Dict[str, str]] = None,
-        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        **kwargs,
-    ):
-        model = self._try_modify_pastkv_to_lowprecision(model, ov_config, device, **kwargs)
-        super().__init__(model, config, device, dynamic_shapes, ov_config, model_save_dir, **kwargs)
-
-    def _try_modify_pastkv_to_lowprecision(
-        self, model: openvino.runtime.Model, ov_config: Optional[Dict[str, str]] = None, device: str = "CPU", **kwargs
-    ):
-        device = device.upper()
-        pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
-        # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
-        if ov_config:
-            user_precision_hint = ov_config.get("INFERENCE_PRECISION_HINT", "")
-            user_mode_hint = ov_config.get("EXECUTION_MODE_HINT", "")
-            if user_precision_hint in STR_TO_OV_TYPE:
-                pastkv_will_use = STR_TO_OV_TYPE[user_precision_hint]
-            if user_mode_hint.upper() == "ACCURACY":
-                pastkv_will_use = Type.f32
-
-        use_cache = kwargs.get("use_cache", True)
-        has_pastkv = any("past_key_values" in key.get_any_name() for key in model.inputs)
-        self.model_org = model
-        if pastkv_will_use != Type.f32 and use_cache and has_pastkv:
-            ppp = PrePostProcessor(model.clone())
-            need_gen = False
-            for key in model.inputs:
-                if "past_key_values" in key.get_any_name() and pastkv_will_use != key.get_element_type():
-                    need_gen = True
-                    ppp.input(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
-            for key in model.outputs:
-                if "present" in key.get_any_name() and pastkv_will_use != key.get_element_type():
-                    need_gen = True
-                    ppp.output(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
-            if need_gen:
-                model = ppp.build()
-
-        return model
-
-    def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
-        """
-        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
-        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
-
-        Arguments:
-            save_directory (`str` or `Path`):
-                The directory where to save the model files.
-            file_name(`str`, *optional*):
-                The model file name to use when saving the model. Overwrites the default file names.
-        """
-        file_name = file_name if file_name is not None else OV_XML_FILE_NAME
-        dst_path = os.path.join(save_directory, file_name)
-        openvino.runtime.serialize(self.model_org, dst_path, dst_path.replace(".xml", ".bin"))
 
     @add_start_docstrings_to_model_forward(
         INPUTS_DOCSTRING.format("batch_size, sequence_length")
