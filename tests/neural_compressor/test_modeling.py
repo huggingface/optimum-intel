@@ -44,7 +44,7 @@ MODEL_NAMES_TO_TASK = (
     ("echarlaix/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic", "text-classification"),
     ("echarlaix/distilbert-sst2-inc-dynamic-quantization-magnitude-pruning-0.1", "text-classification"),
     ("hf-internal-testing/tiny-random-bert", "fill-mask"),
-    ("Intel/bert-base-uncased-squad-int8-static", "question-answering"),
+    ("Intel/distilbert-base-uncased-distilled-squad-int8-static", "question-answering"),
     ("hf-internal-testing/tiny-random-gpt2", "text-generation"),
     ("Intel/t5-small-xsum-int8-dynamic", "text2text-generation"),
     # ("echarlaix/stable-diffusion-v1-5-inc-int8-dynamic", "stable-diffusion")
