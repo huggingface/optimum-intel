@@ -23,6 +23,7 @@ import nncf
 import openvino
 import torch
 import transformers
+from accelerate.data_loader import DataLoaderStateMixin
 from datasets import Dataset, load_dataset
 from huggingface_hub import HfApi
 from nncf import NNCFConfig
@@ -59,6 +60,13 @@ logger = logging.getLogger(__name__)
 class OVDataLoader(PTInitializingDataLoader):
     def get_inputs(self, dataloader_output) -> Tuple[Tuple, Dict]:
         return (), dataloader_output
+
+    @property
+    def batch_size(self):
+        batch_size = self._data_loader.batch_size
+        if batch_size is None and isinstance(self._data_loader, DataLoaderStateMixin):
+            batch_size = self._data_loader.total_batch_size
+        return batch_size
 
 
 class OVQuantizer(OptimumQuantizer):
