@@ -358,13 +358,13 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
 
         inputs = _generate_inputs(batch_size)
         np.random.seed(0)
-        ov_outputs_1 = pipeline(**inputs, height=height, width=width)
+        ov_outputs_1 = pipeline(**inputs, height=height, width=width, num_images_per_prompt=num_images_per_prompt)
         np.random.seed(0)
         with tempfile.TemporaryDirectory() as tmp_dir:
             pipeline.save_pretrained(tmp_dir)
             pipeline = self.MODEL_CLASS.from_pretrained(tmp_dir)
-        ov_outputs_2 = pipeline(**inputs, height=height, width=width)
-        ov_outputs_3 = pipeline(**inputs, height=height, width=width)
+        ov_outputs_2 = pipeline(**inputs, height=height, width=width, num_images_per_prompt=num_images_per_prompt)
+        ov_outputs_3 = pipeline(**inputs, height=height, width=width, num_images_per_prompt=num_images_per_prompt)
         self.assertTrue(np.array_equal(ov_outputs_1.images[0], ov_outputs_2.images[0]))
         self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
 
