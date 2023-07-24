@@ -156,11 +156,11 @@ class OVModelIntegrationTest(unittest.TestCase):
         batch_size, height, width = 2, 16, 16
         np.random.seed(0)
         inputs = {
-        "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
-        "height": height,
-        "width": width,
-        "num_inference_steps": 2,
-        "output_type": "np",
+            "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
+            "height": height,
+            "width": width,
+            "num_inference_steps": 2,
+            "output_type": "np",
         }
         pipeline_outputs = loaded_pipeline(**inputs).images
         self.assertEqual(pipeline_outputs.shape, (batch_size, height, width, 3))
