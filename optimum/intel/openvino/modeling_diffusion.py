@@ -156,12 +156,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel):
                 dst_path = save_directory / dst_path / OV_XML_FILE_NAME
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 openvino.runtime.serialize(ov_model.model, dst_path)
-                model_dir = Path(
-                    ov_model._model_dir / ov_model._model_name
-                    if ov_model._model_dir.is_dir()
-                    else ov_model.config.get("_name_or_path")
-                )
-                config_path = model_dir / ov_model.CONFIG_NAME
+                model_dir = ov_model.config.get("_name_or_path", None) or ov_model._model_dir / ov_model._model_name
+                config_path = Path(model_dir) / ov_model.CONFIG_NAME
                 if config_path.is_file():
                     shutil.copyfile(config_path, dst_path.parent / ov_model.CONFIG_NAME)
 
