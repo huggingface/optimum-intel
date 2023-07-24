@@ -156,7 +156,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel):
                 dst_path = save_directory / dst_path / OV_XML_FILE_NAME
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 openvino.runtime.serialize(ov_model.model, dst_path)
-                config_path = Path(ov_model.config["_name_or_path"]) / ov_model.CONFIG_NAME
+                model_dir = Path(
+                    ov_model._model_dir / ov_model._model_name
+                    if ov_model._model_dir.is_dir()
+                    else ov_model.config.get("_name_or_path")
+                )
+                config_path = model_dir / ov_model.CONFIG_NAME
                 if config_path.is_file():
                     shutil.copyfile(config_path, dst_path.parent / ov_model.CONFIG_NAME)
 
@@ -366,7 +371,16 @@ class OVStableDiffusionPipelineBase(OVBaseModel):
             if inputs.get_any_name() == "timestep":
                 shapes[inputs][0] = 1
             elif inputs.get_any_name() == "sample":
-                shapes[inputs] = [batch_size, self.unet.config["in_channels"], height, width]
+                in_channels = self.unet.config.get("in_channels", None)
+                if in_channels is None:
+                    in_channels = shapes[inputs][1]
+                    if in_channels.is_dynamic:
+                        logger.warning(
+                            "Could not identify `in_channels` from the unet configuration, to statically reshape the unet please provide a configuration."
+                        )
+                        self.is_dynamic = True
+
+                shapes[inputs] = [batch_size, in_channels, height, width]
             elif inputs.get_any_name() == "text_embeds":
                 shapes[inputs] = [batch_size, self.text_encoder_2.config["projection_dim"]]
             elif inputs.get_any_name() == "time_ids":
@@ -386,14 +400,30 @@ class OVStableDiffusionPipelineBase(OVBaseModel):
     def _reshape_vae_decoder(self, model: openvino.runtime.Model, height: int = -1, width: int = -1):
         height = height // self.vae_scale_factor if height > -1 else height
         width = width // self.vae_scale_factor if width > -1 else width
-        shapes = {model.inputs[0]: [1, self.vae_decoder.config["latent_channels"], height, width]}
+        latent_channels = self.vae_decoder.config.get("latent_channels", None)
+        if latent_channels is None:
+            latent_channels = model.inputs[0].get_partial_shape()[1]
+            if latent_channels.is_dynamic:
+                logger.warning(
+                    "Could not identify `latent_channels` from the VAE decoder configuration, to statically reshape the VAE decoder please provide a configuration."
+                )
+                self.is_dynamic = True
+        shapes = {model.inputs[0]: [1, latent_channels, height, width]}
         model.reshape(shapes)
         return model
 
     def _reshape_vae_encoder(
         self, model: openvino.runtime.Model, batch_size: int = -1, height: int = -1, width: int = -1
     ):
-        shapes = {model.inputs[0]: [batch_size, self.vae_encoder.config["in_channels"], height, width]}
+        in_channels = self.vae_encoder.config.get("in_channels", None)
+        if in_channels is None:
+            in_channels = model.inputs[0].get_partial_shape()[1]
+            if in_channels.is_dynamic:
+                logger.warning(
+                    "Could not identify `in_channels` from the VAE encoder configuration, to statically reshape the VAE encoder please provide a configuration."
+                )
+                self.is_dynamic = True
+        shapes = {model.inputs[0]: [batch_size, in_channels, height, width]}
         model.reshape(shapes)
         return model
 
@@ -588,8 +618,8 @@ class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPi
         num_images_per_prompt: int = 1,
         **kwargs,
     ):
-        height = height or self.unet.config["sample_size"] * self.vae_scale_factor
-        width = width or self.unet.config["sample_size"] * self.vae_scale_factor
+        height = height or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
+        width = width or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
         _height = self.height
         _width = self.width
 

@@ -80,13 +80,11 @@ class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
         self.assertEqual(pipeline.vae_scale_factor, 2)
         self.assertEqual(pipeline.vae_decoder.config["latent_channels"], 4)
         self.assertEqual(pipeline.unet.config["in_channels"], 4)
-        height, width = 128, 128
-        inputs = self.generate_inputs(height=height, width=width)
-        prompt = inputs.pop("prompt")
-
-        for batch_size in [1, 2]:
+        batch_size, height = 2, 128
+        for width in [64, 128]:
+            inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
             for num_images in [1, 3]:
-                outputs = pipeline([prompt] * batch_size, num_images_per_prompt=num_images, **inputs).images
+                outputs = pipeline(**inputs, num_images_per_prompt=num_images).images
                 self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

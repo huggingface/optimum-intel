@@ -153,13 +153,17 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_load_from_hub_and_save_stable_diffusion_model(self):
         loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_DIFFUSION_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_pipeline.config, Dict)
-        prompt = "sailing ship in storm by Leonardo da Vinci"
-        height = 16
-        width = 16
-        vae_scale_factor = 4  # needed for dummy stable diffusion model
+        batch_size, height, width = 2, 16, 16
         np.random.seed(0)
-        pipeline_outputs = loaded_pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np")
-        self.assertEqual(pipeline_outputs.images.shape, (1, height // vae_scale_factor, width // vae_scale_factor, 3))
+        inputs = {
+        "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
+        "height": height,
+        "width": width,
+        "num_inference_steps": 2,
+        "output_type": "np",
+        }
+        pipeline_outputs = loaded_pipeline(**inputs).images
+        self.assertEqual(pipeline_outputs.shape, (batch_size, height, width, 3))
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
             pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
@@ -175,8 +179,8 @@ class OVModelIntegrationTest(unittest.TestCase):
                 self.assertIn(OV_XML_FILE_NAME, folder_contents)
                 self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
         np.random.seed(0)
-        outputs = pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np").images
-        self.assertTrue(np.array_equal(pipeline_outputs.images, outputs))
+        outputs = pipeline(**inputs).images
+        self.assertTrue(np.array_equal(pipeline_outputs, outputs))
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
