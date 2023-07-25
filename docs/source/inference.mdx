@@ -211,6 +211,7 @@ image.save("fantasy_landscape.png")
 
 
 ### Inpaint
+
 ```python
 import PIL
 import requests
@@ -220,9 +221,11 @@ from optimum.intel import OVStableDiffusionInpaintPipeline
 
 model_id = "runwayml/stable-diffusion-inpainting"
 pipeline = OVStableDiffusionInpaintPipeline.from_pretrained(model_id, export=True)
+
 def download_image(url):
     response = requests.get(url)
     return PIL.Image.open(BytesIO(response.content)).convert("RGB")
+
 img_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo.png"
 mask_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo_mask.png"
 init_image = download_image(img_url).resize((512, 512))
