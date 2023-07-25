@@ -237,7 +237,7 @@ pipeline.save_pretrained(save_directory)
 
 ```
 
-| Image 1 | Image 2|
+|   |   |
 |---|---|
 | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich.png) | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich_2.png) |
 
@@ -271,6 +271,7 @@ from diffusers.utils import load_image
 
 model_id = "stabilityai/stable-diffusion-xl-refiner-0.9"
 pipeline = OVStableDiffusionXLImg2ImgPipeline.from_pretrained(model_id, export=True)
+
 url = "https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/castle_friedrich.png"
 image = load_image(url).convert("RGB")
 prompt = "medieval castle by Caspar David Friedrich"
