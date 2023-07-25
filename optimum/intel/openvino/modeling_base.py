@@ -25,8 +25,8 @@ from openvino.runtime import Core
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
+from optimum.exporters.tasks import TasksManager
 from optimum.modeling_base import OptimizedModel
 
 from ..utils.import_utils import is_transformers_version

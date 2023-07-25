@@ -25,8 +25,8 @@ from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
+from optimum.exporters.tasks import TasksManager
 from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_transformers_version

@@ -47,4 +47,10 @@ from .modeling_seq2seq import OVModelForSeq2SeqLM
 
 
 if is_diffusers_available():
-    from .modeling_diffusion import OVStableDiffusionPipeline
+    from .modeling_diffusion import (
+        OVStableDiffusionImg2ImgPipeline,
+        OVStableDiffusionInpaintPipeline,
+        OVStableDiffusionPipeline,
+        OVStableDiffusionXLImg2ImgPipeline,
+        OVStableDiffusionXLPipeline,
+    )

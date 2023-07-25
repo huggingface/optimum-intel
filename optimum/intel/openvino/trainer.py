@@ -78,8 +78,8 @@ from transformers.utils import (
     logging,
 )
 
-from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
+from optimum.exporters.tasks import TasksManager
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_transformers_version

@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 Optimum Intel can be used to load optimized models from the [Hugging Face Hub](https://huggingface.co/models?library=openvino&sort=downloads) and create pipelines to run inference with OpenVINO Runtime without rewriting your APIs.
 
-## Switching from Transformers to Optimum Inference
+## Switching from Transformers to Optimum
 
 You can now easily perform inference with OpenVINO Runtime on a variety of Intel processors ([see](https://docs.openvino.ai/latest/openvino_docs_OV_UG_supported_plugins_Supported_Devices.html) the full list of supported devices). 
 For that, just replace the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
@@ -102,7 +102,7 @@ model.half()
 model.compile()
 ```
 
-## Export and inference of sequence-to-sequence models
+## Sequence-to-sequence models
 
 Sequence-to-sequence (Seq2Seq) models, that generate a new sequence from an input, can also be used when running inference with OpenVINO. When Seq2Seq models are exported to the OpenVINO IR, they are decomposed into two parts : the encoder and the "decoder" (which actually consists of the decoder with the language modeling head), that are later combined during inference.
 To leverage the pre-computed key/values hidden-states to speed up sequential decoding, simply pass `use_cache=True` to the `from_pretrained()` method. An additional model component will be exported: the "decoder" with pre-computed key/values as one of its inputs.
@@ -128,7 +128,7 @@ tokenizer.save_pretrained(save_directory)
 [{'translation_text': "Il n'est jamais sorti sans un livre sous son bras, et il est souvent revenu avec deux."}]
 ```
 
-## Export and inference of Stable Diffusion models
+## Stable Diffusion
 
 Stable Diffusion models can also be used when running inference with OpenVINO. When Stable Diffusion models
 are exported to the OpenVINO format, they are decomposed into three components that are later combined during inference:
@@ -140,10 +140,11 @@ are exported to the OpenVINO format, they are decomposed into three components t
 Make sure you have 🤗 Diffusers installed.
 
 To install `diffusers`:
-```
-pip install diffusers
+```bash
+pip install optimum[diffusers]
 ```
 
+### Text-to-Image
 Here is an example of how you can load an OpenVINO Stable Diffusion model and run inference using OpenVINO Runtime:
 
 ```python
@@ -188,6 +189,28 @@ In case you want to change any parameters such as the outputs height or width, y
 ![img](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/stable_diffusion_v1_5_sail_boat_rembrandt.png)
 
 
+### Image-to-Image
+
+```python
+import requests
+import torch
+from PIL import Image
+from io import BytesIO
+from optimum.intel import OVStableDiffusionImg2ImgPipeline
+
+model_id = "runwayml/stable-diffusion-v1-5"
+pipeline = OVStableDiffusionImg2ImgPipeline.from_pretrained(model_id, export=True)
+url = "https://raw.githubusercontent.com/CompVis/stable-diffusion/main/assets/stable-samples/img2img/sketch-mountains-input.jpg"
+response = requests.get(url)
+init_image = Image.open(BytesIO(response.content)).convert("RGB")
+init_image = init_image.resize((768, 512))
+prompt = "A fantasy landscape, trending on artstation"
+image = pipeline(prompt=prompt, image=init_image, strength=0.75, guidance_scale=7.5).images[0]
+image.save("fantasy_landscape.png")
+```
+
+
+
 ## Supported tasks
 
 As shown in the table below, each task is associated with a class enabling to automatically load your model.
@@ -205,3 +228,7 @@ As shown in the table below, each task is associated with a class enabling to au
 | `text-generation`                    | `OVModelForCausalLM`                 |
 | `text2text-generation`               | `OVModelForSeq2SeqLM`                |
 | `text-to-image`                      | `OVStableDiffusionPipeline`          |
+| `text-to-image`                      | `OVStableDiffusionXLPipeline`        |
+| `image-to-image`                     | `OVStableDiffusionImg2ImgPipeline`   |
+| `image-to-image`                     | `OVStableDiffusionXLImg2ImgPipeline` |
+| `inpaint`                            | `OVStableDiffusionPipeline`          |
