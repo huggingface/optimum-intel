@@ -231,52 +231,6 @@ prompt = "Face of a yellow cat, high resolution, sitting on a park bench"
 image = pipeline(prompt=prompt, image=init_image, mask_image=mask_image).images[0]
 ```
 
-
-## Stable Diffusion XL
-
-Before using `OVtableDiffusionXLPipeline` make sure to have `diffusers` and `invisible_watermark` installed. You can install the libraries as follows:
-
-```bash
-pip install diffusers
-pip install invisible-watermark>=2.0
-```
-
-### Text-to-Image
-
-Here is an example of how you can load a PyTorch SD XL model, convert it to the adapted format on-the-fly and run inference with OpenVINO Runtime:
-
-```python
-from optimum.intel import OVtableDiffusionXLPipeline
-
-model_id = "stabilityai/stable-diffusion-xl-base-0.9"
-pipeline = OVtableDiffusionXLPipeline.from_pretrained(model_id, export=True)
-prompt = "sailing ship in storm by Leonardo da Vinci"
-image = pipeline(prompt).images[0]
-
-# Don't forget to save your OpenVINO model
-save_directory = "a_local_path"
-pipeline.save_pretrained(save_directory)
-
-```
-
-### Image-to-Image
-
-The image can be refined by making use of a model like [stabilityai/stable-diffusion-xl-refiner-0.9](https://huggingface.co/stabilityai/stable-diffusion-xl-refiner-0.9). In this case, you only have to output the latents from the base model.
-
-
-```python
-from optimum.intel import OVStableDiffusionXLImg2ImgPipeline
-
-use_refiner = True
-model_id = "stabilityai/stable-diffusion-xl-refiner-0.9"
-refiner = OVStableDiffusionXLImg2ImgPipeline.from_pretrained(model_id, export=True)
-
-image = pipeline(prompt=prompt, output_type="latent" if use_refiner else "pil").images[0]
-image = refiner(prompt=prompt, image=image[None, :]).images[0]
-image.save("sailing_ship.png")
-```
-
-
 ## Supported tasks
 
 As shown in the table below, each task is associated with a class enabling to automatically load your model.
@@ -293,6 +247,8 @@ As shown in the table below, each task is associated with a class enabling to au
 | `fill-mask`                          | `OVModelForMaskedLM`                 |
 | `text-generation`                    | `OVModelForCausalLM`                 |
 | `text2text-generation`               | `OVModelForSeq2SeqLM`                |
-| `text-to-image`                      | `OVStableDiffusionPipeline`,        `OVStableDiffusionXLPipeline`|
-| `image-to-image`                     | `OVStableDiffusionImg2ImgPipeline`, `OVStableDiffusionXLImg2ImgPipeline`|
+| `text-to-image`                      | `OVStableDiffusionPipeline`          |
+| `text-to-image`                      | `OVStableDiffusionXLPipeline`        |
+| `image-to-image`                     | `OVStableDiffusionImg2ImgPipeline`   |
+| `image-to-image`                     | `OVStableDiffusionXLImg2ImgPipeline` |
 | `inpaint`                            | `OVStableDiffusionPipeline`          |
