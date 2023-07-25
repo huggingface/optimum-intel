@@ -38,7 +38,7 @@ To easily save the resulting model, you can use the `save_pretrained()` method, 
 
 ```python
 # Save the exported model
-save_directory = "a_local_path"
+save_directory = "openvino_distilbert"
 model.save_pretrained(save_directory)
 tokenizer.save_pretrained(save_directory)
 ```
@@ -121,7 +121,7 @@ text = "He never went out without a book under his arm, and he often came back w
 result = translation_pipe(text)
 
 # Save the exported model
-save_directory = "a_local_path"
+save_directory = "openvino_t5"
 model.save_pretrained(save_directory)
 tokenizer.save_pretrained(save_directory)
 
@@ -151,18 +151,18 @@ Here is an example of how you can load an OpenVINO Stable Diffusion model and ru
 from optimum.intel import OVStableDiffusionPipeline
 
 model_id = "echarlaix/stable-diffusion-v1-5-openvino"
-stable_diffusion = OVStableDiffusionPipeline.from_pretrained(model_id)
+pipeline = OVStableDiffusionPipeline.from_pretrained(model_id)
 prompt = "sailing ship in storm by Rembrandt"
-images = stable_diffusion(prompt).images
+images = pipeline(prompt).images
 ```
 
 To load your PyTorch model and convert it to OpenVINO on-the-fly, you can set `export=True`.
 
 ```python
 model_id = "runwayml/stable-diffusion-v1-5"
-stable_diffusion = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
+pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
 # Don't forget to save the exported model
-stable_diffusion.save_pretrained("a_local_path")
+pipeline.save_pretrained("openvino-sd-v1-5")
 ```
 
 To further speed up inference, the model can be statically reshaped :
@@ -175,12 +175,12 @@ height = 512
 width = 512
 
 # Statically reshape the model
-stable_diffusion.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt)
+pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt)
 # Compile the model before the first inference
-stable_diffusion.compile()
+pipeline.compile()
 
 # Run inference
-images = stable_diffusion(prompt, height=height, width=width, num_images_per_prompt=num_images_per_prompt).images
+images = pipeline(prompt, height=height, width=width, num_images_per_prompt=num_images_per_prompt).images
 ```
 
 In case you want to change any parameters such as the outputs height or width, you'll need to statically reshape your model once again.
@@ -200,6 +200,7 @@ from optimum.intel import OVStableDiffusionImg2ImgPipeline
 
 model_id = "runwayml/stable-diffusion-v1-5"
 pipeline = OVStableDiffusionImg2ImgPipeline.from_pretrained(model_id, export=True)
+
 url = "https://raw.githubusercontent.com/CompVis/stable-diffusion/main/assets/stable-samples/img2img/sketch-mountains-input.jpg"
 response = requests.get(url)
 init_image = Image.open(BytesIO(response.content)).convert("RGB")
@@ -232,9 +233,7 @@ prompt = "train station by Caspar David Friedrich"
 image = pipeline(prompt).images[0]
 
 # Don't forget to save your OpenVINO model
-save_directory = "a_local_path"
-pipeline.save_pretrained(save_directory)
-
+pipeline.save_pretrained("openvino-sd-xl-base-0.9")
 ```
 
 |   |   |
@@ -256,10 +255,7 @@ refiner = OVStableDiffusionXLImg2ImgPipeline.from_pretrained(model_id, export=Tr
 
 image = pipeline(prompt=prompt, output_type="latent" if use_refiner else "pil").images[0]
 image = refiner(prompt=prompt, image=image[None, :]).images[0]
-image.save("sailing_ship.png")
 ```
-
-
 
 ### Image-to-Image
 
@@ -276,9 +272,8 @@ url = "https://huggingface.co/datasets/optimum/documentation-images/resolve/main
 image = load_image(url).convert("RGB")
 prompt = "medieval castle by Caspar David Friedrich"
 image = pipeline(prompt, image=image).images[0]
+image.save("medieval_castle.png")
 ```
-
-
 
 ## Supported tasks
 
