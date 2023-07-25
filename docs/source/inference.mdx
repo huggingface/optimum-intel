@@ -221,7 +221,7 @@ pip install invisible-watermark>=2.0
 
 ### Text-to-Image
 
-Here is an example of how you can load a PyTorch SD XL model, convert it to the adapted format on-the-fly and run inference with OpenVINO Runtime:
+Here is an example of how you can load a PyTorch SDXL model, convert it to the adapted format on-the-fly and run inference with OpenVINO Runtime:
 
 ```python
 from optimum.intel import OVtableDiffusionXLPipeline
@@ -260,7 +260,10 @@ image.save("sailing_ship.png")
 ```
 
 
+
 ### Image-to-Image
+
+You can use SDXL as follows for *image-to-image*:
 
 ```python
 from optimum.intel import OVStableDiffusionXLImg2ImgPipeline
