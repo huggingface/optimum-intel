@@ -237,11 +237,12 @@ pipeline.save_pretrained(save_directory)
 
 ```
 
+| Image 1 | Image 2|
 |---|---|
-| ![img](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich.png) | ![img](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich_2.png) |
+| ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich.png) | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich_2.png) |
 
 
-### Image-to-Image
+### Refining the image output
 
 The image can be refined by making use of a model like [stabilityai/stable-diffusion-xl-refiner-0.9](https://huggingface.co/stabilityai/stable-diffusion-xl-refiner-0.9). In this case, you only have to output the latents from the base model.
 
@@ -257,6 +258,22 @@ image = pipeline(prompt=prompt, output_type="latent" if use_refiner else "pil").
 image = refiner(prompt=prompt, image=image[None, :]).images[0]
 image.save("sailing_ship.png")
 ```
+
+
+### Image-to-Image
+
+```python
+from optimum.intel import OVStableDiffusionXLImg2ImgPipeline
+from diffusers.utils import load_image
+
+model_id = "stabilityai/stable-diffusion-xl-refiner-0.9"
+pipeline = OVStableDiffusionXLImg2ImgPipeline.from_pretrained(model_id, export=True)
+url = "https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/castle_friedrich.png"
+image = load_image(url).convert("RGB")
+prompt = "medieval castle by Caspar David Friedrich"
+image = pipeline(prompt, image=image).images[0]
+```
+
 
 
 ## Supported tasks
