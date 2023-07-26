@@ -244,8 +244,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel):
                 else:
                     kwargs[name] = load_method(new_model_save_dir)
 
+        unet = cls.load_model(new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name)
+
         components = {
-            "unet": new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name,
             "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
             "vae_decoder": new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
             "text_encoder": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
@@ -253,12 +254,25 @@ class OVStableDiffusionPipelineBase(OVBaseModel):
         }
 
         for key, value in components.items():
-            kwargs[key] = cls.load_model(value) if value.is_file() else None
+            components[key] = cls.load_model(value) if value.is_file() else None
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
-        return cls(config=config, model_save_dir=model_save_dir, **kwargs)
+        return cls(
+            vae_decoder=components["vae_decoder"],
+            text_encoder=components["text_encoder"],
+            unet=unet,
+            config=config,
+            tokenizer=kwargs.pop("tokenizer", None),
+            scheduler=kwargs.pop("scheduler"),
+            feature_extractor=kwargs.pop("feature_extractor", None),
+            vae_encoder=components["vae_encoder"],
+            text_encoder_2=components["text_encoder_2"],
+            tokenizer_2=kwargs.pop("tokenizer_2", None),
+            model_save_dir=model_save_dir,
+            **kwargs,
+        )
 
     @classmethod
     def _from_transformers(
