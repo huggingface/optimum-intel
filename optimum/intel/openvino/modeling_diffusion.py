@@ -470,7 +470,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel):
         self.unet._compile()
         for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
             if component is not None:
-                component._compile
+                component._compile()
 
     @classmethod
     def _load_config(cls, config_name_or_path: Union[str, os.PathLike], **kwargs):

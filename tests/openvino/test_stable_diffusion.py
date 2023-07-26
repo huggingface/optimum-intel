@@ -25,6 +25,7 @@ from diffusers import (
     StableDiffusionXLPipeline,
 )
 from diffusers.utils import floats_tensor, load_image
+from openvino.runtime.ie_api import CompiledModel
 from parameterized import parameterized
 from utils_tests import MODEL_NAMES, SEED
 
@@ -352,8 +353,12 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_image_reproducibility(self, model_arch: str):
         pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True)
-        batch_size, num_images_per_prompt, height, width = 2, 3, 64, 128
 
+        # Verify every subcomponent is compiled by default
+        for component in {"unet", "vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"}:
+            self.assertIsInstance(getattr(pipeline, component).request, CompiledModel)
+
+        batch_size, num_images_per_prompt, height, width = 2, 3, 64, 128
         inputs = _generate_inputs(batch_size)
         np.random.seed(0)
         ov_outputs_1 = pipeline(**inputs, height=height, width=width, num_images_per_prompt=num_images_per_prompt)
