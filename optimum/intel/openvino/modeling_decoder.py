@@ -95,6 +95,8 @@ _SUPPORTED_ARCHITECTURES = {
     """,
 )
 class OVBaseDecoderModel(OVModel):
+    disable_pastkv_lp_opt = False
+
     def __init__(
         self,
         model: openvino.runtime.Model,
@@ -110,7 +112,7 @@ class OVBaseDecoderModel(OVModel):
                 "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
             )
 
-        model = self._try_modify_pastkv_to_lowprecision(model, ov_config, device)
+        model = self._try_modify_pastkv_to_lowprecision(model, ov_config, device, dynamic_shapes)
 
         super().__init__(
             model,
@@ -140,7 +142,11 @@ class OVBaseDecoderModel(OVModel):
             )
 
     def _try_modify_pastkv_to_lowprecision(
-        self, model: openvino.runtime.Model, ov_config: Optional[Dict[str, str]] = None, device: str = "CPU"
+        self,
+        model: openvino.runtime.Model,
+        ov_config: Optional[Dict[str, str]] = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
     ):
         device = device.upper()
         pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
@@ -155,7 +161,7 @@ class OVBaseDecoderModel(OVModel):
 
         use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs)
         self.model_org = model
-        if pastkv_will_use != Type.f32 and use_cache:
+        if pastkv_will_use != Type.f32 and use_cache and self.disable_pastkv_lp_opt is False:
             ppp = PrePostProcessor(model.clone())
             need_gen = False
             for key in model.inputs:
@@ -168,6 +174,10 @@ class OVBaseDecoderModel(OVModel):
                     ppp.output(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
             if need_gen:
                 model = ppp.build()
+                if dynamic_shapes:
+                    height = -1 if self.export_feature == "image-classification" else None
+                    width = -1 if self.export_feature == "image-classification" else None
+                    self.model_org = self._reshape(self.model_org, -1, -1, height, width)
 
         return model
 
@@ -181,7 +191,7 @@ class OVBaseDecoderModel(OVModel):
                 The directory where to save the model files.
         """
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
-        openvino.runtime.serialize(self.model_org, dst_path)
+        openvino.runtime.serialize(self.model if self.disable_pastkv_lp_opt else self.model_org, dst_path)
 
     @classmethod
     def _from_transformers(
@@ -473,3 +483,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     def can_generate(self):
         """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
         return True
+
+
+# bf16 may be in used when quantization, disable pastkv lower precision optimization
+class OVModelForCausalLMDisablePastKVOpt(OVModelForCausalLM):
+    disable_pastkv_lp_opt = True
