@@ -17,8 +17,10 @@ To install the latest release of 🤗 Optimum Intel with the corresponding requi
 
 | Accelerator                                                                                                      | Installation                                                         |
 |:-----------------------------------------------------------------------------------------------------------------|:---------------------------------------------------------------------|
-| [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `python -m pip install "optimum[neural-compressor]"`                 |
-| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `python -m pip install "optimum[openvino,nncf]"`                     |
+| [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `pip install --upgrade-strategy eager "optimum[neural-compressor]"`  |
+| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `pip install --upgrade-strategy eager "optimum[openvino,nncf]"`      |
+
+The `--upgrade-strategy eager` option is needed to ensure `optimum-intel` is upgraded to the latest version.
 
 We recommend creating a [virtual environment](https://packaging.python.org/en/latest/guides/installing-using-pip-and-virtual-environments/#creating-a-virtual-environment) and upgrading
 pip with `python -m pip install --upgrade pip`.
