@@ -74,7 +74,7 @@ else:
         [
             "OVModelForAudioClassification",
             "OVModelForCausalLM",
-            "OVModelForCausalLMDisablePastKVOpt",
+            "OVModelForCausalLMDisablePKVOpt",
             "OVModelForFeatureExtraction",
             "OVModelForImageClassification",
             "OVModelForMaskedLM",
@@ -152,7 +152,7 @@ if TYPE_CHECKING:
         from .openvino import (
             OVModelForAudioClassification,
             OVModelForCausalLM,
-            OVModelForCausalLMDisablePastKVOpt,
+            OVModelForCausalLMDisablePKVOpt,
             OVModelForFeatureExtraction,
             OVModelForImageClassification,
             OVModelForMaskedLM,

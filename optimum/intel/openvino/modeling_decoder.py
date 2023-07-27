@@ -95,7 +95,7 @@ _SUPPORTED_ARCHITECTURES = {
     """,
 )
 class OVBaseDecoderModel(OVModel):
-    disable_pastkv_lp_opt = False
+    disable_pkv_lp_opt = False
 
     def __init__(
         self,
@@ -149,35 +149,37 @@ class OVBaseDecoderModel(OVModel):
         dynamic_shapes: bool = True,
     ):
         device = device.upper()
-        pastkv_will_use = core.get_property(device, "INFERENCE_PRECISION_HINT")
+        pkv_precision = core.get_property(device, "INFERENCE_PRECISION_HINT")
         # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
         if ov_config:
-            user_precision_hint = ov_config.get("INFERENCE_PRECISION_HINT", "")
-            user_mode_hint = ov_config.get("EXECUTION_MODE_HINT", "")
-            if user_precision_hint in STR_TO_OV_TYPE:
-                pastkv_will_use = STR_TO_OV_TYPE[user_precision_hint]
-            elif user_mode_hint.upper() == "ACCURACY":
-                pastkv_will_use = Type.f32
+            config_precision_hint = ov_config.get("INFERENCE_PRECISION_HINT", "")
+            config_mode_hint = ov_config.get("EXECUTION_MODE_HINT", "")
+            if config_precision_hint in STR_TO_OV_TYPE:
+                pkv_precision = STR_TO_OV_TYPE[config_precision_hint]
+            elif config_mode_hint.upper() == "ACCURACY":
+                pkv_precision = Type.f32
 
         use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs)
-        self.model_org = model
-        if pastkv_will_use != Type.f32 and use_cache and self.disable_pastkv_lp_opt is False:
+        self._original_model = model
+        self._pkv_precision = Type.f32
+        if pkv_precision != Type.f32 and use_cache and self.disable_pkv_lp_opt is False:
             ppp = PrePostProcessor(model.clone())
             need_gen = False
             for key in model.inputs:
-                if "past_key_values" in key.get_any_name() and pastkv_will_use != key.get_element_type():
+                if "past_key_values" in key.get_any_name() and pkv_precision != key.get_element_type():
                     need_gen = True
-                    ppp.input(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
+                    ppp.input(key.get_any_name()).tensor().set_element_type(pkv_precision)
             for key in model.outputs:
-                if "present" in key.get_any_name() and pastkv_will_use != key.get_element_type():
+                if "present" in key.get_any_name() and pkv_precision != key.get_element_type():
                     need_gen = True
-                    ppp.output(key.get_any_name()).tensor().set_element_type(pastkv_will_use)
+                    ppp.output(key.get_any_name()).tensor().set_element_type(pkv_precision)
             if need_gen:
                 model = ppp.build()
+                self._pkv_precision = pkv_precision
                 if dynamic_shapes:
                     height = -1 if self.export_feature == "image-classification" else None
                     width = -1 if self.export_feature == "image-classification" else None
-                    self.model_org = self._reshape(self.model_org, -1, -1, height, width)
+                    self._original_model = self._reshape(self._original_model, -1, -1, height, width)
 
         return model
 
@@ -191,7 +193,7 @@ class OVBaseDecoderModel(OVModel):
                 The directory where to save the model files.
         """
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
-        openvino.runtime.serialize(self.model if self.disable_pastkv_lp_opt else self.model_org, dst_path)
+        openvino.runtime.serialize(self.model if self.disable_pkv_lp_opt else self._original_model, dst_path)
 
     @classmethod
     def _from_transformers(
@@ -329,9 +331,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         inputs = {}
         if past_key_values is not None:
-            pastkv_will_use = self.model.input(self.key_value_input_names[0]).get_element_type()
-            if pastkv_will_use == Type.bf16:
-                # numpy does not support bf16, pretending u16, should change to bf16
+            if self._pkv_precision == Type.bf16:
+                # numpy does not support bf16, pretending f16, should change to bf16
                 past_key_values = tuple(
                     Tensor(past_key_value, past_key_value.shape, Type.bf16)
                     for pkv_per_layer in past_key_values
@@ -486,5 +487,5 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
 
 # bf16 may be in used when quantization, disable pastkv lower precision optimization
-class OVModelForCausalLMDisablePastKVOpt(OVModelForCausalLM):
-    disable_pastkv_lp_opt = True
+class OVModelForCausalLMDisablePKVOpt(OVModelForCausalLM):
+    disable_pkv_lp_opt = True
