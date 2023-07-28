@@ -351,6 +351,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel):
         height: int = -1,
         width: int = -1,
         num_images_per_prompt: int = -1,
+        tokenizer_max_length: int = -1
     ):
         if batch_size == -1 or num_images_per_prompt == -1:
             batch_size = -1
@@ -383,13 +384,13 @@ class OVStableDiffusionPipelineBase(OVBaseModel):
                 shapes[inputs] = [batch_size, 5 if requires_aesthetics_score else 6]
             else:
                 shapes[inputs][0] = batch_size
-                shapes[inputs][1] = self.tokenizer.model_max_length
+                shapes[inputs][1] = tokenizer_max_length
         model.reshape(shapes)
         return model
 
-    def _reshape_text_encoder(self, model: openvino.runtime.Model, batch_size: int = -1):
+    def _reshape_text_encoder(self, model: openvino.runtime.Model, batch_size: int = -1, tokenizer_max_length: int = 77):
         if batch_size != -1:
-            shapes = {model.inputs[0]: [batch_size, self.tokenizer.model_max_length]}
+            shapes = {model.inputs[0]: [batch_size, tokenizer_max_length]}
             model.reshape(shapes)
         return model
 
@@ -432,13 +433,17 @@ class OVStableDiffusionPipelineBase(OVBaseModel):
     ):
         self.is_dynamic = -1 in {batch_size, height, width, num_images_per_prompt}
         self.vae_decoder.model = self._reshape_vae_decoder(self.vae_decoder.model, height, width)
-        self.unet.model = self._reshape_unet(self.unet.model, batch_size, height, width, num_images_per_prompt)
+        if self.tokenizer is None and self.tokenizer_2 is None:
+            tokenizer_max_len = -1
+        else:
+            tokenizer_max_len = self.tokenizer.model_max_length if self.tokenizer is not None else self.tokenizer_2.model_max_length
+        self.unet.model = self._reshape_unet(self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len)
 
         if self.text_encoder is not None:
-            self.text_encoder.model = self._reshape_text_encoder(self.text_encoder.model, batch_size)
+            self.text_encoder.model = self._reshape_text_encoder(self.text_encoder.model, batch_size, self.tokenizer.model_max_length)
 
         if self.text_encoder_2 is not None:
-            self.text_encoder_2.model = self._reshape_text_encoder(self.text_encoder_2.model, batch_size)
+            self.text_encoder_2.model = self._reshape_text_encoder(self.text_encoder_2.model, batch_size, self.tokenizer_2.model_max_length)
 
         if self.vae_encoder is not None:
             self.vae_encoder.model = self._reshape_vae_encoder(self.vae_encoder.model, batch_size, height, width)
