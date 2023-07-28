@@ -34,7 +34,8 @@ outputs = cls_pipe("He's a dreadful magician.")
 [{'label': 'NEGATIVE', 'score': 0.9919503927230835}]
 ```
 
-To easily save the resulting model, you can use the `save_pretrained()` method, which will save both the BIN and XML files describing the graph.
+To easily save the resulting model, you can use the `save_pretrained()` method, which will save both the BIN and XML files describing the graph. It is useful to save the tokenizer to the same directory, to enable easy loading of the tokenizer for the model.
+
 
 ```python
 # Save the exported model
@@ -52,17 +53,6 @@ model.reshape(1, 9)
 model.compile()
 ```
 
-Currently, OpenVINO only supports static shapes when running inference on Intel GPUs. FP16 precision can also be enabled in order to further decrease latency.
-
-```python
-# Fix the batch size to 1 and the sequence length to 9
-model.reshape(1, 9)
-# Enable FP16 precision
-model.half()
-model.to("gpu")
-# Compile the model before the first inference
-model.compile()
-```
 
 When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape. When instantiating your pipeline, you can specify the maximum total input sequence length after tokenization in order for shorter sequences to be padded and for longer sequences to be truncated.
 
@@ -89,7 +79,18 @@ qa_pipe = pipeline(
 metric = task_evaluator.compute(model_or_pipeline=qa_pipe, data=eval_dataset, metric="squad")
 ```
 
-By default the model will be compiled when instantiating our `OVModel`. In the case where the model is reshaped, placed to an other device or if FP16 precision is enabled, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by setting `compile=False`. The model should also be compiled before the first inference with `model.compile()`.
+
+To run inference on Intel integrated or discrete GPU, use `.to("gpu")`. On GPU, models run in FP16 precision by default. (See [OpenVINO documentation](https://docs.openvino.ai/nightly/openvino_docs_install_guides_configurations_for_intel_gpu.html) about installing drivers for GPU inference).
+
+```python
+# Static shapes speed up inference
+model.reshape(1, 9)
+model.to("gpu")
+# Compile the model before the first inference
+model.compile()
+```
+
+By default the model will be compiled when instantiating our `OVModel`. In the case where the model is reshaped or placed to another device, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by setting `compile=False`. The model can be compiled before the first inference with `model.compile()`.
 
 ```python
 from optimum.intel import OVModelForSequenceClassification
@@ -97,17 +98,33 @@ from optimum.intel import OVModelForSequenceClassification
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 # Load the model and disable the model compilation
 model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, compile=False)
-model.half()
+# Reshape to a static sequence length of 128
+model.reshape(1,128)
 # Compile the model before the first inference
 model.compile()
+```
+
+It is possible to pass an `ov_config` parameter to `from_pretrained()` with custom OpenVINO configuration values. This can be used for example to enable full precision inference on devices where FP16 or BF16 inference precision is used by default.
+
+
+```python
+model = OVModelForSequenceClassification.from_pretrained(model_id, ov_config={"INFERENCE_PRECISION_HINT":"f32"})
+```
+
+Optimum Intel leverages OpenVINO's model caching to speed up model compiling. By default a `model_cache` directory is created in the model's directory in the [Hugging Face Hub cache](https://huggingface.co/docs/huggingface_hub/main/en/guides/manage-cache). To override this, use the ov_config parameter and set `CACHE_DIR` to a different value. To disable model caching, set `CACHE_DIR` to an empty string.
+
+
+```python
+model = OVModelForSequenceClassification.from_pretrained(model_id, ov_config={"CACHE_DIR":""})
 ```
 
 ## Sequence-to-sequence models
 
 Sequence-to-sequence (Seq2Seq) models, that generate a new sequence from an input, can also be used when running inference with OpenVINO. When Seq2Seq models are exported to the OpenVINO IR, they are decomposed into two parts : the encoder and the "decoder" (which actually consists of the decoder with the language modeling head), that are later combined during inference.
-To leverage the pre-computed key/values hidden-states to speed up sequential decoding, simply pass `use_cache=True` to the `from_pretrained()` method. An additional model component will be exported: the "decoder" with pre-computed key/values as one of its inputs.
-This specific export comes from the fact that during the first pass, the decoder has no pre-computed key/values hidden-states, while during the rest of the generation past key/values will be used to speed up sequential decoding.
-Here is an example on how you can run inference for a translation task using an MarianMT model and then export it to the OpenVINO IR:
+To speed up sequential decoding, a cache with pre-computed key/values hidden-states will be used by default. An additional model component will be exported: the "decoder" with pre-computed key/values as one of its inputs.  This specific export comes from the fact that during the first pass, the decoder has no pre-computed key/values hidden-states, while during the rest of the generation past key/values will be used to speed up sequential decoding. To disable this cache, set `use_cache=False` in the `from_pretrained()` method.
+
+Here is an example on how you can run inference for a translation task using a T5 model and then export it to OpenVINO IR:
+
 
 ```python
 from transformers import AutoTokenizer, pipeline
