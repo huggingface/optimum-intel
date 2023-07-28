@@ -246,14 +246,14 @@ from optimum.intel import OVStableDiffusionXLPipeline
 
 model_id = "stabilityai/stable-diffusion-xl-base-1.0"
 base = OVStableDiffusionXLPipeline.from_pretrained(model_id)
-prompt = "medieval castle by Caspar David Friedrich"
+prompt = "train station by Caspar David Friedrich"
 image = base(prompt).images[0]
-image.save("medieval_castle.png")
+image.save("train_station.png")
 ```
 
 |   |   |
 |---|---|
-| ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/medieval_castle_4.png) | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/medieval_castle_7.png) |
+| ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich.png) | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich_2.png) |
 
 
 ### Image-to-Image
