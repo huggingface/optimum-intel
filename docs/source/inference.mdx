@@ -217,7 +217,7 @@ Before using `OVtableDiffusionXLPipeline` make sure to have `diffusers` and `inv
 
 ```bash
 pip install diffusers
-pip install invisible-watermark>=2.0
+pip install invisible-watermark>=0.2.0
 ```
 
 ### Text-to-Image
@@ -225,10 +225,10 @@ pip install invisible-watermark>=2.0
 Here is an example of how you can load a PyTorch SDXL model, convert it to the adapted format on-the-fly and run inference with OpenVINO Runtime:
 
 ```python
-from optimum.intel import OVtableDiffusionXLPipeline
+from optimum.intel import OVStableDiffusionXLPipeline
 
 model_id = "stabilityai/stable-diffusion-xl-base-1.0"
-base = OVtableDiffusionXLPipeline.from_pretrained(model_id, export=True)
+base = OVStableDiffusionXLPipeline.from_pretrained(model_id, export=True)
 prompt = "train station by Caspar David Friedrich"
 image = base(prompt).images[0]
 
