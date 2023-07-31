@@ -117,6 +117,7 @@ class OVBaseDecoderModel(OVModel):
             dynamic_shapes=True,
             ov_config=ov_config,
             model_save_dir=model_save_dir,
+            compile=False,
             **kwargs,
         )
 
@@ -130,6 +131,9 @@ class OVBaseDecoderModel(OVModel):
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
         self.update_pkv_precision()
+        enable_compilation = kwargs.get("compile", True)
+        if enable_compilation:
+            self.compile()
 
         if use_cache ^ self.use_cache:
             raise ValueError(
