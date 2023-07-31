@@ -95,8 +95,6 @@ _SUPPORTED_ARCHITECTURES = {
     """,
 )
 class OVBaseDecoderModel(OVModel):
-    disable_pkv_lp_opt = False
-
     def __init__(
         self,
         model: openvino.runtime.Model,
@@ -111,8 +109,6 @@ class OVBaseDecoderModel(OVModel):
             raise ValueError(
                 "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
             )
-
-        model = self._try_modify_pastkv_to_lowprecision(model, ov_config, device, dynamic_shapes)
 
         super().__init__(
             model,
@@ -132,6 +128,7 @@ class OVBaseDecoderModel(OVModel):
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
+        self.update_pkv_precision()
 
         if use_cache ^ self.use_cache:
             raise ValueError(
@@ -141,59 +138,31 @@ class OVBaseDecoderModel(OVModel):
                 "To export your model, simply set `export=True`."
             )
 
-    def _try_modify_pastkv_to_lowprecision(
-        self,
-        model: openvino.runtime.Model,
-        ov_config: Optional[Dict[str, str]] = None,
-        device: str = "CPU",
-        dynamic_shapes: bool = True,
-    ):
-        device = device.upper()
-        pkv_precision = core.get_property(device, "INFERENCE_PRECISION_HINT")
+    def update_pkv_precision(self):
+        if not self.use_cache:
+            return
+        device = self._device.upper()
+        inference_precision_hint = core.get_property(device, "INFERENCE_PRECISION_HINT")
+        pkv_precision = Type.f32
         # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
-        if ov_config:
-            config_precision_hint = ov_config.get("INFERENCE_PRECISION_HINT", "")
-            config_mode_hint = ov_config.get("EXECUTION_MODE_HINT", "")
-            if config_precision_hint in STR_TO_OV_TYPE:
-                pkv_precision = STR_TO_OV_TYPE[config_precision_hint]
-            elif config_mode_hint.upper() == "ACCURACY":
-                pkv_precision = Type.f32
+        if self.ov_config:
+            inference_precision_hint = self.ov_config.get("INFERENCE_PRECISION_HINT", "")
+            if inference_precision_hint in STR_TO_OV_TYPE:
+                pkv_precision = STR_TO_OV_TYPE[inference_precision_hint]
 
-        use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs)
-        self._original_model = model
         self._pkv_precision = Type.f32
-        if pkv_precision != Type.f32 and use_cache and self.disable_pkv_lp_opt is False:
-            ppp = PrePostProcessor(model.clone())
-            need_gen = False
-            for key in model.inputs:
-                if "past_key_values" in key.get_any_name() and pkv_precision != key.get_element_type():
-                    need_gen = True
-                    ppp.input(key.get_any_name()).tensor().set_element_type(pkv_precision)
-            for key in model.outputs:
-                if "present" in key.get_any_name() and pkv_precision != key.get_element_type():
-                    need_gen = True
-                    ppp.output(key.get_any_name()).tensor().set_element_type(pkv_precision)
-            if need_gen:
-                model = ppp.build()
-                self._pkv_precision = pkv_precision
-                if dynamic_shapes:
-                    height = -1 if self.export_feature == "image-classification" else None
-                    width = -1 if self.export_feature == "image-classification" else None
-                    self._original_model = self._reshape(self._original_model, -1, -1, height, width)
-
-        return model
-
-    def _save_pretrained(self, save_directory: Union[str, Path]):
-        """
-        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
-        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
-
-        Arguments:
-            save_directory (`str` or `Path`):
-                The directory where to save the model files.
-        """
-        dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
-        openvino.runtime.serialize(self.model if self.disable_pkv_lp_opt else self._original_model, dst_path)
+        ppp = PrePostProcessor(self.model)
+        for key in self.model.inputs:
+            if "past_key_values" in key.get_any_name() and pkv_precision != key.get_element_type():
+                ppp.input(key.get_any_name()).tensor().set_element_type(pkv_precision)
+        for key in self.model.outputs:
+            if "present" in key.get_any_name() and pkv_precision != key.get_element_type():
+                ppp.output(key.get_any_name()).tensor().set_element_type(pkv_precision)
+                
+        self.model = ppp.build()
+        self._pkv_precision = pkv_precision
+        if self.is_dynamic:
+            self.model = self._reshape(self.model, -1, -1)
 
     @classmethod
     def _from_transformers(
@@ -484,8 +453,3 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     def can_generate(self):
         """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
         return True
-
-
-# bf16 may be in used when quantization, disable pastkv lower precision optimization
-class OVModelForCausalLMDisablePKVOpt(OVModelForCausalLM):
-    disable_pkv_lp_opt = True

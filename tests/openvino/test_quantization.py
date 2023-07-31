@@ -38,6 +38,7 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForCausalLMDisablePKVOpt,
     OVModelForTokenClassification,
+    OVModelForCausalLM,
     OVQuantizer,
     OVTrainer,
 )
@@ -65,7 +66,7 @@ class OVQuantizerTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 42, 32),
-        (OVModelForCausalLMDisablePKVOpt, "hf-internal-testing/tiny-random-gpt2", 41, 21),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 21),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)

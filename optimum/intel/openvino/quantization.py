@@ -257,9 +257,11 @@ class OVQuantizer(OptimumQuantizer):
             batch_size=batch_size,
             remove_unused_columns=remove_unused_columns,
             data_collator=data_collator,
-        )
+        )        
 
         # Prefeth past_key_values
+        self.model.ov_config["INFERENCE_PRECISION_HINT"] = "f32"
+        self.model.update_pkv_precision()
         self.model.compile()
         subset_size = kwargs.get("subset_size", 300)
         data_cache = []
