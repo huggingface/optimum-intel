@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 import logging
-import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
@@ -34,7 +33,7 @@ from optimum.utils import NormalizedConfigManager
 from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
+from .utils import ONNX_WEIGHTS_NAME, STR_TO_OV_TYPE
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -158,7 +157,7 @@ class OVBaseDecoderModel(OVModel):
         for key in self.model.outputs:
             if "present" in key.get_any_name() and pkv_precision != key.get_element_type():
                 ppp.output(key.get_any_name()).tensor().set_element_type(pkv_precision)
-                
+
         self.model = ppp.build()
         self._pkv_precision = pkv_precision
         if self.is_dynamic:

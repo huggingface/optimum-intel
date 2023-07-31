@@ -257,7 +257,7 @@ class OVQuantizer(OptimumQuantizer):
             batch_size=batch_size,
             remove_unused_columns=remove_unused_columns,
             data_collator=data_collator,
-        )        
+        )
 
         # Prefeth past_key_values
         self.model.ov_config["INFERENCE_PRECISION_HINT"] = "f32"
