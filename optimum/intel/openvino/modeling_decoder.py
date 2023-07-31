@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
@@ -33,7 +34,7 @@ from optimum.utils import NormalizedConfigManager
 from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .utils import ONNX_WEIGHTS_NAME, STR_TO_OV_TYPE
+from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -127,6 +128,7 @@ class OVBaseDecoderModel(OVModel):
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
+        self._original_model = self.model.clone()  # keep original model for serialization
         self.update_pkv_precision()
 
         if use_cache ^ self.use_cache:
@@ -162,6 +164,19 @@ class OVBaseDecoderModel(OVModel):
         self._pkv_precision = pkv_precision
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
+        self.request = None
+
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        """
+        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
+        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
+
+        Arguments:
+            save_directory (`str` or `Path`):
+                The directory where to save the model files.
+        """
+        dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
+        openvino.runtime.serialize(self._original_model, dst_path)
 
     @classmethod
     def _from_transformers(
