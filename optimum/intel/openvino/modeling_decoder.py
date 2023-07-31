@@ -139,17 +139,19 @@ class OVBaseDecoderModel(OVModel):
                 "To export your model, simply set `export=True`."
             )
 
-    def update_pkv_precision(self):
+    def update_pkv_precision(self, force_fp32=False):
         if not self.use_cache:
             return
-        device = self._device.upper()
-        inference_precision_hint = core.get_property(device, "INFERENCE_PRECISION_HINT")
+
         pkv_precision = Type.f32
-        # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
-        if self.ov_config:
-            inference_precision_hint = self.ov_config.get("INFERENCE_PRECISION_HINT", "")
-            if inference_precision_hint in STR_TO_OV_TYPE:
-                pkv_precision = STR_TO_OV_TYPE[inference_precision_hint]
+        if not force_fp32:
+            device = self._device.upper()
+            inference_precision_hint = core.get_property(device, "INFERENCE_PRECISION_HINT")
+            # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
+            if self.ov_config:
+                inference_precision_hint = self.ov_config.get("INFERENCE_PRECISION_HINT", "")
+                if inference_precision_hint in STR_TO_OV_TYPE:
+                    pkv_precision = STR_TO_OV_TYPE[inference_precision_hint]
 
         self._pkv_precision = Type.f32
         ppp = PrePostProcessor(self.model)
@@ -175,8 +177,9 @@ class OVBaseDecoderModel(OVModel):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
+        model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
-        openvino.runtime.serialize(self._original_model, dst_path)
+        openvino.runtime.serialize(model_to_save, dst_path)
 
     @classmethod
     def _from_transformers(

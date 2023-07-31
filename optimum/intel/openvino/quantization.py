@@ -260,8 +260,7 @@ class OVQuantizer(OptimumQuantizer):
         )
 
         # Prefeth past_key_values
-        self.model.ov_config["INFERENCE_PRECISION_HINT"] = "f32"
-        self.model.update_pkv_precision()
+        self.model.update_pkv_precision(True)
         self.model.compile()
         subset_size = kwargs.get("subset_size", 300)
         data_cache = []
