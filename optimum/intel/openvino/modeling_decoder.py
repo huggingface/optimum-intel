@@ -117,12 +117,13 @@ class OVBaseDecoderModel(OVModel):
             model,
             config,
             device=device,
-            dynamic_shapes=True,
+            dynamic_shapes=False,
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             **kwargs,
         )
 
+        self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
         self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs)
         self.main_input_name = "input_ids"
@@ -133,6 +134,8 @@ class OVBaseDecoderModel(OVModel):
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
         self.update_pkv_precision()
+        if self.is_dynamic:
+            self.model = self._reshape(self.model, -1, -1)
         if enable_compilation:
             self.compile()
 
@@ -155,10 +158,9 @@ class OVBaseDecoderModel(OVModel):
             # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
             if self.ov_config:
                 inference_precision_hint = self.ov_config.get("INFERENCE_PRECISION_HINT", "")
-                if inference_precision_hint in STR_TO_OV_TYPE:
-                    pkv_precision = STR_TO_OV_TYPE[inference_precision_hint]
+            if inference_precision_hint in STR_TO_OV_TYPE:
+                pkv_precision = STR_TO_OV_TYPE[inference_precision_hint]
 
-        self._pkv_precision = Type.f32
         ppp = PrePostProcessor(self.model)
         for key in self.model.inputs:
             if "past_key_values" in key.get_any_name() and pkv_precision != key.get_element_type():
@@ -169,8 +171,6 @@ class OVBaseDecoderModel(OVModel):
 
         self.model = ppp.build()
         self._pkv_precision = pkv_precision
-        if self.is_dynamic:
-            self.model = self._reshape(self.model, -1, -1)
         self.request = None
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
