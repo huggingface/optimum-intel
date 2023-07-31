@@ -42,7 +42,7 @@ from .modeling import (
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
 )
-from .modeling_decoder import OVModelForCausalLM, OVModelForCausalLMDisablePKVOpt
+from .modeling_decoder import OVModelForCausalLM
 from .modeling_seq2seq import OVModelForSeq2SeqLM
 
 
