@@ -36,7 +36,6 @@ from optimum.intel import (
     OVConfig,
     OVModelForQuestionAnswering,
     OVModelForSequenceClassification,
-    OVModelForCausalLMDisablePKVOpt,
     OVModelForTokenClassification,
     OVModelForCausalLM,
     OVQuantizer,
@@ -148,7 +147,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS = (
         (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 39),
-        (OVModelForCausalLMDisablePKVOpt, "hf-internal-testing/tiny-random-gpt2", 5),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 5),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS)
