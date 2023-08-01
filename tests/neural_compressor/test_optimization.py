@@ -39,7 +39,7 @@ from transformers import (
     pipeline,
     set_seed,
 )
-from utils_tests import INCTestMixin, _generate_dataset, SEED
+from utils_tests import SEED, INCTestMixin, _generate_dataset
 
 from optimum.intel import (
     INCConfig,
@@ -56,6 +56,7 @@ from optimum.pipelines import ORT_SUPPORTED_TASKS
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(SEED)
+
 
 class OptimizationTest(INCTestMixin):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (

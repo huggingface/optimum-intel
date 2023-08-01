@@ -16,14 +16,11 @@ import os
 import tempfile
 
 from neural_compressor.config import PostTrainingQuantConfig
-
 from parameterized import parameterized
 from transformers import AutoTokenizer, set_seed
-
-from utils_tests import INCTestMixin, _generate_dataset, SEED
+from utils_tests import SEED, INCTestMixin, _generate_dataset
 
 from optimum.intel import INCQuantizer
-
 from optimum.pipelines import ORT_SUPPORTED_TASKS
 
 
