@@ -61,7 +61,7 @@ quantizer.quantize(quantization_config=quantization_config, save_directory="dyna
 
 ### Static quantization
 
-In the same maneer we can apply static quantization, for which we also need to generate the calibration dataset in order to perform the calibration step.
+In the same manner we can apply static quantization, for which we also need to generate the calibration dataset in order to perform the calibration step.
 
 ```python
 from functools import partial
@@ -129,7 +129,7 @@ Please refer to INC [documentation](https://github.com/intel/neural-compressor/b
 
 ## During training optimization
 
-The [`INCTrainer`] class provides an API to train your model while combining different compression techniques such as knowledge distillation, pruning and quantization.
+The [`INCTrainer`](https://huggingface.co/docs/optimum/main/intel/reference_inc#optimum.intel.INCTrainer) class provides an API to train your model while combining different compression techniques such as knowledge distillation, pruning and quantization.
 The `INCTrainer` is very similar to the 🤗 Transformers [`Trainer`](https://huggingface.co/docs/transformers/main/en/main_classes/trainer#trainer), which can be replaced with minimal changes in your code.
 
 ### Quantization
@@ -181,8 +181,8 @@ trainer.save_model()
 
 ### Pruning
 
-In the same maneer, pruning can be applied by specifiying the pruning configuration detailing the desired pruning process.
-To know more about the different supported methodologies, you can refer to the Neural Compressor [documentation](https://github.com/intel/neural-compressor/tree/master/neural_compressor/pruner#pruning-types).
+In the same manner, pruning can be applied by specifying the pruning configuration detailing the desired pruning process.
+To know more about the different supported methodologies, you can refer to the Neural Compressor [documentation](https://github.com/intel/neural-compressor/tree/master/neural_compressor/compression/pruner#pruning-types).
 At the moment, pruning is applied on both the linear and the convolutional layers, and not on other layers such as the embeddings. It's important to mention that the pruning sparsity defined in the configuration will be applied on these layers, and thus will not results in the global model sparsity.
 
 ```diff
@@ -219,7 +219,7 @@ model = AutoModelForSequenceClassification.from_pretrained(save_dir)
 ```
 ### Knowledge distillation
 
-Knowledge distillation can also be applied in the same maneer.
+Knowledge distillation can also be applied in the same manner.
 To know more about the different supported methodologies, you can refer to the Neural Compressor [documentation](https://github.com/intel/neural-compressor/blob/master/docs/source/distillation.md)
 
 ```diff

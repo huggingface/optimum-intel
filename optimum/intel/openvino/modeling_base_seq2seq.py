@@ -24,8 +24,8 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export
+from optimum.exporters.tasks import TasksManager
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel

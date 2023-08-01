@@ -36,8 +36,8 @@ from optimum.intel import (
     OVConfig,
     OVModelForQuestionAnswering,
     OVModelForSequenceClassification,
-    OVModelForCausalLM,
     OVModelForTokenClassification,
+    OVModelForCausalLM,
     OVQuantizer,
     OVTrainer,
 )

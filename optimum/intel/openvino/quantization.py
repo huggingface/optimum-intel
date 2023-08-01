@@ -22,6 +22,7 @@ import nncf
 import openvino
 import torch
 import transformers
+from accelerate.data_loader import DataLoaderStateMixin
 from datasets import Dataset, load_dataset
 from nncf import NNCFConfig
 from nncf.torch import create_compressed_model, register_default_init_args
@@ -32,8 +33,8 @@ from openvino.runtime import Core, Tensor
 from torch.utils.data import DataLoader, RandomSampler, TensorDataset
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 
-from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
+from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES
@@ -55,6 +56,13 @@ logger = logging.getLogger(__name__)
 class OVDataLoader(PTInitializingDataLoader):
     def get_inputs(self, dataloader_output) -> Tuple[Tuple, Dict]:
         return (), dataloader_output
+
+    @property
+    def batch_size(self):
+        batch_size = self._data_loader.batch_size
+        if batch_size is None and isinstance(self._data_loader, DataLoaderStateMixin):
+            batch_size = self._data_loader.total_batch_size
+        return batch_size
 
 
 class OVQuantizer(OptimumQuantizer):
@@ -252,6 +260,7 @@ class OVQuantizer(OptimumQuantizer):
         )
 
         # Prefeth past_key_values
+        self.model.update_pkv_precision(True)
         self.model.compile()
         subset_size = kwargs.get("subset_size", 300)
         data_cache = []
@@ -290,7 +299,7 @@ class OVQuantizer(OptimumQuantizer):
 
         self.model.request = InferRequestWrapper(self.model.request)
         for _, data in enumerate(calibration_dataloader):
-            self.model.generate(**data, max_new_tokens=10)
+            self.model.generate(**data, max_new_tokens=1)
             if len(data_cache) >= subset_size:
                 break
         self.model.request = self.model.request.request

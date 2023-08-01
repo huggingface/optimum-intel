@@ -22,14 +22,17 @@ To generate the documentation for 🤗 Optimum Intel, simply run the following
 command from the root of the `optimum-intel` repository:
 
 ```bash
-make doc BUILD_DIR=intel-doc-build
+make doc BUILD_DIR=intel-doc-build VERSION=main
 ```
 
 This command will generate the HTML files that will be rendered as the
 documentation on the [Hugging Face
 website](https://huggingface.co/docs/optimum/index). You can inspect them in
 your favorite browser. You can also adapt the `BUILD_DIR` argument to any
-temporary folder that you prefer.
+temporary folder that you prefer. By default, the comamnd builds a Docker container
+with the latest files from the main branch. To build documentation for a different
+commit or a fork, use the `DEFAULT_CLONE_URL` and `COMMIT_SHA_SUBPACKAGE`
+environment variables.
 
 ---
 **NOTE**

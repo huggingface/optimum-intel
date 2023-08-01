@@ -43,6 +43,7 @@ from transformers import (
     pipeline,
     set_seed,
 )
+from utils_tests import MODEL_NAMES
 
 from optimum.intel.openvino import (
     OV_DECODER_NAME,
@@ -60,12 +61,6 @@ from optimum.intel.openvino import (
     OVModelForTokenClassification,
     OVStableDiffusionPipeline,
 )
-from optimum.intel.openvino.modeling_diffusion import (
-    OVModelTextEncoder,
-    OVModelUnet,
-    OVModelVaeDecoder,
-    OVModelVaeEncoder,
-)
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
@@ -74,72 +69,6 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 from optimum.utils.testing_utils import require_diffusers
-
-
-MODEL_NAMES = {
-    "albert": "hf-internal-testing/tiny-random-albert",
-    "audio_spectrogram_transformer": "Ericwang/tiny-random-ast",
-    "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
-    "bert": "hf-internal-testing/tiny-random-bert",
-    "bart": "hf-internal-testing/tiny-random-bart",
-    "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
-    "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
-    "blenderbot": "hf-internal-testing/tiny-random-blenderbot",
-    "bloom": "hf-internal-testing/tiny-random-BloomModel",
-    "camembert": "hf-internal-testing/tiny-random-camembert",
-    "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
-    "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
-    "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
-    "data2vec_vision": "hf-internal-testing/tiny-random-Data2VecVisionModel",
-    "data2vec_audio": "hf-internal-testing/tiny-random-Data2VecAudioModel",
-    "deberta": "hf-internal-testing/tiny-random-deberta",
-    "deberta_v2": "hf-internal-testing/tiny-random-DebertaV2Model",
-    "deit": "hf-internal-testing/tiny-random-deit",
-    "convnext": "hf-internal-testing/tiny-random-convnext",
-    "distilbert": "hf-internal-testing/tiny-random-distilbert",
-    "electra": "hf-internal-testing/tiny-random-electra",
-    "flaubert": "hf-internal-testing/tiny-random-flaubert",
-    # "gpt_bigcode": "bigcode/tiny_starcoder_py",
-    "gpt2": "hf-internal-testing/tiny-random-gpt2",
-    "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
-    "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
-    "gptj": "hf-internal-testing/tiny-random-GPTJModel",
-    "hubert": "hf-internal-testing/tiny-random-HubertModel",
-    "ibert": "hf-internal-testing/tiny-random-ibert",
-    "levit": "hf-internal-testing/tiny-random-LevitModel",
-    "longt5": "hf-internal-testing/tiny-random-longt5",
-    "llama": "fxmarty/tiny-llama-fast-tokenizer",
-    "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
-    "opt": "hf-internal-testing/tiny-random-OPTModel",
-    "marian": "sshleifer/tiny-marian-en-de",  # hf-internal-testing ones are broken
-    "mbart": "hf-internal-testing/tiny-random-mbart",
-    "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
-    "mobilenet_v1": "google/mobilenet_v1_0.75_192",
-    "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
-    "mobilevit": "hf-internal-testing/tiny-random-mobilevit",
-    "mt5": "stas/mt5-tiny-random",
-    "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
-    "pegasus": "hf-internal-testing/tiny-random-pegasus",
-    "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
-    "resnet": "hf-internal-testing/tiny-random-resnet",
-    "roberta": "hf-internal-testing/tiny-random-roberta",
-    "roformer": "hf-internal-testing/tiny-random-roformer",
-    "segformer": "hf-internal-testing/tiny-random-SegformerModel",
-    "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
-    "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
-    "sew": "hf-internal-testing/tiny-random-SEWModel",
-    "sew_d": "hf-internal-testing/tiny-random-SEWDModel",
-    "swin": "hf-internal-testing/tiny-random-SwinModel",
-    "t5": "hf-internal-testing/tiny-random-t5",
-    "unispeech": "hf-internal-testing/tiny-random-unispeech",
-    "unispeech_sat": "hf-internal-testing/tiny-random-UnispeechSatModel",
-    "vit": "hf-internal-testing/tiny-random-vit",
-    "wavlm": "hf-internal-testing/tiny-random-WavlmModel",
-    "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
-    "wav2vec2-conformer": "hf-internal-testing/tiny-random-wav2vec2-conformer",
-    "xlm": "hf-internal-testing/tiny-random-xlm",
-    "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
-}
 
 
 TENSOR_ALIAS_TO_TYPE = {
@@ -224,13 +153,17 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_load_from_hub_and_save_stable_diffusion_model(self):
         loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_DIFFUSION_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_pipeline.config, Dict)
-        prompt = "sailing ship in storm by Leonardo da Vinci"
-        height = 16
-        width = 16
-        vae_scale_factor = 4  # needed for dummy stable diffusion model
+        batch_size, height, width = 2, 16, 16
         np.random.seed(0)
-        pipeline_outputs = loaded_pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np")
-        self.assertEqual(pipeline_outputs.images.shape, (1, height // vae_scale_factor, width // vae_scale_factor, 3))
+        inputs = {
+            "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
+            "height": height,
+            "width": width,
+            "num_inference_steps": 2,
+            "output_type": "np",
+        }
+        pipeline_outputs = loaded_pipeline(**inputs).images
+        self.assertEqual(pipeline_outputs.shape, (batch_size, height, width, 3))
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_pipeline.save_pretrained(tmpdirname)
             pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname)
@@ -246,8 +179,8 @@ class OVModelIntegrationTest(unittest.TestCase):
                 self.assertIn(OV_XML_FILE_NAME, folder_contents)
                 self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
         np.random.seed(0)
-        outputs = pipeline(prompt, num_inference_steps=1, height=height, width=width, output_type="np").images
-        self.assertTrue(np.array_equal(pipeline_outputs.images, outputs))
+        outputs = pipeline(**inputs).images
+        self.assertTrue(np.array_equal(pipeline_outputs, outputs))
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
@@ -864,137 +797,3 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         outputs = pipe([np.random.random(16000)])
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
-
-
-class OVStableDiffusionPipelineIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @require_diffusers
-    def test_compare_to_diffusers(self, model_arch: str):
-        model_id = MODEL_NAMES[model_arch]
-        ov_pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, compile=False)
-        self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
-        self.assertIsInstance(ov_pipeline.vae_encoder, OVModelVaeEncoder)
-        self.assertIsInstance(ov_pipeline.vae_decoder, OVModelVaeDecoder)
-        self.assertIsInstance(ov_pipeline.unet, OVModelUnet)
-        self.assertIsInstance(ov_pipeline.config, Dict)
-
-        from diffusers import StableDiffusionPipeline
-
-        diffusers_pipeline = StableDiffusionPipeline.from_pretrained(model_id)
-        diffusers_pipeline.safety_checker = None
-        num_images_per_prompt, height, width, scale_factor = 1, 512, 512, 8
-        latents_shape = (
-            num_images_per_prompt,
-            diffusers_pipeline.unet.in_channels,
-            height // scale_factor,
-            width // scale_factor,
-        )
-        latents = np.random.randn(*latents_shape).astype(np.float32)
-        kwargs = {
-            "prompt": "sailing ship in storm by Leonardo da Vinci",
-            "num_inference_steps": 1,
-            "output_type": "np",
-            "num_images_per_prompt": num_images_per_prompt,
-            "height": height,
-            "width": width,
-        }
-        ov_pipeline.to("cpu")
-        ov_pipeline.compile()
-        ov_outputs = ov_pipeline(latents=latents, **kwargs).images
-        self.assertIsInstance(ov_outputs, np.ndarray)
-        with torch.no_grad():
-            diffusers_outputs = diffusers_pipeline(latents=torch.from_numpy(latents), **kwargs).images
-        # Compare model outputs
-        self.assertTrue(np.allclose(ov_outputs, diffusers_outputs, atol=1e-4))
-        # Compare model devices
-        self.assertEqual(diffusers_pipeline.device.type, ov_pipeline.device)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @require_diffusers
-    def test_num_images_per_prompt(self, model_arch: str):
-        from diffusers import DPMSolverMultistepScheduler
-
-        model_id = MODEL_NAMES[model_arch]
-        scheduler = DPMSolverMultistepScheduler.from_pretrained(model_id, subfolder="scheduler")
-        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, scheduler=scheduler)
-        prompt = "sailing ship in storm by Leonardo da Vinci"
-
-        for batch_size in [1, 3]:
-            for num_images in [1, 2]:
-                outputs = pipeline(
-                    [prompt] * batch_size, num_inference_steps=2, num_images_per_prompt=num_images, output_type="np"
-                )
-                self.assertEqual(outputs.images.shape, (batch_size * num_images, 128, 128, 3))
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @require_diffusers
-    def test_num_images_per_prompt_static_model(self, model_arch: str):
-        model_id = MODEL_NAMES[model_arch]
-        batch_size = 3
-        num_images_per_prompt = 4
-        height = 128
-        width = 64
-        vae_scale_factor = 4
-        prompt = "sailing ship in storm by Leonardo da Vinci"
-        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, compile=False)
-        pipeline.half()
-        pipeline.reshape(
-            batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt
-        )
-        self.assertFalse(pipeline.is_dynamic)
-        pipeline.compile()
-        # Verify output shapes requirements not matching the static model don't impact the final outputs
-        outputs = pipeline(
-            [prompt] * batch_size,
-            num_inference_steps=2,
-            num_images_per_prompt=num_images_per_prompt,
-            height=width,
-            width=width,
-            output_type="np",
-        ).images
-        self.assertEqual(
-            outputs.shape,
-            (batch_size * num_images_per_prompt, height // vae_scale_factor, width // vae_scale_factor, 3),
-        )
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @require_diffusers
-    def test_image_reproducibility(self, model_arch: str):
-        model_id = MODEL_NAMES[model_arch]
-        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True)
-
-        kwargs = {
-            "prompt": "sailing ship in storm by Leonardo da Vinci",
-            "output_type": "np",
-            "num_inference_steps": 2,
-        }
-        np.random.seed(0)
-        outputs_1 = pipeline(**kwargs)
-        np.random.seed(0)
-        outputs_2 = pipeline(**kwargs)
-        outputs_3 = pipeline(**kwargs)
-
-        # Compare model outputs
-        self.assertTrue(np.array_equal(outputs_1.images[0], outputs_2.images[0]))
-        self.assertFalse(np.array_equal(outputs_1.images[0], outputs_3.images[0]))
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @require_diffusers
-    def test_height_width_properties(self, model_arch: str):
-        model_id = MODEL_NAMES[model_arch]
-        batch_size = 1
-        num_images_per_prompt = 4
-        height = 128
-        width = 64
-        pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=True, compile=False, dynamic=True)
-        self.assertTrue(pipeline.is_dynamic)
-        self.assertEqual(pipeline.height, -1)
-        self.assertEqual(pipeline.width, -1)
-        pipeline.reshape(
-            batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt
-        )
-        self.assertFalse(pipeline.is_dynamic)
-        self.assertEqual(pipeline.height, height)
-        self.assertEqual(pipeline.width, width)
