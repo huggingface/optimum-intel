@@ -299,7 +299,7 @@ class OVQuantizer(OptimumQuantizer):
 
         self.model.request = InferRequestWrapper(self.model.request)
         for _, data in enumerate(calibration_dataloader):
-            self.model.generate(**data, max_new_tokens=10)
+            self.model.generate(**data, max_new_tokens=1)
             if len(data_cache) >= subset_size:
                 break
         self.model.request = self.model.request.request
