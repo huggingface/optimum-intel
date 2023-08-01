@@ -35,6 +35,9 @@ if is_nncf_available():
 
 from .modeling import (
     OVModelForAudioClassification,
+    OVModelForAudioFrameClassification,
+    OVModelForAudioXVector,
+    OVModelForCTC,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,

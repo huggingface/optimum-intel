@@ -23,6 +23,9 @@ from transformers import (
     AutoConfig,
     AutoModel,
     AutoModelForAudioClassification,
+    AutoModelForAudioFrameClassification,
+    AutoModelForAudioXVector,
+    AutoModelForCTC,
     AutoModelForImageClassification,
     AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
@@ -32,12 +35,15 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import (
     BaseModelOutput,
+    CausalLMOutput,
     ImageClassifierOutput,
     MaskedLMOutput,
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
     TokenClassifierOutput,
+    XVectorOutput,
 )
+from optimum.exporters import TasksManager
 
 from .modeling_base import OVBaseModel
 
@@ -91,6 +97,13 @@ IMAGE_INPUTS_DOCSTRING = r"""
         pixel_values (`torch.Tensor`):
             Pixel values corresponding to the images in the current batch.
             Pixel values can be obtained from encoded images using [`AutoFeatureExtractor`](https://huggingface.co/docs/transformers/autoclass_tutorial#autofeatureextractor).
+"""
+
+AUDIO_INPUTS_DOCSTRING = r"""
+    Args:
+        input_values (`torch.Tensor` of shape `({0})`):
+            Float values of input raw speech waveform..
+            Input values can be obtained from audio file loaded into an array using [`AutoFeatureExtractor`](https://huggingface.co/docs/transformers/autoclass_tutorial#autofeatureextractor).
 """
 
 
@@ -575,3 +588,234 @@ class OVModelForAudioClassification(OVModel):
         outputs = self.request(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return SequenceClassifierOutput(logits=logits)
+
+
+CTC_EXAMPLE = r"""
+    Example of CTC:
+
+    ```python
+    >>> from transformers import {processor_class}
+    >>> from optimum.intel.openvino import {model_class}
+    >>> from datasets import load_dataset
+
+    >>> dataset = load_dataset("hf-internal-testing/librispeech_asr_demo", "clean", split="validation")
+    >>> dataset = dataset.sort("id")
+    >>> sampling_rate = dataset.features["audio"].sampling_rate
+
+    >>> processor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+
+    >>> # audio file is decoded on the fly
+    >>> inputs = processor(dataset[0]["audio"]["array"], sampling_rate=sampling_rate, return_tensors="np")
+    >>> logits = model(**inputs).logits
+    >>> predicted_ids = np.argmax(logits, axis=-1)
+
+    >>> transcription = processor.batch_decode(predicted_ids)
+    ```
+"""
+
+
+@add_start_docstrings(
+    """
+    Onnx Model with a language modeling head on top for Connectionist Temporal Classification (CTC).
+    """,
+    MODEL_START_DOCSTRING,
+)
+class OVModelForCTC(OVModel):
+    """
+    CTC model for OpenVINO.
+    """
+
+    auto_model_class = AutoModelForCTC
+    export_feature = TasksManager.infer_task_from_model(auto_model_class)
+
+    @add_start_docstrings_to_model_forward(
+        AUDIO_INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        + CTC_EXAMPLE.format(
+            processor_class=_FEATURE_EXTRACTOR_FOR_DOC,
+            model_class="OVModelForCTC",
+            checkpoint="facebook/hubert-large-ls960-ft",
+        )
+    )
+    def forward(
+        self,
+        input_values: Optional[torch.Tensor] = None,
+        attention_mask: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        **kwargs,
+    ):
+        np_inputs = isinstance(input_values, np.ndarray)
+        if not np_inputs:
+            input_values = np.array(input_values)
+            attention_mask = np.array(attention_mask) if attention_mask is not None else attention_mask
+
+        inputs = {
+            "input_values": input_values,
+        }
+
+        # Add the attention_mask when needed
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+
+        # Run inference
+        outputs = self.request(inputs)
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
+        return CausalLMOutput(logits=logits)
+
+
+AUDIO_XVECTOR_EXAMPLE = r"""
+    Example of Audio XVector:
+
+    ```python
+    >>> from transformers import {processor_class}
+    >>> from optimum.intel.openvino import {model_class}
+    >>> from datasets import load_dataset
+    >>> import torch
+
+    >>> dataset = load_dataset("hf-internal-testing/librispeech_asr_demo", "clean", split="validation")
+    >>> dataset = dataset.sort("id")
+    >>> sampling_rate = dataset.features["audio"].sampling_rate
+
+    >>> feature_extractor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+
+    >>> # audio file is decoded on the fly
+    >>> inputs = feature_extractor(
+    ...     [d["array"] for d in dataset[:2]["audio"]], sampling_rate=sampling_rate, return_tensors="pt", padding=True
+    ... )
+    >>>     embeddings = model(**inputs).embeddings
+
+    >>> embeddings = torch.nn.functional.normalize(embeddings, dim=-1).cpu()
+
+    >>> cosine_sim = torch.nn.CosineSimilarity(dim=-1)
+    >>> similarity = cosine_sim(embeddings[0], embeddings[1])
+    >>> threshold = 0.7
+    >>> if similarity < threshold:
+    ...     print("Speakers are not the same!")
+    >>> round(similarity.item(), 2)
+    ```
+"""
+
+
+@add_start_docstrings(
+    """
+    Onnx Model with an XVector feature extraction head on top for tasks like Speaker Verification.
+    """,
+    MODEL_START_DOCSTRING,
+)
+class OVModelForAudioXVector(OVModel):
+    """
+    Audio XVector model for OpenVINO.
+    """
+
+    auto_model_class = AutoModelForAudioXVector
+    export_feature = TasksManager.infer_task_from_model(auto_model_class)
+
+    @add_start_docstrings_to_model_forward(
+        AUDIO_INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        + AUDIO_XVECTOR_EXAMPLE.format(
+            processor_class=_FEATURE_EXTRACTOR_FOR_DOC,
+            model_class="OVModelForAudioXVector",
+            checkpoint="anton-l/wav2vec2-base-superb-sv",
+        )
+    )
+    def forward(
+        self,
+        input_values: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        np_inputs = isinstance(input_values, np.ndarray)
+        if not np_inputs:
+            input_values = np.array(input_values)
+            attention_mask = np.array(attention_mask) if attention_mask is not None else attention_mask
+
+        inputs = {
+            "input_values": input_values,
+        }
+
+        # Add the attention_mask when needed
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+
+        # Run inference
+        outputs = self.request(inputs)
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
+        embeddings = (
+            torch.from_numpy(outputs["embeddings"]).to(self.device) if not np_inputs else outputs["embeddings"]
+        )
+
+        return XVectorOutput(logits=logits, embeddings=embeddings)
+
+
+AUDIO_FRAME_CLASSIFICATION_EXAMPLE = r"""
+    Example of audio frame classification:
+
+    ```python
+    >>> from transformers import {processor_class}
+    >>> from optimum.intel.openvino import {model_class}
+    >>> from datasets import load_dataset
+    >>> import torch
+
+    >>> dataset = load_dataset("hf-internal-testing/librispeech_asr_demo", "clean", split="validation")
+    >>> dataset = dataset.sort("id")
+    >>> sampling_rate = dataset.features["audio"].sampling_rate
+
+    >>> feature_extractor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model =  {model_class}.from_pretrained("{checkpoint}", export=True)
+
+    >>> inputs = feature_extractor(dataset[0]["audio"]["array"], return_tensors="pt", sampling_rate=sampling_rate)
+    >>>    logits = model(**inputs).logits
+
+    >>> probabilities = torch.sigmoid(torch.as_tensor(logits)[0])
+    >>> labels = (probabilities > 0.5).long()
+    >>> labels[0].tolist()
+    ```
+"""
+
+
+@add_start_docstrings(
+    """
+    OpenVINO Model for with a frame classification head on top for tasks like Speaker Diarization.
+    """,
+    MODEL_START_DOCSTRING,
+)
+class OVModelForAudioFrameClassification(OVModel):
+    """
+    Audio Frame Classification model for OpenVINO.
+    """
+
+    auto_model_class = AutoModelForAudioFrameClassification
+    export_feature = TasksManager.infer_task_from_model(auto_model_class)
+
+    @add_start_docstrings_to_model_forward(
+        AUDIO_INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        + AUDIO_FRAME_CLASSIFICATION_EXAMPLE.format(
+            processor_class=_FEATURE_EXTRACTOR_FOR_DOC,
+            model_class="OVModelForAudioFrameClassification",
+            checkpoint="anton-l/wav2vec2-base-superb-sd",
+        )
+    )
+    def forward(
+        self,
+        input_values: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs,
+    ):
+        np_inputs = isinstance(input_values, np.ndarray)
+        if not np_inputs:
+            input_values = np.array(input_values)
+            attention_mask = np.array(attention_mask) if attention_mask is not None else attention_mask
+
+        inputs = {
+            "input_values": input_values,
+        }
+
+        # Add the attention_mask when needed
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+
+        # Run inference
+        outputs = self.request(inputs)
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
+
+        return TokenClassifierOutput(logits=logits)
