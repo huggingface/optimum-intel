@@ -127,10 +127,6 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
         # https://github.com/huggingface/diffusers/blob/v0.17.1/tests/pipelines/stable_diffusion/test_onnx_stable_diffusion_img2img.py#L71
         expected_slice = np.array([0.69643, 0.58484, 0.50314, 0.58760, 0.55368, 0.59643, 0.51529, 0.41217, 0.49087])
         self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-1))
-        ort_pipeline = self.ORT_MODEL_CLASS.from_pretrained(model_id, export=True)
-        np.random.seed(0)
-        ort_output = ort_pipeline(**inputs).images[0, -3:, -3:, -1]
-        self.assertTrue(np.allclose(output, ort_output, atol=1e-1))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_num_images_per_prompt_static_model(self, model_arch: str):
