@@ -388,8 +388,8 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
     ORT_MODEL_CLASS = ORTStableDiffusionXLImg2ImgPipeline
     PT_MODEL_CLASS = StableDiffusionXLImg2ImgPipeline
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_inference(self, model_arch: str):
+    def test_inference(self):
+        model_arch = "stable-diffusion-xl"
         pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
