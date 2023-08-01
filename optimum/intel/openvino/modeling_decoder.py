@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
@@ -20,7 +21,8 @@ from typing import Dict, Optional, Tuple, Union
 import numpy as np
 import openvino
 import torch
-from openvino.runtime import Core, Tensor
+from openvino.preprocess import PrePostProcessor
+from openvino.runtime import Core, Tensor, Type
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -32,7 +34,7 @@ from optimum.utils import NormalizedConfigManager
 from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .utils import ONNX_WEIGHTS_NAME
+from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -108,16 +110,20 @@ class OVBaseDecoderModel(OVModel):
                 "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
             )
 
+        enable_compilation = kwargs.get("compile", True)
+        kwargs["compile"] = False  # avoid extra compilation in the base class
+
         super().__init__(
             model,
             config,
             device=device,
-            dynamic_shapes=True,
+            dynamic_shapes=False,
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             **kwargs,
         )
 
+        self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
         self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs)
         self.main_input_name = "input_ids"
@@ -126,6 +132,12 @@ class OVBaseDecoderModel(OVModel):
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
+        self._original_model = self.model.clone()  # keep original model for serialization
+        self.update_pkv_precision()
+        if self.is_dynamic:
+            self.model = self._reshape(self.model, -1, -1)
+        if enable_compilation:
+            self.compile()
 
         if use_cache ^ self.use_cache:
             raise ValueError(
@@ -134,6 +146,51 @@ class OVBaseDecoderModel(OVModel):
                 f"once again with `use_cache={use_cache}` when calling the `from_pretrained` method. "
                 "To export your model, simply set `export=True`."
             )
+
+    def update_pkv_precision(self, force_fp32=False):
+        if not self.use_cache:
+            return
+
+        pkv_precision = Type.f32
+        if not force_fp32:
+            device = self._device.upper()
+            pkv_precision = core.get_property(device, "INFERENCE_PRECISION_HINT")
+            # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
+            if self.ov_config:
+                inference_precision_hint = self.ov_config.get("INFERENCE_PRECISION_HINT", "")
+                if inference_precision_hint in STR_TO_OV_TYPE:
+                    pkv_precision = STR_TO_OV_TYPE[inference_precision_hint]
+
+            ppp = PrePostProcessor(self.model)
+            for key in self.model.inputs:
+                if "past_key_values" in key.get_any_name() and pkv_precision != key.get_element_type():
+                    ppp.input(key.get_any_name()).tensor().set_element_type(pkv_precision)
+            for key in self.model.outputs:
+                if "present" in key.get_any_name() and pkv_precision != key.get_element_type():
+                    ppp.output(key.get_any_name()).tensor().set_element_type(pkv_precision)
+
+            self.model = ppp.build()
+            self._pkv_precision = pkv_precision
+        else:
+            if hasattr(self, "_pkv_precision") and self._pkv_precision != Type.f32:
+                self._pkv_precision = Type.f32
+                self.model = self._original_model.clone()
+                if self.is_dynamic:
+                    self.model = self._reshape(self.model, -1, -1)
+                self.request = None
+
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        """
+        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
+        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
+
+        Arguments:
+            save_directory (`str` or `Path`):
+                The directory where to save the model files.
+        """
+        model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
+        dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
+        openvino.runtime.serialize(model_to_save, dst_path)
 
     @classmethod
     def _from_transformers(
@@ -271,10 +328,18 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         inputs = {}
         if past_key_values is not None:
-            # Flatten the past_key_values
-            past_key_values = tuple(
-                past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
-            )
+            if self._pkv_precision == Type.bf16:
+                # numpy does not support bf16, pretending f16, should change to bf16
+                past_key_values = tuple(
+                    Tensor(past_key_value, past_key_value.shape, Type.bf16)
+                    for pkv_per_layer in past_key_values
+                    for past_key_value in pkv_per_layer
+                )
+            else:
+                # Flatten the past_key_values
+                past_key_values = tuple(
+                    past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
+                )
             # Add the past_key_values to the decoder inputs
             inputs = dict(zip(self.key_value_input_names, past_key_values))
 

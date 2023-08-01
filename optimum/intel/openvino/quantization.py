@@ -260,6 +260,7 @@ class OVQuantizer(OptimumQuantizer):
         )
 
         # Prefeth past_key_values
+        self.model.update_pkv_precision(True)
         self.model.compile()
         subset_size = kwargs.get("subset_size", 300)
         data_cache = []
