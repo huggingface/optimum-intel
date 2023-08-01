@@ -154,24 +154,30 @@ class OVBaseDecoderModel(OVModel):
         pkv_precision = Type.f32
         if not force_fp32:
             device = self._device.upper()
-            inference_precision_hint = core.get_property(device, "INFERENCE_PRECISION_HINT")
+            pkv_precision = core.get_property(device, "INFERENCE_PRECISION_HINT")
             # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
             if self.ov_config:
                 inference_precision_hint = self.ov_config.get("INFERENCE_PRECISION_HINT", "")
-            if inference_precision_hint in STR_TO_OV_TYPE:
-                pkv_precision = STR_TO_OV_TYPE[inference_precision_hint]
+                if inference_precision_hint in STR_TO_OV_TYPE:
+                    pkv_precision = STR_TO_OV_TYPE[inference_precision_hint]
 
-        ppp = PrePostProcessor(self.model)
-        for key in self.model.inputs:
-            if "past_key_values" in key.get_any_name() and pkv_precision != key.get_element_type():
-                ppp.input(key.get_any_name()).tensor().set_element_type(pkv_precision)
-        for key in self.model.outputs:
-            if "present" in key.get_any_name() and pkv_precision != key.get_element_type():
-                ppp.output(key.get_any_name()).tensor().set_element_type(pkv_precision)
+            ppp = PrePostProcessor(self.model)
+            for key in self.model.inputs:
+                if "past_key_values" in key.get_any_name() and pkv_precision != key.get_element_type():
+                    ppp.input(key.get_any_name()).tensor().set_element_type(pkv_precision)
+            for key in self.model.outputs:
+                if "present" in key.get_any_name() and pkv_precision != key.get_element_type():
+                    ppp.output(key.get_any_name()).tensor().set_element_type(pkv_precision)
 
-        self.model = ppp.build()
-        self._pkv_precision = pkv_precision
-        self.request = None
+            self.model = ppp.build()
+            self._pkv_precision = pkv_precision
+        else:
+            if hasattr(self, '_pkv_precision') and self._pkv_precision != Type.f32:
+                self._pkv_precision = Type.f32
+                self.model = self._original_model.clone()
+                if self.is_dynamic:
+                    self.model = self._reshape(self.model, -1, -1)
+                self.request = None
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
