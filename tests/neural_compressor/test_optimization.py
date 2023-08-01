@@ -12,12 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-# ruff: noqa
-
 import os
 import tempfile
-import unittest
-from functools import partial
 
 import evaluate
 import numpy as np
@@ -32,47 +28,34 @@ from neural_compressor.config import (
     TuningCriterion,
     WeightPruningConfig,
 )
-from onnx import load as onnx_load
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForQuestionAnswering,
-    AutoModelForSequenceClassification,
     AutoTokenizer,
-    EvalPrediction,
-    TrainingArguments,
-    Seq2SeqTrainingArguments,
-    default_data_collator,
-    pipeline,
     BertTokenizer,
     EncoderDecoderModel,
+    Seq2SeqTrainingArguments,
+    pipeline,
     set_seed,
 )
+from utils_tests import INCTestMixin, _generate_dataset, SEED
 
 from optimum.intel import (
     INCConfig,
     INCModelForCausalLM,
-    INCModelForSeq2SeqLM,
     INCModelForQuestionAnswering,
-    INCModelForSequenceClassification,
-    INCModelForMaskedLM,
-    INCModelForTokenClassification,
+    INCModelForSeq2SeqLM,
     INCQuantizer,
-    INCStableDiffusionPipeline,
-    INCTrainer,
     INCSeq2SeqTrainer,
+    INCStableDiffusionPipeline,
 )
-from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
-from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME, ONNX_WEIGHTS_NAME
-from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
+from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
 from optimum.pipelines import ORT_SUPPORTED_TASKS
-
-from utils_tests import INCTestMixin, _generate_dataset
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
-set_seed(1009)
-
+set_seed(SEED)
 
 class OptimizationTest(INCTestMixin):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (

@@ -12,73 +12,23 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-# ruff: noqa
-
 import os
 import tempfile
-import unittest
-from functools import partial
 
-import evaluate
-import numpy as np
-import torch
-from datasets import load_dataset
-from diffusers import StableDiffusionPipeline
-from neural_compressor.config import (
-    AccuracyCriterion,
-    DistillationConfig,
-    PostTrainingQuantConfig,
-    QuantizationAwareTrainingConfig,
-    TuningCriterion,
-    WeightPruningConfig,
-)
-from onnx import load as onnx_load
+from neural_compressor.config import PostTrainingQuantConfig
+
 from parameterized import parameterized
-from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForQuestionAnswering,
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    EvalPrediction,
-    TrainingArguments,
-    Seq2SeqTrainingArguments,
-    default_data_collator,
-    pipeline,
-    BertTokenizer,
-    EncoderDecoderModel,
-    set_seed,
-)
+from transformers import AutoTokenizer, set_seed
 
-from optimum.intel import (
-    INCConfig,
-    INCModelForCausalLM,
-    INCModelForSeq2SeqLM,
-    INCModelForQuestionAnswering,
-    INCModelForSequenceClassification,
-    INCModelForMaskedLM,
-    INCModelForTokenClassification,
-    INCQuantizer,
-    INCStableDiffusionPipeline,
-    INCTrainer,
-    INCSeq2SeqTrainer,
-)
-from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
-from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME, ONNX_WEIGHTS_NAME
-from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
+from utils_tests import INCTestMixin, _generate_dataset, SEED
+
+from optimum.intel import INCQuantizer
+
 from optimum.pipelines import ORT_SUPPORTED_TASKS
-
-from utils_tests import (
-    INCTestMixin,
-    _generate_dataset,
-    _compute_metrics,
-    _preprocess_function,
-    num_quantized_matmul_onnx_model,
-    _TASK_TO_DATASET,
-)
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
-set_seed(1009)
+set_seed(SEED)
 
 
 class OptimizationTest(INCTestMixin):
