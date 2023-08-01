@@ -389,8 +389,8 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
     PT_MODEL_CLASS = StableDiffusionXLImg2ImgPipeline
 
     def test_inference(self):
-        model_arch = "stable-diffusion-xl"
-        pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True)
+        model_id = "hf-internal-testing/tiny-stable-diffusion-xl-pipe"
+        pipeline = self.MODEL_CLASS.from_pretrained(model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             pipeline.save_pretrained(tmp_dir)
@@ -399,8 +399,8 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
         inputs = self.generate_inputs()
         np.random.seed(0)
         output = pipeline(**inputs).images[0, -3:, -3:, -1]
-        expected_slice = np.array([0.6515, 0.5405, 0.4858, 0.5632, 0.5174, 0.5681, 0.4948, 0.4253, 0.5080])
-        self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-1))
+        expected_slice = np.array([0.5675, 0.5108, 0.4758, 0.5280, 0.5080, 0.5473, 0.4789, 0.4286, 0.4861])
+        self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_num_images_per_prompt_static_model(self, model_arch: str):
