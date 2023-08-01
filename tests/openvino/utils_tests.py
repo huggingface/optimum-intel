@@ -68,6 +68,7 @@ MODEL_NAMES = {
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
+    "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
     "sew_d": "hf-internal-testing/tiny-random-SEWDModel",
     "swin": "hf-internal-testing/tiny-random-SwinModel",

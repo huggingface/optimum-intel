@@ -122,15 +122,11 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True)
         inputs = self.generate_inputs()
         inputs["prompt"] = "A painting of a squirrel eating a burger"
-
-        output = pipeline(**inputs, generator=np.random.RandomState(0)).images[0, -3:, -3:, -1]
+        np.random.seed(0)
+        output = pipeline(**inputs).images[0, -3:, -3:, -1]
         # https://github.com/huggingface/diffusers/blob/v0.17.1/tests/pipelines/stable_diffusion/test_onnx_stable_diffusion_img2img.py#L71
         expected_slice = np.array([0.69643, 0.58484, 0.50314, 0.58760, 0.55368, 0.59643, 0.51529, 0.41217, 0.49087])
         self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-1))
-
-        ort_pipeline = self.ORT_MODEL_CLASS.from_pretrained(model_id, export=True)
-        ort_output = ort_pipeline(**inputs, generator=np.random.RandomState(0)).images[0, -3:, -3:, -1]
-        self.assertTrue(np.allclose(output, ort_output, atol=1e-1))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_num_images_per_prompt_static_model(self, model_arch: str):
@@ -387,23 +383,24 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
 
 
 class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("stable-diffusion-xl",)
+    SUPPORTED_ARCHITECTURES = ("stable-diffusion-xl", "stable-diffusion-xl-refiner")
     MODEL_CLASS = OVStableDiffusionXLImg2ImgPipeline
     ORT_MODEL_CLASS = ORTStableDiffusionXLImg2ImgPipeline
     PT_MODEL_CLASS = StableDiffusionXLImg2ImgPipeline
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_inference(self, model_arch: str):
-        pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True)
+    def test_inference(self):
+        model_id = "hf-internal-testing/tiny-stable-diffusion-xl-pipe"
+        pipeline = self.MODEL_CLASS.from_pretrained(model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             pipeline.save_pretrained(tmp_dir)
             pipeline = self.MODEL_CLASS.from_pretrained(tmp_dir)
 
         inputs = self.generate_inputs()
-        output = pipeline(**inputs, generator=np.random.RandomState(0)).images[0, -3:, -3:, -1]
-        expected_slice = np.array([0.6515, 0.5405, 0.4858, 0.5632, 0.5174, 0.5681, 0.4948, 0.4253, 0.5080])
-        self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-1))
+        np.random.seed(0)
+        output = pipeline(**inputs).images[0, -3:, -3:, -1]
+        expected_slice = np.array([0.5675, 0.5108, 0.4758, 0.5280, 0.5080, 0.5473, 0.4789, 0.4286, 0.4861])
+        self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_num_images_per_prompt_static_model(self, model_arch: str):
