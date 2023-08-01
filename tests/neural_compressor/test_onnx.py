@@ -12,6 +12,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+# ruff: noqa
+
+
 import os
 import tempfile
 
@@ -20,9 +23,18 @@ from parameterized import parameterized
 from transformers import AutoTokenizer, set_seed
 from utils_tests import SEED, INCTestMixin, _generate_dataset
 
-from optimum.intel import INCQuantizer
+from optimum.intel import (
+    INCConfig,
+    INCModelForCausalLM,
+    INCModelForSeq2SeqLM,
+    INCModelForQuestionAnswering,
+    INCModelForSequenceClassification,
+    INCModelForMaskedLM,
+    INCModelForTokenClassification,
+    INCQuantizer,
+)
+from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
 from optimum.pipelines import ORT_SUPPORTED_TASKS
-
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(SEED)

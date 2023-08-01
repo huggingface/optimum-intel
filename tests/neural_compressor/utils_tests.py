@@ -12,6 +12,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+# ruff: noqa
+
+
 import os
 import unittest
 from functools import partial
@@ -23,11 +26,23 @@ from datasets import load_dataset
 from onnx import load as onnx_load
 from transformers import AutoTokenizer, TrainingArguments, default_data_collator
 
-from optimum.intel import INCConfig, INCTrainer
+from optimum.intel import (
+    INCConfig,
+    INCModelForCausalLM,
+    INCModelForSeq2SeqLM,
+    INCModelForQuestionAnswering,
+    INCModelForSequenceClassification,
+    INCModelForMaskedLM,
+    INCModelForTokenClassification,
+    INCQuantizer,
+    INCTrainer,
+    INCSeq2SeqTrainer,
+    INCStableDiffusionPipeline,
+)
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.constant import ONNX_WEIGHTS_NAME
+from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
 from optimum.pipelines import ORT_SUPPORTED_TASKS
-
 
 SEED = 1009
 _TASK_TO_DATASET = {

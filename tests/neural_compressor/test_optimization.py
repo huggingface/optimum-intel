@@ -12,6 +12,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+# ruff: noqa
+
+
 import os
 import tempfile
 
@@ -44,13 +47,16 @@ from utils_tests import SEED, INCTestMixin, _generate_dataset
 from optimum.intel import (
     INCConfig,
     INCModelForCausalLM,
-    INCModelForQuestionAnswering,
     INCModelForSeq2SeqLM,
+    INCModelForQuestionAnswering,
+    INCModelForSequenceClassification,
+    INCModelForMaskedLM,
+    INCModelForTokenClassification,
     INCQuantizer,
-    INCSeq2SeqTrainer,
     INCStableDiffusionPipeline,
 )
 from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
+from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
 from optimum.pipelines import ORT_SUPPORTED_TASKS
 
 
