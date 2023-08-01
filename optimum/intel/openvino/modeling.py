@@ -43,6 +43,7 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
     XVectorOutput,
 )
+
 from optimum.exporters import TasksManager
 
 from .modeling_base import OVBaseModel
