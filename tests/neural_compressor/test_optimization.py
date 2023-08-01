@@ -53,6 +53,7 @@ from optimum.intel import (
     INCModelForMaskedLM,
     INCModelForTokenClassification,
     INCQuantizer,
+    INCSeq2SeqTrainer,
     INCStableDiffusionPipeline,
 )
 from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
