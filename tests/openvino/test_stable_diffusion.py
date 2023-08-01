@@ -387,7 +387,7 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
 
 
 class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("stable-diffusion-xl",)
+    SUPPORTED_ARCHITECTURES = ("stable-diffusion-xl", "stable-diffusion-xl-refiner")
     MODEL_CLASS = OVStableDiffusionXLImg2ImgPipeline
     ORT_MODEL_CLASS = ORTStableDiffusionXLImg2ImgPipeline
     PT_MODEL_CLASS = StableDiffusionXLImg2ImgPipeline
