@@ -172,7 +172,7 @@ class OVBaseDecoderModel(OVModel):
             self.model = ppp.build()
             self._pkv_precision = pkv_precision
         else:
-            if hasattr(self, '_pkv_precision') and self._pkv_precision != Type.f32:
+            if hasattr(self, "_pkv_precision") and self._pkv_precision != Type.f32:
                 self._pkv_precision = Type.f32
                 self.model = self._original_model.clone()
                 if self.is_dynamic:
