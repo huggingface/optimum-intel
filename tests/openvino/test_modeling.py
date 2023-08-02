@@ -48,11 +48,7 @@ from transformers import (
 )
 from utils_tests import MODEL_NAMES
 
-from optimum.intel.openvino import (
-    OV_DECODER_NAME,
-    OV_DECODER_WITH_PAST_NAME,
-    OV_ENCODER_NAME,
-    OV_XML_FILE_NAME,
+from optimum.intel import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
     OVModelForAudioXVector,
@@ -67,6 +63,7 @@ from optimum.intel.openvino import (
     OVModelForTokenClassification,
     OVStableDiffusionPipeline,
 )
+from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
