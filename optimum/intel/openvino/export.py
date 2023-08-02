@@ -1,9 +1,9 @@
-import logging
+import functools
 import inspect
+import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union, Any, Callable
-import functools
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from openvino import PartialShape, convert_model, serialize
 from openvino.runtime.utils.types import get_element_type
@@ -11,23 +11,23 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoTokenizer
 from transformers.utils import is_tf_available, is_torch_available
 from transformers import AutoTokenizer
+from transformers.utils import is_tf_available, is_torch_available
 
-from optimum.utils import is_diffusers_available, DEFAULT_DUMMY_SHAPES
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
-from optimum.exporters.onnx.convert import export_tensorflow, check_dummy_inputs_are_allowed
-from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
-from optimum.utils.save_utils import maybe_save_preprocessors
 from optimum.exporters.onnx import __main__
+from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
+from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed, export_tensorflow
+from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
+from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
+from optimum.utils.save_utils import maybe_save_preprocessors
 
-from openvino.tools.mo import convert_model
-from openvino.runtime import serialize, PartialShape
-from openvino.runtime.utils.types import get_element_type
 from .utils import OV_XML_FILE_NAME
+
 
 logger = logging.getLogger(__name__)
 
 if is_torch_available():
+    import torch
     import torch.nn as nn
     from transformers.modeling_utils import PreTrainedModel
 

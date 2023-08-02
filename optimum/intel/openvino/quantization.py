@@ -34,7 +34,6 @@ from torch.utils.data import DataLoader, RandomSampler, TensorDataset
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 
 from optimum.exporters.onnx import export as onnx_export
-from .export import export
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 

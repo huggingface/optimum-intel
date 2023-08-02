@@ -17,14 +17,13 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
-import time
 
 import openvino
 from huggingface_hub import hf_hub_download
 from openvino import Core, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from openvino.tools import mo
 from openvino.runtime import Core
+from openvino.tools import mo
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
