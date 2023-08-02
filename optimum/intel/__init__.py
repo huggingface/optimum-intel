@@ -179,6 +179,9 @@ if TYPE_CHECKING:
     else:
         from .openvino import (
             OVModelForAudioClassification,
+            OVModelForAudioFrameClassification,
+            OVModelForAudioXVector,
+            OVModelForCTC,
             OVModelForCausalLM,
             OVModelForFeatureExtraction,
             OVModelForImageClassification,
