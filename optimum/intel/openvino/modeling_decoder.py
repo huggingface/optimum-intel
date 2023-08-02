@@ -234,7 +234,7 @@ class OVBaseDecoderModel(OVModel):
         # TODO : create ModelPatcher to patch each architecture
         if config.model_type == "bloom":
             model.transformer._prepare_attn_mask = _prepare_attn_mask
-        elif config.model_type in {"llama", "longllama"}:
+        elif config.model_type == "llama":
             model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
         elif config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
             model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
