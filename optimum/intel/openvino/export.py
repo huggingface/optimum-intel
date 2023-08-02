@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from openvino import PartialShape, convert_model, save_model
+from openvino import PartialShape, convert_model, serialize
 from openvino.runtime.utils.types import get_element_type
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoTokenizer
@@ -199,7 +199,7 @@ def export_pytorch(
                 model, config, opset, onnx_output, device, input_shapes, model_kwargs
             )
             ov_model = convert_model(onnx_output)
-            save_model(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
+            serialize(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
             return input_names, output_names, True
         clear_class_registry()
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
@@ -221,7 +221,7 @@ def export_pytorch(
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
-        save_model(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
+        serialize(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
         del model
         gc.collect()
     return input_names, output_names, False
