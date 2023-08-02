@@ -17,22 +17,21 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
-import time
 
 import openvino
 from huggingface_hub import hf_hub_download
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from openvino.tools import mo
 from openvino.runtime import Core
+from openvino.tools import mo
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from optimum.exporters.onnx import OnnxConfig
 from optimum.exporters.tasks import TasksManager
-from .export import export, is_torch_model
 from optimum.modeling_base import OptimizedModel
 
 from ..utils.import_utils import is_transformers_version
+from .export import export, is_torch_model
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
 
@@ -132,13 +131,11 @@ class OVBaseModel(PreTrainedModel):
         if isinstance(file_name, str):
             file_name = Path(file_name)
         bin_file_name = file_name.with_suffix(".bin") if file_name.suffix == ".xml" else None
-        s = time.perf_counter()
         model = (
             core.read_model(file_name, bin_file_name)
             if not file_name.suffix == ".onnx"
             else mo.convert_model(file_name)
         )
-        e = time.perf_counter()
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
 

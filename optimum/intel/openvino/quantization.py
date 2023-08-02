@@ -34,12 +34,12 @@ from torch.utils.data import DataLoader, RandomSampler, TensorDataset
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 
 from optimum.exporters.onnx import export as onnx_export
-from .export import export
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES
 from .configuration import INT8_WEIGHT_COMPRESSION_CONFIG, OVConfig
+from .export import export
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel
 from .utils import (

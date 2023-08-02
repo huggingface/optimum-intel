@@ -32,9 +32,9 @@ from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
+from .export import export, is_torch_model
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
-from .export import export, is_torch_model
 
 
 if is_transformers_version("<", "4.25.0"):
