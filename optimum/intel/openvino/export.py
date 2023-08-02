@@ -1,4 +1,5 @@
 import functools
+import gc
 import inspect
 import logging
 import os
@@ -201,7 +202,7 @@ def export_pytorch(
             ov_model = convert_model(onnx_output)
             serialize(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
             return input_names, output_names, True
-
+        clear_class_registry()
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         ordered_input_names = list(inputs)
         flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
@@ -222,7 +223,15 @@ def export_pytorch(
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
         serialize(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
+        del model
+        gc.collect()
     return input_names, output_names, False
+
+
+def clear_class_registry():
+    torch._C._jit_clear_class_registry()
+    torch.jit._recursive.concrete_type_store = torch.jit._recursive.ConcreteTypeStore()
+    torch.jit._state._clear_class_state()
 
 
 def export_models(
