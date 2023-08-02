@@ -30,7 +30,10 @@ from transformers import (
     AutoFeatureExtractor,
     AutoModel,
     AutoModelForAudioClassification,
+    AutoModelForAudioFrameClassification,
+    AutoModelForAudioXVector,
     AutoModelForCausalLM,
+    AutoModelForCTC,
     AutoModelForImageClassification,
     AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
@@ -45,13 +48,12 @@ from transformers import (
 )
 from utils_tests import MODEL_NAMES
 
-from optimum.intel.openvino import (
-    OV_DECODER_NAME,
-    OV_DECODER_WITH_PAST_NAME,
-    OV_ENCODER_NAME,
-    OV_XML_FILE_NAME,
+from optimum.intel import (
     OVModelForAudioClassification,
+    OVModelForAudioFrameClassification,
+    OVModelForAudioXVector,
     OVModelForCausalLM,
+    OVModelForCTC,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
@@ -61,6 +63,7 @@ from optimum.intel.openvino import (
     OVModelForTokenClassification,
     OVStableDiffusionPipeline,
 )
+from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
@@ -797,3 +800,158 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         outputs = pipe([np.random.random(16000)])
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
+
+
+class OVModelForCTCIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = [
+        "data2vec_audio",
+        "hubert",
+        "sew",
+        "sew_d",
+        "unispeech",
+        "unispeech_sat",
+        "wavlm",
+        "wav2vec2-hf",
+        "wav2vec2-conformer",
+    ]
+
+    def _generate_random_audio_data(self):
+        np.random.seed(10)
+        t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+        # generate pure sine wave at 220 Hz
+        audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
+        return audio_data
+
+    def test_load_vanilla_transformers_which_is_not_supported(self):
+        with self.assertRaises(Exception) as context:
+            _ = OVModelForCTC.from_pretrained(MODEL_NAMES["t5"], export=True)
+
+        self.assertIn("Unrecognized configuration class", str(context.exception))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForCTC.from_pretrained(model_id, export=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        set_seed(SEED)
+        transformers_model = AutoModelForCTC.from_pretrained(model_id)
+        processor = AutoFeatureExtractor.from_pretrained(model_id)
+        input_values = processor(self._generate_random_audio_data(), return_tensors="pt")
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**input_values)
+
+        for input_type in ["pt", "np"]:
+            input_values = processor(self._generate_random_audio_data(), return_tensors=input_type)
+            ov_outputs = ov_model(**input_values)
+
+            self.assertTrue("logits" in ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+
+            # compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
+
+        gc.collect()
+
+
+class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = [
+        "data2vec_audio",
+        "unispeech_sat",
+        "wavlm",
+        "wav2vec2-hf",
+        "wav2vec2-conformer",
+    ]
+
+    def _generate_random_audio_data(self):
+        np.random.seed(10)
+        t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+        # generate pure sine wave at 220 Hz
+        audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
+        return audio_data
+
+    def test_load_vanilla_transformers_which_is_not_supported(self):
+        with self.assertRaises(Exception) as context:
+            _ = OVModelForAudioXVector.from_pretrained(MODEL_NAMES["t5"], export=True)
+
+        self.assertIn("Unrecognized configuration class", str(context.exception))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForAudioXVector.from_pretrained(model_id, export=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        set_seed(SEED)
+        transformers_model = AutoModelForAudioXVector.from_pretrained(model_id)
+        processor = AutoFeatureExtractor.from_pretrained(model_id)
+        input_values = processor(self._generate_random_audio_data(), return_tensors="pt")
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**input_values)
+        for input_type in ["pt", "np"]:
+            input_values = processor(self._generate_random_audio_data(), return_tensors=input_type)
+            ov_outputs = ov_model(**input_values)
+
+            self.assertTrue("logits" in ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+
+            # compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(
+                torch.allclose(torch.Tensor(ov_outputs.embeddings), transformers_outputs.embeddings, atol=1e-4)
+            )
+
+        gc.collect()
+
+
+class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = [
+        "data2vec_audio",
+        "unispeech_sat",
+        "wavlm",
+        "wav2vec2-hf",
+        "wav2vec2-conformer",
+    ]
+
+    def _generate_random_audio_data(self):
+        np.random.seed(10)
+        t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+        # generate pure sine wave at 220 Hz
+        audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
+        return audio_data
+
+    def test_load_vanilla_transformers_which_is_not_supported(self):
+        with self.assertRaises(Exception) as context:
+            _ = OVModelForAudioFrameClassification.from_pretrained(MODEL_NAMES["t5"], export=True)
+
+        self.assertIn("Unrecognized configuration class", str(context.exception))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForAudioFrameClassification.from_pretrained(model_id, export=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        set_seed(SEED)
+        transformers_model = AutoModelForAudioFrameClassification.from_pretrained(model_id)
+        processor = AutoFeatureExtractor.from_pretrained(model_id)
+        input_values = processor(self._generate_random_audio_data(), return_tensors="pt")
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**input_values)
+        for input_type in ["pt", "np"]:
+            input_values = processor(self._generate_random_audio_data(), return_tensors=input_type)
+            ov_outputs = ov_model(**input_values)
+
+            self.assertTrue("logits" in ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+
+            # compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
+
+        gc.collect()

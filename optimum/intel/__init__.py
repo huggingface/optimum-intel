@@ -87,6 +87,9 @@ else:
     _import_structure["openvino"].extend(
         [
             "OVModelForAudioClassification",
+            "OVModelForAudioFrameClassification",
+            "OVModelForAudioXVector",
+            "OVModelForCTC",
             "OVModelForCausalLM",
             "OVModelForFeatureExtraction",
             "OVModelForImageClassification",
@@ -176,7 +179,10 @@ if TYPE_CHECKING:
     else:
         from .openvino import (
             OVModelForAudioClassification,
+            OVModelForAudioFrameClassification,
+            OVModelForAudioXVector,
             OVModelForCausalLM,
+            OVModelForCTC,
             OVModelForFeatureExtraction,
             OVModelForImageClassification,
             OVModelForMaskedLM,
