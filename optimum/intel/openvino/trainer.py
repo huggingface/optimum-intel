@@ -39,13 +39,13 @@ from nncf.torch.composite_compression import PTCompositeCompressionAlgorithmCont
 from nncf.torch.compression_method_api import PTCompressionAlgorithmController
 from nncf.torch.nncf_network import NNCFNetwork
 from nncf.torch.quantization.algo import QuantizationController
-from openvino._offline_transformations import compress_quantize_weights_transformation
-from openvino.runtime import Core, PartialShape, serialize
-from openvino.tools.mo.back.offline_transformations import (
+from openvino._offline_transformations import (
     apply_fused_names_cleanup,
     apply_moc_transformations,
-    apply_user_transformations,
+    apply_pruning_transformation,
+    compress_quantize_weights_transformation,
 )
+from openvino.runtime import Core, PartialShape, save_model
 from torch.onnx import export as onnx_export
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, Dataset, RandomSampler
@@ -755,7 +755,7 @@ class OVTrainer(Trainer):
                     apply_moc_transformations(ov_model)
                     if self._get_compression_controller_by_cls(QuantizationController) is not None:
                         compress_quantize_weights_transformation(ov_model)
-                    apply_user_transformations(ov_model, [("Pruning", {})])
+                    apply_pruning_transformation(ov_model)
                     apply_fused_names_cleanup(ov_model)
                     # Reshape back to dynamic shape IR
                     ov_model = self._reshape_ir(ov_model, static_shape=False)
@@ -772,7 +772,7 @@ class OVTrainer(Trainer):
                     compress_quantize_weights_transformation(ov_model)
 
             # Serialize IR xml and bin
-            serialize(ov_model, output_path)
+            save_model(ov_model, output_path)
 
     def _get_compression_controller_by_cls(
         self, controller_cls: Type[PTCompressionAlgorithmController]

@@ -411,6 +411,7 @@ class OVQuantizer(OptimumQuantizer):
                     os.remove(f"{onnx_path}_data")
                 except FileNotFoundError:
                     pass
+        quantization_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):

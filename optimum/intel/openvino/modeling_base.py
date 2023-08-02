@@ -20,9 +20,8 @@ from typing import Dict, Optional, Union
 
 import openvino
 from huggingface_hub import hf_hub_download
+from openvino import Core, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from openvino.runtime import Core
-from openvino.tools import mo
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
@@ -132,9 +131,7 @@ class OVBaseModel(PreTrainedModel):
             file_name = Path(file_name)
         bin_file_name = file_name.with_suffix(".bin") if file_name.suffix == ".xml" else None
         model = (
-            core.read_model(file_name, bin_file_name)
-            if not file_name.suffix == ".onnx"
-            else mo.convert_model(file_name)
+            core.read_model(file_name, bin_file_name) if not file_name.suffix == ".onnx" else convert_model(file_name)
         )
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
