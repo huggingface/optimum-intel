@@ -1,9 +1,9 @@
+import logging
 import inspect
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Any, Callable
 import functools
-import time
 
 from transformers.utils import is_tf_available, is_torch_available
 from transformers import AutoTokenizer
@@ -16,10 +16,12 @@ from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_o
 from optimum.utils.save_utils import maybe_save_preprocessors
 from optimum.exporters.onnx import __main__
 
-from openvino.tools.mo import convert_model 
+from openvino.tools.mo import convert_model
 from openvino.runtime import serialize, PartialShape
 from openvino.runtime.utils.types import get_element_type
 from .utils import OV_XML_FILE_NAME
+
+logger = logging.getLogger(__name__)
 
 if is_torch_available():
     import torch.nn as nn
@@ -31,10 +33,12 @@ if is_diffusers_available():
 if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
 
+
 def is_torch_model(model):
     if not is_torch_available():
         return False
     return isinstance(model, nn.Module)
+
 
 def export(
     model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"],
@@ -77,7 +81,9 @@ def export(
         raise ImportError("The pip package `diffusers` is required to export stable diffusion models to ONNX.")
 
     if is_torch_available() and isinstance(model, nn.Module):
-        return export_pytorch(model, config, opset, output, device=device, input_shapes=input_shapes, model_kwargs=model_kwargs)
+        return export_pytorch(
+            model, config, opset, output, device=device, input_shapes=input_shapes, model_kwargs=model_kwargs
+        )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -86,7 +92,7 @@ def export(
         if device == "cuda":
             raise RuntimeError("`tf2onnx` does not support export on CUDA device.")
         if input_shapes is not None:
-            print("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
+            logger.info("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
         return export_tensorflow(model, config, opset, output)
 
     else:
@@ -127,10 +133,10 @@ def export_pytorch(
         the ONNX configuration.
     """
     import torch
-    from torch.onnx import export as onnx_export
     from torch.utils._pytree import tree_map
 
-    print(f"Using framework PyTorch: {torch.__version__}")
+    logger.info(f"Using framework PyTorch: {torch.__version__}")
+    output = Path(output)
 
     with torch.no_grad():
         model.config.return_dict = True
@@ -140,9 +146,9 @@ def export_pytorch(
 
         # Check if we need to override certain configuration item
         if config.values_override is not None:
-            print(f"Overriding {len(config.values_override)} configuration item(s)")
+            logger.info(f"Overriding {len(config.values_override)} configuration item(s)")
             for override_config_key, override_config_value in config.values_override.items():
-                print(f"\t- {override_config_key} -> {override_config_value}")
+                logger.info(f"\t- {override_config_key} -> {override_config_value}")
                 setattr(model.config, override_config_key, override_config_value)
 
         if input_shapes is None:
@@ -167,36 +173,39 @@ def export_pytorch(
 
         dummy_inputs = remove_none_from_dummy_inputs(dummy_inputs)
         input_info = get_input_shapes(dummy_inputs, inputs)
-        start0 = time.perf_counter()
         try:
             if custom_patcher:
                 patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
                 patched_forward = patcher.patched_forward
+
                 @functools.wraps(patched_forward)
                 def ts_patched_forward(*args, **kwargs):
                     outputs = patched_forward(*args, **kwargs)
                     return tuple(outputs.values())
+
                 patcher.patched_forward = ts_patched_forward
                 with patcher:
                     ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
             else:
                 ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
         except Exception:
+            model.config.torchscript = False
+            model.config.return_dict = True
             onnx_output = output.with_suffix(".onnx")
-            input_names, output_names = export_pytorch_to_onnx(model, config, opset, onnx_output, device, input_shapes, model_kwargs)
+            input_names, output_names = export_pytorch_to_onnx(
+                model, config, opset, onnx_output, device, input_shapes, model_kwargs
+            )
             ov_model = convert_model(onnx_output)
             serialize(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
-            return input_names, output_names
+            return input_names, output_names, True
 
-        end0 = time.perf_counter()
-        print(f"Convert model took {end0 - start0}s")
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         ordered_input_names = list(inputs)
         flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
         for idx, out_tensor in enumerate(ov_model.outputs):
             if idx < len(output_names):
                 out_tensor.get_tensor().set_names({output_names[idx]})
-                
+
         for idx, inp_tensor in enumerate(ov_model.inputs):
             input_name = ordered_input_names[idx]
             inp_tensor.get_tensor().set_names({input_name})
@@ -205,15 +214,12 @@ def export_pytorch(
             dims = inputs[input_name]
 
             for dim in dims:
-                static_shape[dim] = -1 
+                static_shape[dim] = -1
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
-        start1 = time.perf_counter()
         serialize(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
-        end1 = time.perf_counter()
-        print(f"Serailize model took {end1 - start1}s")
-    return input_names, output_names
+    return input_names, output_names, False
 
 
 def export_models(
@@ -227,30 +233,6 @@ def export_models(
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[List[str]], List[List[str]]]:
-    """
-    Exports a Pytorch or TensorFlow encoder decoder model to an ONNX Intermediate Representation.
-    The following method exports the encoder and decoder components of the model as separate
-    ONNX files.
-
-    Args:
-        models_and_onnx_configs (`Dict[str, Tuple[Union[`PreTrainedModel`, `TFPreTrainedModel`], `OnnxConfig`]]):
-            A dictionnary containing the models to export and their corresponding onnx configs.
-        output_dir (`Path`):
-            Output directory to store the exported ONNX models.
-        opset (`Optional[int]`, defaults to `None`):
-            The version of the ONNX operator set to use.
-        output_names (`Optional[List[str]]`, defaults to `None`):
-            The names to use for the exported ONNX files. The order must be the same as the order of submodels in the ordered dict `models_and_onnx_configs`.
-            If None, will use the keys from `models_and_onnx_configs` as names.
-        device (`str`, defaults to `"cpu"`):
-            The device on which the ONNX model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
-            export on CUDA devices.
-        input_shapes (`Optional[Dict]`, defaults to `None`):
-            If specified, allows to use specific shapes for the example input provided to the ONNX exporter.
-    Returns:
-        `Tuple[List[List[str]], List[List[str]]]`: A tuple with an ordered list of the model's inputs, and the named
-        inputs from the ONNX configuration.
-    """
     outputs = []
 
     if output_names is not None and len(output_names) != len(models_and_onnx_configs):
@@ -296,7 +278,7 @@ def remove_none_from_dummy_inputs(dummy_inputs):
         new_item = [i for i in item if i is not None]
         return type(item)(new_item)
 
-    upd_dummy = {} 
+    upd_dummy = {}
     for k, v in dummy_inputs.items():
         if v is None:
             continue
@@ -309,6 +291,7 @@ def remove_none_from_dummy_inputs(dummy_inputs):
             continue
         upd_dummy[k] = v
     return upd_dummy
+
 
 def get_input_shapes(dummy_inputs, inputs):
     input_info = []
@@ -330,7 +313,6 @@ def main_export(
     task: str = "auto",
     device: str = "cpu",
     fp16: Optional[bool] = False,
-    optimize: Optional[str] = None,
     monolith: bool = False,
     framework: Optional[str] = None,
     cache_dir: Optional[str] = None,
@@ -341,117 +323,14 @@ def main_export(
     force_download: bool = False,
     local_files_only: bool = False,
     use_auth_token: Optional[Union[bool, str]] = None,
-    for_ort: bool = False,
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_onnx_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
     **kwargs_shapes,
 ):
-    """
-    Full-suite ONNX export.
-
-    Args:
-        > Required parameters
-
-        model_name_or_path (`str`):
-            Model ID on huggingface.co or path on disk to the model repository to export.
-        output (`Union[str, Path]`):
-            Path indicating the directory where to store the generated ONNX model.
-
-        > Optional parameters
-
-        task (`Optional[str]`, defaults to `None`):
-            The task to export the model for. If not specified, the task will be auto-inferred based on the model. For decoder models,
-            use `xxx-with-past` to export the model using past key values in the decoder.
-        opset (`Optional[int]`, defaults to `None`):
-            If specified, ONNX opset version to export the model with. Otherwise, the default opset for the given model architecture
-            will be used.
-        device (`str`, defaults to `"cpu"`):
-            The device to use to do the export. Defaults to "cpu".
-        fp16 (`Optional[bool]`, defaults to `"False"`):
-            Use half precision during the export. PyTorch-only, requires `device="cuda"`.
-        optimize (`Optional[str]`, defaults to `None`):
-            Allows to run ONNX Runtime optimizations directly during the export. Some of these optimizations are specific to
-            ONNX Runtime, and the resulting ONNX will not be usable with other runtime as OpenVINO or TensorRT.
-            Available options: `"O1", "O2", "O3", "O4"`. Reference: [`~optimum.onnxruntime.AutoOptimizationConfig`]
-        monolith (`bool`, defaults to `False`):
-            Forces to export the model as a single ONNX file.
-        no_post_process (`bool`, defaults to `False`):
-            Allows to disable any post-processing done by default on the exported ONNX models.
-        framework (`Optional[str]`, defaults to `None`):
-            The framework to use for the ONNX export (`"pt"` or `"tf"`). If not provided, will attempt to automatically detect
-            the framework for the checkpoint.
-        atol (`Optional[float]`, defaults to `None`):
-            If specified, the absolute difference tolerance when validating the model. Otherwise, the default atol for the model will be used.
-        cache_dir (`Optional[str]`, defaults to `None`):
-            Path indicating where to store cache. The default Hugging Face cache path will be used by default.
-        trust_remote_code (`bool`, defaults to `False`):
-            Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories
-            you trust and in which you have read the code, as it will execute on your local machine arbitrary code present in the
-            model repository.
-        pad_token_id (`Optional[int]`, defaults to `None`):
-            This is needed by some models, for some tasks. If not provided, will attempt to use the tokenizer to guess it.
-        subfolder (`str`, defaults to `""`):
-            In case the relevant files are located inside a subfolder of the model repo either locally or on huggingface.co, you can
-            specify the folder name here.
-        revision (`str`, defaults to `"main"`):
-            Revision is the specific model version to use. It can be a branch name, a tag name, or a commit id.
-        force_download (`bool`, defaults to `False`):
-            Whether or not to force the (re-)download of the model weights and configuration files, overriding the
-            cached versions if they exist.
-        local_files_only (`Optional[bool]`, defaults to `False`):
-            Whether or not to only look at local files (i.e., do not try to download the model).
-        use_auth_token (`Optional[str]`, defaults to `None`):
-            The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-            when running `transformers-cli login` (stored in `~/.huggingface`).
-        model_kwargs (`Optional[Dict[str, Any]]`, defaults to `None`):
-            Experimental usage: keyword arguments to pass to the model during
-            the export. This argument should be used along the `custom_onnx_configs` argument
-            in case, for example, the model inputs/outputs are changed (for example, if
-            `model_kwargs={"output_attentions": True}` is passed).
-        custom_onnx_configs (`Optional[Dict[str, OnnxConfig]]`, defaults to `None`):
-            Experimental usage: override the default ONNX config used for the given model. This argument may be useful for advanced users that desire a finer-grained control on the export. An example is available [here](https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model).
-        fn_get_submodels (`Optional[Callable]`, defaults to `None`):
-            Experimental usage: Override the default submodels that are used at the export. This is
-            especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
-        use_subprocess (`bool`):
-            Do the ONNX exported model validation in subprocesses. This is especially useful when
-            exporting on CUDA device, where ORT does not release memory at inference session
-            destruction. When set to `True`, the `main_export` call should be guarded in
-            `if __name__ == "__main__":` block.
-        **kwargs_shapes (`Dict`):
-            Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
-
-    Example usage:
-    ```python
-    >>> from optimum.exporters.onnx import main_export
-
-    >>> main_export("gpt2", output="gpt2_onnx/")
-    ```
-    """
-    if optimize == "O4" and device != "cuda":
-        raise ValueError(
-            "Requested O4 optimization, but this optimization requires to do the export on GPU."
-            " Please pass the argument `--device cuda`."
-        )
-
-    if (framework == "tf" and fp16 is True) or not is_torch_available():
-        raise ValueError("The --fp16 option is supported only for PyTorch.")
-
-    if fp16 is True and device == "cpu":
-        raise ValueError(
-            "The --fp16 option is supported only when exporting on GPU. Please pass the option `--device cuda`."
-        )
-
     output = Path(output)
     if not output.exists():
         output.mkdir(parents=True)
-
-    if for_ort:
-        logger.warning(
-            "The option --for-ort was passed, but its behavior is now the default in the ONNX exporter"
-            " and passing it is not required anymore."
-        )
 
     original_task = task
     task = TasksManager.map_from_synonym(task)
@@ -528,7 +407,7 @@ def main_export(
         if original_task == "auto":  # Make -with-past the default if --task was not explicitely specified
             task = task + "-with-past"
         else:
-            print(
+            logger.info(
                 f"The task `{task}` was manually specified, and past key values will not be reused in the decoding."
                 f" if needed, please pass `--task {task}-with-past` to export using the past key values."
             )
@@ -547,7 +426,7 @@ def main_export(
             possible_synonyms = f" (possible synonyms are: {synonyms_for_task})"
         else:
             possible_synonyms = ""
-        print(f"Automatic task detection to {task}{possible_synonyms}.")
+        logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
 
     onnx_config, models_and_onnx_configs = __main__._get_submodels_and_onnx_configs(
         model=model,

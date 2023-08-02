@@ -133,9 +133,12 @@ class OVBaseModel(PreTrainedModel):
             file_name = Path(file_name)
         bin_file_name = file_name.with_suffix(".bin") if file_name.suffix == ".xml" else None
         s = time.perf_counter()
-        model = core.read_model(file_name, bin_file_name) if not file_name.suffix == ".onnx" else mo.convert_model(file_name)
+        model = (
+            core.read_model(file_name, bin_file_name)
+            if not file_name.suffix == ".onnx"
+            else mo.convert_model(file_name)
+        )
         e = time.perf_counter()
-        print(f"Read model took {e - s}s")
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
 

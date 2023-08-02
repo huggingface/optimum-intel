@@ -17,7 +17,6 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
-import time
 
 import numpy as np
 import openvino
@@ -226,10 +225,7 @@ class OVBaseDecoderModel(OVModel):
             "force_download": force_download,
             "trust_remote_code": trust_remote_code,
         }
-        start0 = time.perf_counter()
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        end0 = time.perf_counter()
-        print(f"Reading PT model took {end0 - start0}")
         config.is_decoder = True
         config.is_encoder_decoder = False
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)

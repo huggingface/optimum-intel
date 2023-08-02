@@ -33,7 +33,8 @@ from openvino.runtime import Core, Tensor
 from torch.utils.data import DataLoader, RandomSampler, TensorDataset
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 
-from optimum.exporters.onnx import export
+from optimum.exporters.onnx import export as onnx_export
+from .export import export
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
@@ -384,28 +385,32 @@ class OVQuantizer(OptimumQuantizer):
         else:
             onnx_config = onnx_config_class(model.config)
 
-        onnx_path = save_directory / ONNX_WEIGHTS_NAME
+        model_path = save_directory / (ONNX_WEIGHTS_NAME if quantization_config.save_onnx_model else OV_XML_FILE_NAME)
+        if quantization_config.save_onnx_model:
+            # Export the model to the ONNX format
+            opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+            opset = max(opset, MIN_ONNX_QDQ_OPSET)
+            onnx_export(
+                model=compressed_model,
+                config=onnx_config,
+                opset=opset,
+                output=model_path,
+            )
 
-        # Export the model to the ONNX format
-        opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
-        opset = max(opset, MIN_ONNX_QDQ_OPSET)
-        export(
-            model=compressed_model,
-            config=onnx_config,
-            opset=opset,
-            output=onnx_path,
-        )
-
-        # Load and save the compressed model
-        model = core.read_model(onnx_path)
-        self._save_pretrained(model, output_path)
-        quantization_config.save_pretrained(save_directory)
-        if not quantization_config.save_onnx_model:
-            os.remove(onnx_path)
-            try:
-                os.remove(f"{onnx_path}_data")
-            except FileNotFoundError:
-                pass
+            # Load and save the compressed model
+            model = core.read_model(model_path)
+            self._save_pretrained(model, output_path)
+        else:
+            _, _, is_onnx = export(model=compressed_model, config=onnx_config, output=output_path)
+            if is_onnx:
+                onnx_path = output_path.replace(".xml", ".onnx")
+                model = core.read_model(onnx_path)
+                self._save_pretrained(model, output_path)
+                os.remove(onnx_path)
+                try:
+                    os.remove(f"{onnx_path}_data")
+                except FileNotFoundError:
+                    pass
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
