@@ -596,7 +596,7 @@ CTC_EXAMPLE = r"""
 
     ```python
     >>> from transformers import {processor_class}
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
     >>> from datasets import load_dataset
 
     >>> dataset = load_dataset("hf-internal-testing/librispeech_asr_demo", "clean", split="validation")
@@ -668,7 +668,7 @@ AUDIO_XVECTOR_EXAMPLE = r"""
 
     ```python
     >>> from transformers import {processor_class}
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
     >>> from datasets import load_dataset
     >>> import torch
 
@@ -753,7 +753,7 @@ AUDIO_FRAME_CLASSIFICATION_EXAMPLE = r"""
 
     ```python
     >>> from transformers import {processor_class}
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
     >>> from datasets import load_dataset
     >>> import torch
 
