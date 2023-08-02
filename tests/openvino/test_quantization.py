@@ -64,7 +64,7 @@ def get_num_quantized_nodes(ov_model):
 class OVQuantizerTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 42, 32),
+        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 32, 32),
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 21),
     )
 
@@ -146,7 +146,7 @@ class OVQuantizerTest(unittest.TestCase):
 class OVWeightCompressionTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS = (
-        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 39),
+        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 35),
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 5),
     )
 

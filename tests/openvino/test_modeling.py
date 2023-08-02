@@ -257,6 +257,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
             self.assertTrue(not model.is_dynamic)
             self.assertGreaterEqual(outputs[0]["score"], 0.0)
             self.assertIsInstance(outputs[0]["label"], str)
+        del model
         gc.collect()
 
 
@@ -293,6 +294,8 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
             self.assertTrue(
                 torch.allclose(torch.Tensor(ov_outputs.end_logits), transformers_outputs.end_logits, atol=1e-4)
             )
+        del ov_model
+        del transformers_model
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -307,6 +310,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
+        del model
         gc.collect()
 
     def test_metric(self):
