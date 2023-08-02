@@ -1,11 +1,9 @@
-import functools
-import gc
+import logging
 import inspect
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Any, Callable
 import functools
-import time
 
 from openvino import PartialShape, convert_model, serialize
 from openvino.runtime.utils.types import get_element_type
@@ -22,21 +20,16 @@ from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_o
 from optimum.utils.save_utils import maybe_save_preprocessors
 from optimum.exporters.onnx import __main__
 
+from openvino.tools.mo import convert_model
+from openvino.runtime import serialize, PartialShape
+from openvino.runtime.utils.types import get_element_type
 from .utils import OV_XML_FILE_NAME
-
 
 logger = logging.getLogger(__name__)
 
 if is_torch_available():
     import torch.nn as nn
     from transformers.modeling_utils import PreTrainedModel
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-    from transformers.pytorch_utils import is_torch_less_than_1_11
->>>>>>> switch on pytorch frontend
-=======
->>>>>>> fixes for seq2seq
 
 if is_diffusers_available():
     from diffusers import ModelMixin
@@ -44,19 +37,12 @@ if is_diffusers_available():
 if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
 
-<<<<<<< HEAD
-
-=======
->>>>>>> switch on pytorch frontend
 def is_torch_model(model):
     if not is_torch_available():
         return False
     return isinstance(model, nn.Module)
 
-<<<<<<< HEAD
 
-=======
->>>>>>> switch on pytorch frontend
 def export(
     model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"],
     config: OnnxConfig,
@@ -64,14 +50,7 @@ def export(
     opset: Optional[int] = None,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
-<<<<<<< HEAD
-<<<<<<< HEAD
     model_kwargs: Optional[Dict[str, Any]] = None,
-=======
->>>>>>> switch on pytorch frontend
-=======
-    model_kwargs: Optional[Dict[str, Any]] = None,
->>>>>>> wip
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an ONNX Intermediate Representation.
@@ -105,17 +84,9 @@ def export(
         raise ImportError("The pip package `diffusers` is required to export stable diffusion models to ONNX.")
 
     if is_torch_available() and isinstance(model, nn.Module):
-<<<<<<< HEAD
-<<<<<<< HEAD
         return export_pytorch(
             model, config, opset, output, device=device, input_shapes=input_shapes, model_kwargs=model_kwargs
         )
-=======
-        return export_pytorch(model, config, opset, output, device=device, input_shapes=input_shapes)
->>>>>>> switch on pytorch frontend
-=======
-        return export_pytorch(model, config, opset, output, device=device, input_shapes=input_shapes, model_kwargs=model_kwargs)
->>>>>>> wip
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -124,11 +95,7 @@ def export(
         if device == "cuda":
             raise RuntimeError("`tf2onnx` does not support export on CUDA device.")
         if input_shapes is not None:
-<<<<<<< HEAD
             logger.info("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
-=======
-            print("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
->>>>>>> switch on pytorch frontend
         return export_tensorflow(model, config, opset, output)
 
     else:
@@ -144,14 +111,7 @@ def export_pytorch(
     output: Path,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
-<<<<<<< HEAD
-<<<<<<< HEAD
     model_kwargs: Optional[Dict[str, Any]] = None,
-=======
->>>>>>> switch on pytorch frontend
-=======
-    model_kwargs: Optional[Dict[str, Any]] = None,
->>>>>>> fixes for seq2seq
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an ONNX Intermediate Representation.
@@ -176,7 +136,6 @@ def export_pytorch(
         the ONNX configuration.
     """
     import torch
-<<<<<<< HEAD
     from torch.utils._pytree import tree_map
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
@@ -186,34 +145,22 @@ def export_pytorch(
         model.config.return_dict = True
         custom_patcher = type(config).patch_model_for_export != OnnxConfig.patch_model_for_export
         model.config.torchscript = not custom_patcher
-=======
-    from torch.onnx import export as onnx_export
     from torch.utils._pytree import tree_map
 
-    print(f"Using framework PyTorch: {torch.__version__}")
+    logger.info(f"Using framework PyTorch: {torch.__version__}")
+    output = Path(output)
 
     with torch.no_grad():
         model.config.return_dict = True
-<<<<<<< HEAD
-        model.config.torchscript = True
->>>>>>> switch on pytorch frontend
-=======
         custom_patcher = type(config).patch_model_for_export != OnnxConfig.patch_model_for_export
         model.config.torchscript = not custom_patcher
->>>>>>> fixes for seq2seq
         model.eval()
 
         # Check if we need to override certain configuration item
         if config.values_override is not None:
-<<<<<<< HEAD
             logger.info(f"Overriding {len(config.values_override)} configuration item(s)")
             for override_config_key, override_config_value in config.values_override.items():
                 logger.info(f"\t- {override_config_key} -> {override_config_value}")
-=======
-            print(f"Overriding {len(config.values_override)} configuration item(s)")
-            for override_config_key, override_config_value in config.values_override.items():
-                print(f"\t- {override_config_key} -> {override_config_value}")
->>>>>>> switch on pytorch frontend
                 setattr(model.config, override_config_key, override_config_value)
 
         if input_shapes is None:
@@ -231,23 +178,10 @@ def export_pytorch(
         inputs = config.ordered_inputs(model)
         input_names = list(inputs.keys())
         output_names = list(config.outputs.keys())
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-
-        if hasattr(config, "patch_ops"):
-            config.patch_ops()
-        
->>>>>>> switch on pytorch frontend
-=======
->>>>>>> fixes for seq2seq
         if hasattr(model, "forward"):
             sig = inspect.signature(model.forward)
         else:
             sig = inspect.signature(model.call)
-
-<<<<<<< HEAD
-<<<<<<< HEAD
         dummy_inputs = remove_none_from_dummy_inputs(dummy_inputs)
         input_info = get_input_shapes(dummy_inputs, inputs)
         try:
@@ -283,42 +217,39 @@ def export_pytorch(
             if idx < len(output_names):
                 out_tensor.get_tensor().set_names({output_names[idx]})
 
-=======
-=======
-        dummy_inputs = remove_none_from_dummy_inputs(dummy_inputs)
->>>>>>> fixes for seq2seq
         input_info = get_input_shapes(dummy_inputs, inputs)
-        start0 = time.perf_counter()
         try:
             if custom_patcher:
                 patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
                 patched_forward = patcher.patched_forward
+
                 @functools.wraps(patched_forward)
                 def ts_patched_forward(*args, **kwargs):
                     outputs = patched_forward(*args, **kwargs)
                     return tuple(outputs.values())
+
                 patcher.patched_forward = ts_patched_forward
                 with patcher:
                     ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
             else:
                 ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
         except Exception:
+            model.config.torchscript = False
+            model.config.return_dict = True
             onnx_output = output.with_suffix(".onnx")
-            input_names, output_names = export_pytorch_to_onnx(model, config, opset, onnx_output, device, input_shapes, model_kwargs)
+            input_names, output_names = export_pytorch_to_onnx(
+                model, config, opset, onnx_output, device, input_shapes, model_kwargs
+            )
             ov_model = convert_model(onnx_output)
             serialize(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
-            return input_names, output_names
+            return input_names, output_names, True
 
-        end0 = time.perf_counter()
-        print(f"Convert model took {end0 - start0}s")
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         ordered_input_names = list(inputs)
         flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
         for idx, out_tensor in enumerate(ov_model.outputs):
             if idx < len(output_names):
                 out_tensor.get_tensor().set_names({output_names[idx]})
-                
->>>>>>> switch on pytorch frontend
         for idx, inp_tensor in enumerate(ov_model.inputs):
             input_name = ordered_input_names[idx]
             inp_tensor.get_tensor().set_names({input_name})
@@ -327,7 +258,6 @@ def export_pytorch(
             dims = inputs[input_name]
 
             for dim in dims:
-<<<<<<< HEAD
                 static_shape[dim] = -1
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
@@ -342,18 +272,6 @@ def clear_class_registry():
     torch._C._jit_clear_class_registry()
     torch.jit._recursive.concrete_type_store = torch.jit._recursive.ConcreteTypeStore()
     torch.jit._state._clear_class_state()
-=======
-                static_shape[dim] = -1 
-            inp_tensor.get_node().set_partial_shape(static_shape)
-            inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
-        ov_model.validate_nodes_and_infer_types()
-        start1 = time.perf_counter()
-        serialize(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output)
-        end1 = time.perf_counter()
-        print(f"Serailize model took {end1 - start1}s")
-    return input_names, output_names
->>>>>>> switch on pytorch frontend
-
 
 def export_models(
     models_and_onnx_configs: Dict[
@@ -364,14 +282,7 @@ def export_models(
     output_names: Optional[List[str]] = None,
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
-<<<<<<< HEAD
-<<<<<<< HEAD
     model_kwargs: Optional[Dict[str, Any]] = None,
-) -> Tuple[List[List[str]], List[List[str]]]:
-=======
-=======
-    model_kwargs: Optional[Dict[str, Any]] = None,
->>>>>>> wip
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Exports a Pytorch or TensorFlow encoder decoder model to an ONNX Intermediate Representation.
@@ -397,7 +308,6 @@ def export_models(
         `Tuple[List[List[str]], List[List[str]]]`: A tuple with an ordered list of the model's inputs, and the named
         inputs from the ONNX configuration.
     """
->>>>>>> switch on pytorch frontend
     outputs = []
 
     if output_names is not None and len(output_names) != len(models_and_onnx_configs):
@@ -418,14 +328,7 @@ def export_models(
                 opset=opset,
                 device=device,
                 input_shapes=input_shapes,
-<<<<<<< HEAD
-<<<<<<< HEAD
                 model_kwargs=model_kwargs,
-=======
->>>>>>> switch on pytorch frontend
-=======
-                model_kwargs=model_kwargs,
->>>>>>> wip
             )
         )
 
@@ -436,16 +339,8 @@ def export_models(
 def flattenize_inputs(inputs):
     flatten_inputs = []
     for input_data in inputs:
-<<<<<<< HEAD
-<<<<<<< HEAD
         if input_data is None:
             continue
-=======
->>>>>>> switch on pytorch frontend
-=======
-        if input_data is None:
-            continue
->>>>>>> fixes for seq2seq
         if isinstance(input_data, (list, tuple)):
             flatten_inputs.extend(flattenize_inputs(input_data))
         else:
@@ -453,16 +348,11 @@ def flattenize_inputs(inputs):
     return flatten_inputs
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> fixes for seq2seq
 def remove_none_from_dummy_inputs(dummy_inputs):
     def remove_none_from_list_tuple(item):
         new_item = [i for i in item if i is not None]
         return type(item)(new_item)
 
-<<<<<<< HEAD
     upd_dummy = {}
     for k, v in dummy_inputs.items():
         if v is None:
@@ -471,43 +361,17 @@ def remove_none_from_dummy_inputs(dummy_inputs):
             for kk, vv in v.items():
                 upd_dummy[kk] = vv
             continue
-=======
-    upd_dummy = {} 
-    for k, v in dummy_inputs.items():
-        if v is None:
-            continue
-<<<<<<< HEAD
->>>>>>> fixes for seq2seq
-=======
-        if isinstance(v, dict):
-            for kk, vv in v.items():
-                upd_dummy[kk] = vv
-            continue
->>>>>>> wip
         if isinstance(v, (tuple, list)):
             upd_dummy[k] = remove_none_from_list_tuple(v)
             continue
         upd_dummy[k] = v
     return upd_dummy
 
-<<<<<<< HEAD
 
 def get_input_shapes(dummy_inputs, inputs):
     input_info = []
     for input_name, data in dummy_inputs.items():
         if isinstance(data, (tuple, list, dict)):
-=======
-=======
->>>>>>> fixes for seq2seq
-def get_input_shapes(dummy_inputs, inputs):
-    input_info = []
-    for input_name, data in dummy_inputs.items():
-<<<<<<< HEAD
-        if isinstance(data, (tuple, list)):
->>>>>>> switch on pytorch frontend
-=======
-        if isinstance(data, (tuple, list, dict)):
->>>>>>> wip
             return None
         static_shape = PartialShape(data.shape)
         if input_name in inputs:
@@ -515,10 +379,6 @@ def get_input_shapes(dummy_inputs, inputs):
             for dim in dynamic_dims:
                 static_shape[dim] = -1
         input_info.append((input_name, static_shape))
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> wip
     return input_info
 
 
@@ -528,10 +388,6 @@ def main_export(
     task: str = "auto",
     device: str = "cpu",
     fp16: Optional[bool] = False,
-<<<<<<< HEAD
-=======
-    optimize: Optional[str] = None,
->>>>>>> wip
     monolith: bool = False,
     framework: Optional[str] = None,
     cache_dir: Optional[str] = None,
@@ -542,17 +398,11 @@ def main_export(
     force_download: bool = False,
     local_files_only: bool = False,
     use_auth_token: Optional[Union[bool, str]] = None,
-<<<<<<< HEAD
-=======
-    for_ort: bool = False,
->>>>>>> wip
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_onnx_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
     **kwargs_shapes,
 ):
-<<<<<<< HEAD
-=======
     """
     Full-suite ONNX export.
 
@@ -635,12 +485,6 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_onnx/")
     ```
     """
-    if optimize == "O4" and device != "cuda":
-        raise ValueError(
-            "Requested O4 optimization, but this optimization requires to do the export on GPU."
-            " Please pass the argument `--device cuda`."
-        )
-
     if (framework == "tf" and fp16 is True) or not is_torch_available():
         raise ValueError("The --fp16 option is supported only for PyTorch.")
 
@@ -649,20 +493,9 @@ def main_export(
             "The --fp16 option is supported only when exporting on GPU. Please pass the option `--device cuda`."
         )
 
->>>>>>> wip
     output = Path(output)
     if not output.exists():
         output.mkdir(parents=True)
-
-<<<<<<< HEAD
-=======
-    if for_ort:
-        logger.warning(
-            "The option --for-ort was passed, but its behavior is now the default in the ONNX exporter"
-            " and passing it is not required anymore."
-        )
-
->>>>>>> wip
     original_task = task
     task = TasksManager.map_from_synonym(task)
 
@@ -738,11 +571,7 @@ def main_export(
         if original_task == "auto":  # Make -with-past the default if --task was not explicitely specified
             task = task + "-with-past"
         else:
-<<<<<<< HEAD
             logger.info(
-=======
-            print(
->>>>>>> wip
                 f"The task `{task}` was manually specified, and past key values will not be reused in the decoding."
                 f" if needed, please pass `--task {task}-with-past` to export using the past key values."
             )
@@ -761,11 +590,7 @@ def main_export(
             possible_synonyms = f" (possible synonyms are: {synonyms_for_task})"
         else:
             possible_synonyms = ""
-<<<<<<< HEAD
         logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
-=======
-        print(f"Automatic task detection to {task}{possible_synonyms}.")
->>>>>>> wip
 
     onnx_config, models_and_onnx_configs = __main__._get_submodels_and_onnx_configs(
         model=model,
@@ -843,11 +668,4 @@ def main_export(
         input_shapes=input_shapes,
         device=device,
         model_kwargs=model_kwargs,
-<<<<<<< HEAD
     )
-=======
-    return input_info
->>>>>>> switch on pytorch frontend
-=======
-    )
->>>>>>> wip
