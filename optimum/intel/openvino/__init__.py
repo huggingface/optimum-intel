@@ -35,6 +35,9 @@ if is_nncf_available():
 
 from .modeling import (
     OVModelForAudioClassification,
+    OVModelForAudioFrameClassification,
+    OVModelForAudioXVector,
+    OVModelForCTC,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
@@ -48,4 +51,10 @@ from .modeling_timm import OVModelForTimm
 
 
 if is_diffusers_available():
-    from .modeling_diffusion import OVStableDiffusionPipeline
+    from .modeling_diffusion import (
+        OVStableDiffusionImg2ImgPipeline,
+        OVStableDiffusionInpaintPipeline,
+        OVStableDiffusionPipeline,
+        OVStableDiffusionXLImg2ImgPipeline,
+        OVStableDiffusionXLPipeline,
+    )

@@ -12,7 +12,7 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-    "optimum>=1.8.8",
+    "optimum>=1.10.0",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
     "sentencepiece",
@@ -43,7 +43,7 @@ EXTRAS_REQUIRE = {
     "openvino": ["openvino>=2023.0.0", "onnx", "onnxruntime"],
     "nncf": ["nncf>=2.5.0", "openvino-dev>=2023.0.0"],
     "ipex": ["intel-extension-for-pytorch", "onnx"],
-    "diffusers": ["diffusers"],
+    "diffusers": ["diffusers", "invisible-watermark>=0.2.0"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
 }
@@ -63,9 +63,10 @@ setup(
         "Intended Audience :: Education",
         "Intended Audience :: Science/Research",
         "Operating System :: OS Independent",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
     keywords="transformers, quantization, pruning, knowledge distillation, optimization, training",

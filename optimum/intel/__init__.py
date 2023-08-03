@@ -56,9 +56,23 @@ try:
     if not (is_openvino_available() and is_diffusers_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_diffusers_objects"] = ["OVStableDiffusionPipeline"]
+    _import_structure["utils.dummy_openvino_and_diffusers_objects"] = [
+        "OVStableDiffusionPipeline",
+        "OVStableDiffusionImg2ImgPipeline",
+        "OVStableDiffusionInpaintPipeline",
+        "OVStableDiffusionXLPipeline",
+        "OVStableDiffusionXLImg2ImgPipeline",
+    ]
 else:
-    _import_structure["openvino"].append("OVStableDiffusionPipeline")
+    _import_structure["openvino"].extend(
+        [
+            "OVStableDiffusionPipeline",
+            "OVStableDiffusionImg2ImgPipeline",
+            "OVStableDiffusionInpaintPipeline",
+            "OVStableDiffusionXLPipeline",
+            "OVStableDiffusionXLImg2ImgPipeline",
+        ]
+    )
 
 try:
     if not is_openvino_available():
@@ -73,6 +87,9 @@ else:
     _import_structure["openvino"].extend(
         [
             "OVModelForAudioClassification",
+            "OVModelForAudioFrameClassification",
+            "OVModelForAudioXVector",
+            "OVModelForCTC",
             "OVModelForCausalLM",
             "OVModelForFeatureExtraction",
             "OVModelForImageClassification",
@@ -139,9 +156,21 @@ if TYPE_CHECKING:
         if not (is_openvino_available() and is_diffusers_available()):
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
-        from .utils.dummy_openvino_and_diffusers_objects import OVStableDiffusionPipeline
+        from .utils.dummy_openvino_and_diffusers_objects import (
+            OVStableDiffusionImg2ImgPipeline,
+            OVStableDiffusionInpaintPipeline,
+            OVStableDiffusionPipeline,
+            OVStableDiffusionXLImg2ImgPipeline,
+            OVStableDiffusionXLPipeline,
+        )
     else:
-        from .openvino import OVStableDiffusionPipeline
+        from .openvino import (
+            OVStableDiffusionImg2ImgPipeline,
+            OVStableDiffusionInpaintPipeline,
+            OVStableDiffusionPipeline,
+            OVStableDiffusionXLImg2ImgPipeline,
+            OVStableDiffusionXLPipeline,
+        )
 
     try:
         if not is_openvino_available():
@@ -151,7 +180,10 @@ if TYPE_CHECKING:
     else:
         from .openvino import (
             OVModelForAudioClassification,
+            OVModelForAudioFrameClassification,
+            OVModelForAudioXVector,
             OVModelForCausalLM,
+            OVModelForCTC,
             OVModelForFeatureExtraction,
             OVModelForImageClassification,
             OVModelForMaskedLM,
