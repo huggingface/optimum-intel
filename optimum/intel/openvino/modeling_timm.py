@@ -58,8 +58,7 @@ def get_timm_exporter_config_constructor(
     exporter_config_kwargs: Optional[Dict[str, Any]] = None,
     **kwargs
 ) -> ExportConfigConstructor:
-    # print(exporter)
-    # print(task)
+
     assert exporter == 'onnx' and task == "image-classification"
     exporter_config_constructor = TimmOnnxConfig
 
@@ -132,7 +131,6 @@ class TimmModel(TimmPreTrainedModel):
                                            num_classes = self.config.num_labels,
                                            pretrained = pretrained,
                                            in_chans = in_chans)
-                                           
         self.timm_model.eval()
 
     @classmethod
@@ -281,7 +279,8 @@ class OVModelForTimm(OVModelForImageClassification):
         }
 
 
-        model = TasksManager.get_model_from_timm(task, model_id, **model_kwargs)
+        # model = TasksManager.get_model_from_timm(task, model_id, **model_kwargs)
+        model = TimmForImageClassification.from_pretrained(model_id, **kwargs)
         onnx_config_class = TasksManager.get_timm_exporter_config_constructor(
             exporter="onnx",
             task=task,
@@ -290,9 +289,6 @@ class OVModelForTimm(OVModelForImageClassification):
         onnx_config = onnx_config_class(model.config)
         save_dir = TemporaryDirectory()
         
-        # dummy_input = torch.randn(1, 3, 224, 224)
-        # input_node = 'pixel_values'
-        # output_node = 'logits'
         with TemporaryDirectory() as save_dir:
             save_dir_path = Path(save_dir)
             export(
@@ -316,7 +312,6 @@ class OVModelForTimm(OVModelForImageClassification):
 
     @classmethod
     def _load_config(cls, model_id,**kwargs):
-
         return TimmConfig.from_pretrained(model_id, **kwargs)
 
     # @classmethod
