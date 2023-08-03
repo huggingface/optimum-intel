@@ -132,7 +132,7 @@ class TimmModel(TimmPreTrainedModel):
                                            num_classes = self.config.num_labels,
                                            pretrained = pretrained,
                                            in_chans = in_chans)
-        
+                                           
         self.timm_model.eval()
 
     @classmethod
