@@ -1,0 +1,23 @@
+{
+  "_name_or_path": "hf-internal-testing/tiny-random-distilbert",
+  "activation": "gelu",
+  "architectures": [
+    "DistilBertForSequenceClassification"
+  ],
+  "attention_dropout": 0.1,
+  "dim": 32,
+  "dropout": 0.1,
+  "hidden_act": "gelu",
+  "hidden_dim": 37,
+  "initializer_range": 0.02,
+  "max_position_embeddings": 512,
+  "model_type": "distilbert",
+  "n_heads": 4,
+  "n_layers": 5,
+  "pad_token_id": 0,
+  "qa_dropout": 0.1,
+  "seq_classif_dropout": 0.2,
+  "sinusoidal_pos_embds": false,
+  "transformers_version": "4.31.0",
+  "vocab_size": 1124
+}

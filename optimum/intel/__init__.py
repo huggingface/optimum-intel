@@ -98,7 +98,6 @@ else:
             "OVModelForSeq2SeqLM",
             "OVModelForSequenceClassification",
             "OVModelForTokenClassification",
-            "OVModelForTimm",
         ]
     )
 
@@ -191,7 +190,6 @@ if TYPE_CHECKING:
             OVModelForSeq2SeqLM,
             OVModelForSequenceClassification,
             OVModelForTokenClassification,
-            OVModelForTimm,
         )
 
     try:
