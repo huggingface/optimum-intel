@@ -59,7 +59,6 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
-
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 random.seed(42)
@@ -223,7 +222,7 @@ class EMAQUnet:
             param.data.copy_(s_param.data)
 
     def to(self, device=None, dtype=None) -> None:
-        r"""Move internal buffers of the ExponentialMovingAverage to `device`.
+        """Move internal buffers of the ExponentialMovingAverage to `device`.
 
         Args:
             device: like `device` argument to `torch.Tensor.to`
@@ -313,7 +312,7 @@ def parse_args():
         type=str,
         default=None,
         choices=["DDIM", "DDPM", "LMSDiscrete"],
-        help="The noise scheduler for the Diffusion pipiline used for training.",
+        help="The noise scheduler for the Diffusion pipeline used for training.",
     )
     parser.add_argument(
         "--beta_start",
@@ -337,7 +336,7 @@ def parse_args():
         "--noise_schedule_steps",
         type=int,
         default=1000,
-        help=("The noise scheduler max train timestemps"),
+        help="The noise scheduler max train timestamps",
     )
     parser.add_argument(
         "--center_crop",
@@ -540,7 +539,7 @@ def parse_args():
         type=str,
         default="mean_min_max",
         choices=["min_max", "mean_min_max", "threesigma"],
-        help="They way how to estimate activation quantization paramters at the initializatin step before QAT.",
+        help="They way how to estimate activation quantization parameters at the initialization step before QAT.",
     )
     parser.add_argument(
         "--tune_quantizers_only",
@@ -775,7 +774,7 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
-        logging_dir=logging_dir,
+        project_dir=logging_dir,
     )
 
     logging.basicConfig(
@@ -994,8 +993,8 @@ def main():
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
 
-    unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, optimizer, train_dataloader, lr_scheduler
+    optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        optimizer, train_dataloader, lr_scheduler
     )
 
     weight_dtype = torch.float32
@@ -1120,7 +1119,7 @@ def main():
 
     accelerator.end_training()
 
-    # Export optimized pipline to OpenVINO
+    # Export optimized pipeline to OpenVINO
     export_unet = compression_controller.strip(do_copy=False)
     export_pipeline = StableDiffusionPipeline(
         text_encoder=text_encoder,
