@@ -59,6 +59,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
+
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 random.seed(42)
@@ -993,9 +994,7 @@ def main():
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
 
-    optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        optimizer, train_dataloader, lr_scheduler
-    )
+    optimizer, train_dataloader, lr_scheduler = accelerator.prepare(optimizer, train_dataloader, lr_scheduler)
 
     weight_dtype = torch.float32
     if args.mixed_precision == "fp16":
