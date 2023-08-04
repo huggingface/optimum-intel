@@ -41,7 +41,7 @@ EXTRAS_REQUIRE = {
         "onnxruntime<1.15.0",
     ],
     "openvino": ["openvino==2023.1.0.dev20230728", "onnx", "onnxruntime"],
-    "nncf": ["nncf @ git+https://github.com/openvinotoolkit/nncf.git"],
+    "nncf": ["nncf @ git+https://github.com/openvinotoolkit/nncf.git", "openvino-dev==2023.1.0.dev20230728"],
     "ipex": ["intel-extension-for-pytorch", "onnx"],
     "diffusers": ["diffusers", "invisible-watermark>=0.2.0"],
     "quality": QUALITY_REQUIRE,
