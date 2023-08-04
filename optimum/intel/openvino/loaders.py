@@ -38,10 +38,12 @@ from .utils import TEXTUAL_INVERSION_NAME, TEXTUAL_INVERSION_NAME_SAFE, TEXTUAL_
 
 logger = logging.getLogger(__name__)
 
+
 class InsertTextEmbedding(MatcherPass):
     r"""
     OpenVINO ngraph transformation for inserting pre-trained texual inversion embedding to text encoder
     """
+
     def __init__(self, token_ids_and_embeddings):
         MatcherPass.__init__(self)
         self.model_changed = False
@@ -55,8 +57,11 @@ class InsertTextEmbedding(MatcherPass):
                 for token_id, embedding in token_ids_and_embeddings:
                     ti_weights = ops.constant(embedding, Type.f32, name=str(token_id))
                     ti_weights_unsqueeze = ops.unsqueeze(ti_weights, axes=0)
-                    add_ti = ops.concat(nodes=[add_ti,ti_weights_unsqueeze], axis=0,
-                                        name=f"{TEXTUAL_INVERSION_EMBEDDING_KEY}.textual_inversion_{token_id}")
+                    add_ti = ops.concat(
+                        nodes=[add_ti, ti_weights_unsqueeze],
+                        axis=0,
+                        name=f"{TEXTUAL_INVERSION_EMBEDDING_KEY}.textual_inversion_{token_id}",
+                    )
 
                 for consumer in consumers:
                     consumer.replace_source_output(add_ti.output(0))
@@ -67,7 +72,8 @@ class InsertTextEmbedding(MatcherPass):
             # Root node wasn't replaced or changed
             return False
 
-        self.register_matcher(Matcher(param,"InsertTextEmbedding"), callback)
+        self.register_matcher(Matcher(param, "InsertTextEmbedding"), callback)
+
 
 # Adapted from diffusers.loaders.TextualInversionLoaderMixin
 class OVTextualInversionLoaderMixin:
