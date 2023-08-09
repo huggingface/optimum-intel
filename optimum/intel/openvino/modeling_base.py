@@ -148,7 +148,7 @@ class OVBaseModel(PreTrainedModel):
                 The directory where to save the model files.
         """
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
-        openvino.runtime.serialize(self.model, dst_path)
+        openvino.save_model(self.model, dst_path, compress_to_fp16=False)
 
     @classmethod
     def _from_pretrained(
@@ -199,7 +199,7 @@ class OVBaseModel(PreTrainedModel):
             model_save_dir = model_id
         # Download the model from the hub
         else:
-            model_file_names = [file_name]
+            model_file_names = [file_name] if from_onnx else []
             # If not ONNX then OpenVINO IR
             if not from_onnx:
                 model_file_names.append(file_name.replace(".xml", ".bin"))

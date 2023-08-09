@@ -772,7 +772,7 @@ class OVTrainer(Trainer):
                     compress_quantize_weights_transformation(ov_model)
 
             # Serialize IR xml and bin
-            save_model(ov_model, output_path)
+            save_model(ov_model, output_path, compress_to_fp16=False)
 
     def _get_compression_controller_by_cls(
         self, controller_cls: Type[PTCompressionAlgorithmController]

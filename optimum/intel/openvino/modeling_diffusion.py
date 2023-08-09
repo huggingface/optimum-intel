@@ -156,7 +156,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             if ov_model is not None:
                 dst_path = save_directory / dst_path / OV_XML_FILE_NAME
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
-                openvino.runtime.serialize(ov_model.model, dst_path)
+                openvino.save_model(ov_model.model, dst_path, compress_to_fp16=False)
                 model_dir = ov_model.config.get("_name_or_path", None) or ov_model._model_dir / ov_model._model_name
                 config_path = Path(model_dir) / ov_model.CONFIG_NAME
                 if config_path.is_file():

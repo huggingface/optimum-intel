@@ -105,7 +105,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
         for src_file, dst_file_name in zip(src_files, dst_file_names):
             dst_path = os.path.join(save_directory, dst_file_name)
-            openvino.runtime.serialize(src_file, dst_path)
+            openvino.save_model(src_file, dst_path, compress_to_fp16=False)
 
     @classmethod
     def _from_pretrained(
