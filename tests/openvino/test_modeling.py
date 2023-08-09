@@ -21,6 +21,7 @@ from typing import Dict
 
 import numpy as np
 import requests
+import timm
 import torch
 from datasets import load_dataset
 from evaluate import evaluator
@@ -65,6 +66,7 @@ from optimum.intel import (
 )
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
+from optimum.intel.openvino.modeling_timm import TimmImageProcessor
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
@@ -585,6 +587,11 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         "vit",
     )
 
+    TIMM_MODELS = (
+        "timm/pit_s_distilled_224.in1k",
+        "timm/vit_tiny_patch16_224.augreg_in21k"
+    )
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -617,6 +624,27 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
+        gc.collect()
+
+    @parameterized.expand(TIMM_MODELS)
+    def test_compare_to_timm(self, model_id):
+        ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        timm_model = timm.create_model(model_id, pretrained = True)
+        preprocessor = TimmImageProcessor.from_pretrained(model_id)
+        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        image = Image.open(requests.get(url, stream=True).raw)
+        inputs = preprocessor(images=image, return_tensors="pt")
+        with torch.no_grad():
+            timm_model.eval()
+            timm_outputs = timm_model(inputs['pixel_values'].float())
+        for input_type in ["pt", "np"]:
+            inputs = preprocessor(images=image, return_tensors=input_type)
+            ov_outputs = ov_model(**inputs)
+            self.assertIn("logits", ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), timm_outputs, atol=1e-4))
         gc.collect()
 
 
