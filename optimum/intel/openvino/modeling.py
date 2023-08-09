@@ -521,7 +521,7 @@ class OVModelForImageClassification(OVModel):
     ):
         # Fix the mismatch between timm_config and huggingface_config
         if not os.path.isdir(model_id) and model_info(model_id).library_name == "timm":
-            return OVModelForTimm.from_pretrained(
+            return OVModelForTimm.from_timm(
                     model_id = model_id,
                     use_auth_token = use_auth_token,
                     revision = revision,
@@ -578,7 +578,7 @@ class OVModelForImageClassification(OVModel):
         return ImageClassifierOutput(logits=logits)
 
 
-class OVModelForTimm(OVModelForImageClassification):
+class OVModelForTimm(OVModel):
 
     @classmethod
     def _from_transformers(
@@ -634,7 +634,7 @@ class OVModelForTimm(OVModelForImageClassification):
             )
 
     @classmethod
-    def from_pretrained(
+    def from_timm(
         cls,
         model_id: Union[str, Path],
         export: bool = False,
@@ -726,6 +726,26 @@ class OVModelForTimm(OVModelForImageClassification):
             **kwargs,
         )
 
+    def forward(
+        self,
+        pixel_values: Union[torch.Tensor, np.ndarray],
+        **kwargs,
+    ):
+        self.compile()
+
+        np_inputs = isinstance(pixel_values, np.ndarray)
+        if not np_inputs:
+            pixel_values = np.array(pixel_values)
+
+        inputs = {
+            "pixel_values": pixel_values,
+        }
+
+        # Run inference
+        outputs = self.request(inputs)
+        logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
+        return ImageClassifierOutput(logits=logits)
+        
     @classmethod
     def _load_config(cls, model_id,**kwargs):
         return TimmConfig.from_pretrained(model_id, **kwargs)
