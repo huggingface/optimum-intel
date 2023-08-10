@@ -11,16 +11,17 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import os
 import logging
+import os
 from pathlib import Path
-from typing import Optional, Union
 from tempfile import TemporaryDirectory
+from typing import Optional, Union
 
 import numpy as np
 import openvino
 import torch
 import transformers
+from huggingface_hub import model_info
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -46,13 +47,15 @@ from transformers.modeling_outputs import (
     TokenClassifierOutput,
     XVectorOutput,
 )
-from huggingface_hub import model_info
+
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import export
+from optimum.modeling_base import OptimizedModel
 
 from .modeling_base import OVBaseModel
-from .modeling_timm import TimmForImageClassification, TimmConfig, TimmOnnxConfig
-from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
+from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOnnxConfig
+from .utils import ONNX_WEIGHTS_NAME
+
 
 logger = logging.getLogger(__name__)
 
@@ -594,16 +597,6 @@ class OVModelForTimm(OVModel):
         **kwargs,
     ):
         task = task or cls.export_feature
-
-        model_kwargs = {
-            "revision": revision,
-            "use_auth_token": use_auth_token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "trust_remote_code": trust_remote_code,
-        }
 
         model = TimmForImageClassification.from_pretrained(model_id, **kwargs)
         onnx_config = TimmOnnxConfig(model.config)

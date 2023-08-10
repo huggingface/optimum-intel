@@ -1,40 +1,34 @@
 import os
-import PIL
-import numpy as np
-from pathlib import Path
-from packaging import version
 from collections import OrderedDict
-from typing import Mapping, Any, Dict, List, Optional, Tuple, Union, Callable
+from typing import Dict, List, Optional, Tuple, Union
 
-import torch
-import torch.nn as nn
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
-
+import numpy as np
 import timm
+import torch
 from timm.layers.config import set_fused_attn
 from timm.models._hub import load_model_config_from_hf
-from transformers import PreTrainedModel, PretrainedConfig
-from transformers.utils import TensorType
+from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+from transformers import PretrainedConfig, PreTrainedModel
+from transformers.image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
+from transformers.image_transforms import resize, to_channel_dimension_format
 from transformers.image_utils import (
     IMAGENET_STANDARD_MEAN,
     IMAGENET_STANDARD_STD,
     ChannelDimension,
+    ImageFeatureExtractionMixin,
     ImageInput,
     PILImageResampling,
     make_list_of_images,
     to_numpy_array,
     valid_images,
-    ImageFeatureExtractionMixin,
 )
-from transformers.image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
-from transformers.image_transforms import resize, to_channel_dimension_format
 from transformers.modeling_outputs import BaseModelOutput, ImageClassifierOutput
+from transformers.utils import TensorType
 
-from optimum.exporters import TasksManager
 from optimum.exporters.onnx.model_configs import ViTOnnxConfig
 
+
 set_fused_attn(False, False)
-ExportConfigConstructor = Callable[[PretrainedConfig], "ExportConfig"]
 
 
 class TimmConfig(PretrainedConfig):
