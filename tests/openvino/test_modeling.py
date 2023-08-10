@@ -587,10 +587,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         "vit",
     )
 
-    TIMM_MODELS = (
-        "timm/pit_s_distilled_224.in1k",
-        "timm/vit_tiny_patch16_224.augreg_in21k"
-    )
+    TIMM_MODELS = ("timm/pit_s_distilled_224.in1k", "timm/vit_tiny_patch16_224.augreg_in21k")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -630,14 +627,14 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     def test_compare_to_timm(self, model_id):
         ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
-        timm_model = timm.create_model(model_id, pretrained = True)
+        timm_model = timm.create_model(model_id, pretrained=True)
         preprocessor = TimmImageProcessor.from_pretrained(model_id)
         url = "http://images.cocodataset.org/val2017/000000039769.jpg"
         image = Image.open(requests.get(url, stream=True).raw)
         inputs = preprocessor(images=image, return_tensors="pt")
         with torch.no_grad():
             timm_model.eval()
-            timm_outputs = timm_model(inputs['pixel_values'].float())
+            timm_outputs = timm_model(inputs["pixel_values"].float())
         for input_type in ["pt", "np"]:
             inputs = preprocessor(images=image, return_tensors=input_type)
             ov_outputs = ov_model(**inputs)

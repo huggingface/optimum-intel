@@ -23,9 +23,9 @@ from transformers.image_utils import (
     PILImageResampling,
     make_list_of_images,
     to_numpy_array,
-    valid_images, 
-    ImageFeatureExtractionMixin
-    )
+    valid_images,
+    ImageFeatureExtractionMixin,
+)
 from transformers.image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
 from transformers.image_transforms import resize, to_channel_dimension_format
 from transformers.modeling_outputs import BaseModelOutput, ImageClassifierOutput
@@ -51,7 +51,6 @@ class TimmConfig(PretrainedConfig):
         revision: str = "main",
         **kwargs,
     ) -> "PretrainedConfig":
-
         kwargs["cache_dir"] = cache_dir
         kwargs["force_download"] = force_download
         kwargs["local_files_only"] = local_files_only
@@ -66,7 +65,7 @@ class TimmConfig(PretrainedConfig):
 
 class TimmOnnxConfig(ViTOnnxConfig):
     DEFAULT_TIMM_ONNX_OPSET = 13
-    outputs= OrderedDict([('logits', {0: 'batch_size'})])
+    outputs = OrderedDict([("logits", {0: "batch_size"})])
 
 
 class TimmPreTrainedModel(PreTrainedModel):
@@ -76,25 +75,23 @@ class TimmPreTrainedModel(PreTrainedModel):
 
 
 class TimmModel(TimmPreTrainedModel):
-    def __init__(self, 
-                config: TimmConfig, 
-                feature_only : bool = True, 
-                pretrained : bool = True, 
-                in_chans : int = 3, 
-                **kwargs):
+    def __init__(
+        self, config: TimmConfig, feature_only: bool = True, pretrained: bool = True, in_chans: int = 3, **kwargs
+    ):
         super().__init__(config)
 
         self.config = config
         if feature_only:
-            self.timm_model = timm.create_model("hf-hub:" + self.config.hf_hub_id,
-                                           num_classes = 0,
-                                           pretrained = pretrained,
-                                           in_chans = in_chans)
+            self.timm_model = timm.create_model(
+                "hf-hub:" + self.config.hf_hub_id, num_classes=0, pretrained=pretrained, in_chans=in_chans
+            )
         else:
-            self.timm_model = timm.create_model("hf-hub:" + self.config.hf_hub_id,
-                                           num_classes = self.config.num_labels,
-                                           pretrained = pretrained,
-                                           in_chans = in_chans)
+            self.timm_model = timm.create_model(
+                "hf-hub:" + self.config.hf_hub_id,
+                num_classes=self.config.num_labels,
+                pretrained=pretrained,
+                in_chans=in_chans,
+            )
         self.timm_model.eval()
 
     @classmethod
@@ -107,7 +104,6 @@ class TimmModel(TimmPreTrainedModel):
         pixel_values: Optional[torch.Tensor] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutput]:
-
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if pixel_values is None:
@@ -123,10 +119,7 @@ class TimmModel(TimmPreTrainedModel):
         if not return_dict:
             return model_output
 
-        return BaseModelOutput(
-            last_hidden_state=model_output,
-            hidden_states= None
-        )
+        return BaseModelOutput(last_hidden_state=model_output, hidden_states=None)
 
 
 class TimmForImageClassification(TimmPreTrainedModel):
@@ -135,7 +128,7 @@ class TimmForImageClassification(TimmPreTrainedModel):
 
         if num_labels:
             config.num_labels = num_labels
-        self.timm = TimmModel(config, feature_only = False)
+        self.timm = TimmModel(config, feature_only=False)
 
     @classmethod
     def from_pretrained(cls, model_name_or_path, **kwargs):
@@ -191,9 +184,8 @@ class TimmForImageClassification(TimmPreTrainedModel):
 
         return ImageClassifierOutput(
             loss=loss,
-            logits = logits.last_hidden_state,
+            logits=logits.last_hidden_state,
         )
-
 
 
 class TimmImageProcessor(BaseImageProcessor, ImageFeatureExtractionMixin):
@@ -229,7 +221,6 @@ class TimmImageProcessor(BaseImageProcessor, ImageFeatureExtractionMixin):
 
     model_input_names = ["pixel_values"]
 
-
     def __init__(
         self,
         do_resize: bool = True,
@@ -262,28 +253,22 @@ class TimmImageProcessor(BaseImageProcessor, ImageFeatureExtractionMixin):
     ):
         timm_config_dict, _ = load_model_config_from_hf(pretrained_model_name_or_path)
 
-        _, im_h, im_w = timm_config_dict.get('input_size', [3, 224, 224])
+        _, im_h, im_w = timm_config_dict.get("input_size", [3, 224, 224])
 
         image_preprocess_config_dict = {
-            'crop_size': {
-                'height': im_h,
-                'width': im_w
-            },
-            'do_center_crop': True if timm_config_dict.get('crop_mode') == 'center' else False,
-            'do_normalize': True,
-            'do_reduce_labels': False,
-            'do_rescale': True,
-            'do_resize': True,
-            'image_mean': timm_config_dict.get('mean', IMAGENET_STANDARD_MEAN),
-            'image_processor_type': 'TimmImageProcessor',
-            'image_std': timm_config_dict.get('std', IMAGENET_STANDARD_STD),
-            'resample': 3,
-            'rescale_factor': 0.00392156862745098,
-            'size': {
-                'height': im_h,
-                'width': im_w
-                }
-            }
+            "crop_size": {"height": im_h, "width": im_w},
+            "do_center_crop": True if timm_config_dict.get("crop_mode") == "center" else False,
+            "do_normalize": True,
+            "do_reduce_labels": False,
+            "do_rescale": True,
+            "do_resize": True,
+            "image_mean": timm_config_dict.get("mean", IMAGENET_STANDARD_MEAN),
+            "image_processor_type": "TimmImageProcessor",
+            "image_std": timm_config_dict.get("std", IMAGENET_STANDARD_STD),
+            "resample": 3,
+            "rescale_factor": 0.00392156862745098,
+            "size": {"height": im_h, "width": im_w},
+        }
 
         return cls.from_dict(image_preprocess_config_dict, **kwargs)
 
@@ -318,64 +303,10 @@ class TimmImageProcessor(BaseImageProcessor, ImageFeatureExtractionMixin):
         if "height" not in size or "width" not in size:
             raise ValueError(f"The `size` dictionary must contain the keys `height` and `width`. Got {size.keys()}")
         if image.ndim == 2:
-            image = np.stack([image]*3, axis=-1)
+            image = np.stack([image] * 3, axis=-1)
         return resize(
             image, size=(size["height"], size["width"]), resample=resample, data_format=data_format, **kwargs
         )
-
-    # def rescale(self, image: np.ndarray, scale: Union[float, int]) -> np.ndarray:
-    #     """
-    #     Rescale a numpy image by scale amount
-    #     """
-    #     # self._ensure_format_supported(image)
-    #     return image * scale
-        
-    # def normalize(self, image, mean, std, rescale=False):
-    #     """
-    #     Normalizes `image` with `mean` and `std`. Note that this will trigger a conversion of `image` to a NumPy array
-    #     if it's a PIL Image.
-
-    #     Args:
-    #         image (`PIL.Image.Image` or `np.ndarray` or `torch.Tensor`):
-    #             The image to normalize.
-    #         mean (`List[float]` or `np.ndarray` or `torch.Tensor`):
-    #             The mean (per channel) to use for normalization.
-    #         std (`List[float]` or `np.ndarray` or `torch.Tensor`):
-    #             The standard deviation (per channel) to use for normalization.
-    #         rescale (`bool`, *optional*, defaults to `False`):
-    #             Whether or not to rescale the image to be between 0 and 1. If a PIL image is provided, scaling will
-    #             happen automatically.
-    #     """
-    #     self._ensure_format_supported(image)
-
-    #     if isinstance(image, PIL.Image.Image):
-    #         image = self.to_numpy_array(image, rescale=True)
-    #     # If the input image is a PIL image, it automatically gets rescaled. If it's another
-    #     # type it may need rescaling.
-    #     elif rescale:
-    #         if isinstance(image, np.ndarray):
-    #             image = self.rescale(image.astype(np.float32), 1 / 255.0)
-    #         elif is_torch_tensor(image):
-    #             image = self.rescale(image.float(), 1 / 255.0)
-
-    #     if isinstance(image, np.ndarray):
-    #         if not isinstance(mean, np.ndarray):
-    #             mean = np.array(mean).astype(image.dtype)
-    #         if not isinstance(std, np.ndarray):
-    #             std = np.array(std).astype(image.dtype)
-    #     elif is_torch_tensor(image):
-    #         import torch
-
-    #         if not isinstance(mean, torch.Tensor):
-    #             mean = torch.tensor(mean)
-    #         if not isinstance(std, torch.Tensor):
-    #             std = torch.tensor(std)
-
-    #     if image.ndim == 3 and image.shape[0] in [1, 3]:
-    #         return (image - mean[:, None, None]) / std[:, None, None]
-    #     else:
-    #         return (image - mean) / std
-
 
     def preprocess(
         self,
@@ -447,7 +378,7 @@ class TimmImageProcessor(BaseImageProcessor, ImageFeatureExtractionMixin):
                 "Invalid image type. Must be of type PIL.Image.Image, numpy.ndarray, "
                 "torch.Tensor, tf.Tensor or jax.ndarray."
             )
-        
+
         if do_resize and size is None:
             raise ValueError("Size must be specified if do_resize is True.")
 

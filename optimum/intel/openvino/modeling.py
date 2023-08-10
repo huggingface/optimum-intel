@@ -502,7 +502,6 @@ class OVModelForImageClassification(OVModel):
     def __init__(self, model=None, config=None, **kwargs):
         super().__init__(model, config, **kwargs)
 
-
     @classmethod
     def from_pretrained(
         cls,
@@ -522,32 +521,32 @@ class OVModelForImageClassification(OVModel):
         # Fix the mismatch between timm_config and huggingface_config
         if not os.path.isdir(model_id) and model_info(model_id).library_name == "timm":
             return OVModelForTimm.from_timm(
-                    model_id = model_id,
-                    use_auth_token = use_auth_token,
-                    revision = revision,
-                    force_download = force_download,
-                    cache_dir = cache_dir,
-                    subfolder = subfolder,
-                    local_files_only = local_files_only,
-                    task = task,
-                    trust_remote_code = trust_remote_code,
-                    **kwargs,
-                )
+                model_id=model_id,
+                use_auth_token=use_auth_token,
+                revision=revision,
+                force_download=force_download,
+                cache_dir=cache_dir,
+                subfolder=subfolder,
+                local_files_only=local_files_only,
+                task=task,
+                trust_remote_code=trust_remote_code,
+                **kwargs,
+            )
         else:
             return super().from_pretrained(
-                    model_id = model_id,
-                    config = config,
-                    export = export,
-                    use_auth_token = use_auth_token,
-                    revision = revision,
-                    force_download = force_download,
-                    cache_dir = cache_dir,
-                    subfolder = subfolder,
-                    local_files_only = local_files_only,
-                    task = task,
-                    trust_remote_code = trust_remote_code,
-                    **kwargs,
-                )
+                model_id=model_id,
+                config=config,
+                export=export,
+                use_auth_token=use_auth_token,
+                revision=revision,
+                force_download=force_download,
+                cache_dir=cache_dir,
+                subfolder=subfolder,
+                local_files_only=local_files_only,
+                task=task,
+                trust_remote_code=trust_remote_code,
+                **kwargs,
+            )
 
     @add_start_docstrings_to_model_forward(
         IMAGE_INPUTS_DOCSTRING.format("batch_size, num_channels, height, width")
@@ -579,7 +578,6 @@ class OVModelForImageClassification(OVModel):
 
 
 class OVModelForTimm(OVModel):
-
     @classmethod
     def _from_transformers(
         cls,
@@ -607,11 +605,10 @@ class OVModelForTimm(OVModel):
             "trust_remote_code": trust_remote_code,
         }
 
-
         model = TimmForImageClassification.from_pretrained(model_id, **kwargs)
         onnx_config = TimmOnnxConfig(model.config)
         save_dir = TemporaryDirectory()
-        
+
         with TemporaryDirectory() as save_dir:
             save_dir_path = Path(save_dir)
             export(
@@ -670,21 +667,21 @@ class OVModelForTimm(OVModel):
             model_id, revision = model_id.split("@")
 
         # if config is None:
-            # if os.path.isdir(os.path.join(model_id, subfolder)) and cls.config_name == CONFIG_NAME:
-            #     if CONFIG_NAME in os.listdir(os.path.join(model_id, subfolder)):
-            #         config = AutoConfig.from_pretrained(
-            #             os.path.join(model_id, subfolder, CONFIG_NAME), trust_remote_code=trust_remote_code
-            #         )
-            #     elif CONFIG_NAME in os.listdir(model_id):
-            #         config = AutoConfig.from_pretrained(
-            #             os.path.join(model_id, CONFIG_NAME), trust_remote_code=trust_remote_code
-            #         )
-            #         logger.info(
-            #             f"config.json not found in the specified subfolder {subfolder}. Using the top level config.json."
-            #         )
-            #     else:
-            #         raise OSError(f"config.json not found in {model_id} local folder")
-            # else:
+        # if os.path.isdir(os.path.join(model_id, subfolder)) and cls.config_name == CONFIG_NAME:
+        #     if CONFIG_NAME in os.listdir(os.path.join(model_id, subfolder)):
+        #         config = AutoConfig.from_pretrained(
+        #             os.path.join(model_id, subfolder, CONFIG_NAME), trust_remote_code=trust_remote_code
+        #         )
+        #     elif CONFIG_NAME in os.listdir(model_id):
+        #         config = AutoConfig.from_pretrained(
+        #             os.path.join(model_id, CONFIG_NAME), trust_remote_code=trust_remote_code
+        #         )
+        #         logger.info(
+        #             f"config.json not found in the specified subfolder {subfolder}. Using the top level config.json."
+        #         )
+        #     else:
+        #         raise OSError(f"config.json not found in {model_id} local folder")
+        # else:
         config = cls._load_config(
             model_id,
             revision=revision,
@@ -745,9 +742,9 @@ class OVModelForTimm(OVModel):
         outputs = self.request(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return ImageClassifierOutput(logits=logits)
-        
+
     @classmethod
-    def _load_config(cls, model_id,**kwargs):
+    def _load_config(cls, model_id, **kwargs):
         return TimmConfig.from_pretrained(model_id, **kwargs)
 
 
