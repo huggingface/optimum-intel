@@ -1,13 +1,12 @@
 import os
 from collections import OrderedDict
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import timm
 import torch
 from timm.layers.config import set_fused_attn
 from timm.models._hub import load_model_config_from_hf
-from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.image_processing_utils import BaseImageProcessor, BatchFeature, get_size_dict
 from transformers.image_transforms import resize, to_channel_dimension_format
@@ -22,7 +21,7 @@ from transformers.image_utils import (
     to_numpy_array,
     valid_images,
 )
-from transformers.modeling_outputs import BaseModelOutput, ImageClassifierOutput
+from transformers.modeling_outputs import ImageClassifierOutput
 from transformers.utils import TensorType
 
 from optimum.exporters.onnx.model_configs import ViTOnnxConfig
@@ -62,18 +61,17 @@ class TimmOnnxConfig(ViTOnnxConfig):
     outputs = OrderedDict([("logits", {0: "batch_size"})])
 
 
-
 class TimmForImageClassification(PreTrainedModel):
     def __init__(self, config: TimmConfig, num_labels: int = None, **kwargs) -> None:
         super().__init__(config, **kwargs)
         if num_labels:
             config.num_labels = num_labels
         self.model = timm.create_model(
-                "hf-hub:" + self.config.hf_hub_id,
-                num_classes=self.config.num_labels,
-                pretrained=True,
-                in_chans=3,
-            )
+            "hf-hub:" + self.config.hf_hub_id,
+            num_classes=self.config.num_labels,
+            pretrained=True,
+            in_chans=3,
+        )
         self.model.eval()
 
     @classmethod
@@ -81,10 +79,7 @@ class TimmForImageClassification(PreTrainedModel):
         config = TimmConfig.from_pretrained(model_name_or_path, **kwargs)
         return cls(config, **kwargs)
 
-    def forward(
-        self,
-        pixel_values: Optional[torch.Tensor] = None
-    ):
+    def forward(self, pixel_values: Optional[torch.Tensor] = None):
         logits = self.model(
             pixel_values,
         )

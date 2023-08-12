@@ -14,7 +14,6 @@
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Optional, Union
 
 import numpy as np
@@ -48,12 +47,10 @@ from transformers.modeling_outputs import (
     XVectorOutput,
 )
 
-from optimum.exporters import TasksManager, onnx
-from optimum.modeling_base import OptimizedModel
+from optimum.exporters import TasksManager
 
 from .modeling_base import OVBaseModel
 from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOnnxConfig
-from .utils import ONNX_WEIGHTS_NAME
 
 
 logger = logging.getLogger(__name__)

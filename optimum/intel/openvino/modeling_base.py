@@ -25,7 +25,7 @@ from openvino.runtime import Core
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from optimum.exporters.onnx import export, OnnxConfig
+from optimum.exporters.onnx import OnnxConfig, export
 from optimum.exporters.tasks import TasksManager
 from optimum.modeling_base import OptimizedModel
 
@@ -293,7 +293,7 @@ class OVBaseModel(PreTrainedModel):
         cls,
         model: PreTrainedModel,
         config: PretrainedConfig,
-        onnx_config:OnnxConfig,
+        onnx_config: OnnxConfig,
         use_auth_token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
