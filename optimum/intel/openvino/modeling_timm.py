@@ -62,67 +62,19 @@ class TimmOnnxConfig(ViTOnnxConfig):
     outputs = OrderedDict([("logits", {0: "batch_size"})])
 
 
-class TimmPreTrainedModel(PreTrainedModel):
-    config_class = TimmConfig
-    base_model_prefix = "timm"
-    main_input_name = "pixel_values"
 
-
-class TimmModel(TimmPreTrainedModel):
-    def __init__(
-        self, config: TimmConfig, feature_only: bool = True, pretrained: bool = True, in_chans: int = 3, **kwargs
-    ):
-        super().__init__(config)
-
-        self.config = config
-        if feature_only:
-            self.timm_model = timm.create_model(
-                "hf-hub:" + self.config.hf_hub_id, num_classes=0, pretrained=pretrained, in_chans=in_chans
-            )
-        else:
-            self.timm_model = timm.create_model(
-                "hf-hub:" + self.config.hf_hub_id,
-                num_classes=self.config.num_labels,
-                pretrained=pretrained,
-                in_chans=in_chans,
-            )
-        self.timm_model.eval()
-
-    @classmethod
-    def from_pretrained(cls, model_name_or_path, **kwargs):
-        config = TimmConfig.from_pretrained(model_name_or_path, **kwargs)
-        return cls(config, **kwargs)
-
-    def forward(
-        self,
-        pixel_values: Optional[torch.Tensor] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple, BaseModelOutput]:
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        if pixel_values is None:
-            raise ValueError("You have to specify pixel_values")
-
-        # TODO: maybe have a cleaner way to cast the input (from `ImageProcessor` side?)
-        # expected_dtype = self.embeddings.patch_embeddings.projection.weight.dtype
-        # if pixel_values.dtype != expected_dtype:
-        #     pixel_values = pixel_values.to(expected_dtype)
-
-        model_output = self.timm_model(pixel_values)
-
-        if not return_dict:
-            return model_output
-
-        return BaseModelOutput(last_hidden_state=model_output, hidden_states=None)
-
-
-class TimmForImageClassification(TimmPreTrainedModel):
+class TimmForImageClassification(PreTrainedModel):
     def __init__(self, config: TimmConfig, num_labels: int = None, **kwargs) -> None:
         super().__init__(config, **kwargs)
-
         if num_labels:
             config.num_labels = num_labels
-        self.timm = TimmModel(config, feature_only=False)
+        self.model = timm.create_model(
+                "hf-hub:" + self.config.hf_hub_id,
+                num_classes=self.config.num_labels,
+                pretrained=True,
+                in_chans=3,
+            )
+        self.model.eval()
 
     @classmethod
     def from_pretrained(cls, model_name_or_path, **kwargs):
@@ -131,54 +83,14 @@ class TimmForImageClassification(TimmPreTrainedModel):
 
     def forward(
         self,
-        pixel_values: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        return_dict: Optional[bool] = None,
-    ) -> Union[tuple, ImageClassifierOutput]:
-        r"""
-        labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
-            Labels for computing the image classification/regression loss. Indices should be in `[0, ...,
-            config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
-            `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
-        """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        logits = self.timm(
+        pixel_values: Optional[torch.Tensor] = None
+    ):
+        logits = self.model(
             pixel_values,
-            return_dict=return_dict,
         )
 
-        loss = None
-        if labels is not None:
-            # move labels to correct device to enable model parallelism
-            labels = labels.to(logits.device)
-            if self.config.problem_type is None:
-                if self.num_labels == 1:
-                    self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
-                    self.config.problem_type = "single_label_classification"
-                else:
-                    self.config.problem_type = "multi_label_classification"
-
-            if self.config.problem_type == "regression":
-                loss_fct = MSELoss()
-                if self.num_labels == 1:
-                    loss = loss_fct(logits.squeeze(), labels.squeeze())
-                else:
-                    loss = loss_fct(logits, labels)
-            elif self.config.problem_type == "single_label_classification":
-                loss_fct = CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-            elif self.config.problem_type == "multi_label_classification":
-                loss_fct = BCEWithLogitsLoss()
-                loss = loss_fct(logits, labels)
-
-        if not return_dict:
-            return logits
-
         return ImageClassifierOutput(
-            loss=loss,
-            logits=logits.last_hidden_state,
+            logits=logits,
         )
 
 
@@ -392,7 +304,5 @@ class TimmImageProcessor(BaseImageProcessor, ImageFeatureExtractionMixin):
             images = [self.normalize(image=image, mean=image_mean, std=image_std) for image in images]
 
         images = [to_channel_dimension_format(image, data_format) for image in images]
-        # print(images[0].shape)
-        # print('top from preprocessor')
         data = {"pixel_values": images}
         return BatchFeature(data=data, tensor_type=return_tensors)

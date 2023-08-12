@@ -25,7 +25,7 @@ from openvino.runtime import Core
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from optimum.exporters.onnx import export
+from optimum.exporters.onnx import export, OnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.modeling_base import OptimizedModel
 
@@ -276,6 +276,31 @@ class OVBaseModel(PreTrainedModel):
         )
 
         onnx_config = onnx_config_class(model.config)
+
+        return cls._to_onnx_to_load(
+            model=model,
+            config=config,
+            onnx_config=onnx_config,
+            use_auth_token=use_auth_token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+        )
+
+    @classmethod
+    def _to_onnx_to_load(
+        cls,
+        model: PreTrainedModel,
+        config: PretrainedConfig,
+        onnx_config:OnnxConfig,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: Optional[str] = None,
+        local_files_only: bool = False,
+        **kwargs,
+    ):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
