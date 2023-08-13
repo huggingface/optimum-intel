@@ -31,8 +31,12 @@ from optimum.exporters import TasksManager
 from optimum.utils import NormalizedConfigManager
 
 from ..utils.import_utils import is_transformers_version
+<<<<<<< HEAD
 from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
 from .export import export, is_torch_model
+=======
+from ..utils.modeling_utils import patch_decoder_attention_mask
+>>>>>>> fix llama export in quantization flow
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
@@ -232,12 +236,7 @@ class OVBaseDecoderModel(OVModel):
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
 
         # TODO : create ModelPatcher to patch each architecture
-        if config.model_type == "bloom":
-            model.transformer._prepare_attn_mask = _prepare_attn_mask
-        elif config.model_type == "llama":
-            model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
-        elif config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
-            model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+        model = patch_decoder_attention_mask(model)
 
         # Export the model to the ONNX format
         export(model=model, config=onnx_config, output=save_dir_path / ONNX_WEIGHTS_NAME)

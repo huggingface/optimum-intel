@@ -34,13 +34,12 @@ from torch.utils.data import DataLoader, RandomSampler, TensorDataset
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 
-from optimum.exporters.onnx import export as onnx_export
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES
-from .configuration import INT8_WEIGHT_COMPRESSION_CONFIG, OVConfig
-from .export import export
+from ..utils.modeling_utils import patch_decoder_attention_mask
+from .configuration import OVConfig
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel
 from .utils import (
@@ -336,8 +335,9 @@ class OVQuantizer(OptimumQuantizer):
         self._set_task()
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
-        file_name = file_name if file_name is not None else OV_XML_FILE_NAME
-        output_path = save_directory.joinpath(file_name)
+        ov_file_name = file_name if file_name is not None else OV_XML_FILE_NAME
+        onnx_file_name = Path(file_name).with_suffix(".onnx") if file_name is not None else ONNX_WEIGHTS_NAME
+        output_path = save_directory.joinpath(ov_file_name)
         output_path = output_path.with_suffix(".xml").as_posix()
 
         model_type = self.model.config.model_type.replace("_", "-")
@@ -379,36 +379,43 @@ class OVQuantizer(OptimumQuantizer):
         self.model.config.save_pretrained(save_directory)
 
         if task == "text-generation":
+            model = patch_decoder_attention_mask(model)
             onnx_config = onnx_config_class(model.config, use_past=model.config.use_cache)
         else:
             onnx_config = onnx_config_class(model.config)
 
-        model_path = save_directory / (ONNX_WEIGHTS_NAME if quantization_config.save_onnx_model else OV_XML_FILE_NAME)
-        if quantization_config.save_onnx_model:
-            # Export the model to the ONNX format
-            opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
-            opset = max(opset, MIN_ONNX_QDQ_OPSET)
-            onnx_export(
-                model=compressed_model,
-                config=onnx_config,
-                opset=opset,
-                output=model_path,
-            )
-
+        model_path = save_directory / onnx_file_name if quantization_config.save_onnx_model else ov_file_name
+        onnx_path = save_directory / onnx_file_name
+        opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
+        opset = max(opset, MIN_ONNX_QDQ_OPSET)
+        _, _, is_onnx = export(
+            model=compressed_model,
+            config=onnx_config,
+            output=model_path,
+            opset=opset,
+            from_onnx=quantization_config.save_onnx_model,
+        )
+        if is_onnx:
             # Load and save the compressed model
-            model = core.read_model(model_path)
+            model = core.read_model(onnx_path)
             self._save_pretrained(model, output_path)
+<<<<<<< HEAD
         else:
             _, _, is_onnx = export(model=compressed_model, config=onnx_config, output=output_path)
             if is_onnx:
                 onnx_path = output_path.replace(".xml", ".onnx")
                 model = core.read_model(onnx_path)
                 self._save_pretrained(model, output_path)
+=======
+            # if onnx conversion happens as fallback for pytorch conversion, remove onnx model
+            if not quantization_config.save_onnx_model:
+>>>>>>> fix llama export in quantization flow
                 os.remove(onnx_path)
                 try:
                     os.remove(f"{onnx_path}_data")
                 except FileNotFoundError:
                     pass
+
         quantization_config.save_pretrained(save_directory)
 
     @staticmethod

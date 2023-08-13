@@ -59,6 +59,7 @@ def export(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    from_onnx: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -93,7 +94,15 @@ def export(
 
     if is_torch_available() and isinstance(model, nn.Module):
         return export_pytorch(
-            model, config, opset, output, device=device, input_shapes=input_shapes, model_kwargs=model_kwargs
+            model,
+            config,
+            opset,
+            output,
+            device=device,
+            input_shapes=input_shapes,
+            model_kwargs=model_kwargs,
+            opset=opset,
+            from_onnx=from_onnx,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -112,6 +121,37 @@ def export(
         )
 
 
+def export_pytorch_via_onnx(
+    model: Union["PreTrainedModel", "ModelMixin"],
+    config: OnnxConfig,
+    opset: int,
+    output: Path,
+    device: str = "cpu",
+    input_shapes: Optional[Dict] = None,
+    model_kwargs: Optional[Dict[str, Any]] = None,
+):
+    import torch
+
+    orig_torch_onnx_export = torch.onnx.export
+    torch.onnx.export = functools.partial(orig_torch_onnx_export, do_constant_folding=False)
+    model.config.torchscript = False
+    model.config.return_dict = True
+    onnx_output = (
+        output.with_suffix(".onnx") if not output.name != OV_XML_FILE_NAME else output.parent / ONNX_WEIGHTS_NAME
+    )
+    input_names, output_names = export_pytorch_to_onnx(
+        model, config, opset, onnx_output, device, input_shapes, model_kwargs
+    )
+    torch.onnx.export = orig_torch_onnx_export
+    ov_model = convert_model(str(onnx_output))
+    save_model(
+        ov_model,
+        output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
+        compress_to_fp16=False,
+    )
+    return input_names, output_names, True
+
+
 def export_pytorch(
     model: Union["PreTrainedModel", "ModelMixin"],
     config: OnnxConfig,
@@ -120,6 +160,7 @@ def export_pytorch(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    from_onnx: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -148,6 +189,8 @@ def export_pytorch(
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
+    if from_onnx:
+        return export_pytorch_via_onnx(model, config, opset, output, device, input_shapes, model_kwargs)
 
     with torch.no_grad():
         model.config.return_dict = True
@@ -200,28 +243,9 @@ def export_pytorch(
             patcher.patched_forward = ts_patched_forward
             with patcher:
                 ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
-        except Exception:
-            orig_torch_onnx_export = torch.onnx.export
-
-            torch.onnx.export = functools.partial(orig_torch_onnx_export, do_constant_folding=True)
-            model.config.torchscript = False
-            model.config.return_dict = True
-            onnx_output = (
-                output.with_suffix(".onnx")
-                if not output.name != OV_XML_FILE_NAME
-                else output.parent / ONNX_WEIGHTS_NAME
-            )
-            input_names, output_names = export_pytorch_to_onnx(
-                model, config, opset, onnx_output, device, input_shapes, model_kwargs
-            )
-            torch.onnx.export = orig_torch_onnx_export
-            ov_model = convert_model(str(onnx_output))
-            save_model(
-                ov_model,
-                output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
-                compress_to_fp16=False,
-            )
-            return input_names, output_names, True
+        except Exception as ex:
+            logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
+            return export_pytorch_via_onnx(model, config, opset, output, device, input_shapes, model_kwargs)
         clear_class_registry()
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         ordered_input_names = list(inputs)

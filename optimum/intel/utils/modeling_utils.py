@@ -89,3 +89,13 @@ def _prepare_decoder_attention_mask(attention_mask, input_shape, inputs_embeds, 
         )
 
     return combined_attention_mask
+
+
+def patch_decoder_attention_mask(model):
+    if model.config.model_type == "bloom":
+        model.transformer._prepare_attn_mask = _prepare_attn_mask
+    elif model.config.model_type == "llama":
+        model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+    elif model.config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
+        model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+    return model
