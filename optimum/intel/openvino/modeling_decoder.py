@@ -30,13 +30,10 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from optimum.exporters import TasksManager
 from optimum.utils import NormalizedConfigManager
 
+from ...exporters.openvino import export
+from ...exporters.openvino.utils import is_torch_model
 from ..utils.import_utils import is_transformers_version
-<<<<<<< HEAD
-from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
-from .export import export, is_torch_model
-=======
 from ..utils.modeling_utils import patch_decoder_attention_mask
->>>>>>> fix llama export in quantization flow
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 

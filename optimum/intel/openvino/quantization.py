@@ -30,13 +30,14 @@ from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_obj
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, Tensor
-from torch.utils.data import DataLoader, RandomSampler, TensorDataset
+from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
+from ...exporters.openvino import export
 from ..utils.constant import _TASK_ALIASES
 from ..utils.modeling_utils import patch_decoder_attention_mask
 from .configuration import OVConfig
@@ -353,7 +354,7 @@ class OVQuantizer(OptimumQuantizer):
                 "No configuration describing the quantization process was provided, a default OVConfig will be generated."
             )
             quantization_config = OVConfig()
-            
+
         if weights_only:
             compressed_model = compress_weights(self.model)
             self.model = compressed_model
@@ -377,19 +378,18 @@ class OVQuantizer(OptimumQuantizer):
         task = self.task
         model = self.model
         self.model.config.save_pretrained(save_directory)
-
+        model = patch_decoder_attention_mask(model)
         if task == "text-generation":
-            model = patch_decoder_attention_mask(model)
             onnx_config = onnx_config_class(model.config, use_past=model.config.use_cache)
         else:
             onnx_config = onnx_config_class(model.config)
 
-        model_path = save_directory / onnx_file_name if quantization_config.save_onnx_model else ov_file_name
+        model_path = save_directory / (onnx_file_name if quantization_config.save_onnx_model else ov_file_name)
         onnx_path = save_directory / onnx_file_name
         opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = max(opset, MIN_ONNX_QDQ_OPSET)
         _, _, is_onnx = export(
-            model=compressed_model,
+            model=model,
             config=onnx_config,
             output=model_path,
             opset=opset,
@@ -399,17 +399,8 @@ class OVQuantizer(OptimumQuantizer):
             # Load and save the compressed model
             model = core.read_model(onnx_path)
             self._save_pretrained(model, output_path)
-<<<<<<< HEAD
-        else:
-            _, _, is_onnx = export(model=compressed_model, config=onnx_config, output=output_path)
-            if is_onnx:
-                onnx_path = output_path.replace(".xml", ".onnx")
-                model = core.read_model(onnx_path)
-                self._save_pretrained(model, output_path)
-=======
             # if onnx conversion happens as fallback for pytorch conversion, remove onnx model
             if not quantization_config.save_onnx_model:
->>>>>>> fix llama export in quantization flow
                 os.remove(onnx_path)
                 try:
                     os.remove(f"{onnx_path}_data")

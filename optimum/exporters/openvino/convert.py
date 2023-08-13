@@ -101,7 +101,6 @@ def export(
             device=device,
             input_shapes=input_shapes,
             model_kwargs=model_kwargs,
-            opset=opset,
             from_onnx=from_onnx,
         )
 
