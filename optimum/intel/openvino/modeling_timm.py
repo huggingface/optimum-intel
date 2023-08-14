@@ -1,10 +1,14 @@
+import json
 import os
 from collections import OrderedDict
+from glob import glob
 from typing import Dict, List, Optional, Union
 
 import numpy as np
 import timm
 import torch
+from huggingface_hub import model_info
+from packaging import version
 from timm.layers.config import set_fused_attn
 from timm.models._hub import load_model_config_from_hf
 from transformers import PretrainedConfig, PreTrainedModel
@@ -24,10 +28,31 @@ from transformers.image_utils import (
 from transformers.modeling_outputs import ImageClassifierOutput
 from transformers.utils import TensorType
 
-from optimum.exporters.onnx.model_configs import ViTOnnxConfig
+from optimum.exporters.onnx.config import VisionOnnxConfig
+from optimum.utils import NormalizedVisionConfig
 
 
 set_fused_attn(False, False)
+
+
+def is_timm_ov_dir(model_dir):
+    config_file = None
+    has_xml = False
+    has_bin = False
+    if os.path.isdir(model_dir):
+        for filename in glob(os.path.join(model_dir, "*")):
+            if filename.endswith(".xml"):
+                has_xml = True
+            if filename.endswith(".bin"):
+                has_bin = True
+            if filename.endswith("config.json"):
+                config_file = filename
+    if config_file and has_xml and has_bin:
+        with open(config_file) as conf:
+            hf_hub_id = json.load(conf).get("hf_hub_id", None)
+        if hf_hub_id and model_info(hf_hub_id).library_name == "timm":
+            return True
+    return False
 
 
 class TimmConfig(PretrainedConfig):
@@ -44,6 +69,10 @@ class TimmConfig(PretrainedConfig):
         revision: str = "main",
         **kwargs,
     ) -> "PretrainedConfig":
+        if is_timm_ov_dir(pretrained_model_name_or_path):
+            config_path = os.path.join(pretrained_model_name_or_path, "config.json")
+            return cls.from_json_file(config_path)
+
         kwargs["cache_dir"] = cache_dir
         kwargs["force_download"] = force_download
         kwargs["local_files_only"] = local_files_only
@@ -56,9 +85,15 @@ class TimmConfig(PretrainedConfig):
         return cls.from_dict(config_dict, **kwargs)
 
 
-class TimmOnnxConfig(ViTOnnxConfig):
+class TimmOnnxConfig(VisionOnnxConfig):
     DEFAULT_TIMM_ONNX_OPSET = 13
     outputs = OrderedDict([("logits", {0: "batch_size"})])
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    MIN_TORCH_VERSION = version.parse("1.11")
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"pixel_values": {0: "batch_size", 1: "num_channels", 2: "height", 3: "width"}}
 
 
 class TimmForImageClassification(PreTrainedModel):

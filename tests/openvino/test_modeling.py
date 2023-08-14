@@ -644,6 +644,20 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), timm_outputs, atol=1e-4))
         gc.collect()
 
+    @parameterized.expand(TIMM_MODELS)
+    def test_timm_save_and_infer(self, model_id):
+        ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True)
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            model_save_path = os.path.join(tmpdirname, "timm_ov_model")
+            ov_model.save_pretrained(model_save_path)
+            new_ov_model = OVModelForImageClassification.from_pretrained(
+                model_save_path,
+            )
+            new_ov_model(
+                pixel_values=torch.zeros((5, 3, new_ov_model.config.image_size, new_ov_model.config.image_size))
+            )
+        gc.collect()
+
 
 class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (

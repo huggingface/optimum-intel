@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import logging
-import os
 from pathlib import Path
 from typing import Optional, Union
 
@@ -50,7 +49,7 @@ from transformers.modeling_outputs import (
 from optimum.exporters import TasksManager
 
 from .modeling_base import OVBaseModel
-from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOnnxConfig
+from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOnnxConfig, is_timm_ov_dir
 
 
 logger = logging.getLogger(__name__)
@@ -518,8 +517,15 @@ class OVModelForImageClassification(OVModel):
         **kwargs,
     ):
         # Fix the mismatch between timm_config and huggingface_config
-        if not os.path.isdir(model_id) and model_info(model_id).library_name == "timm":
+        local_timm_model = is_timm_ov_dir(model_id)
+        if local_timm_model or model_info(model_id).library_name == "timm":
             config = TimmConfig.from_pretrained(model_id, **kwargs)
+            #  If locally saved timm model, dirrectly load
+            if local_timm_model:
+                return super()._from_pretrained(
+                    model_id=model_id,
+                    config=config,
+                )
             model = TimmForImageClassification.from_pretrained(model_id, **kwargs)
             onnx_config = TimmOnnxConfig(model.config)
 
