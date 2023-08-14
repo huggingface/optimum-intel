@@ -242,6 +242,7 @@ image2 = pipeline(prompt, num_inference_steps=50).images[0]
 image2.save("stable_diffusion_v1_5_with_textual_inversion.png")
 ```
 The left image shows the generation result of original stable diffusion v1.5, the right image shows the generation result of stable diffusion v1.5 with textual inversion.
+
 |   |   |
 |---|---|
 | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/textual_inversion/stable_diffusion_v1_5_without_textual_inversion.png) | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/textual_inversion/stable_diffusion_v1_5_with_textual_inversion.png) |
@@ -306,9 +307,9 @@ from optimum.intel import OVStableDiffusionXLPipeline
 import numpy as np
 
 model_id = "stabilityai/stable-diffusion-xl-base-1.0"
-prompt = "charturnerv2, multiple views of the same character in the same outfit, a character turnaround of a beautiful woman wearing a black jacket and red shirt, best quality, intricate details."
+prompt = "charturnerv2, multiple views of the same character in the same outfit, a character turnaround of a beautiful woman wearing a red jacket and black shirt, best quality, intricate details."
 # Set a random seed for better comparison
-np.random.seed(0)
+np.random.seed(112)
 
 base = OVStableDiffusionXLPipeline.from_pretrained(model_id, export=False, compile=False)
 base.compile()
