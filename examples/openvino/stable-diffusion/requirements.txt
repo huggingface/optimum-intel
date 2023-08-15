@@ -1,5 +1,6 @@
 accelerate
 diffusers
 torch~=1.13
+torchvision==0.14.1
 nncf @ git+https://github.com/openvinotoolkit/nncf.git
 tomesd @ git+https://github.com/AlexKoff88/tomesd.git@openvino
