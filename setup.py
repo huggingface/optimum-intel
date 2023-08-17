@@ -17,6 +17,7 @@ INSTALL_REQUIRE = [
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
+    "timm",
     "accelerate",  # transformers 4.29 require accelerate for PyTorch
 ]
 
