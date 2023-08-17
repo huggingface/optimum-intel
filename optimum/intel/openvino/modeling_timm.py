@@ -123,7 +123,7 @@ class TimmForImageClassification(PreTrainedModel):
             logits=logits,
         )
 
-
+# Adapted from ViTImageProcessor - https://github.com/huggingface/transformers/blob/main/src/transformers/models/vit/image_processing_vit.py
 class TimmImageProcessor(BaseImageProcessor, ImageFeatureExtractionMixin):
     r"""
     Constructs a ViT image processor.
