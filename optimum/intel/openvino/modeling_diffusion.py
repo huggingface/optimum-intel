@@ -50,6 +50,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
+from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
 from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME
 
@@ -59,7 +60,7 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
-class OVStableDiffusionPipelineBase(OVBaseModel):
+class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
     auto_model_class = StableDiffusionPipeline
     config_name = "model_index.json"
     export_feature = "stable-diffusion"

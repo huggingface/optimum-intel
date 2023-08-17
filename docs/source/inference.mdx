@@ -208,6 +208,45 @@ In case you want to change any parameters such as the outputs height or width, y
     <img src="https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/stable_diffusion_v1_5_sail_boat_rembrandt.png">
 </div>
 
+### Text-to-Image with Textual Inversion
+Here is an example of how you can load an OpenVINO Stable Diffusion model with pre-trained textual inversion embeddings and run inference using OpenVINO Runtime:
+
+
+First, you can run original pipeline without textual inversion
+```python
+from optimum.intel import OVStableDiffusionPipeline
+import numpy as np
+
+model_id = "echarlaix/stable-diffusion-v1-5-openvino"
+prompt = "A <cat-toy> back-pack"
+# Set a random seed for better comparison
+np.random.seed(42)
+
+pipeline = OVStableDiffusionPipeline.from_pretrained(model_id, export=False, compile=False)
+pipeline.compile()
+image1 = pipeline(prompt, num_inference_steps=50).images[0]
+image1.save("stable_diffusion_v1_5_without_textual_inversion.png")
+```
+
+Then, you can load [sd-concepts-library/cat-toy](https://huggingface.co/sd-concepts-library/cat-toy) textual inversion embedding and run pipeline with same prompt again
+```python
+# Reset stable diffusion pipeline
+pipeline.clear_requests()
+
+# Load textual inversion into stable diffusion pipeline
+pipeline.load_textual_inversion("sd-concepts-library/cat-toy", "<cat-toy>")
+
+# Compile the model before the first inference
+pipeline.compile()
+image2 = pipeline(prompt, num_inference_steps=50).images[0]
+image2.save("stable_diffusion_v1_5_with_textual_inversion.png")
+```
+The left image shows the generation result of original stable diffusion v1.5, the right image shows the generation result of stable diffusion v1.5 with textual inversion.
+
+|   |   |
+|---|---|
+| ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/textual_inversion/stable_diffusion_v1_5_without_textual_inversion.png) | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/textual_inversion/stable_diffusion_v1_5_with_textual_inversion.png) |
+
 
 ### Image-to-Image
 
@@ -256,6 +295,47 @@ image.save("train_station.png")
 |   |   |
 |---|---|
 | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich.png) | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich_2.png) |
+
+### Text-to-Image with Textual Inversion
+
+Here is an example of how you can load an SDXL OpenVINO model from [stabilityai/stable-diffusion-xl-base-1.0](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0) with pre-trained textual inversion embeddings and run inference using OpenVINO Runtime:
+
+
+First, you can run original pipeline without textual inversion
+```python
+from optimum.intel import OVStableDiffusionXLPipeline
+import numpy as np
+
+model_id = "stabilityai/stable-diffusion-xl-base-1.0"
+prompt = "charturnerv2, multiple views of the same character in the same outfit, a character turnaround of a beautiful woman wearing a red jacket and black shirt, best quality, intricate details."
+# Set a random seed for better comparison
+np.random.seed(112)
+
+base = OVStableDiffusionXLPipeline.from_pretrained(model_id, export=False, compile=False)
+base.compile()
+image1 = base(prompt, num_inference_steps=50).images[0]
+image1.save("sdxl_without_textual_inversion.png")
+```
+
+Then, you can load [charturnerv2](https://civitai.com/models/3036/charturner-character-turnaround-helper-for-15-and-21) textual inversion embedding and run pipeline with same prompt again
+```python
+# Reset stable diffusion pipeline
+base.clear_requests()
+
+# Load textual inversion into stable diffusion pipeline
+base.load_textual_inversion("./charturnerv2.pt", "charturnerv2")
+
+# Compile the model before the first inference
+base.compile()
+image2 = base(prompt, num_inference_steps=50).images[0]
+image2.save("sdxl_with_textual_inversion.png")
+
+The left image shows the generation result of the original SDXL base 1.0, the right image shows the generation result of SDXL base 1.0 with textual inversion.
+```
+
+|   |   |
+|---|---|
+| ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/textual_inversion/sdxl_without_textual_inversion.png) | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/textual_inversion/sdxl_with_textual_inversion.png) |
 
 
 ### Image-to-Image
