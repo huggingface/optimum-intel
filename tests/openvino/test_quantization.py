@@ -64,8 +64,8 @@ def get_num_quantized_nodes(ov_model):
 class OVQuantizerTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 32, 32),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 21),
+        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 32, 35),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 22),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)

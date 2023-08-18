@@ -29,7 +29,7 @@ from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed, expor
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.utils import is_diffusers_available
 
-from ...intel.openvino.utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
+from ...intel.openvino.utils import OV_XML_FILE_NAME
 from .utils import (
     clear_class_registry,
     flattenize_inputs,
@@ -135,9 +135,7 @@ def export_pytorch_via_onnx(
     torch.onnx.export = functools.partial(orig_torch_onnx_export, do_constant_folding=False)
     model.config.torchscript = False
     model.config.return_dict = True
-    onnx_output = (
-        output.with_suffix(".onnx") if not output.name != OV_XML_FILE_NAME else output.parent / ONNX_WEIGHTS_NAME
-    )
+    onnx_output = output.with_suffix(".onnx")
     input_names, output_names = export_pytorch_to_onnx(
         model, config, opset, onnx_output, device, input_shapes, model_kwargs
     )
@@ -192,6 +190,7 @@ def export_pytorch(
         return export_pytorch_via_onnx(model, config, opset, output, device, input_shapes, model_kwargs)
 
     with torch.no_grad():
+        model.config.torchscript = False
         model.config.return_dict = True
         model.eval()
 
@@ -224,23 +223,28 @@ def export_pytorch(
 
         dummy_inputs, dict_inputs = remove_none_from_dummy_inputs(dummy_inputs)
         input_info = get_input_shapes(dummy_inputs, inputs)
+        custom_patcher = type(config).patch_model_for_export != OnnxConfig.patch_model_for_export
         try:
-            patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
-            patched_forward = patcher.patched_forward
+            if custom_patcher or dict_inputs:
+                patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
+                patched_forward = patcher.patched_forward
 
-            @functools.wraps(patched_forward)
-            def ts_patched_forward(*args, **kwargs):
-                for i in range(len(dict_inputs)):
-                    input_name = dict_inputs[i][0]
-                    keys = dict_inputs[i][1]
-                    tuple_input = kwargs[input_name]
-                    input_dict = dict(zip(keys, tuple_input))
-                    kwargs[input_name] = input_dict
-                outputs = patched_forward(*args, **kwargs)
-                return tuple(outputs.values())
+                @functools.wraps(patched_forward)
+                def ts_patched_forward(*args, **kwargs):
+                    for i in range(len(dict_inputs)):
+                        input_name = dict_inputs[i][0]
+                        keys = dict_inputs[i][1]
+                        tuple_input = kwargs[input_name]
+                        input_dict = dict(zip(keys, tuple_input))
+                        kwargs[input_name] = input_dict
+                    outputs = patched_forward(*args, **kwargs)
+                    return tuple(outputs.values())
 
-            patcher.patched_forward = ts_patched_forward
-            with patcher:
+                patcher.patched_forward = ts_patched_forward
+                with patcher:
+                    ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
+            else:
+                model.config.torchscript = True
                 ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")

@@ -337,7 +337,6 @@ class OVQuantizer(OptimumQuantizer):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         ov_file_name = file_name if file_name is not None else OV_XML_FILE_NAME
-        onnx_file_name = Path(file_name).with_suffix(".onnx") if file_name is not None else ONNX_WEIGHTS_NAME
         output_path = save_directory.joinpath(ov_file_name)
         output_path = output_path.with_suffix(".xml").as_posix()
 
@@ -354,7 +353,11 @@ class OVQuantizer(OptimumQuantizer):
                 "No configuration describing the quantization process was provided, a default OVConfig will be generated."
             )
             quantization_config = OVConfig()
-
+        onnx_file_name = (
+            ONNX_WEIGHTS_NAME
+            if file_name is None and quantization_config.save_onnx_model
+            else Path(ov_file_name).with_suffix(".onnx")
+        )
         if weights_only:
             compressed_model = compress_weights(self.model)
             self.model = compressed_model
