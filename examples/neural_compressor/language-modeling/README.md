@@ -18,7 +18,7 @@ limitations under the License.
 
 The scripts [`run_clm.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/language-modeling/run_clm.py) 
 and [`run_mlm.py`](https://github.com/huggingface/optimum-intel/blob/main/examples/neural_compressor/language-modeling/run_mlm.py)
-allow us to apply different quantization approaches (such as dynamic, static and aware-training quantization) as well as pruning 
+allow us to apply different quantization approaches (such as dynamic, static, weight-only and aware-training quantization) as well as pruning 
 using the [Intel Neural Compressor ](https://github.com/intel/neural-compressor) library for language modeling tasks.
 
 The SmoothQuant methodology is also available for post-training quantization.
@@ -67,6 +67,7 @@ python run_clm.py \
     --do_eval \
     --verify_loading \
     --output_dir /tmp/clm_output
+```
 
 ### RoBERTa/BERT/DistilBERT and masked language modeling
 
@@ -91,7 +92,7 @@ python run_mlm.py \
     --output_dir /tmp/mlm_output
 ```
 
-In order to apply dynamic, static or aware-training quantization, `quantization_approach` must be set to 
-respectively `dynamic`, `static` or `aware_training`.
+In order to apply dynamic, static, weight-only or aware-training quantization, `quantization_approach` must be set to 
+respectively `dynamic`, `static`, `weight_only` or `aware_training`.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.

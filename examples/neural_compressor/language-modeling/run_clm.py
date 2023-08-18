@@ -196,7 +196,24 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to verify the loading of the quantized model."},
     )
-
+    weight_only_bits: int = field(
+        default=8,
+        metadata={"help": "Bits for weight only quantization, 1-8 bits."},
+    )
+    weight_only_group: int = field(
+        default=-1,
+        metadata={"help": "Group size for weight only quantization. Group_size=[1-N] indicates "
+                    "splitting the input channel elements per group_size. -1 indicates "
+                    "the per-channel quantization per output channel."},
+    )
+    weight_only_scheme: str = field(
+        default="sym",
+        metadata={"help": "Scheme for weight only quantization. Choose from 'sym' and 'asym'."},
+    )
+    weight_only_algorithm: str = field(
+        default="RTN",
+        metadata={"help": "Scheme for weight only quantization. Choose from 'RTN', 'AWQ' and 'GPTQ'."},
+    )
 
 @dataclass
 class DataTrainingArguments:
@@ -539,7 +556,7 @@ def main():
             desc=f"Grouping texts in chunks of {block_size}",
         )
 
-    if training_args.do_train or (optim_args.apply_quantization and optim_args.quantization_approach == "static"):
+    if training_args.do_train or (optim_args.apply_quantization and optim_args.quantization_approach in ["static", "weight_only"]):
         if "train" not in tokenized_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = lm_datasets["train"]
@@ -587,7 +604,7 @@ def main():
         raise ValueError("`do_train` must be set to True.")
 
     if optim_args.apply_quantization:
-        supported_approach = {"static", "dynamic", "aware_training"}
+        supported_approach = {"static", "dynamic", "aware_training", "weight_only"}
         if optim_args.quantization_approach not in supported_approach:
             raise ValueError(
                 f"Unknown quantization approach. Supported approach are {supported_approach}."
@@ -600,7 +617,24 @@ def main():
                 recipes = {"smooth_quant": True, "smooth_quant_args": {"alpha": optim_args.smooth_quant_alpha}}
             else:
                 recipes = {}
-            quantization_config = PostTrainingQuantConfig(approach=optim_args.quantization_approach, recipes=recipes)
+            if optim_args.quantization_approach == "weight_only":
+                op_type_dict={
+                    ".*": {
+                        "weight": {
+                            "bits": optim_args.weight_only_bits,
+                            "group_size": optim_args.weight_only_group,
+                            "scheme": optim_args.weight_only_scheme,
+                            "algorithm": optim_args.weight_only_algorithm,
+                        },
+                    },
+                }
+            else:
+                op_type_dict = {}
+            quantization_config = PostTrainingQuantConfig(
+                approach=optim_args.quantization_approach,
+                op_type_dict=op_type_dict,
+                recipes=recipes
+            )
 
     if optim_args.apply_pruning:
         if optim_args.end_step is None:
@@ -677,10 +711,10 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic"}:
+    if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic", "weight_only"}:
         model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
         quantizer = INCQuantizer.from_pretrained(model)
-        if optim_args.quantization_approach == "static":
+        if optim_args.quantization_approach in ["static", "weight_only"]:
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
             train_dataset = train_dataset.select(range(num_calibration_samples))
             quantization_config.calibration_sampling_size = num_calibration_samples
@@ -688,7 +722,7 @@ def main():
         quantizer.quantize(
             quantization_config=quantization_config,
             save_directory=training_args.output_dir,
-            calibration_dataset=train_dataset if optim_args.quantization_approach == "static" else None,
+            calibration_dataset=train_dataset if optim_args.quantization_approach in ["static", "weight_only"] else None,
             batch_size=training_args.per_device_train_batch_size,
         )
         trainer.model = quantizer._quantized_model

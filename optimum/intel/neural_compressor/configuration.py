@@ -25,6 +25,7 @@ _quantization_model = {
     "post_training_dynamic_quant": "dynamic",
     "post_training_static_quant": "static",
     "quant_aware_training": "aware_training",
+    "post_training_weight_only": "weight_only",
 }
 
 

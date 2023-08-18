@@ -87,6 +87,7 @@ class INCQuantizationMode(Enum):
     DYNAMIC = "post_training_dynamic_quant"
     STATIC = "post_training_static_quant"
     AWARE_TRAINING = "quant_aware_training"
+    WEIGHT_ONLY = "post_training_weight_only"
 
 
 SUPPORTED_QUANT_MODE = {approach.value for approach in INCQuantizationMode}
@@ -188,6 +189,18 @@ class INCQuantizer(OptimumQuantizer):
             if op_type_dict is None or "Embedding" not in op_type_dict:
                 logger.warning("ONNX export is no supported for model with quantized embeddings")
                 save_onnx_model = False
+
+        elif INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.WEIGHT_ONLY:
+            if calibration_dataset is None:
+                raise ValueError(
+                    "Weight-only quantizaion needs a calibration dataset."
+                )
+            calibration_dataloader = self._get_calibration_dataloader(
+                calibration_dataset=calibration_dataset,
+                batch_size=batch_size,
+                remove_unused_columns=remove_unused_columns,
+                data_collator=data_collator,
+            )
 
         else:
             # Disable ONNX export for dynamically quantized model as deprecated in neural-compressor>=2.2.0
