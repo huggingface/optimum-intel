@@ -218,6 +218,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                     cls.config_name,
                 }
             )
+            ignore_patterns = ["*.msgpack", "*.safetensors", "*pytorch_model.bin"]
+            if not from_onnx:
+                ignore_patterns.extend(["*.onnx", "*.onnx_data"])
             # Downloads all repo's files matching the allowed patterns
             model_id = snapshot_download(
                 model_id,
@@ -226,7 +229,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 use_auth_token=use_auth_token,
                 revision=revision,
                 allow_patterns=allow_patterns,
-                ignore_patterns=["*.msgpack", "*.safetensors", "*pytorch_model.bin"],
+                ignore_patterns=ignore_patterns,
             )
         new_model_save_dir = Path(model_id)
 
