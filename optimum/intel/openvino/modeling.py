@@ -484,6 +484,20 @@ IMAGE_CLASSIFICATION_EXAMPLE = r"""
     >>> url = "http://images.cocodataset.org/val2017/000000039769.jpg"
     >>> outputs = pipe(url)
     ```
+    This class can also be used with [timm](https://github.com/huggingface/pytorch-image-models) 
+    models hosted on [HuggingFaceHub](https://huggingface.co/timm). Example:
+    ```python
+    >>> from transformers import pipeline
+    >>> from optimum.intel.openvino.modeling_timm import TimmImageProcessor
+    >>> from optimum.intel import OVModelForImageClassification
+
+    >>> model_id = "timm/vit_tiny_patch16_224.augreg_in21k"
+    >>> preprocessor = TimmImageProcessor.from_pretrained(model_id)
+    >>> model = OVModelForImageClassification.from_pretrained(model_id, export=True)
+    >>> pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
+    >>> url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+    >>> outputs = pipe(url)
+    ```
 """
 
 
