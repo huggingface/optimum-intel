@@ -91,6 +91,14 @@ if _diffusers_available:
     except importlib_metadata.PackageNotFoundError:
         _diffusers_available = False
 
+_safetensors_version = "N/A"
+_safetensors_available = importlib.util.find_spec("safetensors") is not None
+if _safetensors_available:
+    try:
+        _safetensors_version = importlib_metadata.version("safetensors")
+    except importlib_metadata.PackageNotFoundError:
+        _safetensors_available = False
+
 
 def is_transformers_available():
     return _transformers_available
@@ -114,6 +122,10 @@ def is_nncf_available():
 
 def is_diffusers_available():
     return _diffusers_available
+
+
+def is_safetensors_available():
+    return _safetensors_available
 
 
 # This function was copied from: https://github.com/huggingface/accelerate/blob/874c4967d94badd24f893064cc3bef45f57cadf7/src/accelerate/utils/versions.py#L319
