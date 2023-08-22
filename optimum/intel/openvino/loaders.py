@@ -20,8 +20,9 @@ from diffusers.utils import (
     DIFFUSERS_CACHE,
     HF_HUB_OFFLINE,
     _get_model_file,
-    is_safetensors_available,
 )
+
+from ..utils.import_utils import is_safetensors_available
 
 
 if is_safetensors_available():
