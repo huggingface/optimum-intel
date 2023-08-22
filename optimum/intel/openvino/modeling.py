@@ -484,7 +484,7 @@ IMAGE_CLASSIFICATION_EXAMPLE = r"""
     >>> url = "http://images.cocodataset.org/val2017/000000039769.jpg"
     >>> outputs = pipe(url)
     ```
-    This class can also be used with [timm](https://github.com/huggingface/pytorch-image-models) 
+    This class can also be used with [timm](https://github.com/huggingface/pytorch-image-models)
     models hosted on [HuggingFaceHub](https://huggingface.co/timm). Example:
     ```python
     >>> from transformers import pipeline
