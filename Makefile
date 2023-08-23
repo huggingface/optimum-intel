@@ -53,6 +53,7 @@ doc: build_doc_docker_image
 	@test -n "$(VERSION)" || (echo "VERSION is empty." ; exit 1)
 	docker run -v $(CURRENT_DIR):/doc_folder --workdir=/doc_folder doc_maker \
 	doc-builder build optimum.intel /optimum-intel/docs/source/ \
+		--repo_name optimum-intel \
 		--build_dir $(BUILD_DIR) \
 		--version $(VERSION) \
 		--version_tag_suffix "" \
