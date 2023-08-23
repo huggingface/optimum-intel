@@ -16,6 +16,8 @@ from transformers.utils import is_torch_available
 
 from openvino.runtime import PartialShape
 
+from ...intel.utils.import_utils import is_nncf_available
+
 
 if is_torch_available():
     import torch
@@ -79,3 +81,7 @@ def clear_class_registry():
     torch._C._jit_clear_class_registry()
     torch.jit._recursive.concrete_type_store = torch.jit._recursive.ConcreteTypeStore()
     torch.jit._state._clear_class_state()
+    if is_nncf_available():
+        from nncf.torch import patch_torch_operators
+
+        patch_torch_operators()

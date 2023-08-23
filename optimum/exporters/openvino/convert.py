@@ -70,14 +70,16 @@ def export(
         config ([`~exporters.onnx.config.OnnxConfig`]):
             The ONNX configuration associated with the exported model.
         output (`Path`):
-            Directory to store the exported ONNX model.
+            Directory to store the exported model.
         opset (`Optional[int]`, defaults to `None`):
             The version of the ONNX operator set to use.
         device (`str`, *optional*, defaults to `cpu`):
-            The device on which the ONNX model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
+            The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
             export on CUDA devices.
         input_shapes (`Optional[Dict]`, defaults to `None`):
-            If specified, allows to use specific shapes for the example input provided to the ONNX exporter.
+            If specified, allows to use specific shapes for the example input provided to the exporter.
+        from_onnx (`bool`, defaults to False):
+            If set to True, model will be converted vie exporting to ONNX.
 
     Returns:
         `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -166,16 +168,18 @@ def export_pytorch(
         model ([`PreTrainedModel`]):
             The model to export.
         config ([`~exporters.onnx.config.OnnxConfig`]):
-            The ONNX configuration associated with the exported model.
+            The configuration associated with the exported model.
         opset (`int`):
             The version of the ONNX operator set to use.
         output (`Path`):
-            Directory to store the exported ONNX model.
+            Directory to store the exported model.
         device (`str`, defaults to `"cpu"`):
-            The device on which the ONNX model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
+            The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
             export on CUDA devices.
         input_shapes (`optional[Dict]`, defaults to `None`):
-            If specified, allows to use specific shapes for the example input provided to the ONNX exporter.
+            If specified, allows to use specific shapes for the example input provided to the exporter.
+        from_onnx (`bool`, defaults to False):
+            If set to True, model will be converted vie exporting to ONNX.
 
     Returns:
         `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -225,6 +229,9 @@ def export_pytorch(
         input_info = get_input_shapes(dummy_inputs, inputs)
         custom_patcher = type(config).patch_model_for_export != OnnxConfig.patch_model_for_export
         try:
+            # TorchScript used behaind OpenVINO conversion. Optimum supports only return_dict=True models for patching,
+            # while TorchScript do not support dictionary with values of mixed types (e.g. Tensor and None) in model input/output
+            # To handle it, additional wrapper on patcher forward applied.
             if custom_patcher or dict_inputs:
                 patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
                 patched_forward = patcher.patched_forward

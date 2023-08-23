@@ -35,8 +35,4 @@ jobs:
         pip install .[openvino,nncf,tests,diffusers]
     - name: Test with Pytest
       run: |
-        pytest tests/openvino/test_modeling.py
-        pytest tests/openvino/test_quantization.py
-        pytest tests/openvino/test_stable_diffusion.py
-        pytest tests/openvino/test_training_examples.py
-        pytest tests/openvino/test_training.py
+        pytest tests/openvino/ --ignore test_modeling_basic
