@@ -208,9 +208,7 @@ class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
             # make sure the binary masks will have many zeros
             initialize_movement_sparsifier_parameters_by_sparsity(movement_controller, sparsity=sparsity)
 
-    def get_training_args(self) -> OVTrainingArguments:
-        num_train_epochs = 3
-        train_batch_size = 4
+    def get_training_args(self, train_batch_size=4, eval_batch_size=1, num_train_epochs=3) -> OVTrainingArguments:
         args = OVTrainingArguments(
             output_dir=self.output_dir,
             num_train_epochs=num_train_epochs,
@@ -219,7 +217,7 @@ class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
             do_eval=True,
             logging_steps=1,
             per_device_train_batch_size=train_batch_size,
-            per_device_eval_batch_size=1,
+            per_device_eval_batch_size=eval_batch_size,
             no_cuda=True,
             full_determinism=True,
             remove_unused_columns=False,
@@ -485,8 +483,9 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
         for batch_size in [1, 4]:
+            self.trainer.args = self.get_training_args(eval_batch_size=batch_size)
+            self.trainer.create_accelerator_and_postprocess()
             for seq_length in [16, 89, 128]:
-                self.trainer.args.per_device_eval_batch_size = batch_size
                 dataset = deepcopy(self.eval_dataset)
                 dataset.set_transform(partial(self.data_transform, max_length=seq_length))
                 for inputs in self.trainer.get_eval_dataloader(dataset):
@@ -640,7 +639,8 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
         torch_model = torch_model.eval()
         batch_sizes = [1] if self.is_swin else [1, 4]
         for batch_size in batch_sizes:
-            self.trainer.args.per_device_eval_batch_size = batch_size
+            self.trainer.args = self.get_training_args(eval_batch_size=batch_size)
+            self.trainer.create_accelerator_and_postprocess()
             for inputs in self.trainer.get_eval_dataloader():
                 self.assertEqual(inputs["pixel_values"].shape[0], batch_size)
                 ovmodel_outputs = ovmodel(**inputs)
@@ -822,8 +822,9 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
         for batch_size in [1, 4]:
+            self.trainer.args = self.get_training_args(eval_batch_size=batch_size)
+            self.trainer.create_accelerator_and_postprocess()
             for seq_length in [12345, 16000]:
-                self.trainer.args.per_device_eval_batch_size = batch_size
                 dataset = deepcopy(self.eval_dataset)
                 dataset.set_transform(partial(self.data_transform, max_length=seq_length))
                 for inputs in self.trainer.get_eval_dataloader(dataset):
