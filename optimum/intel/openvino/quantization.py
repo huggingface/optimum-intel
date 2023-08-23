@@ -37,7 +37,7 @@ from transformers.pytorch_utils import Conv1D
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
-from ...exporters.openvino import export
+from ...exporters.openvino import export, export_pytorch_via_onnx
 from ..utils.constant import _TASK_ALIASES
 from ..utils.modeling_utils import patch_decoder_attention_mask
 from .configuration import OVConfig
@@ -389,15 +389,10 @@ class OVQuantizer(OptimumQuantizer):
 
         model_path = save_directory / (onnx_file_name if quantization_config.save_onnx_model else ov_file_name)
         onnx_path = save_directory / onnx_file_name
+        export_fn = export if not quantization_config.save_onnx_model else export_pytorch_via_onnx
         opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = max(opset, MIN_ONNX_QDQ_OPSET)
-        _, _, is_onnx = export(
-            model=model,
-            config=onnx_config,
-            output=model_path,
-            opset=opset,
-            from_onnx=quantization_config.save_onnx_model,
-        )
+        _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset)
         if is_onnx:
             # Load and save the compressed model
             model = core.read_model(onnx_path)

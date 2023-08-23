@@ -752,7 +752,7 @@ class OVTrainer(Trainer):
                 try:
                     # OpenVINO IR pruning requires static-shaped input
                     ov_model = self._reshape_ir(ov_model, static_shape=True)
-                    apply_moc_transformations(ov_model)
+                    apply_moc_transformations(ov_model, cf=False)
                     if self._get_compression_controller_by_cls(QuantizationController) is not None:
                         compress_quantize_weights_transformation(ov_model)
                     apply_pruning_transformation(ov_model)

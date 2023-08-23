@@ -59,7 +59,6 @@ def export(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    from_onnx: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -78,8 +77,6 @@ def export(
             export on CUDA devices.
         input_shapes (`Optional[Dict]`, defaults to `None`):
             If specified, allows to use specific shapes for the example input provided to the exporter.
-        from_onnx (`bool`, defaults to False):
-            If set to True, model will be converted vie exporting to ONNX.
 
     Returns:
         `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -103,7 +100,6 @@ def export(
             device=device,
             input_shapes=input_shapes,
             model_kwargs=model_kwargs,
-            from_onnx=from_onnx,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -133,6 +129,7 @@ def export_pytorch_via_onnx(
 ):
     import torch
 
+    output = Path(output)
     orig_torch_onnx_export = torch.onnx.export
     torch.onnx.export = functools.partial(orig_torch_onnx_export, do_constant_folding=False)
     model.config.torchscript = False
@@ -159,7 +156,6 @@ def export_pytorch(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    from_onnx: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -178,8 +174,6 @@ def export_pytorch(
             export on CUDA devices.
         input_shapes (`optional[Dict]`, defaults to `None`):
             If specified, allows to use specific shapes for the example input provided to the exporter.
-        from_onnx (`bool`, defaults to False):
-            If set to True, model will be converted vie exporting to ONNX.
 
     Returns:
         `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -190,8 +184,6 @@ def export_pytorch(
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
-    if from_onnx:
-        return export_pytorch_via_onnx(model, config, opset, output, device, input_shapes, model_kwargs)
 
     with torch.no_grad():
         model.config.torchscript = False
