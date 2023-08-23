@@ -219,7 +219,7 @@ class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
             do_eval=True,
             logging_steps=1,
             per_device_train_batch_size=train_batch_size,
-            per_device_eval_batch_size=1,
+            per_gpu_eval_batch_size=1,
             no_cuda=True,
             full_determinism=True,
             remove_unused_columns=False,
@@ -486,7 +486,7 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
         torch_model = torch_model.eval()
         for batch_size in [1, 4]:
             for seq_length in [16, 89, 128]:
-                self.trainer.args.per_device_eval_batch_size = batch_size
+                self.trainer.args.per_gpu_eval_batch_size = batch_size
                 dataset = deepcopy(self.eval_dataset)
                 dataset.set_transform(partial(self.data_transform, max_length=seq_length))
                 for inputs in self.trainer.get_eval_dataloader(dataset):
@@ -640,7 +640,7 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
         torch_model = torch_model.eval()
         batch_sizes = [1] if self.is_swin else [1, 4]
         for batch_size in batch_sizes:
-            self.trainer.args.per_device_eval_batch_size = batch_size
+            self.trainer.args.per_gpu_eval_batch_size = batch_size
             for inputs in self.trainer.get_eval_dataloader():
                 self.assertEqual(inputs["pixel_values"].shape[0], batch_size)
                 ovmodel_outputs = ovmodel(**inputs)
@@ -823,7 +823,7 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
         torch_model = torch_model.eval()
         for batch_size in [1, 4]:
             for seq_length in [12345, 16000]:
-                self.trainer.args.per_device_eval_batch_size = batch_size
+                self.trainer.args.per_gpu_eval_batch_size = batch_size
                 dataset = deepcopy(self.eval_dataset)
                 dataset.set_transform(partial(self.data_transform, max_length=seq_length))
                 for inputs in self.trainer.get_eval_dataloader(dataset):
