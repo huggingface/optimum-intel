@@ -483,9 +483,9 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
         for batch_size in [1, 4]:
+            self.trainer.args = self.get_training_args(eval_batch_size=batch_size)
+            self.trainer.create_accelerator_and_postprocess()
             for seq_length in [16, 89, 128]:
-                self.trainer.args = self.get_training_args(eval_batch_size=batch_size)
-                self.trainer.create_accelerator_and_postprocess()
                 dataset = deepcopy(self.eval_dataset)
                 dataset.set_transform(partial(self.data_transform, max_length=seq_length))
                 for inputs in self.trainer.get_eval_dataloader(dataset):
@@ -822,9 +822,9 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
     def check_ovmodel_output_equals_torch_output(self, ovmodel, torch_model):
         torch_model = torch_model.eval()
         for batch_size in [1, 4]:
+            self.trainer.args = self.get_training_args(eval_batch_size=batch_size)
+            self.trainer.create_accelerator_and_postprocess()
             for seq_length in [12345, 16000]:
-                self.trainer.args = self.get_training_args(eval_batch_size=batch_size)
-                self.trainer.create_accelerator_and_postprocess()
                 dataset = deepcopy(self.eval_dataset)
                 dataset.set_transform(partial(self.data_transform, max_length=seq_length))
                 for inputs in self.trainer.get_eval_dataloader(dataset):
