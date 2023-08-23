@@ -284,16 +284,29 @@ class INCQuantizer(OptimumQuantizer):
         device = model.model.device
         inputs = {k: v.to(device) for k, v in inputs.items()}
 
-        torch_to_int8_onnx(
-            model.model,
-            q_config=model.q_config,
-            save_path=str(output_path),
-            example_inputs=inputs,
-            opset_version=opset,
-            dynamic_axes=dynamic_axes,
-            input_names=list(config.inputs.keys()),
-            output_names=list(config.outputs.keys()),
-        )
+        if is_neural_compressor_version(">", "2.2.1"):
+            torch_to_int8_onnx(
+                self._original_model,
+                model.model,
+                q_config=model.q_config,
+                save_path=str(output_path),
+                example_inputs=inputs,
+                opset_version=opset,
+                dynamic_axes=dynamic_axes,
+                input_names=list(config.inputs.keys()),
+                output_names=list(config.outputs.keys()),
+            )
+        else:
+            torch_to_int8_onnx(
+                model.model,
+                q_config=model.q_config,
+                save_path=str(output_path),
+                example_inputs=inputs,
+                opset_version=opset,
+                dynamic_axes=dynamic_axes,
+                input_names=list(config.inputs.keys()),
+                output_names=list(config.outputs.keys()),
+            )
 
     def _set_task(self):
         if self.task is None:
