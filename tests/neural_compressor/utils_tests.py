@@ -54,10 +54,10 @@ _TASK_TO_DATASET = {
 
 def num_quantized_matmul_onnx_model(onnx_model):
     num_quantized_matmul = 0
-    for initializer in onnx_model.graph.initializer:
-        if "QuantizeLinear" in initializer.name:
+    for node in onnx_model.graph.node:
+        if "quantizelinear" == node.op_type.lower():
             num_quantized_matmul += 1
-    return num_quantized_matmul
+    return num_quantized_matmul // 2
 
 
 def _preprocess_function(examples, tokenizer, column_name):
