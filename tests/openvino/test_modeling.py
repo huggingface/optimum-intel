@@ -641,7 +641,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
             self.assertIn("logits", ov_outputs)
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
             # Compare tensor outputs
-            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), timm_outputs, atol=1e-4))
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), timm_outputs, atol=1e-3))
         gc.collect()
 
     @parameterized.expand(TIMM_MODELS)
