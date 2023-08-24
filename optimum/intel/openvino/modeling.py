@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import logging
+import os
 from pathlib import Path
 from typing import Optional, Union
 
@@ -532,14 +533,11 @@ class OVModelForImageClassification(OVModel):
     ):
         # Fix the mismatch between timm_config and huggingface_config
         local_timm_model = is_timm_ov_dir(model_id)
-        if local_timm_model or model_info(model_id).library_name == "timm":
+        if local_timm_model or (not os.path.isdir(model_id) and model_info(model_id).library_name == "timm"):
             config = TimmConfig.from_pretrained(model_id, **kwargs)
-            #  If locally saved timm model, dirrectly load
+            #  If locally saved timm model, directly load
             if local_timm_model:
-                return super()._from_pretrained(
-                    model_id=model_id,
-                    config=config,
-                )
+                return super()._from_pretrained(model_id=model_id, config=config)
             model = TimmForImageClassification.from_pretrained(model_id, **kwargs)
             onnx_config = TimmOnnxConfig(model.config)
 
