@@ -28,6 +28,8 @@ from transformers.utils import TensorType
 from optimum.exporters.onnx.config import VisionOnnxConfig
 from optimum.utils import NormalizedVisionConfig
 
+from .utils import _is_timm_ov_dir
+
 
 set_fused_attn(False, False)
 

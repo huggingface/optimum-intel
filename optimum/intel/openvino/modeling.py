@@ -536,7 +536,9 @@ class OVModelForImageClassification(OVModel):
         local_timm_model = _is_timm_ov_dir(model_id)
         if local_timm_model or (not os.path.isdir(model_id) and model_info(model_id).library_name == "timm"):
             if not is_timm_available():
-                raise ImportError("Trying to load a timm model but timm is not installed : `pip install timm`.")
+                raise ImportError(
+                    "To load a timm model, timm needs to be installed. Please install it with `pip install timm`."
+                )
 
             from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOnnxConfig
 
