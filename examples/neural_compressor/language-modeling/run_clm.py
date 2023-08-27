@@ -713,6 +713,7 @@ def main():
 
     if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic", "weight_only"}:
         model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
+        model.seqlen = block_size
         quantizer = INCQuantizer.from_pretrained(model)
         if optim_args.quantization_approach in ["static", "weight_only"]:
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
@@ -723,7 +724,8 @@ def main():
             quantization_config=quantization_config,
             save_directory=training_args.output_dir,
             calibration_dataset=train_dataset if optim_args.quantization_approach in ["static", "weight_only"] else None,
-            batch_size=training_args.per_device_train_batch_size,
+            batch_size=1 if optim_args.quantization_approach == "weight_only" and optim_args.weight_only_algorithm == "GPTQ" \
+                    else  training_args.per_device_train_batch_size,
         )
         trainer.model = quantizer._quantized_model
     if optim_args.apply_quantization and optim_args.verify_loading:

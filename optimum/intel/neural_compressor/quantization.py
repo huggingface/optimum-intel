@@ -191,15 +191,24 @@ class INCQuantizer(OptimumQuantizer):
                 save_onnx_model = False
 
         elif INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.WEIGHT_ONLY:
-            if calibration_dataset is None:
+            if isinstance(quantization_config.op_type_dict, dict) and len(quantization_config.op_type_dict) > 0:
+                algo = []
+                for  _, val in quantization_config.op_type_dict.items():
+                    algo += val.get("weight", {}).get("algorithm", ["RTN"])
+            else:
+                algo = ["RTN"]
+
+            if calibration_dataset is None and ("GPTQ" in algo or "AWQ" in algo):
                 raise ValueError(
                     "Weight-only quantizaion needs a calibration dataset."
                 )
+
             calibration_dataloader = self._get_calibration_dataloader(
                 calibration_dataset=calibration_dataset,
                 batch_size=batch_size,
                 remove_unused_columns=remove_unused_columns,
                 data_collator=data_collator,
+                use_label=False if "GPTQ" in algo else True
             )
 
         else:
@@ -391,6 +400,7 @@ class INCQuantizer(OptimumQuantizer):
         batch_size: int,
         remove_unused_columns: bool,
         data_collator: Optional[DataCollator] = None,
+        use_label: Optional[bool] = True
     ) -> INCDataLoader:
         data_collator = data_collator if data_collator is not None else default_data_collator
         if remove_unused_columns:
@@ -407,7 +417,7 @@ class INCQuantizer(OptimumQuantizer):
             drop_last=False,
         )
 
-        return INCDataLoader.from_pytorch_dataloader(calibration_dataloader)
+        return INCDataLoader.from_pytorch_dataloader(calibration_dataloader, use_label)
 
     def _remove_unused_columns(self, dataset: Dataset):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))

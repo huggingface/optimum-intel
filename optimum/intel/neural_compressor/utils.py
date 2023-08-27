@@ -49,11 +49,14 @@ is_torch_less_than_1_13 = parsed_torch_version_base < version.parse("1.13.0")
 
 
 class INCDataLoader(DataLoader):
+    use_label = True
+
     @classmethod
-    def from_pytorch_dataloader(cls, dataloader: DataLoader):
+    def from_pytorch_dataloader(cls, dataloader: DataLoader, use_label: bool = True):
         if not isinstance(dataloader, DataLoader):
             raise TypeError(f"Expected a PyTorch DataLoader, got: {type(dataloader)}.")
         inc_dataloader = cls(dataloader.dataset)
+        cls.use_label = use_label
         for key, value in dataloader.__dict__.items():
             inc_dataloader.__dict__[key] = value
         return inc_dataloader
@@ -63,7 +66,10 @@ class INCDataLoader(DataLoader):
             if not isinstance(input, (dict, tuple, list, UserDict)):
                 raise TypeError(f"Model calibration cannot use input of type {type(input)}.")
             label = input.get("labels") if isinstance(input, dict) else None
-            yield input, label
+            if self.use_label:
+                yield input, label
+            else:
+                yield input
 
 
 def _cfgs_to_fx_cfgs(op_cfgs: Dict, observer_type: str = "post_training_static_quant") -> Dict:
