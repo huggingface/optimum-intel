@@ -13,7 +13,12 @@
 #  limitations under the License.
 
 
+import json
+import os
+from glob import glob
+
 import numpy as np
+from huggingface_hub import model_info
 from openvino.runtime import Type
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
@@ -95,3 +100,23 @@ def use_external_data_format(num_parameters: int) -> bool:
     """
 
     return compute_serialized_parameters_size(num_parameters, ParameterFormat.Float) >= EXTERNAL_DATA_FORMAT_SIZE_LIMIT
+
+
+def _is_timm_ov_dir(model_dir):
+    config_file = None
+    has_xml = False
+    has_bin = False
+    if os.path.isdir(model_dir):
+        for filename in glob(os.path.join(model_dir, "*")):
+            if filename.endswith(".xml"):
+                has_xml = True
+            if filename.endswith(".bin"):
+                has_bin = True
+            if filename.endswith("config.json"):
+                config_file = filename
+    if config_file and has_xml and has_bin:
+        with open(config_file) as conf:
+            hf_hub_id = json.load(conf).get("hf_hub_id", None)
+        if hf_hub_id and model_info(hf_hub_id).library_name == "timm":
+            return True
+    return False

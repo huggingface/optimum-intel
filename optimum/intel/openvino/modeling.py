@@ -49,8 +49,9 @@ from transformers.modeling_outputs import (
 
 from optimum.exporters import TasksManager
 
+from ..utils.import_utils import is_timm_available
 from .modeling_base import OVBaseModel
-from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOnnxConfig, is_timm_ov_dir
+from .utils import _is_timm_ov_dir
 
 
 logger = logging.getLogger(__name__)
@@ -532,8 +533,15 @@ class OVModelForImageClassification(OVModel):
         **kwargs,
     ):
         # Fix the mismatch between timm_config and huggingface_config
-        local_timm_model = is_timm_ov_dir(model_id)
+        local_timm_model = _is_timm_ov_dir(model_id)
         if local_timm_model or (not os.path.isdir(model_id) and model_info(model_id).library_name == "timm"):
+            if not is_timm_available():
+                raise ImportError(
+                    "To load a timm model, timm needs to be installed. Please install it with `pip install timm`."
+                )
+
+            from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOnnxConfig
+
             config = TimmConfig.from_pretrained(model_id, **kwargs)
             #  If locally saved timm model, directly load
             if local_timm_model:

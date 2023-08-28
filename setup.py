@@ -17,7 +17,6 @@ INSTALL_REQUIRE = [
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
-    "timm",
     "accelerate",  # transformers 4.29 require accelerate for PyTorch
 ]
 
@@ -31,6 +30,7 @@ TESTS_REQUIRE = [
     "sacremoses",
     "torchaudio",
     "rjieba",
+    "timm",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
