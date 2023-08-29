@@ -64,6 +64,7 @@ from optimum.pipelines import ORT_SUPPORTED_TASKS
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(SEED)
 
+
 class OptimizationTest(INCTestMixin):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         ("text-classification", "hf-internal-testing/tiny-random-bert", 34),
@@ -166,6 +167,7 @@ class OptimizationTest(INCTestMixin):
                 load_onnx_model=False,
                 num_samples=num_samples,
             )
+
     @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
     def test_weight_only_quantization(self, model_name):
         op_type_dict = {
@@ -182,7 +184,7 @@ class OptimizationTest(INCTestMixin):
         model = AutoModelForCausalLM.from_pretrained(model_name)
         model.seqlen = 128
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         quantizer = INCQuantizer.from_pretrained(model, task="text-generation")
         calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
 
@@ -193,7 +195,7 @@ class OptimizationTest(INCTestMixin):
                 save_directory=tmp_dir,
             )
             q_model = AutoModelForCausalLM.from_pretrained(tmp_dir)
-            inp = torch.tensor([calibration_dataset[0]['input_ids']])
+            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
             out = model(inp)[0]
             q_out = q_model(inp)[0]
             self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
@@ -217,7 +219,7 @@ class OptimizationTest(INCTestMixin):
                 save_directory=tmp_dir,
             )
             q_model = AutoModelForCausalLM.from_pretrained(tmp_dir)
-            inp = torch.tensor([calibration_dataset[0]['input_ids']])
+            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
             out = model(inp)[0]
             q_out = q_model(inp)[0]
             self.assertTrue(torch.all(torch.isclose(out, q_out, atol=6e-1)))
@@ -241,7 +243,7 @@ class OptimizationTest(INCTestMixin):
                 save_directory=tmp_dir,
             )
             q_model = AutoModelForCausalLM.from_pretrained(tmp_dir)
-            inp = torch.tensor([calibration_dataset[0]['input_ids']])
+            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
             out = model(inp)[0]
             q_out = q_model(inp)[0]
             self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
@@ -570,4 +572,3 @@ class OptimizationTest(INCTestMixin):
             self.assertIsInstance(loaded_model_outputs.logits, torch.Tensor)
             # Compare tensor outputs
             self.assertTrue(torch.allclose(loaded_model_outputs.logits, model_outputs.logits, atol=1e-4))
-

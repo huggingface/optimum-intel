@@ -202,9 +202,11 @@ class OptimizationArguments:
     )
     weight_only_group: int = field(
         default=-1,
-        metadata={"help": "Group size for weight only quantization. Group_size=[1-N] indicates "
-                    "splitting the input channel elements per group_size. -1 indicates "
-                    "the per-channel quantization per output channel."},
+        metadata={
+            "help": "Group size for weight only quantization. Group_size=[1-N] indicates "
+            "splitting the input channel elements per group_size. -1 indicates "
+            "the per-channel quantization per output channel."
+        },
     )
     weight_only_scheme: str = field(
         default="sym",
@@ -214,6 +216,7 @@ class OptimizationArguments:
         default="RTN",
         metadata={"help": "Scheme for weight only quantization. Choose from 'RTN', 'AWQ' and 'GPTQ'."},
     )
+
 
 @dataclass
 class DataTrainingArguments:
@@ -556,7 +559,9 @@ def main():
             desc=f"Grouping texts in chunks of {block_size}",
         )
 
-    if training_args.do_train or (optim_args.apply_quantization and optim_args.quantization_approach in ["static", "weight_only"]):
+    if training_args.do_train or (
+        optim_args.apply_quantization and optim_args.quantization_approach in ["static", "weight_only"]
+    ):
         if "train" not in tokenized_datasets:
             raise ValueError("--do_train requires a train dataset")
         train_dataset = lm_datasets["train"]
@@ -618,7 +623,7 @@ def main():
             else:
                 recipes = {}
             if optim_args.quantization_approach == "weight_only":
-                op_type_dict={
+                op_type_dict = {
                     ".*": {
                         "weight": {
                             "bits": optim_args.weight_only_bits,
@@ -631,9 +636,7 @@ def main():
             else:
                 op_type_dict = {}
             quantization_config = PostTrainingQuantConfig(
-                approach=optim_args.quantization_approach,
-                op_type_dict=op_type_dict,
-                recipes=recipes
+                approach=optim_args.quantization_approach, op_type_dict=op_type_dict, recipes=recipes
             )
 
     if optim_args.apply_pruning:
@@ -723,9 +726,12 @@ def main():
         quantizer.quantize(
             quantization_config=quantization_config,
             save_directory=training_args.output_dir,
-            calibration_dataset=train_dataset if optim_args.quantization_approach in ["static", "weight_only"] else None,
-            batch_size=1 if optim_args.quantization_approach == "weight_only" and optim_args.weight_only_algorithm == "GPTQ" \
-                    else  training_args.per_device_train_batch_size,
+            calibration_dataset=train_dataset
+            if optim_args.quantization_approach in ["static", "weight_only"]
+            else None,
+            batch_size=1
+            if optim_args.quantization_approach == "weight_only" and optim_args.weight_only_algorithm == "GPTQ"
+            else training_args.per_device_train_batch_size,
         )
         trainer.model = quantizer._quantized_model
     if optim_args.apply_quantization and optim_args.verify_loading:

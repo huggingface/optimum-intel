@@ -193,22 +193,20 @@ class INCQuantizer(OptimumQuantizer):
         elif INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.WEIGHT_ONLY:
             if isinstance(quantization_config.op_type_dict, dict) and len(quantization_config.op_type_dict) > 0:
                 algo = []
-                for  _, val in quantization_config.op_type_dict.items():
+                for _, val in quantization_config.op_type_dict.items():
                     algo += val.get("weight", {}).get("algorithm", ["RTN"])
             else:
                 algo = ["RTN"]
 
             if calibration_dataset is None and ("GPTQ" in algo or "AWQ" in algo):
-                raise ValueError(
-                    "Weight-only quantizaion needs a calibration dataset."
-                )
+                raise ValueError("Weight-only quantizaion needs a calibration dataset.")
 
             calibration_dataloader = self._get_calibration_dataloader(
                 calibration_dataset=calibration_dataset,
                 batch_size=batch_size,
                 remove_unused_columns=remove_unused_columns,
                 data_collator=data_collator,
-                use_label=False if "GPTQ" in algo else True
+                use_label=False if "GPTQ" in algo else True,
             )
 
         else:
@@ -400,7 +398,7 @@ class INCQuantizer(OptimumQuantizer):
         batch_size: int,
         remove_unused_columns: bool,
         data_collator: Optional[DataCollator] = None,
-        use_label: Optional[bool] = True
+        use_label: Optional[bool] = True,
     ) -> INCDataLoader:
         data_collator = data_collator if data_collator is not None else default_data_collator
         if remove_unused_columns:
