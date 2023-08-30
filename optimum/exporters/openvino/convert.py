@@ -25,8 +25,9 @@ from openvino.runtime import PartialShape, save_model
 from openvino.runtime.utils.types import get_element_type
 from openvino.tools.ovc import convert_model
 from optimum.exporters.onnx.base import OnnxConfig
-from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed, export_tensorflow as export_tensorflow_onnx
+from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
+from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.utils import is_diffusers_available
 
 from ...intel.openvino.utils import OV_XML_FILE_NAME
@@ -119,6 +120,20 @@ def export(
 
 
 def export_tensorflow(model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, opset: int, output: Path):
+    """
+    Export the TensorFlow model to OpenVINO format.
+
+    Args:
+        model (Union[): The model to export.
+        config (OnnxConfig): The configuration of the model.
+        opset (int): The ONNX opset version to use.
+        output (Path): The path to save the model.
+
+    Returns:
+        input_names: list of input names from ONNX configuration
+        output_names: list of output names from ONNX configuration
+        bool:  True if the model was exported successfully.
+    """
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
@@ -139,6 +154,30 @@ def export_pytorch_via_onnx(
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
 ):
+    """
+    Exports a PyTorch model to an OpenVINO Intermediate Representation via ONNX export.
+
+    Args:
+        model ([`PreTrainedModel`]):
+            The model to export.
+        config ([`~exporters.onnx.config.OnnxConfig`]):
+            The configuration associated with the exported model.
+        opset (`int`):
+            The version of the ONNX operator set to use.
+        output (`Path`):
+            Directory to store the exported model.
+        device (`str`, defaults to `"cpu"`):
+            The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
+            export on CUDA devices.
+        input_shapes (`optional[Dict]`, defaults to `None`):
+            If specified, allows to use specific shapes for the example input provided to the exporter.
+        model_kwargs (optional[Dict[str, Any]], defaults to `None`):
+            Additional kwargs for model export
+
+    Returns:
+        `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
+        the ONNX configuration and boolean flag - was legacy ONNX path were applied to model or not.
+    """
     import torch
 
     output = Path(output)
@@ -186,10 +225,12 @@ def export_pytorch(
             export on CUDA devices.
         input_shapes (`optional[Dict]`, defaults to `None`):
             If specified, allows to use specific shapes for the example input provided to the exporter.
+        model_kwargs (optional[Dict[str, Any]], defaults to `None`):
+            Additional kwargs for model export
 
     Returns:
-        `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
-        the ONNX configuration.
+        `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
+        the ONNX configuration and boolean flag - was legacy ONNX path were applied to model or not.
     """
     import torch
     from torch.utils._pytree import tree_map
@@ -299,6 +340,28 @@ def export_models(
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[List[str]], List[List[str]]]:
+    """
+    Export the models to OpenVINO IR format
+
+    Args:
+        models_and_onnx_configs (Dict[ str, Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"], "OnnxConfig"]):
+        output_dir (Path): output directory for saving models
+        opset (Optional[int], optional, Default to None): ONNX export opset
+        output_names (Optional[List[str]], optional, Defaults to None): model output names
+        device (str, optional, Defaults to "cpu"):
+            The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
+            export on CUDA devices.
+        input_shapes (Optional[Dict], optional, Defaults to None):
+            If specified, allows to use specific shapes for the example input provided to the exporter.
+        model_kwargs (Optional[Dict[str, Any]], optional):
+            Additional kwargs for model export
+
+    Raises:
+        ValueError: if custom names set not equal of number of models
+
+    Returns:
+        list of input_names and output_names from ONNX configuration
+    """
     outputs = []
 
     if output_names is not None and len(output_names) != len(models_and_onnx_configs):

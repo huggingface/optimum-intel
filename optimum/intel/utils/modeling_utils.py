@@ -15,6 +15,7 @@
 from typing import Tuple
 
 import torch
+from transformers.modeling_utils import PreTrainedModel
 
 
 # Modified from transformers.models.bloom.modeling_bloom._make_causal_mask
@@ -91,7 +92,16 @@ def _prepare_decoder_attention_mask(attention_mask, input_shape, inputs_embeds, 
     return combined_attention_mask
 
 
-def patch_decoder_attention_mask(model):
+def patch_decoder_attention_mask(model: "PreTrainedModel"):
+    """
+    Apply patch on decoder with past model forward to resolve first inference based on model architecture
+
+    Args:
+        model (PretrainedModel): The model to patch.
+
+    Returns:
+        model with applied patch
+    """
     if model.config.model_type == "bloom":
         model.transformer._prepare_attn_mask = _prepare_attn_mask
     elif model.config.model_type == "llama":
