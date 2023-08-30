@@ -196,11 +196,11 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to verify the loading of the quantized model."},
     )
-    weight_only_bits: int = field(
+    bits: int = field(
         default=8,
         metadata={"help": "Bits for weight only quantization, 1-8 bits."},
     )
-    weight_only_group: int = field(
+    group_size: int = field(
         default=-1,
         metadata={
             "help": "Group size for weight only quantization. Group_size=[1-N] indicates "
@@ -212,9 +212,11 @@ class OptimizationArguments:
         default="sym",
         metadata={"help": "Scheme for weight only quantization. Choose from 'sym' and 'asym'."},
     )
-    weight_only_algorithm: str = field(
+    quantization_methodology: str = field(
         default="RTN",
-        metadata={"help": "Scheme for weight only quantization. Choose from 'RTN', 'AWQ' and 'GPTQ'."},
+        metadata={
+            "help": "Quantization methodology for weight only quantization. Choose from 'RTN', 'AWQ' and 'GPTQ'."
+        },
     )
 
 
@@ -626,10 +628,10 @@ def main():
                 op_type_dict = {
                     ".*": {
                         "weight": {
-                            "bits": optim_args.weight_only_bits,
-                            "group_size": optim_args.weight_only_group,
+                            "bits": optim_args.bits,
+                            "group_size": optim_args.group_size,
                             "scheme": optim_args.weight_only_scheme,
-                            "algorithm": optim_args.weight_only_algorithm,
+                            "algorithm": optim_args.quantization_methodology,
                         },
                     },
                 }
@@ -729,9 +731,10 @@ def main():
             calibration_dataset=train_dataset
             if optim_args.quantization_approach in ["static", "weight_only"]
             else None,
-            batch_size=1
-            if optim_args.quantization_approach == "weight_only" and optim_args.weight_only_algorithm == "GPTQ"
+            batch_size=1  # batch_size > 1 for GPTQ is WIP
+            if optim_args.quantization_approach == "weight_only" and optim_args.quantization_methodology == "GPTQ"
             else training_args.per_device_train_batch_size,
+            weight_only=True if optim_args.quantization_approach == "weight_only" else False,
         )
         trainer.model = quantizer._quantized_model
     if optim_args.apply_quantization and optim_args.verify_loading:

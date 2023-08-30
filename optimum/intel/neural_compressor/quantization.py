@@ -143,6 +143,7 @@ class INCQuantizer(OptimumQuantizer):
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         file_name: str = None,
+        weight_only: bool = False,
         **kwargs,
     ):
         """
@@ -161,6 +162,9 @@ class INCQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether or not to remove the columns unused by the model forward method.
+            weight_only (`bool`, defaults to `False`):
+                Whether compress weights to integer precision (8-bit by default) while keeping activations
+                floating-point. Fits best for LLM footprint reduction and performance acceleration.
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
@@ -169,7 +173,31 @@ class INCQuantizer(OptimumQuantizer):
         calibration_dataloader = None
         self._set_task()
 
-        if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
+        if weight_only:
+            if isinstance(quantization_config.op_type_dict, dict) and len(quantization_config.op_type_dict) > 0:
+                algo = []
+                for _, val in quantization_config.op_type_dict.items():
+                    algo += val.get("weight", {}).get("algorithm", ["RTN"])
+            else:
+                algo = ["RTN"]
+
+            if calibration_dataset is None and ("GPTQ" in algo or "AWQ" in algo):
+                raise ValueError(
+                    "Weight-only quantization needs a calibration dataset for both GPTQ and AWQ methodologies."
+                )
+
+            if calibration_dataset is None:
+                calibration_dataloader = None
+            else:
+                calibration_dataloader = self._get_calibration_dataloader(
+                    calibration_dataset=calibration_dataset,
+                    batch_size=batch_size,
+                    remove_unused_columns=remove_unused_columns,
+                    data_collator=data_collator,
+                    use_label=False if "GPTQ" in algo else True,
+                )
+
+        elif INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
             # Since PyTorch fx trace does not really require an example_inputs, only need calibration_dataset or calibration_fn here.
             if calibration_dataset is None and self.calibration_fn is None:
                 raise ValueError(
@@ -189,25 +217,6 @@ class INCQuantizer(OptimumQuantizer):
             if op_type_dict is None or "Embedding" not in op_type_dict:
                 logger.warning("ONNX export is no supported for model with quantized embeddings")
                 save_onnx_model = False
-
-        elif INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.WEIGHT_ONLY:
-            if isinstance(quantization_config.op_type_dict, dict) and len(quantization_config.op_type_dict) > 0:
-                algo = []
-                for _, val in quantization_config.op_type_dict.items():
-                    algo += val.get("weight", {}).get("algorithm", ["RTN"])
-            else:
-                algo = ["RTN"]
-
-            if calibration_dataset is None and ("GPTQ" in algo or "AWQ" in algo):
-                raise ValueError("Weight-only quantizaion needs a calibration dataset.")
-
-            calibration_dataloader = self._get_calibration_dataloader(
-                calibration_dataset=calibration_dataset,
-                batch_size=batch_size,
-                remove_unused_columns=remove_unused_columns,
-                data_collator=data_collator,
-                use_label=False if "GPTQ" in algo else True,
-            )
 
         else:
             # Disable ONNX export for dynamically quantized model as deprecated in neural-compressor>=2.2.0
