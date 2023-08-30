@@ -31,11 +31,10 @@ from optimum.exporters import TasksManager
 from optimum.utils import NormalizedConfigManager
 
 from ...exporters.openvino import export
-from ...exporters.openvino.utils import is_torch_model
 from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import patch_decoder_attention_mask
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
+from .utils import OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -235,18 +234,18 @@ class OVBaseDecoderModel(OVModel):
         # TODO : create ModelPatcher to patch each architecture
         model = patch_decoder_attention_mask(model)
 
-        # Export the model to the ONNX format
-        export(model=model, config=onnx_config, output=save_dir_path / ONNX_WEIGHTS_NAME)
+        # Export the model to the OpenVINO IR format
+        export(model=model, config=onnx_config, output=save_dir_path / OV_XML_FILE_NAME)
 
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
-            from_onnx=not is_torch_model(model),
+            from_onnx=False,
             use_auth_token=use_auth_token,
             revision=revision,
             force_download=force_download,
             cache_dir=cache_dir,
-            file_name=ONNX_WEIGHTS_NAME if not is_torch_model(model) else OV_XML_FILE_NAME,
+            file_name=OV_XML_FILE_NAME,
             local_files_only=local_files_only,
             use_cache=use_cache,
             **kwargs,

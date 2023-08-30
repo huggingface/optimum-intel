@@ -25,7 +25,7 @@ from openvino.runtime import PartialShape, save_model
 from openvino.runtime.utils.types import get_element_type
 from openvino.tools.ovc import convert_model
 from optimum.exporters.onnx.base import OnnxConfig
-from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed, export_tensorflow
+from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed, export_tensorflow as export_tensorflow_onnx
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.utils import is_diffusers_available
 
@@ -116,6 +116,18 @@ def export(
         raise RuntimeError(
             "You either provided a PyTorch model with only TensorFlow installed, or a TensorFlow model with only PyTorch installed."
         )
+
+
+def export_tensorflow(model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, opset: int, output: Path):
+    onnx_path = Path(output).with_suffix(".onnx")
+    input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
+    ov_model = convert_model(str(onnx_path))
+    save_model(
+        ov_model,
+        output.parent / output,
+        compress_to_fp16=False,
+    )
+    return input_names, output_names, True
 
 
 def export_pytorch_via_onnx(
@@ -221,9 +233,10 @@ def export_pytorch(
         input_info = get_input_shapes(dummy_inputs, inputs)
         custom_patcher = type(config).patch_model_for_export != OnnxConfig.patch_model_for_export
         try:
-            # TorchScript used behaind OpenVINO conversion. Optimum supports only return_dict=True models for patching,
+            # TorchScript used behind OpenVINO conversion. Optimum supports only return_dict=True models for patching,
             # while TorchScript do not support dictionary with values of mixed types (e.g. Tensor and None) in model input/output
             # To handle it, additional wrapper on patcher forward applied.
+            # model.config.torchscript = True can not be used for patching, because it overrides return_dict to Flase
             if custom_patcher or dict_inputs:
                 patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
                 patched_forward = patcher.patched_forward
@@ -248,7 +261,6 @@ def export_pytorch(
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
             return export_pytorch_via_onnx(model, config, opset, output, device, input_shapes, model_kwargs)
-        clear_class_registry()
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         ordered_input_names = list(inputs)
         flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
@@ -269,9 +281,8 @@ def export_pytorch(
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
-        save_model(
-            ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output, compress_to_fp16=False
-        )
+        save_model(ov_model, output, compress_to_fp16=False)
+        clear_class_registry()
         del model
         gc.collect()
     return input_names, output_names, False
