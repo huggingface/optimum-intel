@@ -278,7 +278,7 @@ class OVBaseModel(PreTrainedModel):
 
         onnx_config = onnx_config_class(model.config)
 
-        return cls._to_onnx_to_load(
+        return cls._to_load(
             model=model,
             config=config,
             onnx_config=onnx_config,
@@ -290,7 +290,7 @@ class OVBaseModel(PreTrainedModel):
         )
 
     @classmethod
-    def _to_onnx_to_load(
+    def _to_load(
         cls,
         model: PreTrainedModel,
         config: PretrainedConfig,
@@ -310,13 +310,13 @@ class OVBaseModel(PreTrainedModel):
             model=model,
             config=onnx_config,
             opset=onnx_config.DEFAULT_ONNX_OPSET,
-            output=save_dir_path / ONNX_WEIGHTS_NAME,
+            output=save_dir_path / OV_XML_FILE_NAME,
         )
 
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
-            from_onnx=not is_torch_model(model),
+            from_onnx=False,
             use_auth_token=use_auth_token,
             revision=revision,
             force_download=force_download,

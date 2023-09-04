@@ -134,7 +134,7 @@ def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Unio
         with torch.no_grad():
             model.eval()
             # Disable node additions to be exported in the graph
-            model.disable_dynamic_graph_building()
+            model.nncf.disable_dynamic_graph_building()
             onnx_export(
                 model,
                 model_inputs,
@@ -145,7 +145,7 @@ def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Unio
                 do_constant_folding=True,
                 opset_version=opset,
             )
-            model.enable_dynamic_graph_building()
+            model.nncf.enable_dynamic_graph_building()
 
 
 class OVTrainer(Trainer):

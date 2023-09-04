@@ -359,6 +359,9 @@ class OVQuantizer(OptimumQuantizer):
             else Path(ov_file_name).with_suffix(".onnx")
         )
         if weights_only:
+            if getattr(self.model.config, "tie_word_embeddings", True):
+                # to fix problem with shared embedding weights in nncf compress_weights()
+                self.model.tie_weights()
             compressed_model = compress_weights(self.model)
             self.model = compressed_model
         else:
