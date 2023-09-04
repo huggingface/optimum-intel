@@ -30,7 +30,6 @@ from optimum.exporters.tasks import TasksManager
 from optimum.modeling_base import OptimizedModel
 
 from ...exporters.openvino import export
-from ...exporters.openvino.utils import is_torch_model
 from ..utils.import_utils import is_transformers_version
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
