@@ -60,12 +60,26 @@ def _generate_inputs(batch_size=1):
     return inputs
 
 
-def _create_image(height=128, width=128):
-    image = load_image(
-        "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
-        "/in_paint/overture-creations-5sI6fQgYIuo.png"
-    )
-    return image.resize((width, height))
+def _create_image(height=128, width=128, batch_size=1, channel=3, input_type="pil"):
+    if input_type == "pil":
+        image = load_image(
+            "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
+            "/in_paint/overture-creations-5sI6fQgYIuo.png"
+        ).resize((width, height))
+    elif input_type == "np":
+        image = np.random.rand(height, width, channel)
+    elif input_type == "pt":
+        image = torch.rand((channel, height, width))
+
+    return [image] * batch_size
+
+
+def to_np(image):
+    if isinstance(image[0], PIL.Image.Image):
+        return np.stack([np.array(i) for i in image], axis=0)
+    elif isinstance(image, torch.Tensor):
+        return image.cpu().numpy().transpose(0, 2, 3, 1)
+    return image
 
 
 class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
@@ -120,8 +134,10 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
     def test_compare_diffusers_pipeline(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True)
-        inputs = self.generate_inputs()
+        height, width, batch_size = 128, 128, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         inputs["prompt"] = "A painting of a squirrel eating a burger"
+        inputs["image"] = floats_tensor((batch_size, 3, height, width), rng=random.Random(SEED))
         np.random.seed(0)
         output = pipeline(**inputs).images[0, -3:, -3:, -1]
         # https://github.com/huggingface/diffusers/blob/v0.17.1/tests/pipelines/stable_diffusion/test_onnx_stable_diffusion_img2img.py#L71
@@ -139,9 +155,9 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
         outputs = pipeline(**inputs, num_images_per_prompt=num_images, generator=np.random.RandomState(0)).images
         self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
-    def generate_inputs(self, height=128, width=128, batch_size=1):
+    def generate_inputs(self, height=128, width=128, batch_size=1, input_type="np"):
         inputs = _generate_inputs(batch_size)
-        inputs["image"] = floats_tensor((batch_size, 3, height, width), rng=random.Random(SEED))
+        inputs["image"] = _create_image(height=height, width=width, batch_size=batch_size, input_type=input_type)
         inputs["strength"] = 0.75
         return inputs
 
@@ -262,6 +278,17 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
             generator=np.random.RandomState(0),
         )
         inputs = self.generate_inputs(height=height, width=width)
+
+        inputs["image"] = load_image(
+            "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
+            "/in_paint/overture-creations-5sI6fQgYIuo.png"
+        ).resize((width, height))
+
+        inputs["mask_image"] = load_image(
+            "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
+            "/in_paint/overture-creations-5sI6fQgYIuo_mask.png"
+        ).resize((width, height))
+
         outputs = pipeline(**inputs, latents=latents).images
         self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
@@ -285,16 +312,8 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
 
     def generate_inputs(self, height=128, width=128, batch_size=1):
         inputs = super(OVStableDiffusionInpaintPipelineTest, self).generate_inputs(height, width, batch_size)
-        inputs["image"] = load_image(
-            "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
-            "/in_paint/overture-creations-5sI6fQgYIuo.png"
-        ).resize((width, height))
-
-        inputs["mask_image"] = load_image(
-            "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
-            "/in_paint/overture-creations-5sI6fQgYIuo_mask.png"
-        ).resize((width, height))
-
+        inputs["image"] = _create_image(height=height, width=width, batch_size=1, input_type="pil")[0]
+        inputs["mask_image"] = _create_image(height=height, width=width, batch_size=1, input_type="pil")[0]
         return inputs
 
 
@@ -396,7 +415,9 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
             pipeline.save_pretrained(tmp_dir)
             pipeline = self.MODEL_CLASS.from_pretrained(tmp_dir)
 
-        inputs = self.generate_inputs()
+        batch_size, height, width = 1, 128, 128
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs["image"] = floats_tensor((batch_size, 3, height, width), rng=random.Random(SEED))
         np.random.seed(0)
         output = pipeline(**inputs).images[0, -3:, -3:, -1]
         expected_slice = np.array([0.5675, 0.5108, 0.4758, 0.5280, 0.5080, 0.5473, 0.4789, 0.4286, 0.4861])
@@ -413,8 +434,8 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
         outputs = pipeline(**inputs, num_images_per_prompt=num_images, generator=np.random.RandomState(0)).images
         self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
-    def generate_inputs(self, height=128, width=128, batch_size=1):
+    def generate_inputs(self, height=128, width=128, batch_size=1, input_type="np"):
         inputs = _generate_inputs(batch_size)
-        inputs["image"] = floats_tensor((batch_size, 3, height, width), rng=random.Random(SEED))
+        inputs["image"] = _create_image(height=height, width=width, batch_size=batch_size, input_type=input_type)
         inputs["strength"] = 0.75
         return inputs
