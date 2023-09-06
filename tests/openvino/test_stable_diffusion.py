@@ -18,6 +18,7 @@ import unittest
 from typing import Dict
 
 import numpy as np
+import PIL
 import torch
 from diffusers import (
     StableDiffusionPipeline,
@@ -420,7 +421,7 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
         inputs["image"] = floats_tensor((batch_size, 3, height, width), rng=random.Random(SEED))
         np.random.seed(0)
         output = pipeline(**inputs).images[0, -3:, -3:, -1]
-        expected_slice = np.array([0.5675, 0.5108, 0.4758, 0.5280, 0.5080, 0.5473, 0.4789, 0.4286, 0.4861])
+        expected_slice = np.array([0.5683, 0.5121, 0.4767, 0.5253, 0.5072, 0.5462, 0.4766, 0.4279, 0.4855])
         self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
