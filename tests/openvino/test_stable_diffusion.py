@@ -86,6 +86,7 @@ def to_np(image):
 class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionPipeline
+    TASK = "text-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_num_images_per_prompt(self, model_arch: str):
@@ -119,6 +120,37 @@ class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
         self.assertTrue(callback_fn.has_been_called)
         self.assertEqual(callback_fn.number_of_steps, inputs["num_inference_steps"])
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @require_diffusers
+    def test_shape(self, model_arch: str):
+        height, width, batch_size = 128, 64, 1
+        pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True)
+
+        if self.TASK == "image-to-image":
+            input_types = ["np", "pil", "pt"]
+        elif self.TASK == "text-to-image":
+            input_types = ["np"]
+        else:
+            input_types = ["pil"]
+
+        for input_type in input_types:
+            if self.TASK == "image-to-image":
+                inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, input_type=input_type)
+            else:
+                inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+            for output_type in ["np", "pil", "latent"]:
+                inputs["output_type"] = output_type
+                outputs = pipeline(**inputs).images
+                if output_type == "pil":
+                    self.assertEqual((len(outputs), outputs[0].height, outputs[0].width), (batch_size, height, width))
+                elif output_type == "np":
+                    self.assertEqual(outputs.shape, (batch_size, height, width, 3))
+                else:
+                    self.assertEqual(
+                        outputs.shape,
+                        (batch_size, 4, height // pipeline.vae_scale_factor, width // pipeline.vae_scale_factor),
+                    )
+
     def generate_inputs(self, height=128, width=128, batch_size=1):
         inputs = _generate_inputs(batch_size)
         inputs["height"] = height
@@ -130,6 +162,7 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionImg2ImgPipeline
     ORT_MODEL_CLASS = ORTStableDiffusionImg2ImgPipeline
+    TASK = "image-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_diffusers_pipeline(self, model_arch: str):
@@ -166,6 +199,7 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
 class OVStableDiffusionPipelineTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionPipeline
+    TASK = "text-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_diffusers(self, model_arch: str):
@@ -264,6 +298,7 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionInpaintPipeline
     ORT_MODEL_CLASS = ORTStableDiffusionInpaintPipeline
+    TASK = "inpaint"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_diffusers_pipeline(self, model_arch: str):
@@ -323,6 +358,7 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
     MODEL_CLASS = OVStableDiffusionXLPipeline
     ORT_MODEL_CLASS = ORTStableDiffusionXLPipeline
     PT_MODEL_CLASS = StableDiffusionXLPipeline
+    TASK = "text-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_diffusers(self, model_arch: str):
@@ -407,6 +443,7 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
     MODEL_CLASS = OVStableDiffusionXLImg2ImgPipeline
     ORT_MODEL_CLASS = ORTStableDiffusionXLImg2ImgPipeline
     PT_MODEL_CLASS = StableDiffusionXLImg2ImgPipeline
+    TASK = "image-to-image"
 
     def test_inference(self):
         model_id = "hf-internal-testing/tiny-stable-diffusion-xl-pipe"
