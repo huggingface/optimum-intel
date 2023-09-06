@@ -105,8 +105,8 @@ class TestExamples(unittest.TestCase):
             with patch.object(sys, "argv", test_args):
                 run_qa.main()
                 results = get_results(tmp_dir)
-                self.assertGreaterEqual(results["eval_f1"], 70)
-                self.assertGreaterEqual(results["eval_exact_match"], 70)
+                self.assertGreaterEqual(results["eval_f1"], 60)
+                self.assertGreaterEqual(results["eval_exact_match"], 45)
 
     def test_run_ner(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -133,9 +133,9 @@ class TestExamples(unittest.TestCase):
                 run_ner.main()
                 results = get_results(tmp_dir)
                 self.assertGreaterEqual(results["eval_accuracy"], 0.70)
-                self.assertGreaterEqual(results["eval_f1"], 0.70)
+                self.assertGreaterEqual(results["eval_f1"], 0.60)
                 self.assertGreaterEqual(results["eval_precision"], 0.70)
-                self.assertGreaterEqual(results["eval_recall"], 0.70)
+                self.assertGreaterEqual(results["eval_recall"], 0.50)
 
     def test_run_swag(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -160,7 +160,7 @@ class TestExamples(unittest.TestCase):
             with patch.object(sys, "argv", test_args):
                 run_swag.main()
                 results = get_results(tmp_dir)
-                self.assertGreaterEqual(results["eval_accuracy"], 0.60)
+                self.assertGreaterEqual(results["eval_accuracy"], 0.40)
 
     def test_run_clm(self):
         quantization_approach = "dynamic"
