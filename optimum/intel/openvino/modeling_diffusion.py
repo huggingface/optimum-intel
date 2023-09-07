@@ -729,7 +729,6 @@ class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiff
 
 
 class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiffusionInpaintPipelineMixin):
-
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]],
@@ -743,8 +742,6 @@ class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiff
         num_images_per_prompt: int = 1,
         **kwargs,
     ):
-
-
         height = height or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
         width = width or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
         _height = self.height
@@ -753,7 +750,9 @@ class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiff
 
         if _height != -1 and _width != -1:
             image = self.image_processor.preprocess(image, height=_height, width=_width).transpose(0, 2, 3, 1)
-            mask_image = self.image_processor.preprocess(mask_image, height=_height, width=_width).transpose(0, 2, 3, 1)
+            mask_image = self.image_processor.preprocess(mask_image, height=_height, width=_width).transpose(
+                0, 2, 3, 1
+            )
 
         if expected_batch_size != -1:
             if isinstance(prompt, str):
