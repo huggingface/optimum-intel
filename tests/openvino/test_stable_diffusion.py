@@ -150,10 +150,12 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
         batch_size, num_images, height, width = 2, 3, 128, 64
         pipeline.half()
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
-        outputs = pipeline(**inputs, num_images_per_prompt=num_images, generator=np.random.RandomState(0)).images
-        self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+
+        for _height in [height, height + 16]:
+            inputs = self.generate_inputs(height=_height, width=width, batch_size=batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
     def generate_inputs(self, height=128, width=128, batch_size=1, input_type="np"):
         inputs = _generate_inputs(batch_size)
@@ -234,16 +236,11 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
         self.assertFalse(pipeline.is_dynamic)
         pipeline.compile()
-        # Verify output shapes requirements not matching the static model don't impact the final outputs
-        outputs = pipeline(
-            [prompt] * batch_size,
-            num_inference_steps=2,
-            num_images_per_prompt=num_images,
-            height=height + 8,
-            width=width,
-            output_type="np",
-        ).images
-        self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+        # Verify output shapes requirements not matching the static model doesn't impact the final outputs
+        for _height in [height, height + 16]:
+            inputs = _generate_inputs(batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images, height=_height, width=width).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_height_width_properties(self, model_arch: str):
@@ -305,10 +302,11 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
         batch_size, num_images, height, width = 1, 3, 128, 64
         pipeline.half()
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
-        outputs = pipeline(**inputs, num_images_per_prompt=num_images, generator=np.random.RandomState(0)).images
-        self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+        for _height in [height, height + 16]:
+            inputs = self.generate_inputs(height=_height, width=width, batch_size=batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
     def generate_inputs(self, height=128, width=128, batch_size=1):
         inputs = super(OVStableDiffusionInpaintPipelineTest, self).generate_inputs(height, width, batch_size)
@@ -395,10 +393,11 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
         self.assertFalse(pipeline.is_dynamic)
         pipeline.compile()
-        # Verify output shapes requirements not matching the static model don't impact the final outputs
-        inputs = _generate_inputs(batch_size)
-        outputs = pipeline(**inputs, num_images_per_prompt=num_images, height=height, width=width).images
-        self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+
+        for _height in [height, height + 16]:
+            inputs = _generate_inputs(batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images, height=_height, width=width).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
 
 class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
@@ -429,10 +428,12 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
         batch_size, num_images, height, width = 2, 3, 128, 64
         pipeline.half()
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
-        outputs = pipeline(**inputs, num_images_per_prompt=num_images, generator=np.random.RandomState(0)).images
-        self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+
+        for _height in [height, height + 16]:
+            inputs = self.generate_inputs(height=_height, width=width, batch_size=batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images, generator=np.random.RandomState(0)).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
     def generate_inputs(self, height=128, width=128, batch_size=1, input_type="np"):
         inputs = _generate_inputs(batch_size)

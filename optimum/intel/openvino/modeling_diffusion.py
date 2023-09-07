@@ -703,10 +703,7 @@ class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiff
         expected_batch_size = self._batch_size
 
         if _height != -1 and _width != -1:
-            if isinstance(image, list):
-                image = [self.image_processor.resize(i, _height, _width) for i in image]
-            else:
-                image = self.image_processor.resize(image, _height, _width)
+            image = self.image_processor.preprocess(image, height=_height, width=_width).transpose(0, 2, 3, 1)
 
         if expected_batch_size != -1:
             if isinstance(prompt, str):
@@ -719,6 +716,7 @@ class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiff
             _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
 
         return StableDiffusionImg2ImgPipelineMixin.__call__(
+            self,
             prompt=prompt,
             image=image,
             strength=strength,
@@ -731,9 +729,53 @@ class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiff
 
 
 class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiffusionInpaintPipelineMixin):
-    def __call__(self, *args, **kwargs):
-        # TODO : add default height and width if model statically reshaped
-        return StableDiffusionInpaintPipelineMixin.__call__(self, *args, **kwargs)
+
+    def __call__(
+        self,
+        prompt: Optional[Union[str, List[str]]],
+        image: PIL.Image.Image,
+        mask_image: PIL.Image.Image,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 7.5,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: int = 1,
+        **kwargs,
+    ):
+
+
+        height = height or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
+        width = width or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
+        _height = self.height
+        _width = self.width
+        expected_batch_size = self._batch_size
+
+        if _height != -1 and _width != -1:
+            image = self.image_processor.preprocess(image, height=_height, width=_width).transpose(0, 2, 3, 1)
+            mask_image = self.image_processor.preprocess(mask_image, height=_height, width=_width).transpose(0, 2, 3, 1)
+
+        if expected_batch_size != -1:
+            if isinstance(prompt, str):
+                batch_size = 1
+            elif isinstance(prompt, list):
+                batch_size = len(prompt)
+            else:
+                batch_size = kwargs.get("prompt_embeds").shape[0]
+
+            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
+
+        return StableDiffusionInpaintPipelineMixin.__call__(
+            self,
+            prompt=prompt,
+            image=image,
+            strength=strength,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            negative_prompt=negative_prompt,
+            num_images_per_prompt=num_images_per_prompt,
+            **kwargs,
+        )
 
 
 class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
@@ -829,10 +871,7 @@ class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, Stable
         expected_batch_size = self._batch_size
 
         if _height != -1 and _width != -1:
-            if isinstance(image, list):
-                image = [self.image_processor.resize(i, _height, _width) for i in image]
-            else:
-                image = self.image_processor.resize(image, _height, _width)
+            image = self.image_processor.preprocess(image, height=_height, width=_width).transpose(0, 2, 3, 1)
 
         if expected_batch_size != -1:
             if isinstance(prompt, str):
@@ -845,6 +884,7 @@ class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, Stable
             _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
 
         return StableDiffusionXLImg2ImgPipelineMixin.__call__(
+            self,
             prompt=prompt,
             image=image,
             strength=strength,
@@ -859,7 +899,7 @@ class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, Stable
 def _raise_invalid_batch_size(
     expected_batch_size: int, batch_size: int, num_images_per_prompt: int, guidance_scale: float
 ):
-    current_batch_size = batch_size * num_images_per_prompt * 1 if guidance_scale <= 1 else 2
+    current_batch_size = batch_size * num_images_per_prompt * (1 if guidance_scale <= 1 else 2)
 
     if expected_batch_size != current_batch_size:
         msg = ""
