@@ -46,7 +46,7 @@ def parse_args_inc_quantize(parser: "ArgumentParser"):
         default="auto",
         help=(
             "The task to export the model for. If not specified, the task will be auto-inferred based on the model. Available tasks depend on the model, but are among:"
-            f" {str(list(TasksManager._TASKS_TO_AUTOMODELS.keys()))}."
+            f" {str(TasksManager.get_all_tasks())}."
         ),
     )
 

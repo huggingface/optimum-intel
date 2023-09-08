@@ -232,7 +232,7 @@ class OVBaseDecoderModel(OVModel):
         onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
 
         # TODO : create ModelPatcher to patch each architecture
-        if config.model_type == "bloom":
+        if config.model_type in {"bloom", "mpt"}:
             model.transformer._prepare_attn_mask = _prepare_attn_mask
         elif config.model_type == "llama":
             model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
