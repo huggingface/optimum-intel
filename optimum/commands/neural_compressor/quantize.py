@@ -28,7 +28,7 @@ def parse_args_inc_quantize(parser: "ArgumentParser"):
     required_group = parser.add_argument_group("Required arguments")
     required_group.add_argument(
         "--model",
-        type=Path,
+        type=str,
         required=True,
         help="Path to the repository where the model to quantize is located.",
     )
@@ -83,7 +83,7 @@ class INCQuantizeCommand(BaseOptimumCLICommand):
 
         if task == "auto":
             try:
-                task = TasksManager.infer_task_from_model(str(model_id))
+                task = TasksManager.infer_task_from_model(model_id)
             except Exception as e:
                 return (
                     f"### Error: {e}. Please pass explicitely the task as it could not be infered.",
