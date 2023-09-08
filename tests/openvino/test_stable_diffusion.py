@@ -18,6 +18,7 @@ import unittest
 from typing import Dict
 
 import numpy as np
+import PIL
 import torch
 from diffusers import (
     StableDiffusionPipeline,
@@ -60,17 +61,32 @@ def _generate_inputs(batch_size=1):
     return inputs
 
 
-def _create_image(height=128, width=128):
-    image = load_image(
-        "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
-        "/in_paint/overture-creations-5sI6fQgYIuo.png"
-    )
-    return image.resize((width, height))
+def _create_image(height=128, width=128, batch_size=1, channel=3, input_type="pil"):
+    if input_type == "pil":
+        image = load_image(
+            "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
+            "/in_paint/overture-creations-5sI6fQgYIuo.png"
+        ).resize((width, height))
+    elif input_type == "np":
+        image = np.random.rand(height, width, channel)
+    elif input_type == "pt":
+        image = torch.rand((channel, height, width))
+
+    return [image] * batch_size
+
+
+def to_np(image):
+    if isinstance(image[0], PIL.Image.Image):
+        return np.stack([np.array(i) for i in image], axis=0)
+    elif isinstance(image, torch.Tensor):
+        return image.cpu().numpy().transpose(0, 2, 3, 1)
+    return image
 
 
 class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionPipeline
+    TASK = "text-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_num_images_per_prompt(self, model_arch: str):
@@ -104,6 +120,36 @@ class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
         self.assertTrue(callback_fn.has_been_called)
         self.assertEqual(callback_fn.number_of_steps, inputs["num_inference_steps"])
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_shape(self, model_arch: str):
+        height, width, batch_size = 128, 64, 1
+        pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True)
+
+        if self.TASK == "image-to-image":
+            input_types = ["np", "pil", "pt"]
+        elif self.TASK == "text-to-image":
+            input_types = ["np"]
+        else:
+            input_types = ["pil"]
+
+        for input_type in input_types:
+            if self.TASK == "image-to-image":
+                inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, input_type=input_type)
+            else:
+                inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+            for output_type in ["np", "pil", "latent"]:
+                inputs["output_type"] = output_type
+                outputs = pipeline(**inputs).images
+                if output_type == "pil":
+                    self.assertEqual((len(outputs), outputs[0].height, outputs[0].width), (batch_size, height, width))
+                elif output_type == "np":
+                    self.assertEqual(outputs.shape, (batch_size, height, width, 3))
+                else:
+                    self.assertEqual(
+                        outputs.shape,
+                        (batch_size, 4, height // pipeline.vae_scale_factor, width // pipeline.vae_scale_factor),
+                    )
+
     def generate_inputs(self, height=128, width=128, batch_size=1):
         inputs = _generate_inputs(batch_size)
         inputs["height"] = height
@@ -115,13 +161,16 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionImg2ImgPipeline
     ORT_MODEL_CLASS = ORTStableDiffusionImg2ImgPipeline
+    TASK = "image-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_diffusers_pipeline(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True)
-        inputs = self.generate_inputs()
+        height, width, batch_size = 128, 128, 1
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         inputs["prompt"] = "A painting of a squirrel eating a burger"
+        inputs["image"] = floats_tensor((batch_size, 3, height, width), rng=random.Random(SEED))
         np.random.seed(0)
         output = pipeline(**inputs).images[0, -3:, -3:, -1]
         # https://github.com/huggingface/diffusers/blob/v0.17.1/tests/pipelines/stable_diffusion/test_onnx_stable_diffusion_img2img.py#L71
@@ -139,9 +188,9 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
         outputs = pipeline(**inputs, num_images_per_prompt=num_images, generator=np.random.RandomState(0)).images
         self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
-    def generate_inputs(self, height=128, width=128, batch_size=1):
+    def generate_inputs(self, height=128, width=128, batch_size=1, input_type="np"):
         inputs = _generate_inputs(batch_size)
-        inputs["image"] = floats_tensor((batch_size, 3, height, width), rng=random.Random(SEED))
+        inputs["image"] = _create_image(height=height, width=width, batch_size=batch_size, input_type=input_type)
         inputs["strength"] = 0.75
         return inputs
 
@@ -149,6 +198,7 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
 class OVStableDiffusionPipelineTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionPipeline
+    TASK = "text-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_diffusers(self, model_arch: str):
@@ -247,6 +297,7 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionInpaintPipeline
     ORT_MODEL_CLASS = ORTStableDiffusionInpaintPipeline
+    TASK = "inpaint"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_diffusers_pipeline(self, model_arch: str):
@@ -262,6 +313,17 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
             generator=np.random.RandomState(0),
         )
         inputs = self.generate_inputs(height=height, width=width)
+
+        inputs["image"] = load_image(
+            "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
+            "/in_paint/overture-creations-5sI6fQgYIuo.png"
+        ).resize((width, height))
+
+        inputs["mask_image"] = load_image(
+            "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
+            "/in_paint/overture-creations-5sI6fQgYIuo_mask.png"
+        ).resize((width, height))
+
         outputs = pipeline(**inputs, latents=latents).images
         self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
@@ -285,16 +347,8 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
 
     def generate_inputs(self, height=128, width=128, batch_size=1):
         inputs = super(OVStableDiffusionInpaintPipelineTest, self).generate_inputs(height, width, batch_size)
-        inputs["image"] = load_image(
-            "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
-            "/in_paint/overture-creations-5sI6fQgYIuo.png"
-        ).resize((width, height))
-
-        inputs["mask_image"] = load_image(
-            "https://huggingface.co/datasets/hf-internal-testing/diffusers-images/resolve/main"
-            "/in_paint/overture-creations-5sI6fQgYIuo_mask.png"
-        ).resize((width, height))
-
+        inputs["image"] = _create_image(height=height, width=width, batch_size=1, input_type="pil")[0]
+        inputs["mask_image"] = _create_image(height=height, width=width, batch_size=1, input_type="pil")[0]
         return inputs
 
 
@@ -303,6 +357,7 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
     MODEL_CLASS = OVStableDiffusionXLPipeline
     ORT_MODEL_CLASS = ORTStableDiffusionXLPipeline
     PT_MODEL_CLASS = StableDiffusionXLPipeline
+    TASK = "text-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_diffusers(self, model_arch: str):
@@ -387,6 +442,7 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
     MODEL_CLASS = OVStableDiffusionXLImg2ImgPipeline
     ORT_MODEL_CLASS = ORTStableDiffusionXLImg2ImgPipeline
     PT_MODEL_CLASS = StableDiffusionXLImg2ImgPipeline
+    TASK = "image-to-image"
 
     def test_inference(self):
         model_id = "hf-internal-testing/tiny-stable-diffusion-xl-pipe"
@@ -396,10 +452,12 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
             pipeline.save_pretrained(tmp_dir)
             pipeline = self.MODEL_CLASS.from_pretrained(tmp_dir)
 
-        inputs = self.generate_inputs()
+        batch_size, height, width = 1, 128, 128
+        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+        inputs["image"] = floats_tensor((batch_size, 3, height, width), rng=random.Random(SEED))
         np.random.seed(0)
         output = pipeline(**inputs).images[0, -3:, -3:, -1]
-        expected_slice = np.array([0.5675, 0.5108, 0.4758, 0.5280, 0.5080, 0.5473, 0.4789, 0.4286, 0.4861])
+        expected_slice = np.array([0.5683, 0.5121, 0.4767, 0.5253, 0.5072, 0.5462, 0.4766, 0.4279, 0.4855])
         self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -413,8 +471,8 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
         outputs = pipeline(**inputs, num_images_per_prompt=num_images, generator=np.random.RandomState(0)).images
         self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
-    def generate_inputs(self, height=128, width=128, batch_size=1):
+    def generate_inputs(self, height=128, width=128, batch_size=1, input_type="np"):
         inputs = _generate_inputs(batch_size)
-        inputs["image"] = floats_tensor((batch_size, 3, height, width), rng=random.Random(SEED))
+        inputs["image"] = _create_image(height=height, width=width, batch_size=batch_size, input_type=input_type)
         inputs["strength"] = 0.75
         return inputs

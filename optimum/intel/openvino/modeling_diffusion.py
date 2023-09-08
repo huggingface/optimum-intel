@@ -30,7 +30,7 @@ from diffusers import (
     StableDiffusionXLPipeline,
 )
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
-from diffusers.utils import CONFIG_NAME
+from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available
 from huggingface_hub import snapshot_download
 from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
@@ -42,6 +42,7 @@ from optimum.pipelines.diffusers.pipeline_stable_diffusion_img2img import Stable
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_inpaint import StableDiffusionInpaintPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_xl import StableDiffusionXLPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_xl_img2img import StableDiffusionXLImg2ImgPipelineMixin
+from optimum.pipelines.diffusers.pipeline_utils import VaeImageProcessor
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
@@ -105,6 +106,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             self.vae_scale_factor = 2 ** (len(self.vae_decoder.config["block_out_channels"]) - 1)
         else:
             self.vae_scale_factor = 8
+
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
 
         self.tokenizer = tokenizer
         self.tokenizer_2 = tokenizer_2
@@ -687,12 +690,21 @@ class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
     auto_model_class = StableDiffusionXLPipeline
     export_feature = "stable-diffusion-xl"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
         super().__init__(*args, **kwargs)
-        # additional invisible-watermark dependency for SD XL
-        from optimum.pipelines.diffusers.watermark import StableDiffusionXLWatermarker
 
-        self.watermark = StableDiffusionXLWatermarker()
+        add_watermarker = add_watermarker if add_watermarker is not None else is_invisible_watermark_available()
+
+        if add_watermarker:
+            if not is_invisible_watermark_available():
+                raise ImportError(
+                    "`add_watermarker` requires invisible-watermark to be installed, which can be installed with `pip install invisible-watermark`."
+                )
+            from optimum.pipelines.diffusers.watermark import StableDiffusionXLWatermarker
+
+            self.watermark = StableDiffusionXLWatermarker()
+        else:
+            self.watermark = None
 
 
 class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLPipelineMixin):
