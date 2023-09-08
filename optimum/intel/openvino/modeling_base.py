@@ -65,7 +65,6 @@ class PreTrainedModel(OptimizedModel):
     """,
 )
 class OVBaseModel(PreTrainedModel):
-    _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
     auto_model_class = None
     export_feature = None
 
@@ -390,13 +389,6 @@ class OVBaseModel(PreTrainedModel):
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
-
-    @classmethod
-    def _auto_model_to_task(cls, auto_model_class):
-        """
-        Get the task corresponding to a class (for example AutoModelForXXX in transformers).
-        """
-        return cls._AUTOMODELS_TO_TASKS[auto_model_class.__name__]
 
     def can_generate(self) -> bool:
         """

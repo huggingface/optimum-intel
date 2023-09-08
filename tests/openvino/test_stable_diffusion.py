@@ -121,7 +121,6 @@ class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
         self.assertEqual(callback_fn.number_of_steps, inputs["num_inference_steps"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @require_diffusers
     def test_shape(self, model_arch: str):
         height, width, batch_size = 128, 64, 1
         pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True)
