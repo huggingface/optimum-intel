@@ -54,7 +54,6 @@ MODEL_START_DOCSTRING = r"""
     """,
 )
 class INCBaseModel:
-    _AUTOMODELS_TO_TASKS = {cls_name: task for task, cls_name in TasksManager._TASKS_TO_AUTOMODELS.items()}
     base_model_prefix = "inc_model"
 
     def __init__(
@@ -255,13 +254,6 @@ class INCBaseModel:
             local_files_only=local_files_only,
             **kwargs,
         )
-
-    @classmethod
-    def _auto_model_to_task(cls, auto_model_class):
-        """
-        Get the task corresponding to a class (for example AutoModelForXXX in transformers).
-        """
-        return cls._AUTOMODELS_TO_TASKS[auto_model_class.__name__]
 
     def eval(self):
         self.model.eval()
