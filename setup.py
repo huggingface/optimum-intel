@@ -12,7 +12,7 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-    "optimum>=1.10.0",
+    "optimum>=1.13.0",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
     "sentencepiece",
@@ -31,6 +31,7 @@ TESTS_REQUIRE = [
     "torchaudio",
     "rjieba",
     "timm",
+    "invisible-watermark>=0.2.0",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
@@ -44,7 +45,7 @@ EXTRAS_REQUIRE = {
     "openvino": ["openvino==2023.1.0.dev20230811", "onnx", "onnxruntime"],
     "nncf": ["nncf @ git+https://github.com/openvinotoolkit/nncf.git@release_v260"],
     "ipex": ["transformers<4.32.0", "intel-extension-for-pytorch", "onnx"],
-    "diffusers": ["diffusers", "invisible-watermark>=0.2.0"],
+    "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
 }

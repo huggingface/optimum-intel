@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y \
 RUN apt-get update && apt-get install -y \
     software-properties-common \
     npm
-RUN npm install npm@latest -g && \
+RUN npm install npm@9.8.1 -g && \
     npm install n -g && \
     n latest
 
