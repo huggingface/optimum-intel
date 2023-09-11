@@ -74,6 +74,7 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 logger = logging.getLogger(__name__)
 
 NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
+NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION = "2.3.0"
 IPEX_MINIMUM_VERSION = "2.1.0"
 
 if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
@@ -174,6 +175,13 @@ class INCQuantizer(OptimumQuantizer):
         self._set_task()
 
         if weight_only:
+            # check neural-compressor version
+            if is_neural_compressor_version("<", NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION):
+                raise ImportError(
+                    f"Found an incompatible version of neural-compressor. Found version {_neural_compressor_version}, "
+                    f"but only version {NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION} or higher supports weight-only quantization."
+                )
+
             # If op_type_dict of quantization_config is not defined, it will use default values for weight-only quantization:
             # {"bits": 4, "group_size": 32, "scheme": "sym", "algorithm": "RTN"}
             if isinstance(quantization_config.op_type_dict, dict) and len(quantization_config.op_type_dict) > 0:
