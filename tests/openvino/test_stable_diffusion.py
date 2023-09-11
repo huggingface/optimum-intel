@@ -264,7 +264,6 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False)
         batch_size, num_images, height, width = 3, 4, 128, 64
-        prompt = "sailing ship in storm by Leonardo da Vinci"
         pipeline.half()
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
         self.assertFalse(pipeline.is_dynamic)

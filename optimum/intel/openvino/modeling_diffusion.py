@@ -768,7 +768,6 @@ class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiff
             self,
             prompt=prompt,
             image=image,
-            strength=strength,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             negative_prompt=negative_prompt,
