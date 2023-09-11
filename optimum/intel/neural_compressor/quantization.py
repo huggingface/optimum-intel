@@ -163,7 +163,7 @@ class INCQuantizer(OptimumQuantizer):
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether or not to remove the columns unused by the model forward method.
             weight_only (`bool`, defaults to `False`):
-                Whether compress weights to integer precision (8-bit by default) while keeping activations
+                Whether compress weights to integer precision (4-bit by default) while keeping activations
                 floating-point. Fits best for LLM footprint reduction and performance acceleration.
         """
         save_directory = Path(save_directory)
@@ -174,6 +174,8 @@ class INCQuantizer(OptimumQuantizer):
         self._set_task()
 
         if weight_only:
+            # If op_type_dict of quantization_config is not defined, it will use default values for weight-only quantization:
+            # {"bits": 4, "group_size": 32, "scheme": "sym", "algorithm": "RTN"}
             if isinstance(quantization_config.op_type_dict, dict) and len(quantization_config.op_type_dict) > 0:
                 algo = []
                 for _, val in quantization_config.op_type_dict.items():
