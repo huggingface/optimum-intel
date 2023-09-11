@@ -336,7 +336,7 @@ class OVEncoder:
             inputs["attention_mask"] = attention_mask
 
         # Run inference
-        last_hidden_state = torch.from_numpy(self.request(inputs, shared_memory=True)["last_hidden_state"]).to(
+        last_hidden_state = torch.from_numpy(self.request(inputs, share_inputs=True)["last_hidden_state"]).to(
             self.device
         )
 
@@ -414,7 +414,7 @@ class OVDecoder:
             inputs["encoder_hidden_states"] = encoder_hidden_states
 
         # Run inference
-        self.request.start_async(inputs, shared_memory=True)
+        self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
