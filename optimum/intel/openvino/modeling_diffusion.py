@@ -749,6 +749,20 @@ class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiff
         expected_batch_size = self._batch_size
 
         if _height != -1 and _width != -1:
+            if height != _height:
+                logger.warning(
+                    f"`height` was set to {height} but the static model will output images of height {_height}."
+                    "To fix the height, please reshape your model accordingly using the `.reshape()` method."
+                )
+                height = _height
+
+            if width != _width:
+                logger.warning(
+                    f"`width` was set to {width} but the static model will output images of width {_width}."
+                    "To fix the width, please reshape your model accordingly using the `.reshape()` method."
+                )
+                width = _width
+
             image = self.image_processor.preprocess(image, height=_height, width=_width).transpose(0, 2, 3, 1)
             mask_image = self.image_processor.preprocess(mask_image, height=_height, width=_width).transpose(
                 0, 2, 3, 1
@@ -768,6 +782,9 @@ class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiff
             self,
             prompt=prompt,
             image=image,
+            mask_image=mask_image,
+            height=height,
+            width=width,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             negative_prompt=negative_prompt,
