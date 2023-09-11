@@ -635,6 +635,11 @@ def main():
                         },
                     },
                 }
+                if optim_args.quantization_methodology == "GPTQ":
+                    gptq_args = {
+                        "pad_max_length": block_size,
+                    }
+                    recipes.update({"gptq_args": gptq_args})
             else:
                 op_type_dict = {}
             quantization_config = PostTrainingQuantConfig(
@@ -718,7 +723,6 @@ def main():
 
     if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic", "weight_only"}:
         model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
-        model.seqlen = block_size
         quantizer = INCQuantizer.from_pretrained(model)
         if optim_args.quantization_approach in ["static", "weight_only"]:
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
