@@ -236,7 +236,9 @@ class OptimizationTest(INCTestMixin):
             },
         }
         recipes = {"gptq_args": {"pad_max_length": len(calibration_dataset[0]["input_ids"])}}
-        quantization_config = PostTrainingQuantConfig(approach="weight_only", op_type_dict=op_type_dict, recipes=recipes)
+        quantization_config = PostTrainingQuantConfig(
+            approach="weight_only", op_type_dict=op_type_dict, recipes=recipes
+        )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantizer.quantize(
