@@ -336,7 +336,7 @@ class OVEncoder:
             inputs["attention_mask"] = attention_mask
 
         # Run inference
-        last_hidden_state = torch.from_numpy(self.request(inputs, shared_memory=True)["last_hidden_state"]).to(
+        last_hidden_state = torch.from_numpy(self.request(inputs, share_inputs=True)["last_hidden_state"]).to(
             self.device
         )
 
@@ -414,13 +414,12 @@ class OVDecoder:
             inputs["encoder_hidden_states"] = encoder_hidden_states
 
         # Run inference
-        self.request.start_async(inputs, shared_memory=True)
-        self.request.wait()
-        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        results = self.request.infer(inputs, share_inputs=True, share_outputs=True)
+        logits = torch.from_numpy(results["logits"]).to(self.device)
 
         # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
         # self-attention layer and 2 to the cross-attention layer)
-        out_past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+        out_past_key_values = tuple(results[key] for key in self.key_value_output_names)
 
         # Tuple of tuple of length `n_layers`, with each tuple of length equal to:
         # * 4 for the decoder without cache (k/v of self-attention + k/v of cross-attention)
