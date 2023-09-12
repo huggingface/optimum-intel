@@ -336,7 +336,8 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
         batch_size, num_images, height, width = 1, 3, 128, 64
         pipeline.half()
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
-        for _height in [height, height + 16]:
+        # for _height in [height, height + 16]: # TODO: add when input reshaping enabled for static model
+        for _height in [height]:
             inputs = self.generate_inputs(height=_height, width=width, batch_size=batch_size)
             outputs = pipeline(**inputs, num_images_per_prompt=num_images).images
             self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
