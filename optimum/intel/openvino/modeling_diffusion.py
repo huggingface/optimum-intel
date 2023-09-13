@@ -773,7 +773,6 @@ class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiff
             else:
                 mask_image = self.image_processor.resize(mask_image, _height, _width)
 
-
         if expected_batch_size != -1:
             if isinstance(prompt, str):
                 batch_size = 1
