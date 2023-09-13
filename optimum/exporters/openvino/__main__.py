@@ -27,9 +27,10 @@ from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_save_preprocessors
 
-from ...intel.openvino.utils import OV_XML_FILE_NAME
 from .convert import export_models
 
+
+OV_XML_FILE_NAME = "openvino_model.xml"
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,7 @@ def main_export(
         custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
         custom_architecture=custom_architecture,
         fn_get_submodels=fn_get_submodels,
+        _variant="default",
     )
 
     if not is_stable_diffusion:

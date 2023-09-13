@@ -102,7 +102,7 @@ def patch_decoder_attention_mask(model: "PreTrainedModel"):
     Returns:
         model with applied patch
     """
-    if model.config.model_type == "bloom":
+    if model.config.model_type in {"bloom", "mpt"}:
         model.transformer._prepare_attn_mask = _prepare_attn_mask
     elif model.config.model_type == "llama":
         model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask

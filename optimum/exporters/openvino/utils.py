@@ -29,6 +29,9 @@ if is_diffusers_available():
     from diffusers import ModelMixin
 
 
+OV_XML_FILE_NAME = "openvino_model.xml"
+
+
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):
     """
     Checks whether the model is a torch model.

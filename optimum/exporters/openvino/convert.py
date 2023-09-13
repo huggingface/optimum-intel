@@ -30,8 +30,8 @@ from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_o
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.utils import is_diffusers_available
 
-from ...intel.openvino.utils import OV_XML_FILE_NAME
 from .utils import (
+    OV_XML_FILE_NAME,
     clear_class_registry,
     flattenize_inputs,
     get_input_shapes,
