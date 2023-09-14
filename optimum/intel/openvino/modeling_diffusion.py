@@ -606,6 +606,11 @@ class OVModelVaeDecoder(OVModelPart):
         outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
 
+    def _compile(self):
+        if "GPU" in self.device:
+            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
+        super()._compile()
+
 
 class OVModelVaeEncoder(OVModelPart):
     def __init__(
@@ -621,6 +626,11 @@ class OVModelVaeEncoder(OVModelPart):
         }
         outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
+
+    def _compile(self):
+        if "GPU" in self.device:
+            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
+        super()._compile()
 
 
 class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPipelineMixin):
