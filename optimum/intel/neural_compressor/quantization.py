@@ -74,6 +74,7 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 logger = logging.getLogger(__name__)
 
 NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
+NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION = "2.3.0"
 IPEX_MINIMUM_VERSION = "2.1.0"
 
 if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
@@ -87,6 +88,7 @@ class INCQuantizationMode(Enum):
     DYNAMIC = "post_training_dynamic_quant"
     STATIC = "post_training_static_quant"
     AWARE_TRAINING = "quant_aware_training"
+    WEIGHT_ONLY = "post_training_weight_only"
 
 
 SUPPORTED_QUANT_MODE = {approach.value for approach in INCQuantizationMode}
@@ -142,6 +144,7 @@ class INCQuantizer(OptimumQuantizer):
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         file_name: str = None,
+        weight_only: bool = False,
         **kwargs,
     ):
         """
@@ -160,6 +163,9 @@ class INCQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether or not to remove the columns unused by the model forward method.
+            weight_only (`bool`, defaults to `False`):
+                Whether compress weights to integer precision (4-bit by default) while keeping activations
+                floating-point. Fits best for LLM footprint reduction and performance acceleration.
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
@@ -168,7 +174,40 @@ class INCQuantizer(OptimumQuantizer):
         calibration_dataloader = None
         self._set_task()
 
-        if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
+        if weight_only:
+            # check neural-compressor version
+            if is_neural_compressor_version("<", NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION):
+                raise ImportError(
+                    f"Found an incompatible version of neural-compressor. Found version {_neural_compressor_version}, "
+                    f"but only version {NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION} or higher supports weight-only quantization."
+                )
+
+            # If op_type_dict of quantization_config is not defined, it will use default values for weight-only quantization:
+            # {"bits": 4, "group_size": 32, "scheme": "sym", "algorithm": "RTN"}
+            if isinstance(quantization_config.op_type_dict, dict) and len(quantization_config.op_type_dict) > 0:
+                algo = []
+                for _, val in quantization_config.op_type_dict.items():
+                    algo += val.get("weight", {}).get("algorithm", ["RTN"])
+            else:
+                algo = ["RTN"]
+
+            if calibration_dataset is None and ("GPTQ" in algo or "AWQ" in algo):
+                raise ValueError(
+                    "Weight-only quantization needs a calibration dataset for both GPTQ and AWQ methodologies."
+                )
+
+            if calibration_dataset is None:
+                calibration_dataloader = None
+            else:
+                calibration_dataloader = self._get_calibration_dataloader(
+                    calibration_dataset=calibration_dataset,
+                    batch_size=batch_size,
+                    remove_unused_columns=remove_unused_columns,
+                    data_collator=data_collator,
+                    use_label=False if "GPTQ" in algo else True,
+                )
+
+        elif INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
             # Since PyTorch fx trace does not really require an example_inputs, only need calibration_dataset or calibration_fn here.
             if calibration_dataset is None and self.calibration_fn is None:
                 raise ValueError(
@@ -378,6 +417,7 @@ class INCQuantizer(OptimumQuantizer):
         batch_size: int,
         remove_unused_columns: bool,
         data_collator: Optional[DataCollator] = None,
+        use_label: Optional[bool] = True,
     ) -> INCDataLoader:
         data_collator = data_collator if data_collator is not None else default_data_collator
         if remove_unused_columns:
@@ -394,7 +434,7 @@ class INCQuantizer(OptimumQuantizer):
             drop_last=False,
         )
 
-        return INCDataLoader.from_pytorch_dataloader(calibration_dataloader)
+        return INCDataLoader.from_pytorch_dataloader(calibration_dataloader, use_label)
 
     def _remove_unused_columns(self, dataset: Dataset):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
