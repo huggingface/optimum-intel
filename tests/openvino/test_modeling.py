@@ -566,7 +566,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         # "camembert",
         # "convbert",
         # "data2vec_text",
-        # "deberta",
+        "deberta",
         # "deberta_v2",
         "distilbert",
         "electra",
