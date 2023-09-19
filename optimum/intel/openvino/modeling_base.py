@@ -20,15 +20,16 @@ from typing import Dict, Optional, Union
 
 import openvino
 from huggingface_hub import hf_hub_download
+from openvino import Core, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from openvino.runtime import Core
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from optimum.exporters.onnx import OnnxConfig, export
+from optimum.exporters.onnx import OnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.modeling_base import OptimizedModel
 
+from ...exporters.openvino import export
 from ..utils.import_utils import is_transformers_version
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
@@ -127,9 +128,7 @@ class OVBaseModel(PreTrainedModel):
 
         if isinstance(file_name, str):
             file_name = Path(file_name)
-        bin_file_name = file_name.with_suffix(".bin") if file_name.suffix == ".xml" else None
-
-        model = core.read_model(file_name, bin_file_name)
+        model = core.read_model(file_name) if not file_name.suffix == ".onnx" else convert_model(file_name)
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
 
@@ -145,7 +144,7 @@ class OVBaseModel(PreTrainedModel):
                 The directory where to save the model files.
         """
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
-        openvino.runtime.serialize(self.model, dst_path)
+        openvino.save_model(self.model, dst_path, compress_to_fp16=False)
 
     @classmethod
     def _from_pretrained(
@@ -198,6 +197,7 @@ class OVBaseModel(PreTrainedModel):
         else:
             model_file_names = [file_name]
             # If not ONNX then OpenVINO IR
+
             if not from_onnx:
                 model_file_names.append(file_name.replace(".xml", ".bin"))
             file_names = []
@@ -276,7 +276,7 @@ class OVBaseModel(PreTrainedModel):
 
         onnx_config = onnx_config_class(model.config)
 
-        return cls._to_onnx_to_load(
+        return cls._to_load(
             model=model,
             config=config,
             onnx_config=onnx_config,
@@ -288,7 +288,7 @@ class OVBaseModel(PreTrainedModel):
         )
 
     @classmethod
-    def _to_onnx_to_load(
+    def _to_load(
         cls,
         model: PreTrainedModel,
         config: PretrainedConfig,
@@ -308,13 +308,13 @@ class OVBaseModel(PreTrainedModel):
             model=model,
             config=onnx_config,
             opset=onnx_config.DEFAULT_ONNX_OPSET,
-            output=save_dir_path / ONNX_WEIGHTS_NAME,
+            output=save_dir_path / OV_XML_FILE_NAME,
         )
 
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
-            from_onnx=True,
+            from_onnx=False,
             use_auth_token=use_auth_token,
             revision=revision,
             force_download=force_download,

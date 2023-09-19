@@ -36,7 +36,6 @@ from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
 
-from optimum.exporters.onnx import main_export
 from optimum.pipelines.diffusers.pipeline_stable_diffusion import StableDiffusionPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_img2img import StableDiffusionImg2ImgPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_inpaint import StableDiffusionInpaintPipelineMixin
@@ -51,6 +50,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
+from ...exporters.openvino import main_export
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
 from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME
@@ -159,7 +159,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             if ov_model is not None:
                 dst_path = save_directory / dst_path / OV_XML_FILE_NAME
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
-                openvino.runtime.serialize(ov_model.model, dst_path)
+                openvino.save_model(ov_model.model, dst_path, compress_to_fp16=False)
                 model_dir = ov_model.config.get("_name_or_path", None) or ov_model._model_dir / ov_model._model_name
                 config_path = Path(model_dir) / ov_model.CONFIG_NAME
                 if config_path.is_file():
@@ -315,7 +315,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
-            from_onnx=True,
+            from_onnx=False,
             use_auth_token=use_auth_token,
             revision=revision,
             force_download=force_download,
