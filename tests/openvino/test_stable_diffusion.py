@@ -25,7 +25,8 @@ from diffusers import (
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
 )
-from diffusers.utils import floats_tensor, load_image
+from diffusers.utils import load_image
+from diffusers.utils.testing_utils import floats_tensor
 from openvino.runtime.ie_api import CompiledModel
 from parameterized import parameterized
 from utils_tests import MODEL_NAMES, SEED

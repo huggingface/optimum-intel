@@ -412,7 +412,6 @@ class OVDecoder:
         # Add the encoder_hidden_states inputs when needed
         if "encoder_hidden_states" in self.input_names and encoder_hidden_states is not None:
             inputs["encoder_hidden_states"] = encoder_hidden_states
-
         # Run inference
         results = self.request.infer(inputs, share_inputs=True, share_outputs=True)
         logits = torch.from_numpy(results["logits"]).to(self.device)
