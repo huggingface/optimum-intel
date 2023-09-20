@@ -28,6 +28,7 @@ from huggingface_hub import hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
+from neural_compressor.model.onnx_model import ONNXModel
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
 from neural_compressor.utils.pytorch import load
@@ -56,6 +57,10 @@ from transformers.utils.generic import ContextManagers
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
+from optimum.onnxruntime import ORTModel
+from optimum.onnxruntime.modeling_decoder import ORTModelDecoder
+from optimum.onnxruntime.modeling_seq2seq import ORTModelForConditionalGeneration
+from optimum.onnxruntime.utils import ONNX_DECODER_NAME
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME
@@ -120,6 +125,7 @@ class INCQuantizer(OptimumQuantizer):
                 The random seed to use when shuffling the calibration dataset.
         """
         super().__init__()
+
         self._original_model = model
         self.eval_fn = eval_fn if eval_fn is not None else lambda model: 1
         self.calibration_fn = calibration_fn
@@ -170,7 +176,12 @@ class INCQuantizer(OptimumQuantizer):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         save_onnx_model = kwargs.pop("save_onnx_model", False)
-        output_path = save_directory.joinpath(file_name or WEIGHTS_NAME)
+
+        if save_onnx_model and isinstance(self._original_model, ORTModel):
+            save_onnx_model = False
+            logger.warning("Model provided is an ONNX model, `save_onnx_model` is set to False")
+
+        default_name = WEIGHTS_NAME if not isinstance(self._original_model, ORTModel) else ONNX_WEIGHTS_NAME
         calibration_dataloader = None
         self._set_task()
 
@@ -250,8 +261,26 @@ class INCQuantizer(OptimumQuantizer):
         if isinstance(self._original_model.config, PretrainedConfig):
             self._original_model.config.backend = quantization_config.backend
 
+        if isinstance(self._original_model, ORTModel):
+            # TODO : enable seq2seq models
+            if isinstance(self._original_model, ORTModelForConditionalGeneration):
+                raise RuntimeError("ORTModelForConditionalGeneration not supported for quantization")
+
+            if isinstance(self._original_model, ORTModelDecoder):
+                model_or_path = self._original_model.onnx_paths
+                if len(model_or_path) > 1:
+                    raise RuntimeError(
+                        f"Too many ONNX model files were found in {self._original_model.onnx_paths}, only `use_cache=False` is supported"
+                    )
+                model_or_path = str(model_or_path[0])
+                default_name = ONNX_DECODER_NAME
+            else:
+                model_or_path = str(self._original_model.model_path)
+        else:
+            model_or_path = self._original_model
+
         compressed_model = fit(
-            self._original_model,
+            model_or_path,
             conf=quantization_config,
             calib_dataloader=calibration_dataloader,
             eval_func=self.eval_fn,
@@ -263,6 +292,7 @@ class INCQuantizer(OptimumQuantizer):
                 "The maximum number of trials specified has been reached and no quantized model meeting the specified"
                 " accuracy tolerance has been found. Either the tolerance or the number of trials need to be increased."
             )
+
         if isinstance(self._original_model.config, PretrainedConfig):
             # If backend is IPEX, then the quantized model is JIT model which will drop the config attribute,
             # so need set config from original_model.
@@ -271,7 +301,7 @@ class INCQuantizer(OptimumQuantizer):
             if isinstance(compressed_model, IPEXModel):
                 model_config.torchscript = True
                 model_config.backend = "ipex"
-            else:
+            elif not isinstance(compressed_model, ONNXModel):
                 compressed_model._model.config = model_config
             model_config.save_pretrained(save_directory)
 
@@ -293,6 +323,7 @@ class INCQuantizer(OptimumQuantizer):
             # Export the compressed model to the ONNX format
             self._onnx_export(compressed_model, onnx_config, output_onnx_path)
 
+        output_path = save_directory.joinpath(file_name or default_name)
         # Save the quantized model
         self._save_pretrained(compressed_model, output_path)
         quantization_config = INCConfig(quantization=quantization_config, save_onnx_model=save_onnx_model)
@@ -302,13 +333,14 @@ class INCQuantizer(OptimumQuantizer):
     def _save_pretrained(model: Union[PyTorchModel, IPEXModel], output_path: str):
         if isinstance(model, IPEXModel):
             model._model.save(output_path)
-            logger.info(f"Model weights saved to {output_path}")
-            return
-        state_dict = model._model.state_dict()
+        elif isinstance(model, ONNXModel):
+            model.save(output_path)
+        else:
+            state_dict = model._model.state_dict()
+            if hasattr(model, "q_config"):
+                state_dict["best_configure"] = model.q_config
+            torch.save(state_dict, output_path)
 
-        if hasattr(model, "q_config"):
-            state_dict["best_configure"] = model.q_config
-        torch.save(state_dict, output_path)
         logger.info(f"Model weights saved to {output_path}")
 
     def _onnx_export(
