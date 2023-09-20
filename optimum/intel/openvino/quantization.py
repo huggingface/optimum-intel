@@ -167,10 +167,6 @@ class OVQuantizer(OptimumQuantizer):
             raise ValueError("`save_directory` needs to be specified")
 
         if weights_only:
-            if isinstance(self.model, OVBaseModel):
-                raise ValueError(
-                    "`weights_only` currently not supported for `OVModels`, only available for torch.nn.Module."
-                )
             if calibration_dataset is not None:
                 logger.warning(
                     "`calibration_dataset` was provided but will not be used as `weights_only` is set to `True`."
@@ -189,6 +185,7 @@ class OVQuantizer(OptimumQuantizer):
                 batch_size,
                 data_collator,
                 remove_unused_columns,
+                weights_only,
                 **kwargs,
             )
         elif isinstance(self.model, OVBaseModel):
@@ -198,6 +195,7 @@ class OVQuantizer(OptimumQuantizer):
                 batch_size,
                 data_collator,
                 remove_unused_columns,
+                weights_only,
                 **kwargs,
             )
         elif isinstance(self.model, torch.nn.Module):
@@ -221,10 +219,16 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        weights_only: bool = False,
         **kwargs,
     ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
+
+        if weights_only:
+            self.model.model = nncf.compress_weights(self.model.model)
+            self.model.save_pretrained(save_directory)
+            return
 
         calibration_dataloader = self._get_calibration_dataloader(
             calibration_dataset=calibration_dataset,
@@ -251,10 +255,16 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        weights_only: bool = False,
         **kwargs,
     ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
+
+        if weights_only:
+            self.model.model = nncf.compress_weights(self.model.model)
+            self.model.save_pretrained(save_directory)
+            return
 
         calibration_dataloader = self._get_calibration_dataloader(
             calibration_dataset=calibration_dataset,
