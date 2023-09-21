@@ -154,7 +154,8 @@ class OVBaseDecoderModel(OVModel):
         pkv_precision = Type.f32
         if not force_fp32:
             device = self._device.upper()
-            pkv_precision = core.get_property(device, "INFERENCE_PRECISION_HINT")
+            if "INFERENCE_PRECISION_HINT" in core.get_property(device, "SUPPORTED_PROPERTIES"):
+                pkv_precision = core.get_property(device, "INFERENCE_PRECISION_HINT")
             # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
             if self.ov_config:
                 inference_precision_hint = self.ov_config.get("INFERENCE_PRECISION_HINT", "")

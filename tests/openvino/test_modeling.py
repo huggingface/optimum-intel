@@ -558,6 +558,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model_without_pkv
         gc.collect()
 
+    def test_auto_device_loading(self):
+        model_id = MODEL_NAMES["gpt2"]
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, device="AUTO")
+        model.half()
+        self.assertEqual(model._device, "AUTO")
+        del model
+        gc.collect()
+
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
