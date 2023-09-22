@@ -347,7 +347,7 @@ class OVEncoder:
 
     def _compile(self):
         if self.request is None:
-            logger.info("Compiling the encoder...")
+            logger.info(f"Compiling the encoder to {self._device} ...")
             self.request = core.compile_model(self.model, self._device, self.ov_config)
 
 
@@ -442,5 +442,5 @@ class OVDecoder:
 
     def _compile(self):
         if self.request is None:
-            logger.info("Compiling the decoder...")
+            logger.info(f"Compiling the decoder to {self._device} ...")
             self.request = core.compile_model(self.model, self._device, self.ov_config).create_infer_request()

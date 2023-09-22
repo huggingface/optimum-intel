@@ -540,7 +540,7 @@ class OVModelPart:
 
     def _compile(self):
         if self.request is None:
-            logger.info(f"Compiling the {self._model_name}...")
+            logger.info(f"Compiling the {self._model_name} to {self.device} ...")
             self.request = core.compile_model(self.model, self.device, self.ov_config)
 
     @property
