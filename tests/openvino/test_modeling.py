@@ -560,11 +560,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_auto_device_loading(self):
         model_id = MODEL_NAMES["gpt2"]
-        model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, device="AUTO")
-        model.half()
-        self.assertEqual(model._device, "AUTO")
-        del model
-        gc.collect()
+        for device in ("AUTO", "AUTO:CPU"):
+            model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, device=device)
+            model.half()
+            self.assertEqual(model._device, device)
+            del model
+            gc.collect()
 
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):

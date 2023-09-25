@@ -43,17 +43,6 @@ core = Core()
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_DEVICES = {
-    "CPU",
-    "GPU",
-    "AUTO",
-    "AUTO:CPU,GPU",
-    "AUTO:GPU,CPU",
-    "MULTI",
-    "MULTI:CPU,GPU",
-    "MULTI:GPU,CPU",
-}
-
 
 # workaround to enable compatibility between openvino models and transformers pipelines
 class PreTrainedModel(OptimizedModel):
@@ -325,7 +314,7 @@ class OVBaseModel(PreTrainedModel):
 
     def compile(self):
         if self.request is None:
-            logger.info("Compiling the model...")
+            logger.info(f"Compiling the model to {self._device} ...")
             ov_config = {**self.ov_config}
             if "CACHE_DIR" not in self.ov_config.keys():
                 # Set default CACHE_DIR only if it is not set.
@@ -381,11 +370,6 @@ class OVBaseModel(PreTrainedModel):
         compress_model_transformation(self.model)
         self.request = None
         return self
-
-    def _ensure_supported_device(self, device: str = None):
-        device = device if device is not None else self._device
-        if device not in _SUPPORTED_DEVICES:
-            raise ValueError(f"Unknown device: {device}. Expected one of {_SUPPORTED_DEVICES}.")
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
