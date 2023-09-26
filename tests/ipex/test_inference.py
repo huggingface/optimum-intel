@@ -15,7 +15,6 @@
 import unittest
 
 import torch
-from parameterized import parameterized
 
 # TODO : add more tasks
 from transformers import (
@@ -29,6 +28,7 @@ from transformers import (
 
 from optimum.intel import inference_mode as ipex_inference_mode
 from optimum.intel.generation.modeling import TSModelForCausalLM
+from parameterized import parameterized
 
 
 MODEL_NAMES = {
@@ -56,12 +56,7 @@ class IPEXIntegrationTest(unittest.TestCase):
         "roberta",
     )
 
-    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
-        "gptj",
-        "gpt2",
-        "gpt_neo",
-        "gpt_bigcode"
-    )
+    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("gptj", "gpt2", "gpt_neo", "gpt_bigcode")
 
     QA_SUPPORTED_ARCHITECTURES = (
         "bert",
