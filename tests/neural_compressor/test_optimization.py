@@ -68,11 +68,11 @@ set_seed(SEED)
 class OptimizationTest(INCTestMixin):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         ("text-classification", "hf-internal-testing/tiny-random-BertForSequenceClassification", 21),
-        # ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 1), # TODO : enable causal lm task once INC ONNX export fixed
+        # ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 21), # TODO : enable causal lm task once INC ONNX export fixed
     )
 
     SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS + (
-        ("fill-mask", "hf-internal-testing/tiny-random-DistilBertForMaskedLM", 22),
+        ("fill-mask", "hf-internal-testing/tiny-random-BertForMaskedLM", 22),
         ("token-classification", "hf-internal-testing/tiny-random-AlbertForTokenClassification", 26),
     )
 
@@ -88,12 +88,13 @@ class OptimizationTest(INCTestMixin):
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         save_onnx_model = False
         quantized_model = None
+        model_kwargs = {"use_cache" : False, "use_io_binding": False} if task == "text-generation" else {}
         with tempfile.TemporaryDirectory() as tmp_dir:
             for backend in ["torch", "ort"]:
                 if backend == "torch":
                     model = model_class.auto_model_class.from_pretrained(model_name)
                 else:
-                    model = model_class.from_pretrained(model_name, export=True)
+                    model = model_class.from_pretrained(model_name, export=True, **model_kwargs)
 
                 quantizer = INCQuantizer.from_pretrained(model, task=task)
                 quantizer.quantize(

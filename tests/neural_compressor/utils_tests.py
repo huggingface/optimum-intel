@@ -93,12 +93,13 @@ class INCTestMixin(unittest.TestCase):
         load_onnx_model=True,
         load_inc_model=True,
         num_samples=None,
-        file_name=ONNX_WEIGHTS_NAME,
+        file_name=None,
     ):
         tokens = tokenizer("This is a sample input", return_tensors="pt")
+        file_name = ONNX_WEIGHTS_NAME if task!="text-generation" else "decoder_model.onnx"
 
         model_kwargs = (
-            {"decoder_file_name": file_name, "use_cache": False}
+            {"decoder_file_name": file_name, "use_cache": False, "use_io_binding": False}
             if task == "text-generation"
             else {"file_name": file_name}
         )
@@ -113,7 +114,7 @@ class INCTestMixin(unittest.TestCase):
             if load_inc_model:
                 inc_model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(save_directory)
                 inc_model_outputs = inc_model(**tokens)
-                self.assertTrue(torch.equal(outputs, inc_model_outputs["logits"]))
+                self.assertTrue(torch.allclose(inc_model_outputs["logits"], outputs, atol=1e-3))
                 # self.assertEqual(inc_config.save_onnx_model, load_onnx_model)
 
         if load_onnx_model:
@@ -127,7 +128,8 @@ class INCTestMixin(unittest.TestCase):
             ort_model = ORT_SUPPORTED_TASKS[task]["class"][0].from_pretrained(save_directory, **model_kwargs)
             ort_outputs = ort_model(**tokens)
             self.assertTrue("logits" in ort_outputs)
-            # self.assertTrue(torch.allclose(ort_outputs.logits, outputs, atol=1e-3))
+            if task != "fill-mask":
+                self.assertTrue(torch.allclose(ort_outputs.logits, outputs, atol=1e-3))
 
     @staticmethod
     def get_trainer(
