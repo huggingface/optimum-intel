@@ -82,7 +82,7 @@ To load the optimized model for inference:
 optimized_model = OVModelForCausalLM.from_pretrained(save_dir)
 ```
 
-Weights compression is currently enabled for PyTorch models: the starting model should be an `AutoModelForCausalLM` instance.
+Weights compression is enabled for PyTorch and OpenVINO models: the starting model can be an `AutoModelForCausalLM` or `OVModelForCausalLM` instance.
 
 ## Training-time optimization
 
