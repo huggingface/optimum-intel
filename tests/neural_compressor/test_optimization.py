@@ -88,7 +88,7 @@ class OptimizationTest(INCTestMixin):
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         save_onnx_model = False
         quantized_model = None
-        model_kwargs = {"use_cache" : False, "use_io_binding": False} if task == "text-generation" else {}
+        model_kwargs = {"use_cache": False, "use_io_binding": False} if task == "text-generation" else {}
         with tempfile.TemporaryDirectory() as tmp_dir:
             for backend in ["torch", "ort"]:
                 if backend == "torch":

@@ -96,7 +96,7 @@ class INCTestMixin(unittest.TestCase):
         file_name=None,
     ):
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        file_name = ONNX_WEIGHTS_NAME if task!="text-generation" else "decoder_model.onnx"
+        file_name = ONNX_WEIGHTS_NAME if task != "text-generation" else "decoder_model.onnx"
 
         model_kwargs = (
             {"decoder_file_name": file_name, "use_cache": False, "use_io_binding": False}
