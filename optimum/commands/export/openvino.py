@@ -43,7 +43,32 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument("--cache_dir", type=str, default=None, help="Path indicating where to store cache.")
+    optional_group.add_argument(
+        "--framework",
+        type=str,
+        choices=["pt", "tf"],
+        default=None,
+        help=(
+            "The framework to use for the export. If not provided, will attempt to use the local checkpoint's original framework or what is available in the environment."
+        ),
+    )
+    optional_group.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help=(
+            "Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories you trust and in which "
+            "you have read the code, as it will execute on your local machine arbitrary code present in the model repository."
 
+        ),
+    )
+    optional_group.add_argument(
+        "--pad-token-id",
+        type=int,
+        default=None,
+        help=(
+            "This is needed by some models, for some tasks. If not provided, will attempt to use the tokenizer to guess it."
+        ),
+    )
 
 class OVExportCommand(BaseOptimumCLICommand):
     COMMAND = CommandInfo(name="openvino", help="Export PyTorch models to OpenVINO IR.")
@@ -68,15 +93,14 @@ class OVExportCommand(BaseOptimumCLICommand):
     def run(self):
         from ...exporters.openvino.__main__ import main_export
 
+        # TODO : add input shapes
         main_export(
             model_name_or_path=self.args.model,
             output=self.args.output,
             task=self.args.task,
-            # fp16=self.args.fp16,
-            # no_post_process=self.args.no_post_process,
-            # framework=self.args.framework,
+            framework=self.args.framework,
             cache_dir=self.args.cache_dir,
-            # trust_remote_code=self.args.trust_remote_code,
-            # pad_token_id=self.args.pad_token_id,
+            trust_remote_code=self.args.trust_remote_code,
+            pad_token_id=self.args.pad_token_id,
             # **input_shapes,
         )
