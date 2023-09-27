@@ -27,12 +27,10 @@ from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from optimum.exporters import TasksManager
 from optimum.utils import NormalizedConfigManager
 
-from ...exporters.openvino import export, main_export
+from ...exporters.openvino import main_export
 from ..utils.import_utils import is_transformers_version
-from ..utils.modeling_utils import patch_decoder_attention_mask
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
@@ -244,7 +242,7 @@ class OVBaseDecoderModel(OVModel):
         config.is_decoder = True
         config.is_encoder_decoder = False
         config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(model_id=save_dir_path, config=config,  use_cache=use_cache, **kwargs)
+        return cls._from_pretrained(model_id=save_dir_path, config=config, use_cache=use_cache, **kwargs)
 
     def _reshape(
         self,

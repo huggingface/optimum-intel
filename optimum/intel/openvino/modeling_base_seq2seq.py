@@ -24,10 +24,7 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from optimum.exporters import TasksManager
-from optimum.exporters.onnx import get_encoder_decoder_models_for_export
-
-from ...exporters.openvino import export_models, main_export
+from ...exporters.openvino import main_export
 from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 from .utils import (
@@ -267,8 +264,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         )
 
         config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(model_id=save_dir_path, config=config,  use_cache=use_cache, **kwargs)
-
+        return cls._from_pretrained(model_id=save_dir_path, config=config, use_cache=use_cache, **kwargs)
 
     def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}

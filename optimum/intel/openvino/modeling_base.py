@@ -26,7 +26,6 @@ from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from optimum.exporters.onnx import OnnxConfig
-from optimum.exporters.tasks import TasksManager
 from optimum.modeling_base import OptimizedModel
 
 from ...exporters.openvino import export, main_export

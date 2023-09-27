@@ -26,6 +26,7 @@ from optimum.exporters.onnx import __main__ as optimum_main
 from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_save_preprocessors
+
 from ...intel.utils.modeling_utils import patch_decoder_attention_mask
 from .convert import export_models
 
@@ -214,7 +215,6 @@ def main_export(
             possible_synonyms = ""
         logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
 
-
     if not task.startswith("text-generation"):
         onnx_config, models_and_onnx_configs = optimum_main._get_submodels_and_onnx_configs(
             model=model,
@@ -229,9 +229,8 @@ def main_export(
         # TODO : ModelPatcher will be added in next optimum release
         model = patch_decoder_attention_mask(model)
 
-        use_cache = task.endswith("-with-past")
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_constructor(model.config) # TODO : optimum next release need use_past_in_inputs=use_cache
+        onnx_config = onnx_config_constructor(model.config)
         models_and_onnx_configs = {"model": (model, onnx_config)}
 
     if not is_stable_diffusion:
