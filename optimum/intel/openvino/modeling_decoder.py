@@ -133,6 +133,7 @@ class OVBaseDecoderModel(OVModel):
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
+        self._pkv_precision = Type.f32
         self.update_pkv_precision()
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
