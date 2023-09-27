@@ -94,13 +94,9 @@ class TimmForImageClassification(PreTrainedModel):
         return cls(config, **kwargs)
 
     def forward(self, pixel_values: Optional[torch.Tensor] = None):
-        logits = self.model(
-            pixel_values,
-        )
+        logits = self.model(pixel_values)
 
-        return ImageClassifierOutput(
-            logits=logits,
-        )
+        return ImageClassifierOutput(logits=logits)
 
 
 # Adapted from ViTImageProcessor - https://github.com/huggingface/transformers/blob/main/src/transformers/models/vit/image_processing_vit.py

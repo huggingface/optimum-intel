@@ -137,11 +137,7 @@ def export_tensorflow(model: Union["PreTrainedModel", "ModelMixin"], config: Onn
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
-    save_model(
-        ov_model,
-        output.parent / output,
-        compress_to_fp16=False,
-    )
+    save_model(ov_model, output.parent / output, compress_to_fp16=False)
     return input_names, output_names, True
 
 
