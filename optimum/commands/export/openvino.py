@@ -58,7 +58,6 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=(
             "Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories you trust and in which "
             "you have read the code, as it will execute on your local machine arbitrary code present in the model repository."
-
         ),
     )
     optional_group.add_argument(
@@ -69,6 +68,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "This is needed by some models, for some tasks. If not provided, will attempt to use the tokenizer to guess it."
         ),
     )
+
 
 class OVExportCommand(BaseOptimumCLICommand):
     COMMAND = CommandInfo(name="openvino", help="Export PyTorch models to OpenVINO IR.")

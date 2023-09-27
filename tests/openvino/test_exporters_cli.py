@@ -14,13 +14,11 @@
 import subprocess
 import unittest
 from tempfile import TemporaryDirectory
-from typing import Dict
 
 from parameterized import parameterized
 from utils_tests import MODEL_NAMES
 
 from optimum.exporters.openvino.__main__ import main_export
-from optimum.exporters.tasks import TasksManager
 
 
 class OVCLIExportTestCase(unittest.TestCase):
@@ -29,18 +27,18 @@ class OVCLIExportTestCase(unittest.TestCase):
     """
 
     SUPPORTED_ARCHITECTURES = (
-            ["causal-lm", "gpt2"],
-            ["causal-lm-with-past", "gpt2"],
-            ["seq2seq-lm", "t5"],
-            ["seq2seq-lm-with-past", "t5"],
-            ["sequence-classification", "bert"],
-            ["question-answering", "distilbert"],
-            ["masked-lm", "bert"],
-            ["default", "blenderbot"],
-            ["default-with-past", "blenderbot"],
-            ["stable-diffusion", "stable-diffusion"],
-            ["stable-diffusion-xl", "stable-diffusion-xl"],
-            ["stable-diffusion-xl", "stable-diffusion-xl-refiner"],
+        ["causal-lm", "gpt2"],
+        ["causal-lm-with-past", "gpt2"],
+        ["seq2seq-lm", "t5"],
+        ["seq2seq-lm-with-past", "t5"],
+        ["sequence-classification", "bert"],
+        ["question-answering", "distilbert"],
+        ["masked-lm", "bert"],
+        ["default", "blenderbot"],
+        ["default-with-past", "blenderbot"],
+        ["stable-diffusion", "stable-diffusion"],
+        ["stable-diffusion-xl", "stable-diffusion-xl"],
+        ["stable-diffusion-xl", "stable-diffusion-xl-refiner"],
     )
 
     def _openvino_export(self, model_name: str, task: str):
