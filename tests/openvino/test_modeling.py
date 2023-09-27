@@ -540,6 +540,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             )
 
         model_without_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
+        
         # Warmup
         _ = model_without_pkv.generate(**tokens)
         with Timer() as without_pkv_timer:
@@ -710,12 +711,8 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdirname:
             model_save_path = os.path.join(tmpdirname, "timm_ov_model")
             ov_model.save_pretrained(model_save_path)
-            new_ov_model = OVModelForImageClassification.from_pretrained(
-                model_save_path,
-            )
-            new_ov_model(
-                pixel_values=torch.zeros((5, 3, new_ov_model.config.image_size, new_ov_model.config.image_size))
-            )
+            model = OVModelForImageClassification.from_pretrained(model_save_path)
+            model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
         gc.collect()
 
 
