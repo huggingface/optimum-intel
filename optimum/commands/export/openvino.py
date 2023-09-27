@@ -13,7 +13,6 @@
 # limitations under the License.
 """Defines the command line for the export with OpenVINO."""
 
-import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -66,7 +65,6 @@ class OVExportCommand(BaseOptimumCLICommand):
     def parse_args(parser: "ArgumentParser"):
         return parse_args_openvino(parser)
 
-
     def run(self):
         from ...exporters.openvino.__main__ import main_export
 
@@ -75,7 +73,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             output=self.args.output,
             task=self.args.task,
             # fp16=self.args.fp16,
-            #no_post_process=self.args.no_post_process,
+            # no_post_process=self.args.no_post_process,
             # framework=self.args.framework,
             cache_dir=self.args.cache_dir,
             # trust_remote_code=self.args.trust_remote_code,
