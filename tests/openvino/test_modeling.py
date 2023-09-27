@@ -121,10 +121,11 @@ class OVModelIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
-    def test_load_from_hub_and_save_decoder_model(self):
+    @parameterized.expand((True, False))
+    def test_load_from_hub_and_save_decoder_model(self, use_cache):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_DECODER_MODEL_ID)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForCausalLM.from_pretrained(self.OV_DECODER_MODEL_ID, use_cache=True)
+        loaded_model = OVModelForCausalLM.from_pretrained(self.OV_DECODER_MODEL_ID, use_cache=use_cache)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         loaded_model_outputs = loaded_model(**tokens)
 
@@ -133,7 +134,8 @@ class OVModelIntegrationTest(unittest.TestCase):
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=True)
+            model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=use_cache)
+            self.assertEqual(model.use_cache, use_cache)
 
         outputs = model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
