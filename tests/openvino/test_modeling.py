@@ -542,7 +542,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             )
 
         model_without_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
-        
+
         # Warmup
         _ = model_without_pkv.generate(**tokens)
         with Timer() as without_pkv_timer:
