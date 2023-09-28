@@ -72,7 +72,7 @@ Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvi
 It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format easily:
 
 ```plain
-optimum-cli export openvino --model distilbert-base-uncased-finetuned-sst-2-english distilbert_sst2_openvino
+optimum-cli export openvino --model distilbert-base-uncased-finetuned-sst-2-english ov_distilbert
 ```
 
 #### Inference:
