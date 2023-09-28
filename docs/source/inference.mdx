@@ -22,16 +22,16 @@ Here is an example on how to perform inference with OpenVINO Runtime for a text 
 ```diff
 - from transformers import AutoModelForSequenceClassification
 + from optimum.intel import OVModelForSequenceClassification
-from transformers import AutoTokenizer, pipeline
+  from transformers import AutoTokenizer, pipeline
 
-model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+  model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 - model = AutoModelForSequenceClassification.from_pretrained(model_id)
 + model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-cls_pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
-outputs = cls_pipe("He's a dreadful magician.")
+  tokenizer = AutoTokenizer.from_pretrained(model_id)
+  cls_pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
+  outputs = cls_pipe("He's a dreadful magician.")
 
-[{'label': 'NEGATIVE', 'score': 0.9919503927230835}]
+  [{'label': 'NEGATIVE', 'score': 0.9919503927230835}]
 ```
 
 See the [reference documentation](reference_ov) for more information about parameters, and examples for different tasks.

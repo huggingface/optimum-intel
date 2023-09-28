@@ -54,10 +54,8 @@ To load a quantized model hosted locally or on the 🤗 hub, you can do as follo
 ```python
 from optimum.intel import INCModelForSequenceClassification
 
-# Load the PyTorch model hosted on the hub
-loaded_model_from_hub = INCModelForSequenceClassification.from_pretrained(
-    "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
-)
+model_id = "Intel/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic"
+model = INCModelForSequenceClassification.from_pretrained(model_id)
 ```
 
 You can load many more quantized models hosted on the hub under the Intel organization [`here`](https://huggingface.co/Intel).
@@ -69,6 +67,14 @@ For more details on the supported compression techniques, please refer to the [d
 
 Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework to accelerate inference.
 
+#### Export:
+
+It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format easily:
+
+```plain
+optimum-cli export openvino --model distilbert-base-uncased-finetuned-sst-2-english distilbert_sst2_openvino
+```
+
 #### Inference:
 
 To load a model and run inference with OpenVINO Runtime, you can just replace your `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
@@ -77,15 +83,16 @@ If you want to load a PyTorch checkpoint, set `export=True` to convert your mode
 ```diff
 - from transformers import AutoModelForSequenceClassification
 + from optimum.intel import OVModelForSequenceClassification
-from transformers import AutoTokenizer, pipeline
+  from transformers import AutoTokenizer, pipeline
 
-model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+  model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 - model = AutoModelForSequenceClassification.from_pretrained(model_id)
 + model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-cls_pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
-text = "He's a dreadful magician."
-outputs = cls_pipe(text)
+  tokenizer = AutoTokenizer.from_pretrained(model_id)
+  model.save_pretrained("./distilbert")
+
+  classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
+  results = classifier("He's a dreadful magician.")
 ```
 
 #### Post-training static quantization:
@@ -98,7 +105,7 @@ from optimum.intel import OVQuantizer, OVModelForSequenceClassification
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
-model = AutoModelForSequenceClassification.from_pretrained(model_id)    
+model = AutoModelForSequenceClassification.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 def preprocess_fn(examples, tokenizer):
     return tokenizer(
@@ -127,46 +134,46 @@ optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 Quantization aware training (QAT) is applied in order to simulate the effects of quantization during training, to alleviate its effects on the model’s accuracy. Here is an example on how to fine-tune a DistilBERT model on the sst-2 task while applying quantization aware training (QAT).
 
 ```diff
-import evaluate
-import numpy as np
-from datasets import load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
+  import evaluate
+  import numpy as np
+  from datasets import load_dataset
+  from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
 - from transformers import Trainer
 + from optimum.intel import OVConfig, OVModelForSequenceClassification, OVTrainer
 
-model_id = "distilbert-base-uncased-finetuned-sst-2-english"
-model = AutoModelForSequenceClassification.from_pretrained(model_id)    
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-dataset = load_dataset("glue", "sst2")
-dataset = dataset.map(
-    lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
-)
-metric = evaluate.load("glue", "sst2")
-compute_metrics = lambda p: metric.compute(
-    predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
-)
+  model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+  model = AutoModelForSequenceClassification.from_pretrained(model_id)
+  tokenizer = AutoTokenizer.from_pretrained(model_id)
+  dataset = load_dataset("glue", "sst2")
+  dataset = dataset.map(
+      lambda examples: tokenizer(examples["sentence"], padding=True, truncation=True, max_length=128), batched=True
+  )
+  metric = evaluate.load("glue", "sst2")
+  compute_metrics = lambda p: metric.compute(
+      predictions=np.argmax(p.predictions, axis=1), references=p.label_ids
+  )
 
-# The directory where the quantized model will be saved
-save_dir = "nncf_results"
+  # The directory where the quantized model will be saved
+  save_dir = "nncf_results"
 
-# Load the default quantization configuration detailing the quantization we wish to apply
+  # Load the default quantization configuration detailing the quantization we wish to apply
 + ov_config = OVConfig()
 
 - trainer = Trainer(
 + trainer = OVTrainer(
-    model=model,
-    args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
-    train_dataset=dataset["train"].select(range(300)),
-    eval_dataset=dataset["validation"],
-    compute_metrics=compute_metrics,
-    tokenizer=tokenizer,
-    data_collator=default_data_collator,
-+   ov_config=ov_config,
-+   task="text-classification",
-)
-train_result = trainer.train()
-metrics = trainer.evaluate()
-trainer.save_model()
+      model=model,
+      args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=True),
+      train_dataset=dataset["train"].select(range(300)),
+      eval_dataset=dataset["validation"],
+      compute_metrics=compute_metrics,
+      tokenizer=tokenizer,
+      data_collator=default_data_collator,
++     ov_config=ov_config,
++     task="text-classification",
+  )
+  train_result = trainer.train()
+  metrics = trainer.evaluate()
+  trainer.save_model()
 
 + optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```
