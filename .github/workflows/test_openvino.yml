@@ -32,6 +32,7 @@ jobs:
         python -m pip install --upgrade pip
         # install PyTorch CPU version to avoid installing CUDA packages on GitHub runner without GPU
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install openvino==2023.1.0
         pip install .[openvino,nncf,tests,diffusers]
     - name: Test with Pytest
       run: |
