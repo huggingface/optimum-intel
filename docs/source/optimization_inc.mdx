@@ -137,43 +137,43 @@ The `INCTrainer` is very similar to the 🤗 Transformers [`Trainer`](https://hu
 To apply quantization during training, you only need to create the appropriate configuration and pass it to the `INCTrainer`.
 
 ```diff
-import evaluate
-import numpy as np
-from datasets import load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
+  import evaluate
+  import numpy as np
+  from datasets import load_dataset
+  from transformers import AutoModelForSequenceClassification, AutoTokenizer, TrainingArguments, default_data_collator
 - from transformers import Trainer
 + from optimum.intel import INCModelForSequenceClassification, INCTrainer
 + from neural_compressor import QuantizationAwareTrainingConfig
 
-model_id = "distilbert-base-uncased-finetuned-sst-2-english"
-model = AutoModelForSequenceClassification.from_pretrained(model_id)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-dataset = load_dataset("glue", "sst2")
-dataset = dataset.map(lambda examples: tokenizer(examples["sentence"], padding=True, max_length=128), batched=True)
-metric = evaluate.load("glue", "sst2")
-compute_metrics = lambda p: metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
+  model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+  model = AutoModelForSequenceClassification.from_pretrained(model_id)
+  tokenizer = AutoTokenizer.from_pretrained(model_id)
+  dataset = load_dataset("glue", "sst2")
+  dataset = dataset.map(lambda examples: tokenizer(examples["sentence"], padding=True, max_length=128), batched=True)
+  metric = evaluate.load("glue", "sst2")
+  compute_metrics = lambda p: metric.compute(predictions=np.argmax(p.predictions, axis=1), references=p.label_ids)
 
-# The directory where the quantized model will be saved
-save_dir = "quantized_model"
+  # The directory where the quantized model will be saved
+  save_dir = "quantized_model"
 
-# The configuration detailing the quantization process
-+quantization_config = QuantizationAwareTrainingConfig()
+  # The configuration detailing the quantization process
++ quantization_config = QuantizationAwareTrainingConfig()
 
 - trainer = Trainer(
 + trainer = INCTrainer(
-    model=model,
-+   quantization_config=quantization_config,
-    args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
-    train_dataset=dataset["train"].select(range(300)),
-    eval_dataset=dataset["validation"],
-    compute_metrics=compute_metrics,
-    tokenizer=tokenizer,
-    data_collator=default_data_collator,
-)
+      model=model,
++     quantization_config=quantization_config,
+      args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
+      train_dataset=dataset["train"].select(range(300)),
+      eval_dataset=dataset["validation"],
+      compute_metrics=compute_metrics,
+      tokenizer=tokenizer,
+      data_collator=default_data_collator,
+  )
 
-train_result = trainer.train()
-metrics = trainer.evaluate()
-trainer.save_model()
+  train_result = trainer.train()
+  metrics = trainer.evaluate()
+  trainer.save_model()
 
 - model = AutoModelForSequenceClassification.from_pretrained(save_dir)
 + model = INCModelForSequenceClassification.from_pretrained(save_dir)
@@ -190,32 +190,32 @@ At the moment, pruning is applied on both the linear and the convolutional layer
 + from optimum.intel import INCTrainer
 + from neural_compressor import WeightPruningConfig
 
-# The configuration detailing the pruning process
+  # The configuration detailing the pruning process
 + pruning_config = WeightPruningConfig(
-+    pruning_type="magnitude",
-+    start_step=0,
-+    end_step=15,
-+    target_sparsity=0.2,
-+    pruning_scope="local",
++     pruning_type="magnitude",
++     start_step=0,
++     end_step=15,
++     target_sparsity=0.2,
++     pruning_scope="local",
 + )
 
 - trainer = Trainer(
 + trainer = INCTrainer(
-    model=model,
-+   pruning_config=pruning_config,
-    args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
-    train_dataset=dataset["train"].select(range(300)),
-    eval_dataset=dataset["validation"],
-    compute_metrics=compute_metrics,
-    tokenizer=tokenizer,
-    data_collator=default_data_collator,
-)
+      model=model,
++     pruning_config=pruning_config,
+      args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
+      train_dataset=dataset["train"].select(range(300)),
+      eval_dataset=dataset["validation"],
+      compute_metrics=compute_metrics,
+      tokenizer=tokenizer,
+      data_collator=default_data_collator,
+  )
 
-train_result = trainer.train()
-metrics = trainer.evaluate()
-trainer.save_model()
+  train_result = trainer.train()
+  metrics = trainer.evaluate()
+  trainer.save_model()
 
-model = AutoModelForSequenceClassification.from_pretrained(save_dir)
+  model = AutoModelForSequenceClassification.from_pretrained(save_dir)
 ```
 ### Knowledge distillation
 
@@ -233,21 +233,21 @@ To know more about the different supported methodologies, you can refer to the N
 
 - trainer = Trainer(
 + trainer = INCTrainer(
-    model=model,
-+   distillation_config=distillation_config,
-    args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
-    train_dataset=dataset["train"].select(range(300)),
-    eval_dataset=dataset["validation"],
-    compute_metrics=compute_metrics,
-    tokenizer=tokenizer,
-    data_collator=default_data_collator,
-)
+      model=model,
++     distillation_config=distillation_config,
+      args=TrainingArguments(save_dir, num_train_epochs=1.0, do_train=True, do_eval=False),
+      train_dataset=dataset["train"].select(range(300)),
+      eval_dataset=dataset["validation"],
+      compute_metrics=compute_metrics,
+      tokenizer=tokenizer,
+      data_collator=default_data_collator,
+  )
 
-train_result = trainer.train()
-metrics = trainer.evaluate()
-trainer.save_model()
+  train_result = trainer.train()
+  metrics = trainer.evaluate()
+  trainer.save_model()
 
-model = AutoModelForSequenceClassification.from_pretrained(save_dir)
+  model = AutoModelForSequenceClassification.from_pretrained(save_dir)
 ```
 
 ## Loading a quantized model

@@ -67,14 +67,6 @@ For more details on the supported compression techniques, please refer to the [d
 
 Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework to accelerate inference.
 
-#### Export:
-
-It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format easily:
-
-```plain
-optimum-cli export openvino --model distilbert-base-uncased-finetuned-sst-2-english ov_distilbert
-```
-
 #### Inference:
 
 To load a model and run inference with OpenVINO Runtime, you can just replace your `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
