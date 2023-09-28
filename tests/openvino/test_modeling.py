@@ -123,9 +123,10 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     @parameterized.expand((True, False))
     def test_load_from_hub_and_save_decoder_model(self, use_cache):
-        tokenizer = AutoTokenizer.from_pretrained(self.OV_DECODER_MODEL_ID)
+        model_id = "vuiseng9/ov-gpt2-fp32-kv-cache" if use_cache else "vuiseng9/ov-gpt2-fp32-no-cache"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForCausalLM.from_pretrained(self.OV_DECODER_MODEL_ID, use_cache=use_cache)
+        loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         loaded_model_outputs = loaded_model(**tokens)
 
