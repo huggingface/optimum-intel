@@ -78,7 +78,7 @@ STR_TO_OV_TYPE = {
 
 
 _HEAD_TO_AUTOMODELS = {
-    "feature-extraction" : "OVModelForFeatureExtraction",
+    "feature-extraction": "OVModelForFeatureExtraction",
     "fill-mask": "OVModelForMaskedLM",
     "text-generation": "OVModelForCausalLM",
     "text2text-generation": "OVModelForSeq2SeqLM",

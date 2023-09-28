@@ -19,8 +19,7 @@ from parameterized import parameterized
 from utils_tests import MODEL_NAMES
 
 from optimum.exporters.openvino.__main__ import main_export
-from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
-from optimum.intel import (
+from optimum.intel import (  # noqa
     OVModelForAudioClassification,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
@@ -33,6 +32,8 @@ from optimum.intel import (
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
+from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
+
 
 class OVCLIExportTestCase(unittest.TestCase):
     """
@@ -66,11 +67,11 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli(self, task: str, model_type: str):
-        with TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdirname}",
                 shell=True,
                 check=True,
             )
-            model_kwargs = {"use_cache" : task.endswith("with-past")} if "generation" in task else {}
-            ov_model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdirname, **model_kwargs)
+            model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
