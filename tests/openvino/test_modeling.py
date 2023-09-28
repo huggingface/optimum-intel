@@ -121,10 +121,12 @@ class OVModelIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
-    def test_load_from_hub_and_save_decoder_model(self):
-        tokenizer = AutoTokenizer.from_pretrained(self.OV_DECODER_MODEL_ID)
+    @parameterized.expand((True, False))
+    def test_load_from_hub_and_save_decoder_model(self, use_cache):
+        model_id = "vuiseng9/ov-gpt2-fp32-kv-cache" if use_cache else "vuiseng9/ov-gpt2-fp32-no-cache"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForCausalLM.from_pretrained(self.OV_DECODER_MODEL_ID, use_cache=True)
+        loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         loaded_model_outputs = loaded_model(**tokens)
 
@@ -133,7 +135,8 @@ class OVModelIntegrationTest(unittest.TestCase):
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=True)
+            model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=use_cache)
+            self.assertEqual(model.use_cache, use_cache)
 
         outputs = model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
@@ -540,6 +543,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             )
 
         model_without_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
+
         # Warmup
         _ = model_without_pkv.generate(**tokens)
         with Timer() as without_pkv_timer:
@@ -710,12 +714,8 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdirname:
             model_save_path = os.path.join(tmpdirname, "timm_ov_model")
             ov_model.save_pretrained(model_save_path)
-            new_ov_model = OVModelForImageClassification.from_pretrained(
-                model_save_path,
-            )
-            new_ov_model(
-                pixel_values=torch.zeros((5, 3, new_ov_model.config.image_size, new_ov_model.config.image_size))
-            )
+            model = OVModelForImageClassification.from_pretrained(model_save_path)
+            model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
         gc.collect()
 
 
