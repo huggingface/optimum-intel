@@ -69,7 +69,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdirname}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
                 shell=True,
                 check=True,
             )
