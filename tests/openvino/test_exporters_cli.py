@@ -19,6 +19,20 @@ from parameterized import parameterized
 from utils_tests import MODEL_NAMES
 
 from optimum.exporters.openvino.__main__ import main_export
+from optimum.intel import (  # noqa
+    OVModelForAudioClassification,
+    OVModelForCausalLM,
+    OVModelForFeatureExtraction,
+    OVModelForImageClassification,
+    OVModelForMaskedLM,
+    OVModelForQuestionAnswering,
+    OVModelForSeq2SeqLM,
+    OVModelForSequenceClassification,
+    OVModelForTokenClassification,
+    OVStableDiffusionPipeline,
+    OVStableDiffusionXLPipeline,
+)
+from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
 
 class OVCLIExportTestCase(unittest.TestCase):
@@ -27,15 +41,17 @@ class OVCLIExportTestCase(unittest.TestCase):
     """
 
     SUPPORTED_ARCHITECTURES = (
-        ["causal-lm", "gpt2"],
-        ["causal-lm-with-past", "gpt2"],
-        ["seq2seq-lm", "t5"],
-        ["seq2seq-lm-with-past", "t5"],
-        ["sequence-classification", "bert"],
+        ["text-generation", "gpt2"],
+        ["text-generation-with-past", "gpt2"],
+        ["text2text-generation", "t5"],
+        ["text2text-generation-with-past", "t5"],
+        ["text-classification", "bert"],
         ["question-answering", "distilbert"],
-        ["masked-lm", "bert"],
-        ["default", "blenderbot"],
-        ["default-with-past", "blenderbot"],
+        ["token-classification", "roberta"],
+        ["image-classification", "vit"],
+        ["audio-classification", "wav2vec2"],
+        ["fill-mask", "bert"],
+        ["feature-extraction", "blenderbot"],
         ["stable-diffusion", "stable-diffusion"],
         ["stable-diffusion-xl", "stable-diffusion-xl"],
         ["stable-diffusion-xl", "stable-diffusion-xl-refiner"],
@@ -51,9 +67,11 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli(self, task: str, model_type: str):
-        with TemporaryDirectory() as tmpdirname:
+        with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdirname}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
                 shell=True,
                 check=True,
             )
+            model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)

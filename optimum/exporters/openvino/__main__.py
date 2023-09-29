@@ -27,6 +27,7 @@ from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_save_preprocessors
 
+from ...intel.utils.modeling_utils import patch_decoder_attention_mask
 from .convert import export_models
 
 
@@ -213,15 +214,24 @@ def main_export(
         else:
             possible_synonyms = ""
         logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
-    onnx_config, models_and_onnx_configs = optimum_main._get_submodels_and_onnx_configs(
-        model=model,
-        task=task,
-        monolith=False,
-        custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
-        custom_architecture=custom_architecture,
-        fn_get_submodels=fn_get_submodels,
-        _variant="default",
-    )
+
+    if not task.startswith("text-generation"):
+        onnx_config, models_and_onnx_configs = optimum_main._get_submodels_and_onnx_configs(
+            model=model,
+            task=task,
+            monolith=False,
+            custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
+            custom_architecture=custom_architecture,
+            fn_get_submodels=fn_get_submodels,
+            _variant="default",
+        )
+    else:
+        # TODO : ModelPatcher will be added in next optimum release
+        model = patch_decoder_attention_mask(model)
+
+        onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
+        onnx_config = onnx_config_constructor(model.config)
+        models_and_onnx_configs = {"model": (model, onnx_config)}
 
     if not is_stable_diffusion:
         needs_pad_token_id = (
@@ -254,7 +264,7 @@ def main_export(
                 f" referring to `optimum.exporters.tasks.TaskManager`'s `_TASKS_TO_AUTOMODELS`."
             )
 
-        files_subpaths = None
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_onnx_configs.keys()]
     else:
         # save the subcomponent configuration
         for model_name in models_and_onnx_configs:

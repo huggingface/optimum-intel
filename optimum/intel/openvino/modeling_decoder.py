@@ -27,12 +27,10 @@ from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from optimum.exporters import TasksManager
 from optimum.utils import NormalizedConfigManager
 
-from ...exporters.openvino import export
+from ...exporters.openvino import main_export
 from ..utils.import_utils import is_transformers_version
-from ..utils.modeling_utils import patch_decoder_attention_mask
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
@@ -219,43 +217,32 @@ class OVBaseDecoderModel(OVModel):
                 f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures were "
                 "validated, use at your own risk."
             )
-        task = task or cls.export_feature
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
-        model_kwargs = {
-            "revision": revision,
-            "use_auth_token": use_auth_token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "trust_remote_code": trust_remote_code,
-        }
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+
+        if task is None:
+            task = cls.export_feature
+
+            if use_cache:
+                task = task + "-with-past"
+
+        main_export(
+            model_name_or_path=model_id,
+            output=save_dir_path,
+            task=task,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            use_auth_token=use_auth_token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+        )
+
         config.is_decoder = True
         config.is_encoder_decoder = False
-        onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
-
-        # TODO : create ModelPatcher to patch each architecture
-        model = patch_decoder_attention_mask(model)
-
-        # Export the model to the OpenVINO IR format
-        export(model=model, config=onnx_config, output=save_dir_path / OV_XML_FILE_NAME)
-
-        return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            from_onnx=False,
-            use_auth_token=use_auth_token,
-            revision=revision,
-            force_download=force_download,
-            cache_dir=cache_dir,
-            file_name=OV_XML_FILE_NAME,
-            local_files_only=local_files_only,
-            use_cache=use_cache,
-            **kwargs,
-        )
+        config.save_pretrained(save_dir_path)
+        return cls._from_pretrained(model_id=save_dir_path, config=config, use_cache=use_cache, **kwargs)
 
     def _reshape(
         self,

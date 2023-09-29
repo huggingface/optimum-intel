@@ -24,10 +24,7 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from optimum.exporters import TasksManager
-from optimum.exporters.onnx import get_encoder_decoder_models_for_export
-
-from ...exporters.openvino import export_models
+from ...exporters.openvino import main_export
 from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 from .utils import (
@@ -244,55 +241,30 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        task = task or cls.export_feature
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
-        model_kwargs = {
-            "revision": revision,
-            "use_auth_token": use_auth_token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "trust_remote_code": trust_remote_code,
-        }
+        if task is None:
+            task = cls.export_feature
 
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
-        models_and_onnx_configs = get_encoder_decoder_models_for_export(model, onnx_config)
-        encoder_file_name = os.path.join("encoder", OV_ENCODER_NAME)
-        decoder_file_name = os.path.join("decoder", OV_DECODER_NAME)
-        decoder_with_past_file_name = os.path.join("decoder_with_past", OV_DECODER_WITH_PAST_NAME)
+            if use_cache:
+                task = task + "-with-past"
 
-        output_names = [encoder_file_name, decoder_file_name]
-        if use_cache is True:
-            output_names.append(decoder_with_past_file_name)
-
-        export_models(
-            models_and_onnx_configs=models_and_onnx_configs,
-            opset=onnx_config.DEFAULT_ONNX_OPSET,
-            output_dir=save_dir_path,
-            output_names=output_names,
-        )
-
-        return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            use_cache=use_cache,
-            from_onnx=False,
-            use_auth_token=use_auth_token,
+        main_export(
+            model_name_or_path=model_id,
+            output=save_dir_path,
+            task=task,
+            subfolder=subfolder,
             revision=revision,
-            force_download=force_download,
             cache_dir=cache_dir,
-            encoder_file_name=encoder_file_name,
-            decoder_file_name=decoder_file_name,
-            decoder_with_past_file_name=decoder_with_past_file_name,
+            use_auth_token=use_auth_token,
             local_files_only=local_files_only,
-            **kwargs,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
         )
+
+        config.save_pretrained(save_dir_path)
+        return cls._from_pretrained(model_id=save_dir_path, config=config, use_cache=use_cache, **kwargs)
 
     def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}
