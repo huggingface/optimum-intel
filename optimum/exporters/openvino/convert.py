@@ -60,6 +60,7 @@ def export(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    fp16: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -101,6 +102,7 @@ def export(
             device=device,
             input_shapes=input_shapes,
             model_kwargs=model_kwargs,
+            fp16=fp16,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -111,7 +113,7 @@ def export(
             raise RuntimeError("`tf2onnx` does not support export on CUDA device.")
         if input_shapes is not None:
             logger.info("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
-        return export_tensorflow(model, config, opset, output)
+        return export_tensorflow(model, config, opset, output, fp16=fp16)
 
     else:
         raise RuntimeError(
@@ -119,7 +121,13 @@ def export(
         )
 
 
-def export_tensorflow(model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, opset: int, output: Path):
+def export_tensorflow(
+    model: Union["PreTrainedModel", "ModelMixin"],
+    config: OnnxConfig,
+    opset: int,
+    output: Path,
+    fp16: bool = False,
+):
     """
     Export the TensorFlow model to OpenVINO format.
 
@@ -137,7 +145,7 @@ def export_tensorflow(model: Union["PreTrainedModel", "ModelMixin"], config: Onn
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
-    save_model(ov_model, output.parent / output, compress_to_fp16=False)
+    save_model(ov_model, output.parent / output, compress_to_fp16=fp16)
     return input_names, output_names, True
 
 
@@ -149,6 +157,7 @@ def export_pytorch_via_onnx(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    fp16: bool = False,
 ):
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation via ONNX export.
@@ -190,7 +199,7 @@ def export_pytorch_via_onnx(
     save_model(
         ov_model,
         output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
-        compress_to_fp16=False,
+        compress_to_fp16=fp16,
     )
     return input_names, output_names, True
 
@@ -203,6 +212,7 @@ def export_pytorch(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    fp16: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -297,7 +307,9 @@ def export_pytorch(
                 ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
-            return export_pytorch_via_onnx(model, config, opset, output, device, input_shapes, model_kwargs)
+            return export_pytorch_via_onnx(
+                model, config, opset, output, device, input_shapes, model_kwargs, fp16=fp16
+            )
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         ordered_input_names = list(inputs)
         flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
@@ -318,7 +330,7 @@ def export_pytorch(
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
-        save_model(ov_model, output, compress_to_fp16=False)
+        save_model(ov_model, output, compress_to_fp16=fp16)
         clear_class_registry()
         del model
         gc.collect()
@@ -335,6 +347,7 @@ def export_models(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    fp16: bool = False,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -379,6 +392,7 @@ def export_models(
                 device=device,
                 input_shapes=input_shapes,
                 model_kwargs=model_kwargs,
+                fp16=fp16,
             )
         )
 

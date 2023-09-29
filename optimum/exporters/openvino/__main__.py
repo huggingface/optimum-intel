@@ -19,24 +19,25 @@ from typing import Any, Callable, Dict, Optional, Union
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoTokenizer
-from transformers.utils import is_torch_available
 
+import openvino
+from openvino import Core
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import __main__ as optimum_main
 from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_save_preprocessors
 
+from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import patch_decoder_attention_mask
 from .convert import export_models
 
 
+core = Core()
+
 OV_XML_FILE_NAME = "openvino_model.xml"
 
 logger = logging.getLogger(__name__)
-
-if is_torch_available():
-    import torch
 
 
 def main_export(
@@ -57,6 +58,7 @@ def main_export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_onnx_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
+    int8: Optional[bool] = False,
     **kwargs_shapes,
 ):
     """
@@ -123,6 +125,19 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_onnx/")
     ```
     """
+    if int8:
+        if fp16:
+            raise ValueError(
+                "Both `fp16` and `int8` were both set to `True`, please select only one of these options."
+            )
+
+        if not is_nncf_available():
+            raise ImportError(
+                "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
+            )
+
+        import nncf
+
     output = Path(output)
     if not output.exists():
         output.mkdir(parents=True)
@@ -138,8 +153,6 @@ def main_export(
         input_shapes[input_name] = (
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
-
-    torch_dtype = None if fp16 is False else torch.float16
 
     if task == "auto":
         try:
@@ -164,7 +177,6 @@ def main_export(
         force_download=force_download,
         trust_remote_code=trust_remote_code,
         framework=framework,
-        torch_dtype=torch_dtype,
         device=device,
     )
 
@@ -299,5 +311,18 @@ def main_export(
         output_names=files_subpaths,
         input_shapes=input_shapes,
         device=device,
+        fp16=fp16,
         model_kwargs=model_kwargs,
     )
+    del models_and_onnx_configs
+
+    if int8:
+        for model_path in files_subpaths:
+            model = core.read_model(output / model_path)
+            model = nncf.compress_weights(model)
+
+            for filename in (model_path, model_path.replace("xml", "bin")):
+                os.remove(output / filename)
+
+            openvino.save_model(model, output / model_path, compress_to_fp16=False)
+            del model
