@@ -117,7 +117,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task.startswith("text2text-generation"):
                 models = [model.encoder, model.decoder]
                 if task.endswith("with-past"):
-                    model.append(model.decoder_with_past)
+                    models.append(model.decoder_with_past)
             elif task.startswith("stable-diffusion"):
                 models = [model.unet, model.vae_encoder, model.vae_decoder]
                 models.append(model.text_encoder if task == "stable-diffusion" else model.text_encoder_2)
