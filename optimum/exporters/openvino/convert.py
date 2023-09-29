@@ -307,9 +307,7 @@ def export_pytorch(
                 ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
-            return export_pytorch_via_onnx(
-                model, config, opset, output, device, input_shapes, model_kwargs, fp16=fp16
-            )
+            return export_pytorch_via_onnx(model, config, opset, output, device, input_shapes, model_kwargs, fp16=fp16)
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         ordered_input_names = list(inputs)
         flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
