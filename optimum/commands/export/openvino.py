@@ -68,7 +68,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "This is needed by some models, for some tasks. If not provided, will attempt to use the tokenizer to guess it."
         ),
     )
-    optional_group.add_argument("--fp16", action="store_true", help="Compress weights to half precision"),
+    optional_group.add_argument("--fp16", action="store_true", help="Compress weights to fp16"),
     optional_group.add_argument("--int8", action="store_true", help="Compress weights to int8"),
 
 
