@@ -92,3 +92,16 @@ TENSOR_ALIAS_TO_TYPE = {
 }
 
 SEED = 42
+
+
+def get_num_quantized_nodes(ov_model):
+    num_fake_quantize = 0
+    num_int8 = 0
+    for elem in ov_model.model.get_ops():
+        print(elem.name)
+        if "FakeQuantize" in elem.name:
+            num_fake_quantize += 1
+        for i in range(elem.get_output_size()):
+            if "8" in elem.get_output_element_type(i).get_type_name():
+                num_int8 += 1
+    return num_fake_quantize, num_int8

@@ -42,23 +42,12 @@ from optimum.intel import (
     OVTrainer,
 )
 from optimum.intel.openvino.configuration import INT8_WEIGHT_COMPRESSION_CONFIG
+from utils_tests import get_num_quantized_nodes
 
 _TASK_TO_DATASET = {
     "text-generation": ("wikitext", "wikitext-2-raw-v1", "text"),
     "text-classification": ("glue", "sst2", "sentence"),
 }
-
-
-def get_num_quantized_nodes(ov_model):
-    num_fake_quantize = 0
-    num_int8 = 0
-    for elem in ov_model.model.get_ops():
-        if "FakeQuantize" in elem.name:
-            num_fake_quantize += 1
-        for i in range(elem.get_output_size()):
-            if "8" in elem.get_output_element_type(i).get_type_name():
-                num_int8 += 1
-    return num_fake_quantize, num_int8
 
 
 class OVQuantizerTest(unittest.TestCase):
@@ -164,7 +153,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir, weights_only=True)
             model = model_cls.from_pretrained(tmp_dir)
 
-            # TODO: uncomment once move to a newer version of NNCF which has some fixes
             _, num_int8 = get_num_quantized_nodes(model)
             self.assertEqual(expected_pt_int8, num_int8)
 
