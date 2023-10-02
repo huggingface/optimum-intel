@@ -238,9 +238,9 @@ def main_export(
         if load_in_8bit is None:
             if model_kwargs is None:
                 model_kwargs = {}
-             
+
             if model.num_parameters() >= _MAX_UNCOMPRESSED_DECODER_SIZE:
-                model_kwargs["load_in_8bit"] = True    
+                model_kwargs["load_in_8bit"] = True
             else:
                 model_kwargs["load_in_8bit"] = False
 
