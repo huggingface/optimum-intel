@@ -86,7 +86,6 @@ _SUPPORTED_ARCHITECTURES = {
     "pegasus",
 }
 
-
 @add_start_docstrings(
     """
     Base OVBaseDecoderModel class.
@@ -226,6 +225,7 @@ class OVBaseDecoderModel(OVModel):
             if use_cache:
                 task = task + "-with-past"
 
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -237,6 +237,7 @@ class OVBaseDecoderModel(OVModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
+            model_kwargs=kwargs,
         )
 
         config.is_decoder = True

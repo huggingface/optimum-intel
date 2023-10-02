@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from transformers.utils import is_tf_available, is_torch_available
 
+import nncf
+
 from openvino.runtime import PartialShape, save_model
 from openvino.runtime.utils.types import get_element_type
 from openvino.tools.ovc import convert_model
@@ -50,6 +52,12 @@ if is_diffusers_available():
 
 if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
+
+
+def _save_model(model, path: str, compress_to_fp16=False, load_in_8bit=False):
+    if load_in_8bit:
+        model = nncf.compress_weights(model)
+    save_model(model, path, compress_to_fp16)
 
 
 def export(
@@ -137,7 +145,7 @@ def export_tensorflow(model: Union["PreTrainedModel", "ModelMixin"], config: Onn
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
-    save_model(ov_model, output.parent / output, compress_to_fp16=False)
+    _save_model(ov_model, output.parent / output, compress_to_fp16=False, load_in_8bit=False)
     return input_names, output_names, True
 
 
@@ -187,10 +195,11 @@ def export_pytorch_via_onnx(
     )
     torch.onnx.export = orig_torch_onnx_export
     ov_model = convert_model(str(onnx_output))
-    save_model(
+    _save_model(
         ov_model,
         output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
         compress_to_fp16=False,
+        load_in_8bit=model_kwargs.get("load_in_8bit", False)
     )
     return input_names, output_names, True
 
@@ -314,11 +323,14 @@ def export_pytorch(
             dims = inputs[input_name]
 
             for dim in dims:
-                static_shape[dim] = -1
+                static_shape[dim] = -1  
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
-        save_model(ov_model, output, compress_to_fp16=False)
+        _save_model(ov_model,
+                   output,
+                   compress_to_fp16=False,
+                   load_in_8bit=model_kwargs.get("load_in_8bit", False))
         clear_class_registry()
         del model
         gc.collect()
