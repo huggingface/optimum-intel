@@ -19,7 +19,6 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import nncf
 from transformers.utils import is_tf_available, is_torch_available
 
 from openvino.runtime import PartialShape, save_model
@@ -29,6 +28,7 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
+from optimum.intel.openvino import is_nncf_available
 from optimum.utils import is_diffusers_available
 
 from .utils import (
@@ -55,6 +55,13 @@ if is_tf_available():
 
 def _save_model(model, path: str, compress_to_fp16=False, load_in_8bit=False):
     if load_in_8bit:
+        if not is_nncf_available():
+            logger.warning(
+                "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
+                "please install it with `pip install nncf`"
+            )
+        import nncf
+
         model = nncf.compress_weights(model)
     save_model(model, path, compress_to_fp16)
 
