@@ -150,6 +150,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 45, 22),
     )
 
+    UPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = ((OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 22),)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS)
     def test_automodel_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
         task = model_cls.export_feature
@@ -196,6 +198,18 @@ class OVWeightCompressionTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
+
+    @parameterized.expand(UPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
+    def test_ovmodel_load_with_compressed_weights(self, model_cls, model_name, expected_ov_int8):
+        model = model_cls.from_pretrained(model_name, export=True, load_in_8bit=True)
+        _, num_int8 = get_num_quantized_nodes(model)
+        self.assertEqual(expected_ov_int8, num_int8)
+
+    @parameterized.expand(UPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
+    def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_name, expected_ov_int8):
+        model = model_cls.from_pretrained(model_name, export=True, load_in_8bit=False)
+        _, num_int8 = get_num_quantized_nodes(model)
+        self.assertEqual(0, num_int8)
 
 
 class OVQuantizerQATest(unittest.TestCase):
