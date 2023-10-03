@@ -30,6 +30,7 @@ from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_o
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.utils import is_diffusers_available
 
+from ...intel.utils.import_utils import is_nncf_available
 from .utils import (
     OV_XML_FILE_NAME,
     clear_class_registry,
@@ -52,6 +53,19 @@ if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
+def _save_model(model, path: str, compress_to_fp16=False, load_in_8bit=False):
+    if load_in_8bit:
+        if not is_nncf_available():
+            logger.warning(
+                "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
+                "please install it with `pip install nncf`"
+            )
+        import nncf
+
+        model = nncf.compress_weights(model)
+    save_model(model, path, compress_to_fp16)
+
+
 def export(
     model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"],
     config: OnnxConfig,
@@ -61,6 +75,7 @@ def export(
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
     fp16: bool = False,
+    load_in_8bit: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -103,6 +118,7 @@ def export(
             input_shapes=input_shapes,
             model_kwargs=model_kwargs,
             fp16=fp16,
+            load_in_8bit=load_in_8bit,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -113,7 +129,7 @@ def export(
             raise RuntimeError("`tf2onnx` does not support export on CUDA device.")
         if input_shapes is not None:
             logger.info("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
-        return export_tensorflow(model, config, opset, output, fp16=fp16)
+        return export_tensorflow(model, config, opset, output)
 
     else:
         raise RuntimeError(
@@ -126,7 +142,6 @@ def export_tensorflow(
     config: OnnxConfig,
     opset: int,
     output: Path,
-    fp16: bool = False,
 ):
     """
     Export the TensorFlow model to OpenVINO format.
@@ -145,7 +160,7 @@ def export_tensorflow(
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
-    save_model(ov_model, output.parent / output, compress_to_fp16=fp16)
+    _save_model(ov_model, output.parent / output, compress_to_fp16=False, load_in_8bit=False)
     return input_names, output_names, True
 
 
@@ -158,6 +173,7 @@ def export_pytorch_via_onnx(
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
     fp16: bool = False,
+    load_in_8bit: bool = False,
 ):
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation via ONNX export.
@@ -196,10 +212,11 @@ def export_pytorch_via_onnx(
     )
     torch.onnx.export = orig_torch_onnx_export
     ov_model = convert_model(str(onnx_output))
-    save_model(
+    _save_model(
         ov_model,
         output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
         compress_to_fp16=fp16,
+        load_in_8bit=load_in_8bit,
     )
     return input_names, output_names, True
 
@@ -213,6 +230,7 @@ def export_pytorch(
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
     fp16: bool = False,
+    load_in_8bit: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -307,7 +325,7 @@ def export_pytorch(
                 ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
-            return export_pytorch_via_onnx(model, config, opset, output, device, input_shapes, model_kwargs, fp16=fp16)
+            return export_pytorch_via_onnx(model, config, opset, output, device, input_shapes, model_kwargs, fp16=fp16, load_in_8bit=load_in_8bit)
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         ordered_input_names = list(inputs)
         flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
@@ -328,7 +346,7 @@ def export_pytorch(
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
-        save_model(ov_model, output, compress_to_fp16=fp16)
+        _save_model(ov_model, output, compress_to_fp16=fp16, load_in_8bit=load_in_8bit)
         clear_class_registry()
         del model
         gc.collect()
@@ -346,6 +364,7 @@ def export_models(
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
     fp16: bool = False,
+    load_in_8bit: bool = False,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -391,6 +410,7 @@ def export_models(
                 input_shapes=input_shapes,
                 model_kwargs=model_kwargs,
                 fp16=fp16,
+                load_in_8bit=load_in_8bit,
             )
         )
 

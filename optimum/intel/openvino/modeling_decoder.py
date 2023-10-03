@@ -237,6 +237,7 @@ class OVBaseDecoderModel(OVModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
+            model_kwargs=kwargs,
         )
 
         config.is_decoder = True

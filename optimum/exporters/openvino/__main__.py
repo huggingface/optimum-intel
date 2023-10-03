@@ -37,6 +37,8 @@ core = Core()
 
 OV_XML_FILE_NAME = "openvino_model.xml"
 
+_MAX_UNCOMPRESSED_SIZE = 1e9
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,7 +60,7 @@ def main_export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_onnx_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
-    int8: Optional[bool] = False,
+    int8: Optional[bool] = None,
     **kwargs_shapes,
 ):
     """
@@ -137,6 +139,9 @@ def main_export(
             )
 
         import nncf
+
+    if model_kwargs is None:
+        model_kwargs = {}
 
     output = Path(output)
     if not output.exists():
@@ -245,6 +250,9 @@ def main_export(
         onnx_config = onnx_config_constructor(model.config)
         models_and_onnx_configs = {"model": (model, onnx_config)}
 
+    if int8 is None:
+        int8 = (model.num_parameters() if not is_stable_diffusion else model.unet.num_parameters()) >= _MAX_UNCOMPRESSED_SIZE
+
     if not is_stable_diffusion:
         needs_pad_token_id = (
             isinstance(onnx_config, OnnxConfigWithPast)
@@ -312,17 +320,6 @@ def main_export(
         input_shapes=input_shapes,
         device=device,
         fp16=fp16,
+        load_in_8bit=int8,
         model_kwargs=model_kwargs,
     )
-    del models_and_onnx_configs
-
-    if int8:
-        for model_path in files_subpaths:
-            model = core.read_model(output / model_path)
-            model = nncf.compress_weights(model)
-
-            for filename in (model_path, model_path.replace("xml", "bin")):
-                os.remove(output / filename)
-
-            openvino.save_model(model, output / model_path, compress_to_fp16=False)
-            del model
