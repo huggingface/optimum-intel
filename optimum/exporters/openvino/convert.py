@@ -30,6 +30,7 @@ from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_o
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.utils import is_diffusers_available
 
+from ...intel.utils.import_utils import is_nncf_available
 from .utils import (
     OV_XML_FILE_NAME,
     clear_class_registry,
@@ -50,6 +51,19 @@ if is_diffusers_available():
 
 if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
+
+
+def _save_model(model, path: str, compress_to_fp16=False, load_in_8bit=False):
+    if load_in_8bit:
+        if not is_nncf_available():
+            logger.warning(
+                "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
+                "please install it with `pip install nncf`"
+            )
+        import nncf
+
+        model = nncf.compress_weights(model)
+    save_model(model, path, compress_to_fp16)
 
 
 def export(
@@ -137,7 +151,7 @@ def export_tensorflow(model: Union["PreTrainedModel", "ModelMixin"], config: Onn
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
-    save_model(ov_model, output.parent / output, compress_to_fp16=False)
+    _save_model(ov_model, output.parent / output, compress_to_fp16=False, load_in_8bit=False)
     return input_names, output_names, True
 
 
@@ -187,10 +201,12 @@ def export_pytorch_via_onnx(
     )
     torch.onnx.export = orig_torch_onnx_export
     ov_model = convert_model(str(onnx_output))
-    save_model(
+    load_in_8bit = False if model_kwargs is None else model_kwargs.get("load_in_8bit", False)
+    _save_model(
         ov_model,
         output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
         compress_to_fp16=False,
+        load_in_8bit=load_in_8bit,
     )
     return input_names, output_names, True
 
@@ -318,7 +334,8 @@ def export_pytorch(
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
-        save_model(ov_model, output, compress_to_fp16=False)
+        load_in_8bit = False if model_kwargs is None else model_kwargs.get("load_in_8bit", False)
+        _save_model(ov_model, output, compress_to_fp16=False, load_in_8bit=load_in_8bit)
         clear_class_registry()
         del model
         gc.collect()
