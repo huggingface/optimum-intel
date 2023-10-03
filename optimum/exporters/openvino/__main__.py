@@ -234,11 +234,10 @@ def main_export(
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_constructor(model.config)
         models_and_onnx_configs = {"model": (model, onnx_config)}
+        if model_kwargs is None:
+            model_kwargs = {}
         load_in_8bit = model_kwargs.get("load_in_8bit", None)
         if load_in_8bit is None:
-            if model_kwargs is None:
-                model_kwargs = {}
-
             if model.num_parameters() >= _MAX_UNCOMPRESSED_DECODER_SIZE:
                 model_kwargs["load_in_8bit"] = True
             else:
