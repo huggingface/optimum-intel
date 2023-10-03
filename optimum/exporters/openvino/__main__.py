@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, Optional, Union
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoTokenizer
 
-import openvino
 from openvino import Core
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import __main__ as optimum_main
@@ -138,7 +137,6 @@ def main_export(
                 "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
             )
 
-        import nncf
 
     if model_kwargs is None:
         model_kwargs = {}
@@ -251,7 +249,9 @@ def main_export(
         models_and_onnx_configs = {"model": (model, onnx_config)}
 
     if int8 is None:
-        int8 = (model.num_parameters() if not is_stable_diffusion else model.unet.num_parameters()) >= _MAX_UNCOMPRESSED_SIZE
+        int8 = (
+            model.num_parameters() if not is_stable_diffusion else model.unet.num_parameters()
+        ) >= _MAX_UNCOMPRESSED_SIZE
 
     if not is_stable_diffusion:
         needs_pad_token_id = (
