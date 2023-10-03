@@ -320,6 +320,6 @@ def main_export(
         input_shapes=input_shapes,
         device=device,
         fp16=fp16,
-        load_in_8bit=int8,
+        int8=int8,
         model_kwargs=model_kwargs,
     )

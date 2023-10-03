@@ -219,6 +219,7 @@ class OVBaseModel(PreTrainedModel):
         local_files_only: bool = False,
         task: Optional[str] = None,
         trust_remote_code: bool = False,
+        # load_in_8bit: bool = False, # TODO : add int8
         **kwargs,
     ):
         """
