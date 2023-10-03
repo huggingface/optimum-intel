@@ -28,9 +28,9 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
-from optimum.intel.openvino import is_nncf_available
 from optimum.utils import is_diffusers_available
 
+from ...intel.utils.import_utils import is_nncf_available
 from .utils import (
     OV_XML_FILE_NAME,
     clear_class_registry,

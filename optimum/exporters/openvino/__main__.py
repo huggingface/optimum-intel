@@ -27,6 +27,7 @@ from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_save_preprocessors
 
+from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import patch_decoder_attention_mask
 from .convert import export_models
 
@@ -242,6 +243,11 @@ def main_export(
                 model_kwargs["load_in_8bit"] = True
             else:
                 model_kwargs["load_in_8bit"] = False
+        else:
+            if not is_nncf_available():
+                raise ImportError(
+                    "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
+                )
 
     if not is_stable_diffusion:
         needs_pad_token_id = (
