@@ -30,6 +30,7 @@ from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import patch_decoder_attention_mask
 from .convert import export_models
 
+
 OV_XML_FILE_NAME = "openvino_model.xml"
 
 _MAX_UNCOMPRESSED_SIZE = 1e9
@@ -243,7 +244,7 @@ def main_export(
         if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
             if is_nncf_available():
                 int8 = True
-                logger.info( "The model weights will be quantized to int8.")
+                logger.info("The model weights will be quantized to int8.")
             else:
                 logger.warning(
                     "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
