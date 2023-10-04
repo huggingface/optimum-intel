@@ -128,8 +128,7 @@ def main_export(
             "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
         )
 
-    if model_kwargs is None:
-        model_kwargs = {}
+    model_kwargs = model_kwargs or {}
 
     output = Path(output)
     if not output.exists():
