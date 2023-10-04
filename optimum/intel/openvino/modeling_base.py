@@ -26,11 +26,10 @@ from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from optimum.exporters.onnx import OnnxConfig
-from optimum.exporters.tasks import TasksManager
 from optimum.modeling_base import OptimizedModel
 
-from ...exporters.openvino import export
-from ..utils.import_utils import is_transformers_version
+from ...exporters.openvino import export, main_export
+from ..utils.import_utils import is_nncf_available, is_transformers_version
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
 
@@ -94,7 +93,7 @@ class OVBaseModel(PreTrainedModel):
             self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
     @staticmethod
-    def load_model(file_name: Union[str, Path]):
+    def load_model(file_name: Union[str, Path], load_in_8bit: bool = False):
         """
         Loads the model.
 
@@ -120,6 +119,15 @@ class OVBaseModel(PreTrainedModel):
         model = core.read_model(file_name) if not file_name.suffix == ".onnx" else convert_model(file_name)
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
+
+        if load_in_8bit:
+            if not is_nncf_available():
+                raise ImportError(
+                    "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
+                )
+            import nncf
+
+            model = nncf.compress_weights(model)
 
         return model
 
@@ -147,6 +155,7 @@ class OVBaseModel(PreTrainedModel):
         file_name: Optional[str] = None,
         from_onnx: bool = False,
         local_files_only: bool = False,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         """
@@ -204,7 +213,8 @@ class OVBaseModel(PreTrainedModel):
             model_save_dir = Path(model_cache_path).parent
             file_name = file_names[0]
 
-        model = cls.load_model(file_name)
+        model = cls.load_model(file_name, load_in_8bit=load_in_8bit)
+
         return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
 
     @classmethod
@@ -220,6 +230,7 @@ class OVBaseModel(PreTrainedModel):
         local_files_only: bool = False,
         task: Optional[str] = None,
         trust_remote_code: bool = False,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         """
@@ -240,41 +251,25 @@ class OVBaseModel(PreTrainedModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        task = task or cls.export_feature
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
 
-        model_kwargs = {
-            "revision": revision,
-            "use_auth_token": use_auth_token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "trust_remote_code": trust_remote_code,
-        }
-
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        model_type = model.config.model_type.replace("_", "-")
-
-        onnx_config_class = TasksManager.get_exporter_config_constructor(
-            exporter="onnx",
-            model=model,
-            task=task,
-            model_name=model_id,
-            model_type=model_type,
-        )
-
-        onnx_config = onnx_config_class(model.config)
-
-        return cls._to_load(
-            model=model,
-            config=config,
-            onnx_config=onnx_config,
-            use_auth_token=use_auth_token,
+        main_export(
+            model_name_or_path=model_id,
+            output=save_dir_path,
+            task=task or cls.export_feature,
+            subfolder=subfolder,
             revision=revision,
-            force_download=force_download,
             cache_dir=cache_dir,
+            use_auth_token=use_auth_token,
             local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+            int8=load_in_8bit,
         )
+
+        config.save_pretrained(save_dir_path)
+        return cls._from_pretrained(model_id=save_dir_path, config=config, load_in_8bit=load_in_8bit, **kwargs)
 
     @classmethod
     def _to_load(

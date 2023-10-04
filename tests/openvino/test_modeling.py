@@ -121,10 +121,12 @@ class OVModelIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
-    def test_load_from_hub_and_save_decoder_model(self):
-        tokenizer = AutoTokenizer.from_pretrained(self.OV_DECODER_MODEL_ID)
+    @parameterized.expand((True, False))
+    def test_load_from_hub_and_save_decoder_model(self, use_cache):
+        model_id = "vuiseng9/ov-gpt2-fp32-kv-cache" if use_cache else "vuiseng9/ov-gpt2-fp32-no-cache"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model = OVModelForCausalLM.from_pretrained(self.OV_DECODER_MODEL_ID, use_cache=True)
+        loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         loaded_model_outputs = loaded_model(**tokens)
 
@@ -133,7 +135,8 @@ class OVModelIntegrationTest(unittest.TestCase):
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=True)
+            model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=use_cache)
+            self.assertEqual(model.use_cache, use_cache)
 
         outputs = model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
@@ -246,8 +249,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        # TODO : Replace from_transformers with export for optimum-intel v1.8
-        model = OVModelForSequenceClassification.from_pretrained(model_id, from_transformers=True, compile=False)
+        model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, compile=False)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
         text = "This restaurant is awesome"
@@ -316,7 +318,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForQuestionAnswering.from_pretrained(model_id, from_transformers=True)
+        model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
         question = "What's my name?"
@@ -331,7 +333,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     def test_metric(self):
         model_id = "distilbert-base-cased-distilled-squad"
         set_seed(SEED)
-        ov_model = OVModelForQuestionAnswering.from_pretrained(model_id, from_transformers=True)
+        ov_model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
         transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         data = load_dataset("squad", split="validation").select(range(50))
@@ -382,7 +384,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForTokenClassification.from_pretrained(model_id, from_transformers=True)
+        model = OVModelForTokenClassification.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
         outputs = pipe("My Name is Arthur and I live in Lyon.")
@@ -430,7 +432,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForFeatureExtraction.from_pretrained(model_id, from_transformers=True)
+        model = OVModelForFeatureExtraction.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
         outputs = pipe("My Name is Arthur and I live in Lyon.")
@@ -487,7 +489,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = OVModelForCausalLM.from_pretrained(model_id, from_transformers=True, use_cache=False, compile=False)
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False, compile=False)
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         model.half()
@@ -540,6 +542,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             )
 
         model_without_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
+
         # Warmup
         _ = model_without_pkv.generate(**tokens)
         with Timer() as without_pkv_timer:
@@ -615,7 +618,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForMaskedLM.from_pretrained(model_id, from_transformers=True)
+        model = OVModelForMaskedLM.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
         outputs = pipe(f"This is a {tokenizer.mask_token}.")
@@ -672,7 +675,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForImageClassification.from_pretrained(model_id, from_transformers=True)
+        model = OVModelForImageClassification.from_pretrained(model_id, export=True)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
         outputs = pipe("http://images.cocodataset.org/val2017/000000039769.jpg")
@@ -710,12 +713,8 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdirname:
             model_save_path = os.path.join(tmpdirname, "timm_ov_model")
             ov_model.save_pretrained(model_save_path)
-            new_ov_model = OVModelForImageClassification.from_pretrained(
-                model_save_path,
-            )
-            new_ov_model(
-                pixel_values=torch.zeros((5, 3, new_ov_model.config.image_size, new_ov_model.config.image_size))
-            )
+            model = OVModelForImageClassification.from_pretrained(model_save_path)
+            model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
         gc.collect()
 
 
@@ -771,7 +770,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, compile=False)
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, compile=False)
         model.half()
         model.to("cpu")
         model.compile()
@@ -803,7 +802,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True)
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
@@ -827,14 +826,14 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
 
-        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=True)
+        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=True)
         _ = model_with_pkv.generate(**tokens)  # warmup
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, from_transformers=True, use_cache=False)
+        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=False)
         _ = model_without_pkv.generate(**tokens)  # warmup
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
@@ -904,7 +903,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForAudioClassification.from_pretrained(model_id, from_transformers=True)
+        model = OVModelForAudioClassification.from_pretrained(model_id, export=True)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
         outputs = pipe([np.random.random(16000)])

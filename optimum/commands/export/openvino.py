@@ -68,6 +68,8 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "This is needed by some models, for some tasks. If not provided, will attempt to use the tokenizer to guess it."
         ),
     )
+    optional_group.add_argument("--fp16", action="store_true", help="Compress weights to fp16"),
+    optional_group.add_argument("--int8", action="store_true", help="Compress weights to int8"),
 
 
 class OVExportCommand(BaseOptimumCLICommand):
@@ -102,5 +104,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             cache_dir=self.args.cache_dir,
             trust_remote_code=self.args.trust_remote_code,
             pad_token_id=self.args.pad_token_id,
+            fp16=self.args.fp16,
+            int8=self.args.int8,
             # **input_shapes,
         )

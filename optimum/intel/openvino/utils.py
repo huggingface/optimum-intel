@@ -78,6 +78,7 @@ STR_TO_OV_TYPE = {
 
 
 _HEAD_TO_AUTOMODELS = {
+    "feature-extraction": "OVModelForFeatureExtraction",
     "fill-mask": "OVModelForMaskedLM",
     "text-generation": "OVModelForCausalLM",
     "text2text-generation": "OVModelForSeq2SeqLM",
@@ -87,6 +88,7 @@ _HEAD_TO_AUTOMODELS = {
     "image-classification": "OVModelForImageClassification",
     "audio-classification": "OVModelForAudioClassification",
     "stable-diffusion": "OVStableDiffusionPipeline",
+    "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
 }
 
 
