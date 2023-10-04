@@ -16,7 +16,7 @@ import unittest
 from tempfile import TemporaryDirectory
 
 from parameterized import parameterized
-from utils_tests import MODEL_NAMES, get_num_quantized_nodes
+from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
 
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.intel import (  # noqa
@@ -34,21 +34,6 @@ from optimum.intel import (  # noqa
 )
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
-
-_ARCHITECTURES_TO_EXPECTED_INT8 = {
-    "bert": (34,),
-    "roberta": (34,),
-    "albert": (42,),
-    "vit": (31,),
-    "blenderbot": (35,),
-    "gpt2": (22,),
-    "wav2vec2": (15,),
-    "distilbert": (33,),
-    "t5": (32, 52, 42),
-    "stable-diffusion": (74, 4, 4, 32),
-    "stable-diffusion-xl": (148, 4, 4, 33),
-    "stable-diffusion-xl-refiner": (148, 4, 4, 33),
-}
 
 
 class OVCLIExportTestCase(unittest.TestCase):
