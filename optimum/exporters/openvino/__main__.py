@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, Optional, Union
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoTokenizer
 
-from openvino import Core
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import __main__ as optimum_main
 from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
@@ -30,9 +29,6 @@ from optimum.utils.save_utils import maybe_save_preprocessors
 from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import patch_decoder_attention_mask
 from .convert import export_models
-
-
-core = Core()
 
 OV_XML_FILE_NAME = "openvino_model.xml"
 
@@ -126,17 +122,10 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_onnx/")
     ```
     """
-    if int8:
-        if fp16:
-            raise ValueError(
-                "Both `fp16` and `int8` were both set to `True`, please select only one of these options."
-            )
-
-        if not is_nncf_available():
-            raise ImportError(
-                "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
-            )
-
+    if int8 and not is_nncf_available():
+        raise ImportError(
+            "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
+        )
 
     if model_kwargs is None:
         model_kwargs = {}
