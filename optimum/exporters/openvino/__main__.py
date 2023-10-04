@@ -238,9 +238,17 @@ def main_export(
         models_and_onnx_configs = {"model": (model, onnx_config)}
 
     if int8 is None:
-        int8 = (
-            model.num_parameters() if not is_stable_diffusion else model.unet.num_parameters()
-        ) >= _MAX_UNCOMPRESSED_SIZE
+        int8 = False
+        num_parameters = model.num_parameters() if not is_stable_diffusion else model.unet.num_parameters()
+        if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+            if is_nncf_available():
+                int8 = True
+                logger.info( "The model weights will be quantized to int8.")
+            else:
+                logger.warning(
+                    "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
+                    "please install it with `pip install nncf`"
+                )
 
     if not is_stable_diffusion:
         needs_pad_token_id = (

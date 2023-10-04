@@ -56,10 +56,10 @@ if is_tf_available():
 def _save_model(model, path: str, compress_to_fp16=False, load_in_8bit=False):
     if load_in_8bit:
         if not is_nncf_available():
-            logger.warning(
-                "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
-                "please install it with `pip install nncf`"
+            raise ImportError(
+                "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
             )
+
         import nncf
 
         model = nncf.compress_weights(model)
