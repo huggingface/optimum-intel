@@ -16,8 +16,6 @@ Optimum Intel can be used to load optimized models from the [Hugging Face Hub](h
 You can now easily perform inference with OpenVINO Runtime on a variety of Intel processors ([see](https://docs.openvino.ai/latest/openvino_docs_OV_UG_supported_plugins_Supported_Devices.html) the full list of supported devices). 
 For that, just replace the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
 
-### Supported tasks
-
 As shown in the table below, each task is associated with a class enabling to automatically load your model.
 
 | Task                                 | Auto Class                           |
@@ -38,25 +36,34 @@ As shown in the table below, each task is associated with a class enabling to au
 It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format with the CLI :
 
 ```bash
-optimum-cli export openvino --model distilbert-base-uncased-finetuned-sst-2-english ov_model
+optimum-cli export openvino --model gpt2 ov_model
 ```
 
-You can also load your PyTorch checkpoint and convert it to the OpenVINO format on-the-fly, by setting `export=True` when loading your model.
+The example above illustrates exporting a checkpoint from the 🤗 Hub. When exporting a local model, first make sure that you saved both the model’s weights and tokenizer files in the same directory (`local_path`).
+When using CLI, pass the `local_path` to the model argument instead of the checkpoint name of the model hosted on the Hub and provide the `--task` argument. You can review the list of supported tasks in the 🤗 [Optimum documentation](https://huggingface.co/docs/optimum/exporters/task_manager). If task argument is not provided, it will default to the model architecture without any task specific head.
+Here we set the `task` to `text-generation-with-past`, with the `-with-past` suffix enabling the re-use of the pre-computed key/values hidden-states `use_cache=True`.
 
-```python
-from optimum.intel import OVModelForSequenceClassification
-
-model_id = "distilbert-base-uncased-finetuned-sst-2-english"
-model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
-model.save_pretrained("ov_model")
+```bash
+optimum-cli export openvino --model local_path --task text-generation-with-past ov_model
 ```
 
 Once the model is exported, you can load the OpenVINO model using :
 
 ```python
-from optimum.intel import OVModelForSequenceClassification
+from optimum.intel import AutoModelForCausalLM
 
-model = OVModelForSequenceClassification.from_pretrained("ov_model")
+model_id = "helenai/gpt2-ov"
+model = AutoModelForCausalLM.from_pretrained(model_id)
+```
+
+You can also load your PyTorch checkpoint and convert it to the OpenVINO format on-the-fly, by setting `export=True` when loading your model.
+
+```python
+from optimum.intel import AutoModelForCausalLM
+
+model_id = "gpt2"
+model = AutoModelForCausalLM.from_pretrained(model_id, export=True)
+model.save_pretrained("ov_model")
 ```
 
 ### Inference
@@ -64,18 +71,16 @@ model = OVModelForSequenceClassification.from_pretrained("ov_model")
 You can load an OpenVINO hosted on the hub and perform inference, no need to adapt your code to get it to work with `OVModelForXxx` classes:
 
 ```diff
-- from transformers import AutoModelForSequenceClassification
-+ from optimum.intel import OVModelForSequenceClassification
+- from transformers import AutoModelForCausalLM
++ from optimum.intel import OVModelForCausalLM
   from transformers import AutoTokenizer, pipeline
 
-  model_id = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
-- model = AutoModelForSequenceClassification.from_pretrained(model_id)
-+ model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
+  model_id = "helenai/gpt2-ov"
+- model = AutoModelForCausalLM.from_pretrained(model_id)
++ model = OVModelForCausalLM.from_pretrained(model_id)
   tokenizer = AutoTokenizer.from_pretrained(model_id)
-  cls_pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
-  outputs = cls_pipe("He's a dreadful magician.")
-
-  [{'label': 'NEGATIVE', 'score': 0.9919503927230835}]
+  pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+  results = pipe("He's a dreadful magician and")
 ```
 
 See the [reference documentation](reference_ov) for more information about parameters, and examples for different tasks.
@@ -91,8 +96,23 @@ tokenizer.save_pretrained(save_directory)
 
 ### Weight only quantization
 
-For quantization both weight and activation checkout [`OVQuantizer`](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov#optimization)
+You can also apply INT8 quantization on your models weights when exporting your model by adding `--int8`:
 
+```bash
+optimum-cli export openvino --model gpt2 --int8 ov_model
+```
+
+This will results in the exported model linear and embedding layers to be quanrtized to INT8, while the activations will be kept in floating point precision.
+
+This can also be done when loading your model by setting `load_in_8bit=True`:
+
+```python
+from optimum.intel import OVModelForCausalLM
+
+model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
+```
+
+To apply quantization on both weights and activations, you can use the `OVQuantizer`, more information in the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov#optimization).
 
 ### Static shape
 
@@ -427,7 +447,7 @@ pipeline.save_pretrained("openvino-sd-xl-refiner-1.0")
 ```
 
 
-### Refining the image output
+#### Refining the image output
 
 The image can be refined by making use of a model like [stabilityai/stable-diffusion-xl-refiner-1.0](https://huggingface.co/stabilityai/stable-diffusion-xl-refiner-1.0). In this case, you only have to output the latents from the base model.
 
