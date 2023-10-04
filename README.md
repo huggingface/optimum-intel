@@ -72,13 +72,13 @@ Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvi
 It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format easily:
 
 ```plain
-optimum-cli export openvino --model distilbert-base-uncased-finetuned-sst-2-english ov_distilbert
+optimum-cli export openvino --model distilbert-base-uncased-finetuned-sst-2-english ov_model
 ```
 
-To apply int8 quantization on your model weights and keep the activations in floating point precision, you can add `--int8`:
+To apply INT8 quantization on the model weights and keep the activations in floating point precision, simply add `--int8`
 
 ```plain
-optimum-cli export openvino --model distilbert-base-uncased-finetuned-sst-2-english --int8 ov_distilbert
+optimum-cli export openvino --model distilbert-base-uncased-finetuned-sst-2-english --int8 ov_model
 ```
 
 

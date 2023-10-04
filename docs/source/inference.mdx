@@ -11,20 +11,64 @@ specific language governing permissions and limitations under the License.
 
 Optimum Intel can be used to load optimized models from the [Hugging Face Hub](https://huggingface.co/models?library=openvino&sort=downloads) and create pipelines to run inference with OpenVINO Runtime without rewriting your APIs.
 
-## Switching from Transformers to Optimum
+## Transformers models
 
 You can now easily perform inference with OpenVINO Runtime on a variety of Intel processors ([see](https://docs.openvino.ai/latest/openvino_docs_OV_UG_supported_plugins_Supported_Devices.html) the full list of supported devices). 
 For that, just replace the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
-To load a Transformers model and convert it to the OpenVINO format on-the-fly, you can set `export=True` when loading your model.
 
-Here is an example on how to perform inference with OpenVINO Runtime for a text classification class:
+### Supported tasks
+
+As shown in the table below, each task is associated with a class enabling to automatically load your model.
+
+| Task                                 | Auto Class                           |
+|--------------------------------------|--------------------------------------|
+| `text-classification`                | `OVModelForSequenceClassification`   |
+| `token-classification`               | `OVModelForTokenClassification`      |
+| `question-answering`                 | `OVModelForQuestionAnswering`        |
+| `audio-classification`               | `OVModelForAudioClassification`      |
+| `image-classification`               | `OVModelForImageClassification`      |
+| `feature-extraction`                 | `OVModelForFeatureExtraction`        |
+| `fill-mask`                          | `OVModelForMaskedLM`                 |
+| `text-generation`                    | `OVModelForCausalLM`                 |
+| `text2text-generation`               | `OVModelForSeq2SeqLM`                |
+
+
+### Export
+
+It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format with the CLI :
+
+```bash
+optimum-cli export openvino --model distilbert-base-uncased-finetuned-sst-2-english ov_model
+```
+
+You can also load your PyTorch checkpoint and convert it to the OpenVINO format on-the-fly, by setting `export=True` when loading your model.
+
+```python
+from optimum.intel import OVModelForSequenceClassification
+
+model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
+model.save_pretrained("ov_model")
+```
+
+Once the model is exported, you can load the OpenVINO model using :
+
+```python
+from optimum.intel import OVModelForSequenceClassification
+
+model = OVModelForSequenceClassification.from_pretrained("ov_model")
+```
+
+### Inference
+
+You can load an OpenVINO hosted on the hub and perform inference, no need to adapt your code to get it to work with `OVModelForXxx` classes:
 
 ```diff
 - from transformers import AutoModelForSequenceClassification
 + from optimum.intel import OVModelForSequenceClassification
   from transformers import AutoTokenizer, pipeline
 
-  model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+  model_id = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
 - model = AutoModelForSequenceClassification.from_pretrained(model_id)
 + model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
   tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -38,13 +82,19 @@ See the [reference documentation](reference_ov) for more information about param
 
 To easily save the resulting model, you can use the `save_pretrained()` method, which will save both the BIN and XML files describing the graph. It is useful to save the tokenizer to the same directory, to enable easy loading of the tokenizer for the model.
 
-
 ```python
 # Save the exported model
 save_directory = "openvino_distilbert"
 model.save_pretrained(save_directory)
 tokenizer.save_pretrained(save_directory)
 ```
+
+### Weight only quantization
+
+For quantization both weight and activation checkout [`OVQuantizer`](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov#optimization)
+
+
+### Static shape
 
 By default, `OVModelForXxx` support dynamic shapes, enabling inputs of every shapes. To speed up inference, static shapes can be enabled by giving the desired inputs shapes.
 
@@ -54,7 +104,6 @@ model.reshape(1, 9)
 # Compile the model before the first inference
 model.compile()
 ```
-
 
 When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape. When instantiating your pipeline, you can specify the maximum total input sequence length after tokenization in order for shorter sequences to be padded and for longer sequences to be truncated.
 
@@ -81,16 +130,7 @@ qa_pipe = pipeline(
 metric = task_evaluator.compute(model_or_pipeline=qa_pipe, data=eval_dataset, metric="squad")
 ```
 
-
-To run inference on Intel integrated or discrete GPU, use `.to("gpu")`. On GPU, models run in FP16 precision by default. (See [OpenVINO documentation](https://docs.openvino.ai/nightly/openvino_docs_install_guides_configurations_for_intel_gpu.html) about installing drivers for GPU inference).
-
-```python
-# Static shapes speed up inference
-model.reshape(1, 9)
-model.to("gpu")
-# Compile the model before the first inference
-model.compile()
-```
+### Compilation
 
 By default the model will be compiled when instantiating our `OVModel`. In the case where the model is reshaped or placed to another device, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by setting `compile=False`. The model can be compiled before the first inference with `model.compile()`.
 
@@ -106,6 +146,19 @@ model.reshape(1,128)
 model.compile()
 ```
 
+To run inference on Intel integrated or discrete GPU, use `.to("gpu")`. On GPU, models run in FP16 precision by default. (See [OpenVINO documentation](https://docs.openvino.ai/nightly/openvino_docs_install_guides_configurations_for_intel_gpu.html) about installing drivers for GPU inference).
+
+```python
+# Static shapes speed up inference
+model.reshape(1, 9)
+model.to("gpu")
+# Compile the model before the first inference
+model.compile()
+```
+
+### Configuration
+
+
 It is possible to pass an `ov_config` parameter to `from_pretrained()` with custom OpenVINO configuration values. This can be used for example to enable full precision inference on devices where FP16 or BF16 inference precision is used by default.
 
 
@@ -120,7 +173,7 @@ Optimum Intel leverages OpenVINO's model caching to speed up model compiling. By
 model = OVModelForSequenceClassification.from_pretrained(model_id, ov_config={"CACHE_DIR":""})
 ```
 
-## Sequence-to-sequence models
+### Sequence-to-sequence models
 
 Sequence-to-sequence (Seq2Seq) models, that generate a new sequence from an input, can also be used when running inference with OpenVINO. When Seq2Seq models are exported to the OpenVINO IR, they are decomposed into two parts : the encoder and the "decoder" (which actually consists of the decoder with the language modeling head), that are later combined during inference.
 To speed up sequential decoding, a cache with pre-computed key/values hidden-states will be used by default. An additional model component will be exported: the "decoder" with pre-computed key/values as one of its inputs.  This specific export comes from the fact that during the first pass, the decoder has no pre-computed key/values hidden-states, while during the rest of the generation past key/values will be used to speed up sequential decoding. To disable this cache, set `use_cache=False` in the `from_pretrained()` method.
@@ -147,14 +200,7 @@ tokenizer.save_pretrained(save_directory)
 [{'translation_text': "Il n'est jamais sorti sans un livre sous son bras, et il est souvent revenu avec deux."}]
 ```
 
-## Stable Diffusion
-
-Stable Diffusion models can also be used when running inference with OpenVINO. When Stable Diffusion models
-are exported to the OpenVINO format, they are decomposed into three components that are later combined during inference:
-- The text encoder
-- The U-NET
-- The VAE encoder
-- The VAE decoder
+## Diffusers models
 
 Make sure you have 🤗 Diffusers installed.
 
@@ -163,7 +209,24 @@ To install `diffusers`:
 pip install optimum[diffusers]
 ```
 
-### Text-to-Image
+
+### Stable Diffusion
+
+Stable Diffusion models can also be used when running inference with OpenVINO. When Stable Diffusion models
+are exported to the OpenVINO format, they are decomposed into different components that are later combined during inference:
+- The text encoder
+- The U-NET
+- The VAE encoder
+- The VAE decoder
+
+| Task                                 | Auto Class                           |
+|--------------------------------------|--------------------------------------|
+| `text-to-image`                      | `OVStableDiffusionPipeline`          |
+| `image-to-image`                     | `OVStableDiffusionImg2ImgPipeline`   |
+| `inpaint`                            | `OVStableDiffusionInpaintPipeline`   |
+
+
+#### Text-to-Image
 Here is an example of how you can load an OpenVINO Stable Diffusion model and run inference using OpenVINO Runtime:
 
 ```python
@@ -208,7 +271,7 @@ In case you want to change any parameters such as the outputs height or width, y
     <img src="https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/stable_diffusion_v1_5_sail_boat_rembrandt.png">
 </div>
 
-### Text-to-Image with Textual Inversion
+#### Text-to-Image with Textual Inversion
 Here is an example of how you can load an OpenVINO Stable Diffusion model with pre-trained textual inversion embeddings and run inference using OpenVINO Runtime:
 
 
@@ -248,7 +311,7 @@ The left image shows the generation result of original stable diffusion v1.5, th
 | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/textual_inversion/stable_diffusion_v1_5_without_textual_inversion.png) | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/textual_inversion/stable_diffusion_v1_5_with_textual_inversion.png) |
 
 
-### Image-to-Image
+#### Image-to-Image
 
 ```python
 import requests
@@ -269,7 +332,13 @@ image = pipeline(prompt=prompt, image=init_image, strength=0.75, guidance_scale=
 image.save("fantasy_landscape.png")
 ```
 
-## Stable Diffusion XL
+### Stable Diffusion XL
+
+| Task                                 | Auto Class                           |
+|--------------------------------------|--------------------------------------|
+| `text-to-image`                      | `OVStableDiffusionXLPipeline`        |
+| `image-to-image`                     | `OVStableDiffusionXLImg2ImgPipeline` |
+
 
 Before using `OVtableDiffusionXLPipeline` make sure to have `diffusers` and `invisible_watermark` installed. You can install the libraries as follows:
 
@@ -278,7 +347,7 @@ pip install diffusers
 pip install invisible-watermark>=0.2.0
 ```
 
-### Text-to-Image
+#### Text-to-Image
 
 Here is an example of how you can load a SDXL OpenVINO model from [stabilityai/stable-diffusion-xl-base-1.0](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0) and run inference using OpenVINO Runtime:
 
@@ -296,7 +365,7 @@ image.save("train_station.png")
 |---|---|
 | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich.png) | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/sd_xl/train_station_friedrich_2.png) |
 
-### Text-to-Image with Textual Inversion
+#### Text-to-Image with Textual Inversion
 
 Here is an example of how you can load an SDXL OpenVINO model from [stabilityai/stable-diffusion-xl-base-1.0](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0) with pre-trained textual inversion embeddings and run inference using OpenVINO Runtime:
 
@@ -338,7 +407,7 @@ The left image shows the generation result of the original SDXL base 1.0, the ri
 | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/textual_inversion/sdxl_without_textual_inversion.png) | ![](https://huggingface.co/datasets/optimum/documentation-images/resolve/main/intel/openvino/textual_inversion/sdxl_with_textual_inversion.png) |
 
 
-### Image-to-Image
+#### Image-to-Image
 
 Here is an example of how you can load a PyTorch SDXL model, convert it to OpenVINO on-the-fly and run inference using OpenVINO Runtime for *image-to-image*:
 
@@ -372,27 +441,3 @@ refiner = OVStableDiffusionXLImg2ImgPipeline.from_pretrained(model_id, export=Tr
 image = base(prompt=prompt, output_type="latent").images[0]
 image = refiner(prompt=prompt, image=image[None, :]).images[0]
 ```
-
-
-
-## Supported tasks
-
-As shown in the table below, each task is associated with a class enabling to automatically load your model.
-
-
-| Task                                 | Auto Class                           |
-|--------------------------------------|--------------------------------------|
-| `text-classification`                | `OVModelForSequenceClassification`   |
-| `token-classification`               | `OVModelForTokenClassification`      |
-| `question-answering`                 | `OVModelForQuestionAnswering`        |
-| `audio-classification`               | `OVModelForAudioClassification`      |
-| `image-classification`               | `OVModelForImageClassification`      |
-| `feature-extraction`                 | `OVModelForFeatureExtraction`        |
-| `fill-mask`                          | `OVModelForMaskedLM`                 |
-| `text-generation`                    | `OVModelForCausalLM`                 |
-| `text2text-generation`               | `OVModelForSeq2SeqLM`                |
-| `text-to-image`                      | `OVStableDiffusionPipeline`          |
-| `text-to-image`                      | `OVStableDiffusionXLPipeline`        |
-| `image-to-image`                     | `OVStableDiffusionImg2ImgPipeline`   |
-| `image-to-image`                     | `OVStableDiffusionXLImg2ImgPipeline` |
-| `inpaint`                            | `OVStableDiffusionInpaintPipeline`   |
