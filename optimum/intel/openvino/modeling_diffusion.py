@@ -190,6 +190,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         local_files_only: bool = False,
         from_onnx: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
@@ -252,7 +253,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 else:
                     kwargs[name] = load_method(new_model_save_dir)
 
-        unet = cls.load_model(new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name)
+        unet = cls.load_model(
+            new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name, load_in_8bit=load_in_8bit
+        )
 
         components = {
             "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
@@ -262,7 +265,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         }
 
         for key, value in components.items():
-            components[key] = cls.load_model(value) if value.is_file() else None
+            components[key] = cls.load_model(value, load_in_8bit=load_in_8bit) if value.is_file() else None
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
@@ -295,6 +298,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         tokenizer: "CLIPTokenizer" = None,
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         save_dir = TemporaryDirectory()
@@ -311,6 +315,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             use_auth_token=use_auth_token,
             local_files_only=local_files_only,
             force_download=force_download,
+            int8=load_in_8bit,
         )
 
         return cls._from_pretrained(
@@ -326,6 +331,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             tokenizer=tokenizer,
             scheduler=scheduler,
             feature_extractor=feature_extractor,
+            load_in_8bit=load_in_8bit,
             **kwargs,
         )
 

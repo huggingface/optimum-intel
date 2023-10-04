@@ -210,6 +210,7 @@ class OVBaseDecoderModel(OVModel):
         task: Optional[str] = None,
         use_cache: bool = True,
         trust_remote_code: bool = False,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         if config.model_type not in _SUPPORTED_ARCHITECTURES:
@@ -238,12 +239,15 @@ class OVBaseDecoderModel(OVModel):
             force_download=force_download,
             trust_remote_code=trust_remote_code,
             model_kwargs=kwargs,
+            int8=load_in_8bit,
         )
 
         config.is_decoder = True
         config.is_encoder_decoder = False
         config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(model_id=save_dir_path, config=config, use_cache=use_cache, **kwargs)
+        return cls._from_pretrained(
+            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=load_in_8bit, **kwargs
+        )
 
     def _reshape(
         self,
