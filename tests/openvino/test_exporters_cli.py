@@ -16,7 +16,7 @@ import unittest
 from tempfile import TemporaryDirectory
 
 from parameterized import parameterized
-from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
+from utils_tests import _ARCHITECTURES_TO_EXPECTED_INT8, MODEL_NAMES, get_num_quantized_nodes
 
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.intel import (  # noqa
@@ -33,7 +33,6 @@ from optimum.intel import (  # noqa
     OVStableDiffusionXLPipeline,
 )
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
-
 
 
 class OVCLIExportTestCase(unittest.TestCase):

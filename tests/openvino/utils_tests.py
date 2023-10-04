@@ -94,7 +94,6 @@ TENSOR_ALIAS_TO_TYPE = {
 SEED = 42
 
 
-
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "bert": (34,),
     "roberta": (34,),
