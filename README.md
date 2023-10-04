@@ -69,7 +69,7 @@ Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvi
 
 #### Export:
 
-It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format easily:
+It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format with the CLI :
 
 ```plain
 optimum-cli export openvino --model gpt2 ov_model
