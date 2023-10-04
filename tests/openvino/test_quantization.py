@@ -34,13 +34,22 @@ from transformers import (
 
 from optimum.intel import (
     OVConfig,
+    OVModelForAudioClassification,
+    OVModelForCausalLM,
+    OVModelForFeatureExtraction,
+    OVModelForImageClassification,
+    OVModelForMaskedLM,
     OVModelForQuestionAnswering,
+    OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
-    OVModelForCausalLM,
+    OVStableDiffusionPipeline,
+    OVStableDiffusionXLPipeline,
     OVQuantizer,
     OVTrainer,
 )
+
+
 from optimum.intel.openvino.configuration import INT8_WEIGHT_COMPRESSION_CONFIG
 from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
 
@@ -149,6 +158,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForQuestionAnswering, "distilbert"),
         (OVModelForAudioClassification, "wav2vec2"),
         (OVModelForFeatureExtraction, "blenderbot"),
+        (OVStableDiffusionPipeline, "stable-diffusion"),
+        (OVStableDiffusionXLPipeline, "stable-diffusion-xl"),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS)
@@ -201,13 +212,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True)
 
-        if model.task.startswith("text2text-generation"):
-            models = [model.encoder, model.decoder]
-        if model.task.endswith("with-past"):
-            models.append(model.decoder_with_past)
-        elif model.task.startswith("stable-diffusion"):
+        if model.export_feature.startswith("text2text-generation"):
+            models = [model.encoder, model.decoder, model.decoder_with_past]
+        elif model.export_feature.startswith("stable-diffusion"):
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if task == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
         else:
             models = [model]
 
@@ -220,13 +229,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=False)
 
-        if model.task.startswith("text2text-generation"):
-            models = [model.encoder, model.decoder]
-        if model.task.endswith("with-past"):
-            models.append(model.decoder_with_past)
-        elif model.task.startswith("stable-diffusion"):
+        if model.export_feature.startswith("text2text-generation"):
+            models = [model.encoder, model.decoder, model.decoder_with_past]
+        elif model.export_feature.startswith("stable-diffusion"):
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if task == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
         else:
             models = [model]
 
