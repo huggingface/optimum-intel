@@ -34,31 +34,29 @@ from transformers import (
 
 from optimum.intel import (
     OVConfig,
+    OVModelForAudioClassification,
+    OVModelForCausalLM,
+    OVModelForFeatureExtraction,
+    OVModelForImageClassification,
+    OVModelForMaskedLM,
     OVModelForQuestionAnswering,
+    OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
-    OVModelForCausalLM,
+    OVStableDiffusionPipeline,
+    OVStableDiffusionXLPipeline,
     OVQuantizer,
     OVTrainer,
 )
+
+
 from optimum.intel.openvino.configuration import INT8_WEIGHT_COMPRESSION_CONFIG
+from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
 
 _TASK_TO_DATASET = {
     "text-generation": ("wikitext", "wikitext-2-raw-v1", "text"),
     "text-classification": ("glue", "sst2", "sentence"),
 }
-
-
-def get_num_quantized_nodes(ov_model):
-    num_fake_quantize = 0
-    num_int8 = 0
-    for elem in ov_model.model.get_ops():
-        if "FakeQuantize" in elem.name:
-            num_fake_quantize += 1
-        for i in range(elem.get_output_size()):
-            if "8" in elem.get_output_element_type(i).get_type_name():
-                num_int8 += 1
-    return num_fake_quantize, num_int8
 
 
 class OVQuantizerTest(unittest.TestCase):
@@ -150,7 +148,19 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 45, 22),
     )
 
-    UPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = ((OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 22),)
+    SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (
+        (OVModelForCausalLM, "gpt2"),
+        (OVModelForMaskedLM, "bert"),
+        (OVModelForTokenClassification, "roberta"),
+        (OVModelForImageClassification, "vit"),
+        (OVModelForSeq2SeqLM, "t5"),
+        (OVModelForSequenceClassification, "albert"),
+        (OVModelForQuestionAnswering, "distilbert"),
+        (OVModelForAudioClassification, "wav2vec2"),
+        (OVModelForFeatureExtraction, "blenderbot"),
+        (OVStableDiffusionPipeline, "stable-diffusion"),
+        (OVStableDiffusionXLPipeline, "stable-diffusion-xl"),
+    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS)
     def test_automodel_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
@@ -166,7 +176,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir, weights_only=True)
             model = model_cls.from_pretrained(tmp_dir)
 
-            # TODO: uncomment once move to a newer version of NNCF which has some fixes
             _, num_int8 = get_num_quantized_nodes(model)
             self.assertEqual(expected_pt_int8, num_int8)
 
@@ -199,17 +208,38 @@ class OVWeightCompressionTest(unittest.TestCase):
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
 
-    @parameterized.expand(UPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
-    def test_ovmodel_load_with_compressed_weights(self, model_cls, model_name, expected_ov_int8):
-        model = model_cls.from_pretrained(model_name, export=True, load_in_8bit=True)
-        _, num_int8 = get_num_quantized_nodes(model)
-        self.assertEqual(expected_ov_int8, num_int8)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
+    def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
+        model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True)
 
-    @parameterized.expand(UPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
-    def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_name, expected_ov_int8):
-        model = model_cls.from_pretrained(model_name, export=True, load_in_8bit=False)
-        _, num_int8 = get_num_quantized_nodes(model)
-        self.assertEqual(0, num_int8)
+        if model.export_feature.startswith("text2text-generation"):
+            models = [model.encoder, model.decoder, model.decoder_with_past]
+        elif model.export_feature.startswith("stable-diffusion"):
+            models = [model.unet, model.vae_encoder, model.vae_decoder]
+            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
+        else:
+            models = [model]
+
+        expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
+        for i, model in enumerate(models):
+            _, num_int8 = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int8[i], num_int8)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
+    def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type):
+        model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=False)
+
+        if model.export_feature.startswith("text2text-generation"):
+            models = [model.encoder, model.decoder, model.decoder_with_past]
+        elif model.export_feature.startswith("stable-diffusion"):
+            models = [model.unet, model.vae_encoder, model.vae_decoder]
+            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
+        else:
+            models = [model]
+
+        for i, model in enumerate(models):
+            _, num_int8 = get_num_quantized_nodes(model)
+            self.assertEqual(0, num_int8)
 
 
 class OVQuantizerQATest(unittest.TestCase):

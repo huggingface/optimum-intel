@@ -119,6 +119,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         local_files_only: bool = False,
         use_cache: bool = True,
         from_onnx: bool = False,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         """
@@ -159,14 +160,14 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         encoder_file_name = encoder_file_name or default_encoder_file_name
         decoder_file_name = decoder_file_name or default_decoder_file_name
         decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
-
+        decoder_with_past = None
         # Load model from a local directory
         if os.path.isdir(model_id):
-            encoder = cls.load_model(os.path.join(model_id, encoder_file_name))
-            decoder = cls.load_model(os.path.join(model_id, decoder_file_name))
-            decoder_with_past = (
-                cls.load_model(os.path.join(model_id, decoder_with_past_file_name)) if use_cache else None
-            )
+            encoder = cls.load_model(os.path.join(model_id, encoder_file_name), load_in_8bit)
+            decoder = cls.load_model(os.path.join(model_id, decoder_file_name), load_in_8bit)
+            if use_cache:
+                decoder_with_past = cls.load_model(os.path.join(model_id, decoder_with_past_file_name), load_in_8bit)
+
             model_save_dir = Path(model_id)
 
         # Load model from hub
@@ -193,9 +194,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 file_names[name] = model_cache_path
 
             model_save_dir = Path(model_cache_path).parent
-            encoder = cls.load_model(file_names["encoder"])
-            decoder = cls.load_model(file_names["decoder"])
-            decoder_with_past = cls.load_model(file_names["decoder_with_past"]) if use_cache else None
+            encoder = cls.load_model(file_names["encoder"], load_in_8bit)
+            decoder = cls.load_model(file_names["decoder"], load_in_8bit)
+            if use_cache:
+                decoder_with_past = cls.load_model(file_names["decoder_with_past"], load_in_8bit)
 
         return cls(
             encoder=encoder,
@@ -220,6 +222,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         task: Optional[str] = None,
         use_cache: bool = True,
         trust_remote_code: bool = False,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         """
@@ -261,10 +264,13 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
+            int8=load_in_8bit,
         )
 
         config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(model_id=save_dir_path, config=config, use_cache=use_cache, **kwargs)
+        return cls._from_pretrained(
+            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=load_in_8bit, **kwargs
+        )
 
     def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}

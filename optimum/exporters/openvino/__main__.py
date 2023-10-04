@@ -19,7 +19,6 @@ from typing import Any, Callable, Dict, Optional, Union
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoTokenizer
-from transformers.utils import is_torch_available
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import __main__ as optimum_main
@@ -34,12 +33,9 @@ from .convert import export_models
 
 OV_XML_FILE_NAME = "openvino_model.xml"
 
-_MAX_UNCOMPRESSED_DECODER_SIZE = 1e9
+_MAX_UNCOMPRESSED_SIZE = 1e9
 
 logger = logging.getLogger(__name__)
-
-if is_torch_available():
-    import torch
 
 
 def main_export(
@@ -60,6 +56,7 @@ def main_export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_onnx_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
+    int8: Optional[bool] = None,
     **kwargs_shapes,
 ):
     """
@@ -126,6 +123,13 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_onnx/")
     ```
     """
+    if int8 and not is_nncf_available():
+        raise ImportError(
+            "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
+        )
+
+    model_kwargs = model_kwargs or {}
+
     output = Path(output)
     if not output.exists():
         output.mkdir(parents=True)
@@ -141,8 +145,6 @@ def main_export(
         input_shapes[input_name] = (
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
-
-    torch_dtype = None if fp16 is False else torch.float16
 
     if task == "auto":
         try:
@@ -167,7 +169,6 @@ def main_export(
         force_download=force_download,
         trust_remote_code=trust_remote_code,
         framework=framework,
-        torch_dtype=torch_dtype,
         device=device,
     )
 
@@ -235,17 +236,19 @@ def main_export(
         onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
         onnx_config = onnx_config_constructor(model.config)
         models_and_onnx_configs = {"model": (model, onnx_config)}
-        model_kwargs = model_kwargs or {}
-        load_in_8bit = model_kwargs.get("load_in_8bit", None)
-        if load_in_8bit is None:
-            if model.num_parameters() >= _MAX_UNCOMPRESSED_DECODER_SIZE:
-                if not is_nncf_available():
-                    logger.warning(
-                        "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
-                        "please install it with `pip install nncf`"
-                    )
-                else:
-                    model_kwargs["load_in_8bit"] = True
+
+    if int8 is None:
+        int8 = False
+        num_parameters = model.num_parameters() if not is_stable_diffusion else model.unet.num_parameters()
+        if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+            if is_nncf_available():
+                int8 = True
+                logger.info("The model weights will be quantized to int8.")
+            else:
+                logger.warning(
+                    "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
+                    "please install it with `pip install nncf`"
+                )
 
     if not is_stable_diffusion:
         needs_pad_token_id = (
@@ -313,5 +316,7 @@ def main_export(
         output_names=files_subpaths,
         input_shapes=input_shapes,
         device=device,
+        fp16=fp16,
+        int8=int8,
         model_kwargs=model_kwargs,
     )
