@@ -273,7 +273,9 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
                 nb_pkv = 2
                 num_layers = self.normalized_config.num_layers
                 num_attention_heads = self.normalized_config.num_attention_heads
-                num_key_value_heads = self.normalized_config.num_key_value_heads or num_attention_heads
+                num_key_value_heads = num_attention_heads
+                if hasattr(self.normalized_config, "num_key_value_heads"):
+                    num_key_value_heads = self.normalized_config.num_key_value_heads
                 hidden_size = self.normalized_config.hidden_size
                 d_k = hidden_size // num_attention_heads
                 if self.config.model_type == "gpt_bigcode":
