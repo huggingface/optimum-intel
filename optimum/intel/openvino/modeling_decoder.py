@@ -359,7 +359,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             inputs["attention_mask"] = np.array(attention_mask)
 
         # Run inference
-        self.request.start_async(inputs, shared_memory=True)
+        self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
 
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
