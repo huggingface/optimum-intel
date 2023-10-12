@@ -385,7 +385,7 @@ class OVEncoder:
         self._compile()
 
         # Model inputs
-        inputs = {self.main_input_name: input_ids}
+        inputs = {self.main_input_name: input_ids if input_ids is not None else kwargs.get(self.main_input_name)}
 
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:

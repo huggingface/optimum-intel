@@ -89,6 +89,7 @@ _HEAD_TO_AUTOMODELS = {
     "audio-classification": "OVModelForAudioClassification",
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
+    "pix2struct": "OVModelForPix2Struct",
 }
 
 

@@ -439,6 +439,9 @@ class OVQuantizer(OptimumQuantizer):
         if self.task == "text2text-generation":
             raise ValueError("Seq2Seq models are currently not supported for post-training static quantization.")
 
+        if self.task == "image-to-text":
+            raise ValueError("Image2Text models are currently not supported for post-training static quantization.")
+
     def get_calibration_dataset(
         self,
         dataset_name: str,
