@@ -158,12 +158,12 @@ PIX2STRUCT_EXAMPLE = r"""
 
     ```python
     >>> from transformers import {processor_class}
-    >>> from optimum.onnxruntime import {model_class}
+    >>> from optimum.intel import {model_class}
     >>> from PIL import Image
     >>> import requests
 
     >>> processor = {processor_class}.from_pretrained("{checkpoint}")
-    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True, use_io_binding=True)
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
 
     >>> url = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/ai2d-demo.jpg"
     >>> image = Image.open(requests.get(url, stream=True).raw)
@@ -185,7 +185,7 @@ PIX2STRUCT_EXAMPLE = r"""
 class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
     auto_model_class = AutoModelForSeq2SeqLM
     main_input_name = "input_ids"
-    export_feature = "image-to-text"
+    export_feature = "text2text-generation"
 
     def __init__(
         self,
@@ -522,6 +522,7 @@ class OVDecoder:
 class OVModelForPix2Struct(OVModelForSeq2SeqLM):
     auto_model_class = Pix2StructForConditionalGeneration
     main_input_name = "flattened_patches"
+    export_feature = "image-to-text"
 
     def prepare_inputs_for_generation(
         self,
