@@ -61,6 +61,7 @@ MODEL_NAMES = {
     "mt5": "stas/mt5-tiny-random",
     "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
     "pegasus": "hf-internal-testing/tiny-random-pegasus",
+    "pix2struct": "fxmarty/pix2struct-tiny-random",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",

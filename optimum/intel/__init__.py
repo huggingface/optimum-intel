@@ -94,6 +94,7 @@ else:
             "OVModelForFeatureExtraction",
             "OVModelForImageClassification",
             "OVModelForMaskedLM",
+            "OVModelForPix2Struct",
             "OVModelForQuestionAnswering",
             "OVModelForSeq2SeqLM",
             "OVModelForSequenceClassification",
