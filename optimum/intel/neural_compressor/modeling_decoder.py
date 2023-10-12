@@ -17,12 +17,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Union
 
-from transformers import PretrainedConfig
+from transformers import PretrainedConfig, AutoModelForCausalLM
 from transformers.file_utils import add_start_docstrings
 
 from optimum.intel.generation import BaseModelForCausalLM
 
-from .modeling_base import MODEL_START_DOCSTRING, INCBaseModel
+from .modeling_base import MODEL_START_DOCSTRING, INCModel
 
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,12 @@ logger = logging.getLogger(__name__)
     """,
     MODEL_START_DOCSTRING,
 )
-class INCModelForCausalLM(INCBaseModel, BaseModelForCausalLM):
+class INCModelForCausalLM(INCModel, BaseModelForCausalLM):
+
+    auto_model_class = AutoModelForCausalLM
+    export_feature = "text-generation"
+    forward = BaseModelForCausalLM.forward
+
     def __init__(
         self,
         model,
