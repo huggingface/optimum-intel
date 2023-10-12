@@ -15,45 +15,26 @@
 import copy
 import inspect
 import logging
-import os
-import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
-from typing import Callable, ClassVar, Dict, Optional, Union
+from typing import Callable, Dict, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
-from huggingface_hub import hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
 from neural_compressor.model.onnx_model import ONNXModel
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
-from neural_compressor.utils.pytorch import load
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import (
-    AutoConfig,
-    AutoModel,
-    AutoModelForCausalLM,
-    AutoModelForMaskedLM,
-    AutoModelForMultipleChoice,
-    AutoModelForQuestionAnswering,
-    AutoModelForSeq2SeqLM,
-    AutoModelForSequenceClassification,
-    AutoModelForTokenClassification,
-    AutoModelForVision2Seq,
     DataCollator,
     PretrainedConfig,
     PreTrainedModel,
-    XLNetLMHeadModel,
     default_data_collator,
 )
-from transformers.modeling_utils import no_init_weights
-from transformers.models.auto.auto_factory import _get_model_class
-from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
-from transformers.utils.generic import ContextManagers
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
@@ -67,10 +48,8 @@ from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAM
 from ..utils.import_utils import (
     _ipex_version,
     _neural_compressor_version,
-    _torch_version,
     is_ipex_version,
     is_neural_compressor_version,
-    is_torch_version,
 )
 from .configuration import INCConfig
 from .utils import INCDataLoader, _cfgs_to_fx_cfgs

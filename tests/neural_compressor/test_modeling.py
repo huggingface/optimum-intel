@@ -14,11 +14,12 @@
 
 
 import os
-import unittest
 import tempfile
+import unittest
+
+import torch
 from parameterized import parameterized
 from transformers import set_seed
-import torch
 
 from optimum.exporters import TasksManager
 from optimum.intel import (  # noqa
@@ -56,7 +57,6 @@ MODEL_NAMES_TO_TASK = (
 )
 
 
-
 class INCModelingTest(unittest.TestCase):
     @parameterized.expand(MODEL_NAMES_TO_TASK + QUANTIZED_MODEL_NAMES_TO_TASK)
     def test_modeling(self, model_id, task):
@@ -79,12 +79,11 @@ class INCModelingTest(unittest.TestCase):
             loaded_model = model_class.from_pretrained(tmpdirname)
             outputs_loaded = loaded_model(**model_inputs)
 
-        output_name = "end_logits" if task== "question-answering" else "logits"
+        output_name = "end_logits" if task == "question-answering" else "logits"
         self.assertTrue(torch.equal(outputs_loaded[output_name], outputs[output_name]))
 
     @parameterized.expand(MODEL_NAMES_TO_TASK)
     def test_export_modeling(self, model_id, task):
-
         model_class = eval(_HEAD_TO_AUTOMODELS[task])
         inc_model = model_class.from_pretrained(model_id)
         model_type = inc_model.config.model_type.replace("_", "-")

@@ -12,38 +12,19 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Union, Dict
+from typing import Dict, Optional, Union
 
 import torch
 from huggingface_hub import hf_hub_download
-from transformers import PretrainedConfig
-from transformers.file_utils import add_start_docstrings
-from transformers.utils import is_ipex_available
-
-
-
-
-from ..generation.modeling import jit_trace
-from ..utils.import_utils import is_torch_version
-from ..utils.modeling_utils import patch_decoder_attention_mask
-from .utils import WEIGHTS_NAME
-from typing import Callable, ClassVar, Dict, Optional, Union
-
-from ...exporters import TasksManager
-from ...modeling_base import OptimizedModel
-import copy
-
-
 from neural_compressor.utils.pytorch import load
-
 from transformers import (
     AutoConfig,
     AutoModel,
-    AutoModelForCausalLM,
     AutoModelForMaskedLM,
     AutoModelForMultipleChoice,
     AutoModelForQuestionAnswering,
@@ -51,14 +32,21 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
-    DataCollator,
     PretrainedConfig,
-    PreTrainedModel,
     XLNetLMHeadModel,
-    default_data_collator,
 )
-
+from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
+from transformers.utils import is_ipex_available
+from transformers.utils.generic import ContextManagers
+
+from ...exporters import TasksManager
+from ...modeling_base import OptimizedModel
+from ..generation.modeling import jit_trace
+from ..utils.import_utils import _torch_version, is_torch_version
+from ..utils.modeling_utils import patch_decoder_attention_mask
+from .configuration import INCConfig
+from .utils import WEIGHTS_NAME
 
 
 logger = logging.getLogger(__name__)
@@ -79,6 +67,7 @@ MODEL_START_DOCSTRING = r"""
 class INCModel(OptimizedModel):
     auto_model_class = AutoModel
     base_model_prefix = "inc_model"
+
     def __init__(
         self,
         model,
@@ -88,7 +77,6 @@ class INCModel(OptimizedModel):
         inc_config: Dict = None,
         **kwargs,
     ):
-
         super().__init__(model=model, config=config)
 
         self.inc_config = inc_config
@@ -166,7 +154,7 @@ class INCModel(OptimizedModel):
             model = torch.jit.load(model_cache_path)
             model = torch.jit.freeze(model.eval())
             return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
-    
+
         model_class = _get_model_class(config, cls.auto_model_class._model_mapping)
         keys_to_ignore_on_load_unexpected = copy.deepcopy(
             getattr(model_class, "_keys_to_ignore_on_load_unexpected", None)
@@ -201,7 +189,7 @@ class INCModel(OptimizedModel):
         except AttributeError:
             init_contexts = [no_init_weights(_enable=True)]
             with ContextManagers(init_contexts):
-                model = model_class(config, **model_kwargs)
+                model = model_class(config)
 
         model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
         model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
@@ -209,7 +197,6 @@ class INCModel(OptimizedModel):
         # Load the state dictionary of the model to verify whether the model is quantized or not
         state_dict = torch.load(model_cache_path, map_location="cpu")
         if "best_configure" in state_dict and state_dict["best_configure"] is not None:
-            is_quantized = True
             q_config = state_dict["best_configure"]
             try:
                 model = load(model_cache_path, model)
@@ -218,7 +205,9 @@ class INCModel(OptimizedModel):
                     e.args += (msg,)
                 raise
 
-        return cls(model, config=config, model_save_dir=model_save_dir, q_config=q_config, inc_config=inc_config, **kwargs)
+        return cls(
+            model, config=config, model_save_dir=model_save_dir, q_config=q_config, inc_config=inc_config, **kwargs
+        )
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         output_path = os.path.join(save_directory, WEIGHTS_NAME)
@@ -240,7 +229,6 @@ class INCModel(OptimizedModel):
     def eval(self):
         self.model.eval()
 
-    
     @classmethod
     def _from_transformers(
         cls,
@@ -256,12 +244,11 @@ class INCModel(OptimizedModel):
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         **kwargs,
     ):
-
         if is_torch_version("<", "2.0.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
         task = cls.export_feature
-        file_name = kwargs.get("file_name", None)
+        kwargs.get("file_name", None)
 
         model_kwargs = {
             "revision": revision,
@@ -298,8 +285,6 @@ class INCModel(OptimizedModel):
             local_files_only=local_files_only,
             **kwargs,
         )
-
-
 
 
 class INCModelForQuestionAnswering(INCModel):
@@ -340,5 +325,3 @@ class INCModelForVision2Seq(INCModel):
 class INCModelForXLNetLM(INCModel):
     auto_model_class = XLNetLMHeadModel
     export_feature = "fill-mask"
-
-

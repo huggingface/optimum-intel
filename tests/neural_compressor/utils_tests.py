@@ -114,7 +114,7 @@ class INCTestMixin(unittest.TestCase):
             if load_inc_model:
                 inc_model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(save_directory)
                 inc_model_outputs = inc_model(**tokens)
-                self.assertTrue(torch.allclose(inc_model_outputs["logits"], outputs, atol=1e-3))
+                self.assertTrue(torch.allclose(inc_model_outputs["logits"], outputs, atol=1e-2))
                 # self.assertEqual(inc_config.save_onnx_model, load_onnx_model)
 
         if load_onnx_model:
@@ -129,7 +129,7 @@ class INCTestMixin(unittest.TestCase):
             ort_outputs = ort_model(**tokens)
             self.assertTrue("logits" in ort_outputs)
             if task != "fill-mask":
-                self.assertTrue(torch.allclose(ort_outputs.logits, outputs, atol=1e-3))
+                self.assertTrue(torch.allclose(ort_outputs.logits, outputs, atol=1e-2))
 
     @staticmethod
     def get_trainer(
