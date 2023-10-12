@@ -385,14 +385,7 @@ class OVEncoder:
         self._compile()
 
         # Model inputs
-        if input_ids is None and self.main_input_name == "input_ids":
-            raise RuntimeError("input_ids should be provided")
-        elif self.main_input_name != "input_ids":
-            if self.main_input_name not in kwargs:
-                raise RuntimeError(f"{self.main_input_name} should be provided")
-            inputs = {self.main_input_name: kwargs[self.main_input_name]}
-        else:
-            inputs = {"input_ids": input_ids}
+        inputs = {self.main_input_name: input_ids}
 
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
@@ -576,7 +569,7 @@ class OVModelForPix2Struct(OVModelForSeq2SeqLM):
         # Encode if needed (training, first prediction pass)
         if encoder_outputs is None:
             encoder_outputs = self.encoder(
-                flattened_patches=flattened_patches,
+                input_ids=flattened_patches,
                 attention_mask=attention_mask,
             )
 
