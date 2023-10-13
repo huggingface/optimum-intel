@@ -273,6 +273,9 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
                 nb_pkv = 2
                 num_layers = self.normalized_config.num_layers
                 num_attention_heads = self.normalized_config.num_attention_heads
+                num_key_value_heads = num_attention_heads
+                if hasattr(self.normalized_config, "num_key_value_heads"):
+                    num_key_value_heads = self.normalized_config.num_key_value_heads
                 hidden_size = self.normalized_config.hidden_size
                 d_k = hidden_size // num_attention_heads
                 if self.config.model_type == "gpt_bigcode":
@@ -282,7 +285,7 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
                         empty_tensor = empty_tensor.to(self.model_dtype)
                     past_key_values = tuple([empty_tensor] * num_layers)
                 elif self.config.model_type != "bloom":
-                    new_shape = [input_ids.shape[0], num_attention_heads, 0, d_k]
+                    new_shape = [input_ids.shape[0], num_key_value_heads, 0, d_k]
                     empty_tensor = torch.empty(size=new_shape)
                     if self.model_dtype is not None:
                         empty_tensor = empty_tensor.to(self.model_dtype)
@@ -291,9 +294,9 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
                     pkv = ()
                     for nb_pkv in range(nb_pkv):
                         if nb_pkv % 2 == 0:
-                            new_shape = [input_ids.shape[0] * num_attention_heads, d_k, 0]
+                            new_shape = [input_ids.shape[0] * num_key_value_heads, d_k, 0]
                         else:
-                            new_shape = [input_ids.shape[0] * num_attention_heads, 0, d_k]
+                            new_shape = [input_ids.shape[0] * num_key_value_heads, 0, d_k]
                         empty_tensor = torch.empty(size=new_shape)
                         if self.model_dtype is not None:
                             empty_tensor = empty_tensor.to(self.model_dtype)
