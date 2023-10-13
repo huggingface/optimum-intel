@@ -21,7 +21,7 @@ import openvino
 import torch
 import transformers
 from openvino.runtime import Core
-from transformers import AutoConfig, AutoModelForSeq2SeqLM
+from transformers import AutoConfig, AutoModelForSeq2SeqLM, Pix2StructForConditionalGeneration
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 
@@ -125,6 +125,56 @@ TRANSLATION_EXAMPLE = r"""
     ```
 """
 
+PIX2STRUCT_MODEL_DOCSTRING = r"""
+    Args:
+        flattened_patches (`torch.FloatTensor` of shape `(batch_size, seq_length, hidden_size)`):
+            Flattened pixel patches. the `hidden_size` is obtained by the following formula: `hidden_size` =
+            `num_channels` * `patch_size` * `patch_size`
+            The process of flattening the pixel patches is done by `Pix2StructProcessor`.
+        attention_mask (`torch.FloatTensor` of shape `(batch_size, sequence_length)`, *optional*):
+            Mask to avoid performing attention on padding token indices.
+        decoder_input_ids (`torch.LongTensor` of shape `(batch_size, target_sequence_length)`, *optional*):
+            Indices of decoder input sequence tokens in the vocabulary.
+            Pix2StructText uses the `pad_token_id` as the starting token for `decoder_input_ids` generation. If
+            `past_key_values` is used, optionally only the last `decoder_input_ids` have to be input (see
+            `past_key_values`).
+        decoder_attention_mask (`torch.BoolTensor` of shape `(batch_size, target_sequence_length)`, *optional*):
+            Default behavior: generate a tensor that ignores pad tokens in `decoder_input_ids`. Causal mask will also
+            be used by default.
+        encoder_outputs (`tuple(tuple(torch.FloatTensor)`, *optional*):
+            Tuple consists of (`last_hidden_state`, `optional`: *hidden_states*, `optional`: *attentions*)
+            `last_hidden_state` of shape `(batch_size, sequence_length, hidden_size)` is a sequence of hidden states at
+            the output of the last layer of the encoder. Used in the cross-attention of the decoder.
+        past_key_values (`tuple(tuple(torch.FloatTensor), *optional*, defaults to `None`)`
+            Contains the precomputed key and value hidden states of the attention blocks used to speed up decoding.
+            The tuple is of length `config.n_layers` with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, decoder_sequence_length, embed_size_per_head)` and 2 additional tensors of shape
+            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+"""
+_PROCESSOR_FOR_DOC = "AutoProcessor"
+
+PIX2STRUCT_EXAMPLE = r"""
+    Example of pix2struct:
+
+    ```python
+    >>> from transformers import {processor_class}
+    >>> from optimum.intel import {model_class}
+    >>> from PIL import Image
+    >>> import requests
+
+    >>> processor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+
+    >>> url = "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/transformers/tasks/ai2d-demo.jpg"
+    >>> image = Image.open(requests.get(url, stream=True).raw)
+    >>> question = "What does the label 15 represent? (1) lava (2) core (3) tunnel (4) ash cloud"
+    >>> inputs = processor(images=image, text=question, return_tensors="pt")
+
+    >>> gen_tokens = model.generate(**inputs)
+    >>> outputs = processor.batch_decode(gen_tokens, skip_special_tokens=True)
+    ```
+"""
+
 
 @add_start_docstrings(
     """
@@ -134,6 +184,8 @@ TRANSLATION_EXAMPLE = r"""
 )
 class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
     auto_model_class = AutoModelForSeq2SeqLM
+    main_input_name = "input_ids"
+    export_feature = "text2text-generation"
 
     def __init__(
         self,
@@ -147,7 +199,6 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             encoder=encoder, decoder=decoder, decoder_with_past=decoder_with_past, config=config, **kwargs
         )
         self.device = torch.device("cpu")
-        self.main_input_name = "input_ids"
         self.decoder_with_past = None
         enable_compilation = kwargs.get("compile", True)
         encoder_cache_dir = Path(self.model_save_dir).joinpath("encoder_cache")
@@ -157,7 +208,9 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             if "CACHE_DIR" in self.ov_config.keys()
             else {**self.ov_config, "CACHE_DIR": str(encoder_cache_dir)}
         )
-        self.encoder = OVEncoder(self.encoder_model, self._device, ov_encoder_config)
+        self.encoder = OVEncoder(
+            self.encoder_model, self._device, ov_encoder_config, main_input_name=self.main_input_name
+        )
         decoder_cache_dir = Path(self.model_save_dir).joinpath("decoder_cache")
         decoder_cache_dir.mkdir(parents=True, exist_ok=True)
         ov_decoder_config = (
@@ -180,7 +233,10 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
 
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
-        self.auto_model_class.register(AutoConfig, self.__class__)
+        try:
+            self.auto_model_class.register(AutoConfig, self.__class__)
+        except AttributeError:
+            pass
 
     def to(self, device: str):
         self._device = device.upper()
@@ -310,26 +366,26 @@ class OVEncoder:
             The OpenVINO inference request associated to the encoder.
     """
 
-    def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict):
+    def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict, main_input_name="input_ids"):
         self.model = model
         self._device = device
         self.device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
-        self.main_input_name = "input_ids"
+        self.main_input_name = main_input_name
         self.ov_config = ov_config
         self.request = None
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
         self,
-        input_ids: torch.LongTensor,
+        input_ids: torch.LongTensor = None,
         attention_mask: torch.LongTensor = None,
         **kwargs,
     ) -> BaseModelOutput:
         self._compile()
 
         # Model inputs
-        inputs = {"input_ids": input_ids}
+        inputs = {self.main_input_name: input_ids if input_ids is not None else kwargs.get(self.main_input_name)}
 
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
@@ -389,6 +445,7 @@ class OVDecoder:
         encoder_hidden_states: torch.FloatTensor,
         encoder_attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        decoder_attention_mask: Optional[torch.LongTensor] = None,
     ) -> Seq2SeqLMOutput:
         self._compile()
         # Model inputs
@@ -412,6 +469,9 @@ class OVDecoder:
         # Add the encoder_hidden_states inputs when needed
         if "encoder_hidden_states" in self.input_names and encoder_hidden_states is not None:
             inputs["encoder_hidden_states"] = encoder_hidden_states
+
+        if "decoder_attention_mask" in self.input_names and decoder_attention_mask is not None:
+            inputs["decoder_attention_mask"] = decoder_attention_mask
         # Run inference
         self.request.start_async(inputs, shared_memory=True)
         self.request.wait()
@@ -444,3 +504,107 @@ class OVDecoder:
         if self.request is None:
             logger.info(f"Compiling the decoder to {self._device} ...")
             self.request = core.compile_model(self.model, self._device, self.ov_config).create_infer_request()
+
+
+@add_start_docstrings(
+    """
+    Pix2Struct model with a language modeling head for OpenVINO inference.
+    """,
+    INPUTS_DOCSTRING,
+)
+class OVModelForPix2Struct(OVModelForSeq2SeqLM):
+    auto_model_class = Pix2StructForConditionalGeneration
+    main_input_name = "flattened_patches"
+    export_feature = "image-to-text"
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        flattened_patches: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.BoolTensor] = None,
+        past_key_values=None,
+        head_mask=None,
+        decoder_head_mask=None,
+        cross_attn_head_mask=None,
+        use_cache=None,
+        encoder_outputs=None,
+        **kwargs,
+    ) -> Dict:
+        if decoder_attention_mask is None:
+            decoder_attention_mask = torch.ones_like(input_ids).to(input_ids.device)
+
+        return {
+            "flattened_patches": flattened_patches,
+            "decoder_input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "encoder_outputs": encoder_outputs,
+            "attention_mask": attention_mask,
+            "decoder_attention_mask": decoder_attention_mask,
+            "head_mask": head_mask,
+            "decoder_head_mask": decoder_head_mask,
+            "cross_attn_head_mask": cross_attn_head_mask,
+            "use_cache": use_cache,
+        }
+
+    @add_start_docstrings_to_model_forward(
+        PIX2STRUCT_MODEL_DOCSTRING.format("batch_size, sequence_length")
+        + PIX2STRUCT_EXAMPLE.format(
+            processor_class=_PROCESSOR_FOR_DOC,
+            model_class="OVModelForPix2Struct",
+            checkpoint="google/pix2struct-ai2d-base",
+        )
+    )
+    def forward(
+        self,
+        flattened_patches: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        decoder_input_ids: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.BoolTensor] = None,
+        encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        **kwargs,
+    ) -> Seq2SeqLMOutput:
+        # Encode if needed : first prediction pass
+        # Encode if needed (training, first prediction pass)
+        if encoder_outputs is None:
+            encoder_outputs = self.encoder(
+                input_ids=flattened_patches,
+                attention_mask=attention_mask,
+            )
+
+        # Decode
+        if past_key_values is None or self.use_cache is False:
+            decoder_outputs = self.decoder(
+                input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+                past_key_values=past_key_values,
+                encoder_hidden_states=encoder_outputs.last_hidden_state,
+                encoder_attention_mask=attention_mask,
+            )
+        else:
+            decoder_outputs = self.decoder_with_past(
+                input_ids=decoder_input_ids[:, -1:],  # Cut decoder_input_ids if past is used
+                decoder_attention_mask=decoder_attention_mask,
+                past_key_values=past_key_values,
+                encoder_hidden_states=encoder_outputs.last_hidden_state,
+                encoder_attention_mask=attention_mask,
+            )
+
+        return Seq2SeqLMOutput(
+            logits=decoder_outputs.logits,
+            past_key_values=decoder_outputs.past_key_values,
+        )
+
+    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            shapes[inputs][0] = batch_size if not is_decoder else -1
+            if is_decoder:
+                if inputs.get_any_name().startswith("past_key_values"):
+                    shapes[inputs][2] = -1
+                elif not inputs.get_any_name().startswith("encoder"):
+                    shapes[inputs][1] = -1
+        model.reshape(shapes)
+        return model
