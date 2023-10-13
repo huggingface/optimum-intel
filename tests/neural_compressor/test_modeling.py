@@ -14,8 +14,10 @@
 
 
 import os
+import tempfile
 import unittest
 
+import torch
 from parameterized import parameterized
 from transformers import set_seed
 
@@ -40,21 +42,26 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(1009)
 
 
-MODEL_NAMES_TO_TASK = (
+QUANTIZED_MODEL_NAMES_TO_TASK = (
     ("echarlaix/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic", "text-classification"),
     ("echarlaix/distilbert-sst2-inc-dynamic-quantization-magnitude-pruning-0.1", "text-classification"),
-    ("hf-internal-testing/tiny-random-bert", "fill-mask"),
     ("Intel/distilbert-base-uncased-distilled-squad-int8-static", "question-answering"),
-    ("hf-internal-testing/tiny-random-gpt2", "text-generation"),
     ("Intel/t5-small-xsum-int8-dynamic", "text2text-generation"),
     # ("echarlaix/stable-diffusion-v1-5-inc-int8-dynamic", "stable-diffusion")
 )
 
 
+MODEL_NAMES_TO_TASK = (
+    ("hf-internal-testing/tiny-random-gpt2", "text-generation"),
+    ("hf-internal-testing/tiny-random-bert", "fill-mask"),
+)
+
+
 class INCModelingTest(unittest.TestCase):
-    @parameterized.expand(MODEL_NAMES_TO_TASK)
+    @parameterized.expand(MODEL_NAMES_TO_TASK + QUANTIZED_MODEL_NAMES_TO_TASK)
     def test_modeling(self, model_id, task):
-        inc_model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(model_id)  # TRANSFORMERS_AUTO_CLASS
+        model_class = eval(_HEAD_TO_AUTOMODELS[task])
+        inc_model = model_class.from_pretrained(model_id)
         model_type = inc_model.config.model_type.replace("_", "-")
         config_class = TasksManager.get_exporter_config_constructor(
             exporter="onnx",
@@ -65,4 +72,39 @@ class INCModelingTest(unittest.TestCase):
         )
         config = config_class(inc_model.config)
         model_inputs = config.generate_dummy_inputs(framework="pt")
-        inc_model(**model_inputs)
+        outputs = inc_model(**model_inputs)
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            inc_model.save_pretrained(tmpdirname)
+            loaded_model = model_class.from_pretrained(tmpdirname)
+            outputs_loaded = loaded_model(**model_inputs)
+
+        output_name = "end_logits" if task == "question-answering" else "logits"
+        self.assertTrue(torch.equal(outputs_loaded[output_name], outputs[output_name]))
+
+    @parameterized.expand(MODEL_NAMES_TO_TASK)
+    def test_export_modeling(self, model_id, task):
+        model_class = eval(_HEAD_TO_AUTOMODELS[task])
+        inc_model = model_class.from_pretrained(model_id)
+        model_type = inc_model.config.model_type.replace("_", "-")
+        config_class = TasksManager.get_exporter_config_constructor(
+            exporter="onnx",
+            model=inc_model,
+            task=task,
+            model_name=model_id,
+            model_type=model_type,
+        )
+        config = config_class(inc_model.config)
+        model_inputs = config.generate_dummy_inputs(framework="pt")
+        outputs = inc_model(**model_inputs)
+        transformers_model = model_class.auto_model_class.from_pretrained(model_id)
+        transformers_outputs = transformers_model(**model_inputs)
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            inc_model.save_pretrained(tmpdirname)
+            loaded_model = model_class.from_pretrained(tmpdirname, export=True)
+            outputs_loaded = loaded_model(**model_inputs)
+
+        output_name = "end_logits" if task == "question-answering" else "logits"
+        self.assertTrue(torch.equal(outputs_loaded[output_name], outputs[output_name]))
+        self.assertTrue(torch.equal(transformers_outputs[output_name], outputs[output_name]))

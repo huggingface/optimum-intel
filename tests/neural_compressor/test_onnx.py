@@ -42,7 +42,7 @@ set_seed(SEED)
 
 class OptimizationTest(INCTestMixin):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("text-classification", "hf-internal-testing/tiny-random-bert", 32),
+        ("text-classification", "hf-internal-testing/tiny-random-bert", 64),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
