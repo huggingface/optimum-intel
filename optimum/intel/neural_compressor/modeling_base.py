@@ -31,20 +31,17 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
+    GenerationMixin,
     PretrainedConfig,
     XLNetLMHeadModel,
-    GenerationMixin,
 )
 from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils import is_ipex_available
 from transformers.utils.generic import ContextManagers
 
-from ...exporters import TasksManager
 from ...modeling_base import OptimizedModel
-from ..generation.modeling import jit_trace
 from ..utils.import_utils import _torch_version, is_torch_version
-from ..utils.modeling_utils import patch_decoder_attention_mask
 from .configuration import INCConfig
 from .utils import WEIGHTS_NAME
 
@@ -211,7 +208,9 @@ class INCModel(OptimizedModel):
 
     def generate(self, *args, **kwargs):
         if not self.can_generate():
-            raise TypeError(f"The current model class {self.model.__class__} is not compatible with `.generate()`, as it doesn't have a language model head.")
+            raise TypeError(
+                f"The current model class {self.model.__class__} is not compatible with `.generate()`, as it doesn't have a language model head."
+            )
         return self.model.generate(*args, **kwargs)
 
 

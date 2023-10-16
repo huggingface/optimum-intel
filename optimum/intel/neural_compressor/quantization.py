@@ -52,8 +52,6 @@ from ..utils.import_utils import (
     is_neural_compressor_version,
 )
 from .configuration import INCConfig
-from .utils import INCDataLoader, _cfgs_to_fx_cfgs
-
 from .modeling_base import (  # noqa
     INCModel,
     INCModelForMaskedLM,
@@ -65,6 +63,8 @@ from .modeling_base import (  # noqa
     INCModelForVision2Seq,
     INCModelForXLNetLM,
 )
+from .utils import INCDataLoader, _cfgs_to_fx_cfgs
+
 
 logger = logging.getLogger(__name__)
 
@@ -528,6 +528,3 @@ def _apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> t
         q_model = convert(q_model, mapping=q_mapping, inplace=True)
 
     return q_model
-
-
-

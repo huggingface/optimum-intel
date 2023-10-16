@@ -19,7 +19,7 @@ import unittest
 
 import torch
 from parameterized import parameterized
-from transformers import set_seed, AutoTokenizer, pipeline
+from transformers import AutoTokenizer, pipeline, set_seed
 
 from optimum.exporters import TasksManager
 from optimum.intel import (  # noqa
@@ -27,17 +27,16 @@ from optimum.intel import (  # noqa
     INCModel,
     INCModelForCausalLM,
     INCModelForMaskedLM,
+    INCModelForMultipleChoice,
     INCModelForQuestionAnswering,
     INCModelForSeq2SeqLM,
     INCModelForSequenceClassification,
     INCModelForTokenClassification,
-    INCModelForMultipleChoice,
     INCQuantizer,
     INCSeq2SeqTrainer,
     INCStableDiffusionPipeline,
     INCTrainer,
 )
-
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
 
 
@@ -61,16 +60,12 @@ MODEL_NAMES_TO_TASK = (
     ("hf-internal-testing/tiny-random-BartForConditionalGeneration", "text2text-generation"),
     ("hf-internal-testing/tiny-random-RobertaForTokenClassification", "token-classification"),
     ("hf-internal-testing/tiny-random-BertForMultipleChoice", "multiple-choice"),
-
 )
 
-DIFFUSERS_MODEL_NAMES_TO_TASK = (
-    ("echarlaix/stable-diffusion-v1-5-inc-int8-dynamic", "stable-diffusion"),
-)
+DIFFUSERS_MODEL_NAMES_TO_TASK = (("echarlaix/stable-diffusion-v1-5-inc-int8-dynamic", "stable-diffusion"),)
 
 
 class INCModelingTest(unittest.TestCase):
-
     @parameterized.expand(MODEL_NAMES_TO_TASK + QUANTIZED_MODEL_NAMES_TO_TASK)
     def test_modeling(self, model_id, task):
         model_class = eval(_HEAD_TO_AUTOMODELS[task])
@@ -106,10 +101,8 @@ class INCModelingTest(unittest.TestCase):
             transformers_outputs = transformers_model(**model_inputs)
             self.assertTrue(torch.equal(transformers_outputs[output_name], outputs[output_name]))
 
-
     @parameterized.expand(MODEL_NAMES_TO_TASK + QUANTIZED_MODEL_NAMES_TO_TASK)
     def test_pipeline(self, model_id, task):
-
         if task == "multiple-choice":
             self.skipTest("No pipeline for multiple choice")
 
@@ -126,4 +119,4 @@ class INCModelingTest(unittest.TestCase):
         elif task == "fill-mask":
             inputs[0] += f"{tokenizer.mask_token}"
 
-        outputs = pipe(*inputs)
+        pipe(*inputs)
