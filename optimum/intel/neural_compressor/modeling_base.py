@@ -136,7 +136,6 @@ class INCModel(OptimizedModel):
         model_save_dir = Path(model_cache_path).parent
         inc_config = None
         msg = None
-
         try:
             inc_config = INCConfig.from_pretrained(model_id)
             if not is_torch_version("==", inc_config.torch_version):
