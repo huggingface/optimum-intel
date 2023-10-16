@@ -39,6 +39,8 @@ class INCModelForCausalLM(INCModel, BaseModelForCausalLM):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
     forward = BaseModelForCausalLM.forward
+    generate = BaseModelForCausalLM.generate
+    can_generate = BaseModelForCausalLM.can_generate
 
     def __init__(
         self,

@@ -19,22 +19,25 @@ import unittest
 
 import torch
 from parameterized import parameterized
-from transformers import set_seed
+from transformers import set_seed, AutoTokenizer, pipeline
 
 from optimum.exporters import TasksManager
 from optimum.intel import (  # noqa
     INCConfig,
+    INCModel,
     INCModelForCausalLM,
     INCModelForMaskedLM,
     INCModelForQuestionAnswering,
     INCModelForSeq2SeqLM,
     INCModelForSequenceClassification,
     INCModelForTokenClassification,
+    INCModelForMultipleChoice,
     INCQuantizer,
     INCSeq2SeqTrainer,
     INCStableDiffusionPipeline,
     INCTrainer,
 )
+
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
 
 
@@ -44,20 +47,30 @@ set_seed(1009)
 
 QUANTIZED_MODEL_NAMES_TO_TASK = (
     ("echarlaix/distilbert-base-uncased-finetuned-sst-2-english-int8-dynamic", "text-classification"),
-    ("echarlaix/distilbert-sst2-inc-dynamic-quantization-magnitude-pruning-0.1", "text-classification"),
     ("Intel/distilbert-base-uncased-distilled-squad-int8-static", "question-answering"),
     ("Intel/t5-small-xsum-int8-dynamic", "text2text-generation"),
-    # ("echarlaix/stable-diffusion-v1-5-inc-int8-dynamic", "stable-diffusion")
 )
 
 
 MODEL_NAMES_TO_TASK = (
     ("hf-internal-testing/tiny-random-gpt2", "text-generation"),
-    ("hf-internal-testing/tiny-random-bert", "fill-mask"),
+    ("hf-internal-testing/tiny-random-BertForMaskedLM", "fill-mask"),
+    ("hf-internal-testing/tiny-random-DistilBertForSequenceClassification", "text-classification"),
+    ("hf-internal-testing/tiny-random-DebertaV2Model", "feature-extraction"),
+    ("hf-internal-testing/tiny-random-MobileBertForQuestionAnswering", "question-answering"),
+    ("hf-internal-testing/tiny-random-BartForConditionalGeneration", "text2text-generation"),
+    ("hf-internal-testing/tiny-random-RobertaForTokenClassification", "token-classification"),
+    ("hf-internal-testing/tiny-random-BertForMultipleChoice", "multiple-choice"),
+
+)
+
+DIFFUSERS_MODEL_NAMES_TO_TASK = (
+    ("echarlaix/stable-diffusion-v1-5-inc-int8-dynamic", "stable-diffusion"),
 )
 
 
 class INCModelingTest(unittest.TestCase):
+
     @parameterized.expand(MODEL_NAMES_TO_TASK + QUANTIZED_MODEL_NAMES_TO_TASK)
     def test_modeling(self, model_id, task):
         model_class = eval(_HEAD_TO_AUTOMODELS[task])
@@ -79,32 +92,38 @@ class INCModelingTest(unittest.TestCase):
             loaded_model = model_class.from_pretrained(tmpdirname)
             outputs_loaded = loaded_model(**model_inputs)
 
-        output_name = "end_logits" if task == "question-answering" else "logits"
+        if task == "feature-extraction":
+            output_name = "last_hidden_state"
+        elif task == "question-answering":
+            output_name = "end_logits"
+        else:
+            output_name = "logits"
+
         self.assertTrue(torch.equal(outputs_loaded[output_name], outputs[output_name]))
 
-    @parameterized.expand(MODEL_NAMES_TO_TASK)
-    def test_export_modeling(self, model_id, task):
-        model_class = eval(_HEAD_TO_AUTOMODELS[task])
-        inc_model = model_class.from_pretrained(model_id)
-        model_type = inc_model.config.model_type.replace("_", "-")
-        config_class = TasksManager.get_exporter_config_constructor(
-            exporter="onnx",
-            model=inc_model,
-            task=task,
-            model_name=model_id,
-            model_type=model_type,
-        )
-        config = config_class(inc_model.config)
-        model_inputs = config.generate_dummy_inputs(framework="pt")
-        outputs = inc_model(**model_inputs)
-        transformers_model = model_class.auto_model_class.from_pretrained(model_id)
-        transformers_outputs = transformers_model(**model_inputs)
+        if inc_model._q_config is None:
+            transformers_model = model_class.auto_model_class.from_pretrained(model_id)
+            transformers_outputs = transformers_model(**model_inputs)
+            self.assertTrue(torch.equal(transformers_outputs[output_name], outputs[output_name]))
 
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            inc_model.save_pretrained(tmpdirname)
-            loaded_model = model_class.from_pretrained(tmpdirname, export=True)
-            outputs_loaded = loaded_model(**model_inputs)
 
-        output_name = "end_logits" if task == "question-answering" else "logits"
-        self.assertTrue(torch.equal(outputs_loaded[output_name], outputs[output_name]))
-        self.assertTrue(torch.equal(transformers_outputs[output_name], outputs[output_name]))
+    @parameterized.expand(MODEL_NAMES_TO_TASK + QUANTIZED_MODEL_NAMES_TO_TASK)
+    def test_pipeline(self, model_id, task):
+
+        if task == "multiple-choice":
+            self.skipTest("No pipeline for multiple choice")
+
+        model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(model_id)
+        model.to("cpu")
+        model.eval()
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        pipe = pipeline(task, model=model, tokenizer=tokenizer)
+        self.assertEqual(pipe.device, model.device)
+
+        inputs = ["This is a simple input"]
+        if task == "question-answering":
+            inputs *= 2
+        elif task == "fill-mask":
+            inputs[0] += f"{tokenizer.mask_token}"
+
+        outputs = pipe(*inputs)
