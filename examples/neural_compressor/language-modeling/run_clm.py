@@ -33,7 +33,7 @@ import evaluate
 import torch
 import transformers
 from datasets import load_dataset
-from intel_extension_for_transformers.transformers.utils.quantization_config import WeightOnlyQuantConfig
+from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 from neural_compressor import (
     DistillationConfig,
     PostTrainingQuantConfig,
@@ -735,12 +735,7 @@ def main():
         )
         trainer.model = quantizer._quantized_model
 
-    # TODO: Weight only quantization didn't support save/load function now. Will implement it soon.
-    if (
-        optim_args.apply_quantization
-        and optim_args.verify_loading
-        and optim_args.quantization_approach != "weight_only"
-    ):
+    if optim_args.apply_quantization and optim_args.verify_loading:
         loaded_model = INCModelForCausalLM.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         with torch.no_grad():

@@ -59,7 +59,6 @@ from ..utils.import_utils import (
     _ipex_version,
     _neural_compressor_version,
     is_intel_extension_for_transformers_available,
-    is_intel_extension_for_transformers_version,
     is_ipex_version,
     is_neural_compressor_version,
 )
@@ -80,10 +79,7 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 
 if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.llm.quantization.utils import convert_to_quantized_model
-    if is_intel_extension_for_transformers_version("<=", "1.2.2"):
-        from intel_extension_for_transformers.transformers.utils.quantization_config import WeightOnlyQuantConfig
-    else:
-        from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
+    from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +182,7 @@ class INCQuantizer(OptimumQuantizer):
         save_directory.mkdir(parents=True, exist_ok=True)
         save_onnx_model = kwargs.pop("save_onnx_model", False)
 
-        if save_onnx_model and isinstance(self._original_model, ORTModel):
+        if save_onnx_model and (isinstance(self._original_model, ORTModel) or weight_only):
             save_onnx_model = False
             logger.warning("Model provided is an ONNX model, `save_onnx_model` is set to False")
 
@@ -278,6 +274,9 @@ class INCQuantizer(OptimumQuantizer):
 
         if isinstance(quantization_config, WeightOnlyQuantConfig):
             self._quantized_model = convert_to_quantized_model(self._original_model, quantization_config)
+            # Save the quantized model
+            output_path = save_directory.joinpath(file_name or default_name)
+            self._quantized_model.save_pretrained(output_path)
         else:
             if isinstance(self._original_model.config, PretrainedConfig):
                 self._original_model.config.backend = quantization_config.backend

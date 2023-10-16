@@ -56,7 +56,7 @@ from optimum.intel import (
     INCSeq2SeqTrainer,
     INCStableDiffusionPipeline,
 )
-from intel_extension_for_transformers.transformers.utils.quantization_config import WeightOnlyQuantConfig
+from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
 from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
 from optimum.pipelines import ORT_SUPPORTED_TASKS
