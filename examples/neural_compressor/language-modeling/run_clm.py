@@ -631,7 +631,7 @@ def main():
                     weight_dtype=optim_args.weight_dtype,
                     group_size=optim_args.group_size,
                     scheme=optim_args.weight_only_scheme,
-                    algorithm=optim_args.quantization_methodology
+                    algorithm=optim_args.quantization_methodology,
                 )
             else:
                 quantization_config = PostTrainingQuantConfig(
@@ -736,8 +736,11 @@ def main():
         trainer.model = quantizer._quantized_model
 
     # Weight only quantization didn't support save/load function due to weight only model has private linear operator.
-    if (optim_args.apply_quantization and optim_args.verify_loading
-            and optim_args.quantization_approach != "weight_only"):
+    if (
+        optim_args.apply_quantization
+        and optim_args.verify_loading
+        and optim_args.quantization_approach != "weight_only"
+    ):
         loaded_model = INCModelForCausalLM.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         with torch.no_grad():

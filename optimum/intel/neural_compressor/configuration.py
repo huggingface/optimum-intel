@@ -12,9 +12,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from intel_extension_for_transformers.transformers.utils import WeightOnlyQuantConfig
 from typing import Dict, Optional, Union
 
+from intel_extension_for_transformers.transformers.utils import WeightOnlyQuantConfig
 from neural_compressor.config import DistillationConfig, WeightPruningConfig, _BaseQuantizationConfig
 
 from optimum.configuration_utils import BaseConfig
