@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from intel_extension_for_transformers.transformers.utils import WeightOnlyQuantConfig
 from typing import Dict, Optional, Union
 
 from neural_compressor.config import DistillationConfig, WeightPruningConfig, _BaseQuantizationConfig
@@ -35,7 +36,7 @@ class INCConfig(BaseConfig):
 
     def __init__(
         self,
-        quantization: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
+        quantization: Optional[Union[Dict, _BaseQuantizationConfig, WeightOnlyQuantConfig]] = None,
         pruning: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
         distillation: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
         save_onnx_model: bool = False,
@@ -50,7 +51,7 @@ class INCConfig(BaseConfig):
         self.save_onnx_model = save_onnx_model
 
     @staticmethod
-    def _create_quantization_config(config: Union[Dict, _BaseQuantizationConfig]):
+    def _create_quantization_config(config: Union[Dict, _BaseQuantizationConfig, WeightOnlyQuantConfig]):
         # TODO : add activations_dtype and weights_dtype
         if isinstance(config, _BaseQuantizationConfig):
             approach = _quantization_model[config.approach]

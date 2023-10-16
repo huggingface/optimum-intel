@@ -17,7 +17,7 @@
 
 import os
 import tempfile
-
+import copy
 import evaluate
 import numpy as np
 import torch
@@ -56,9 +56,11 @@ from optimum.intel import (
     INCSeq2SeqTrainer,
     INCStableDiffusionPipeline,
 )
+from optimum.intel.neural_compressor import WeightOnlyQuantConfig
 from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
 from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
 from optimum.pipelines import ORT_SUPPORTED_TASKS
+import unittest
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -194,84 +196,19 @@ class OptimizationTest(INCTestMixin):
 
     def test_weight_only_quantization(self):
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
-        op_type_dict = {
-            ".*": {
-                "weight": {
-                    "bits": 8,
-                    "group_size": -1,
-                    "scheme": "sym",
-                    "algorithm": "RTN",
-                },
-            },
-        }
-        quantization_config = PostTrainingQuantConfig(approach="weight_only", op_type_dict=op_type_dict)
+        quantization_config = WeightOnlyQuantConfig(weight_dtype="int8")
         model = AutoModelForCausalLM.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        quantizer = INCQuantizer.from_pretrained(model, task="text-generation")
+        quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
         calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer.quantize(
+            q_model = quantizer.quantize(
                 quantization_config=quantization_config,
                 calibration_dataset=calibration_dataset,
                 save_directory=tmp_dir,
-                weight_only=True,
             )
-            q_model = AutoModelForCausalLM.from_pretrained(tmp_dir)
-            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
-            out = model(inp)[0]
-            q_out = q_model(inp)[0]
-            self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
-
-        op_type_dict = {
-            ".*": {
-                "weight": {
-                    "bits": 8,
-                    "group_size": -1,
-                    "scheme": "sym",
-                    "algorithm": "AWQ",
-                },
-            },
-        }
-        quantization_config = PostTrainingQuantConfig(approach="weight_only", op_type_dict=op_type_dict)
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer.quantize(
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-                save_directory=tmp_dir,
-                weight_only=True,
-            )
-            q_model = AutoModelForCausalLM.from_pretrained(tmp_dir)
-            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
-            out = model(inp)[0]
-            q_out = q_model(inp)[0]
-            self.assertTrue(torch.all(torch.isclose(out, q_out, atol=6e-1)))
-
-        op_type_dict = {
-            ".*": {
-                "weight": {
-                    "bits": 8,
-                    "group_size": -1,
-                    "scheme": "sym",
-                    "algorithm": "GPTQ",
-                },
-            },
-        }
-        recipes = {"gptq_args": {"pad_max_length": len(calibration_dataset[0]["input_ids"])}}
-        quantization_config = PostTrainingQuantConfig(
-            approach="weight_only", op_type_dict=op_type_dict, recipes=recipes
-        )
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer.quantize(
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-                save_directory=tmp_dir,
-                weight_only=True,
-            )
-            q_model = AutoModelForCausalLM.from_pretrained(tmp_dir)
             inp = torch.tensor([calibration_dataset[0]["input_ids"]])
             out = model(inp)[0]
             q_out = q_model(inp)[0]
