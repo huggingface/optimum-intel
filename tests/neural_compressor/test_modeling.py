@@ -67,7 +67,7 @@ DIFFUSERS_MODEL_NAMES_TO_TASK = (("echarlaix/stable-diffusion-v1-5-inc-int8-dyna
 
 class INCModelingTest(unittest.TestCase):
     @parameterized.expand(MODEL_NAMES_TO_TASK + QUANTIZED_MODEL_NAMES_TO_TASK)
-    def test_modeling(self, model_id, task):
+    def test_compare_to_transformers(self, model_id, task):
         model_class = eval(_HEAD_TO_AUTOMODELS[task])
         inc_model = model_class.from_pretrained(model_id)
         model_type = inc_model.config.model_type.replace("_", "-")
@@ -94,11 +94,13 @@ class INCModelingTest(unittest.TestCase):
         else:
             output_name = "logits"
 
+        # Compare to saved and loaded model
         self.assertTrue(torch.equal(outputs_loaded[output_name], outputs[output_name]))
 
         if inc_model._q_config is None:
             transformers_model = model_class.auto_model_class.from_pretrained(model_id)
             transformers_outputs = transformers_model(**model_inputs)
+            # Compare to original transformers model
             self.assertTrue(torch.equal(transformers_outputs[output_name], outputs[output_name]))
 
     @parameterized.expand(MODEL_NAMES_TO_TASK + QUANTIZED_MODEL_NAMES_TO_TASK)
@@ -113,10 +115,8 @@ class INCModelingTest(unittest.TestCase):
         pipe = pipeline(task, model=model, tokenizer=tokenizer)
         self.assertEqual(pipe.device, model.device)
 
-        inputs = ["This is a simple input"]
+        inputs = ["This is a simple input" + (f"{tokenizer.mask_token}" if task == "fill-mask" else "")]
         if task == "question-answering":
             inputs *= 2
-        elif task == "fill-mask":
-            inputs[0] += f"{tokenizer.mask_token}"
 
         pipe(*inputs)
