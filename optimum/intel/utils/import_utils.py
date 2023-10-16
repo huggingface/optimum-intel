@@ -17,6 +17,7 @@ import operator as op
 import sys
 from collections import OrderedDict
 from typing import Union
+
 from packaging.version import Version, parse
 
 
@@ -205,7 +206,7 @@ def is_torch_version(operation: str, version: str):
     if not _torch_available:
         return False
 
-    import torch 
+    import torch
 
     return compare_versions(parse(parse(torch.__version__).base_version), operation, version)
 
