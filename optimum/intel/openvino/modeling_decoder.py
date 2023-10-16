@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -33,6 +33,10 @@ from ...exporters.openvino import main_export
 from ..utils.import_utils import is_transformers_version
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import OV_XML_FILE_NAME, STR_TO_OV_TYPE
+
+
+if TYPE_CHECKING:
+    pass
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -269,7 +273,9 @@ class OVBaseDecoderModel(OVModel):
             shapes[inputs][0] = -1
             input_name = inputs.get_any_name()
             if input_name.startswith("past_key_values"):
-                if len(inputs.partial_shape) == 3 and input_name.endswith("value"):
+                if (
+                    len(inputs.partial_shape) == 3 and input_name.endswith("value")
+                ) or self.config.model_type == "chatglm":
                     shapes[inputs][1] = -1
                 else:
                     shapes[inputs][2] = -1
@@ -312,6 +318,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
@@ -345,6 +352,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             for input_name in self.key_value_input_names:
                 model_inputs = self.model.input(input_name)
                 shape = model_inputs.get_partial_shape()
+                if self.config.model_type == "chatglm":
+                    shape[0] = 0
+                    shape[1] = shape_input_ids[0] * num_attention_heads
+                    inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
+                    continue
                 shape[0] = shape_input_ids[0] * num_attention_heads
                 if shape[2].is_dynamic:
                     shape[2] = 0
@@ -358,6 +370,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if "attention_mask" in self.input_names and attention_mask is not None:
             inputs["attention_mask"] = np.array(attention_mask)
 
+        if "position_ids" in self.input_names and position_ids is not None:
+            inputs["position_ids"] = position_ids
         # Run inference
         self.request.start_async(inputs, shared_memory=True)
         self.request.wait()
@@ -385,12 +399,21 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             if past_key_values[0][0].shape[0] == input_ids.shape[0]:
                 past_key_values = self._convert_to_bloom_cache(past_key_values)
 
+        attention_mask = kwargs.get("attention_mask", None)
+        position_ids = kwargs.get("position_ids", None)
+        if attention_mask is not None and position_ids is None:
+            # create position_ids on the fly for batch generation
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values:
+                position_ids = position_ids[:, -1].unsqueeze(-1)
+
         return {
             "input_ids": input_ids,
             "past_key_values": past_key_values,
             "use_cache": self.use_cache,
-            "position_ids": None,
-            "attention_mask": kwargs.get("attention_mask", None),
+            "position_ids": position_ids,
+            "attention_mask": attention_mask,
             "token_type_ids": None,
         }
 

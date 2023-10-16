@@ -15,14 +15,20 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoTokenizer
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import __main__ as optimum_main
 from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
+from optimum.exporters.onnx.utils import (
+    _get_submodels_for_export_encoder_decoder,
+    _get_submodels_for_export_stable_diffusion,
+    get_encoder_decoder_models_for_export,
+    get_sam_models_for_export,
+    get_stable_diffusion_models_for_export,
+)
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
@@ -31,11 +37,111 @@ from ...intel.utils.modeling_utils import patch_decoder_attention_mask
 from .convert import export_models
 
 
+if TYPE_CHECKING:
+    from transformers import PreTrainedModel, TFPreTrainedModel
+
+
 OV_XML_FILE_NAME = "openvino_model.xml"
 
 _MAX_UNCOMPRESSED_SIZE = 1e9
 
 logger = logging.getLogger(__name__)
+
+
+def _get_submodels_and_export_configs(
+    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    task: str,
+    custom_onnx_configs: Dict,
+    custom_architecture: bool,
+    _variant: str,
+    int_dtype: str = "int64",
+    float_dtype: str = "fp32",
+    fn_get_submodels: Optional[Callable] = None,
+    preprocessors: Optional[List[Any]] = None,
+    no_position_ids: bool = False,
+):
+    is_stable_diffusion = "stable-diffusion" in task
+    if not custom_architecture:
+        if is_stable_diffusion:
+            onnx_config = None
+            models_and_onnx_configs = get_stable_diffusion_models_for_export(
+                model, int_dtype=int_dtype, float_dtype=float_dtype
+            )
+        else:
+            onnx_config_constructor = TasksManager.get_exporter_config_constructor(
+                model=model, exporter="openvino", task=task
+            )
+            onnx_config_kwargs = {}
+            if task.startswith("text-generation") and no_position_ids:
+                onnx_config_kwargs["no_position_ids"] = no_position_ids
+
+            onnx_config = onnx_config_constructor(
+                model.config,
+                int_dtype=int_dtype,
+                float_dtype=float_dtype,
+                preprocessors=preprocessors,
+                **onnx_config_kwargs,
+            )
+
+            onnx_config.variant = _variant
+            all_variants = "\n".join(
+                [f"\t- {name}: {description}" for name, description in onnx_config.VARIANTS.items()]
+            )
+            logger.info(f"Using the export variant {onnx_config.variant}. Available variants are:\n{all_variants}")
+
+            if model.config.is_encoder_decoder and task.startswith(TasksManager._ENCODER_DECODER_TASKS):
+                models_and_onnx_configs = get_encoder_decoder_models_for_export(model, onnx_config)
+            elif task.startswith("text-generation"):
+                model = patch_decoder_attention_mask(model)
+                onnx_config_constructor = TasksManager.get_exporter_config_constructor(
+                    model=model, exporter="openvino", task=task
+                )
+                onnx_config = onnx_config_constructor(model.config)
+                models_and_onnx_configs = {"model": (model, onnx_config)}
+            elif model.config.model_type == "sam":
+                models_and_onnx_configs = get_sam_models_for_export(model, onnx_config)
+            else:
+                models_and_onnx_configs = {"model": (model, onnx_config)}
+
+        # When specifying custom ONNX configs for supported transformers architectures, we do
+        # not force to specify a custom ONNX config for each submodel.
+        for key, custom_onnx_config in custom_onnx_configs.items():
+            models_and_onnx_configs[key] = (models_and_onnx_configs[key][0], custom_onnx_config)
+    else:
+        onnx_config = None
+        submodels_for_export = None
+        models_and_onnx_configs = {}
+
+        if fn_get_submodels is not None:
+            submodels_for_export = fn_get_submodels(model)
+        else:
+            if is_stable_diffusion:
+                submodels_for_export = _get_submodels_for_export_stable_diffusion(model)
+            elif model.config.is_encoder_decoder and task.startswith(TasksManager._ENCODER_DECODER_TASKS):
+                submodels_for_export = _get_submodels_for_export_encoder_decoder(
+                    model, use_past=task.endswith("-with-past")
+                )
+            elif task.startswith("text-generation"):
+                model = patch_decoder_attention_mask(model)
+                models_and_onnx_configs = {"model": model}
+            else:
+                submodels_for_export = {"model": model}
+
+        if submodels_for_export.keys() != custom_onnx_configs.keys():
+            logger.error(f"ONNX custom configs for: {', '.join(custom_onnx_configs.keys())}")
+            logger.error(f"Submodels to export: {', '.join(submodels_for_export.keys())}")
+            raise ValueError(
+                "Trying to export a custom model, but could not find as many custom ONNX configs as the number of submodels to export. Please specifiy the fn_get_submodels argument, that should return a dictionary of submodules with as many items as the provided custom_onnx_configs dictionary."
+            )
+
+        for key, custom_onnx_config in custom_onnx_configs.items():
+            models_and_onnx_configs[key] = (submodels_for_export[key], custom_onnx_config)
+
+    # Default to the first ONNX config for stable-diffusion and custom architecture case.
+    if onnx_config is None:
+        onnx_config = next(iter(models_and_onnx_configs.values()))[1]
+
+    return onnx_config, models_and_onnx_configs
 
 
 def main_export(
@@ -183,7 +289,7 @@ def main_export(
                 f"If you want to support {model_type} please propose a PR or open up an issue."
             )
         if model.config.model_type.replace("-", "_") not in TasksManager.get_supported_model_type_for_task(
-            task, exporter="onnx"
+            task, exporter="openvino"
         ):
             custom_architecture = True
 
@@ -200,7 +306,7 @@ def main_export(
     if (
         not custom_architecture
         and not is_stable_diffusion
-        and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(model_type, "onnx")
+        and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(model_type, "openvino")
     ):
         if original_task == "auto":  # Make -with-past the default if --task was not explicitely specified
             task = task + "-with-past"
@@ -222,24 +328,15 @@ def main_export(
     preprocessors = maybe_load_preprocessors(
         model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
-    if not task.startswith("text-generation"):
-        onnx_config, models_and_onnx_configs = optimum_main._get_submodels_and_onnx_configs(
-            model=model,
-            task=task,
-            monolith=False,
-            custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
-            custom_architecture=custom_architecture,
-            fn_get_submodels=fn_get_submodels,
-            preprocessors=preprocessors,
-            _variant="default",
-        )
-    else:
-        # TODO : ModelPatcher will be added in next optimum release
-        model = patch_decoder_attention_mask(model)
-
-        onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_constructor(model.config)
-        models_and_onnx_configs = {"model": (model, onnx_config)}
+    onnx_config, models_and_onnx_configs = _get_submodels_and_export_configs(
+        model=model,
+        task=task,
+        custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
+        custom_architecture=custom_architecture,
+        fn_get_submodels=fn_get_submodels,
+        preprocessors=preprocessors,
+        _variant="default",
+    )
 
     if int8 is None:
         int8 = False
@@ -276,7 +373,7 @@ def main_export(
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
             generation_config.save_pretrained(output)
-        maybe_save_preprocessors(model_name_or_path, output)
+        maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
 
         if model.config.is_encoder_decoder and task.startswith("text-generation"):
             raise ValueError(
