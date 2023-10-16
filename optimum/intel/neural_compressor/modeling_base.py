@@ -136,13 +136,14 @@ class INCModel(OptimizedModel):
         model_save_dir = Path(model_cache_path).parent
         inc_config = None
         msg = None
+
         try:
             inc_config = INCConfig.from_pretrained(model_id)
             if not is_torch_version("==", inc_config.torch_version):
                 msg = f"Quantized model was obtained with torch version {inc_config.torch_version} but {_torch_version} was found."
                 logger.warning(f"{msg}")
-        except Exception:
-            logger.info("Couldn't verify torch version.")
+        except EnvironmentError:
+            msg = f"Please check if torch quantization the model was obtained with is compatible with {_torch_version}."
 
         if getattr(config, "backend", None) == "ipex" or getattr(config, "torchscript", False):
             # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.
