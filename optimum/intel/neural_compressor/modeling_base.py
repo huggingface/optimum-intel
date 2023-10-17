@@ -112,6 +112,7 @@ class INCModel(OptimizedModel):
         file_name: str = WEIGHTS_NAME,
         local_files_only: bool = False,
         subfolder: str = "",
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         model_name_or_path = kwargs.pop("model_name_or_path", None)
@@ -178,8 +179,8 @@ class INCModel(OptimizedModel):
             model, config=config, model_save_dir=model_save_dir, q_config=q_config, inc_config=inc_config, **kwargs
         )
 
-    def _save_pretrained(self, save_directory: Union[str, Path], file_name: str = WEIGHTS_NAME):
-        output_path = os.path.join(save_directory, file_name)
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        output_path = os.path.join(save_directory, WEIGHTS_NAME)
 
         if isinstance(self.model, torch.nn.Module):
             state_dict = self.model.state_dict()

@@ -38,8 +38,7 @@ from optimum.intel import (  # noqa
     INCStableDiffusionPipeline,
     INCTrainer,
 )
-from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
-
+from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS, WEIGHTS_NAME
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(1009)
@@ -94,10 +93,9 @@ class INCModelingTest(unittest.TestCase):
         config = config_class(inc_model.config)
         model_inputs = config.generate_dummy_inputs(framework="pt")
         outputs = inc_model(**model_inputs)
-        file_name = "model.pt"
         with tempfile.TemporaryDirectory() as tmpdirname:
-            inc_model.save_pretrained(tmpdirname, file_name)
-            loaded_model = model_class.from_pretrained(tmpdirname, file_name=file_name)
+            inc_model.save_pretrained(tmpdirname)
+            loaded_model = model_class.from_pretrained(tmpdirname, file_name=WEIGHTS_NAME)
             outputs_loaded = loaded_model(**model_inputs)
 
         if task == "feature-extraction":
