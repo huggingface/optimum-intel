@@ -75,11 +75,11 @@ class INCModel(OptimizedModel):
         inc_config: Dict = None,
         **kwargs,
     ):
-        super().__init__(model=model, config=config)
-
+        super().__init__(model=model, config=config, **kwargs)
         self.inc_config = inc_config
         self._q_config = q_config
         self.model_save_dir = model_save_dir
+        self._device = getattr(self.model, "device", None) or torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         if getattr(self.config, "backend", None) == "ipex":
             if not is_ipex_available():
@@ -107,7 +107,7 @@ class INCModel(OptimizedModel):
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
         cache_dir: Optional[str] = None,
-        file_name: Optional[str] = WEIGHTS_NAME,
+        file_name: str = WEIGHTS_NAME,
         local_files_only: bool = False,
         subfolder: str = "",
         **kwargs,
@@ -176,8 +176,8 @@ class INCModel(OptimizedModel):
             model, config=config, model_save_dir=model_save_dir, q_config=q_config, inc_config=inc_config, **kwargs
         )
 
-    def _save_pretrained(self, save_directory: Union[str, Path]):
-        output_path = os.path.join(save_directory, WEIGHTS_NAME)
+    def _save_pretrained(self, save_directory: Union[str, Path], file_name : str = WEIGHTS_NAME):
+        output_path = os.path.join(save_directory, file_name)
 
         if isinstance(self.model, torch.nn.Module):
             state_dict = self.model.state_dict()
@@ -198,11 +198,12 @@ class INCModel(OptimizedModel):
         return self
 
     @property
-    def device(self):
-        return self.model.device
+    def device(self) -> torch.device:
+        return self._device
 
-    def to(self, device: str):
-        self.model.to(device)
+    def to(self, device: Union[torch.device, str]):
+        self._device = device if isinstance(device, torch.device) else torch.device(device)
+        self.model.to(self._device)
         return self
 
     def can_generate(self):

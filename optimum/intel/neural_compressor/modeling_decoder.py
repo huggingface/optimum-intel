@@ -15,7 +15,7 @@
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Union
+from typing import Optional, Union, Dict
 
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
@@ -47,9 +47,11 @@ class INCModelForCausalLM(INCModel, BaseModelForCausalLM):
         model,
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        q_config: Dict = None,
+        inc_config: Dict = None,
         use_cache: bool = True,
         **kwargs,
     ):
         super(INCModelForCausalLM, self).__init__(
-            model=model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs
+            model=model, config=config, model_save_dir=model_save_dir, q_config=q_config, inc_config=inc_config, use_cache=use_cache, **kwargs
         )
