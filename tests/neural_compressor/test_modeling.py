@@ -15,8 +15,8 @@
 
 import os
 import tempfile
-import unittest
 import time
+import unittest
 
 import torch
 from parameterized import parameterized
@@ -66,7 +66,6 @@ MODEL_NAMES_TO_TASK = (
 DIFFUSERS_MODEL_NAMES_TO_TASK = (("echarlaix/stable-diffusion-v1-5-inc-int8-dynamic", "stable-diffusion"),)
 
 
-
 class Timer(object):
     def __enter__(self):
         self.elapsed = time.perf_counter()
@@ -74,7 +73,6 @@ class Timer(object):
 
     def __exit__(self, type, value, traceback):
         self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
-
 
 
 class INCModelingTest(unittest.TestCase):
@@ -148,7 +146,9 @@ class INCModelingTest(unittest.TestCase):
             outputs_model_with_pkv = model_with_pkv.generate(
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
-        model_without_pkv = INCModelForCausalLM.from_pretrained(model_id, use_cache=False, subfolder="model_without_pkv")
+        model_without_pkv = INCModelForCausalLM.from_pretrained(
+            model_id, use_cache=False, subfolder="model_without_pkv"
+        )
         # Warmup
         model_without_pkv.generate(**tokens)
         with Timer() as without_pkv_timer:

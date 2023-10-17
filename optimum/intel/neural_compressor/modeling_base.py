@@ -79,7 +79,9 @@ class INCModel(OptimizedModel):
         self.inc_config = inc_config
         self._q_config = q_config
         self.model_save_dir = model_save_dir
-        self._device = getattr(self.model, "device", None) or torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self._device = getattr(self.model, "device", None) or torch.device(
+            "cuda:0" if torch.cuda.is_available() else "cpu"
+        )
 
         if getattr(self.config, "backend", None) == "ipex":
             if not is_ipex_available():
@@ -176,7 +178,7 @@ class INCModel(OptimizedModel):
             model, config=config, model_save_dir=model_save_dir, q_config=q_config, inc_config=inc_config, **kwargs
         )
 
-    def _save_pretrained(self, save_directory: Union[str, Path], file_name : str = WEIGHTS_NAME):
+    def _save_pretrained(self, save_directory: Union[str, Path], file_name: str = WEIGHTS_NAME):
         output_path = os.path.join(save_directory, file_name)
 
         if isinstance(self.model, torch.nn.Module):
