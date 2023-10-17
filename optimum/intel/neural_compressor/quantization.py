@@ -52,6 +52,17 @@ from ..utils.import_utils import (
     is_neural_compressor_version,
 )
 from .configuration import INCConfig
+from .modeling_base import (  # noqa
+    INCModel,
+    INCModelForMaskedLM,
+    INCModelForMultipleChoice,
+    INCModelForQuestionAnswering,
+    INCModelForSeq2SeqLM,
+    INCModelForSequenceClassification,
+    INCModelForTokenClassification,
+    INCModelForVision2Seq,
+    INCModelForXLNetLM,
+)
 from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 
 

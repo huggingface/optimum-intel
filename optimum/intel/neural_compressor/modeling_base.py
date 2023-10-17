@@ -31,6 +31,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
+    GenerationMixin,
     PretrainedConfig,
     XLNetLMHeadModel,
 )
@@ -39,11 +40,8 @@ from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils import is_ipex_available
 from transformers.utils.generic import ContextManagers
 
-from ...exporters import TasksManager
 from ...modeling_base import OptimizedModel
-from ..generation.modeling import jit_trace
 from ..utils.import_utils import _torch_version, is_torch_version
-from ..utils.modeling_utils import patch_decoder_attention_mask
 from .configuration import INCConfig
 from .utils import WEIGHTS_NAME
 
@@ -65,6 +63,7 @@ MODEL_START_DOCSTRING = r"""
 
 class INCModel(OptimizedModel):
     auto_model_class = AutoModel
+    export_feature = "feature-extraction"
     base_model_prefix = "inc_model"
 
     def __init__(
@@ -76,12 +75,13 @@ class INCModel(OptimizedModel):
         inc_config: Dict = None,
         **kwargs,
     ):
-        super().__init__(model=model, config=config)
-
+        super().__init__(model=model, config=config, **kwargs)
         self.inc_config = inc_config
         self._q_config = q_config
         self.model_save_dir = model_save_dir
-        self.is_quantized = q_config is not None
+        self._device = getattr(self.model, "device", None) or torch.device(
+            "cuda:0" if torch.cuda.is_available() else "cpu"
+        )
 
         if getattr(self.config, "backend", None) == "ipex":
             if not is_ipex_available():
@@ -109,9 +109,10 @@ class INCModel(OptimizedModel):
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
         cache_dir: Optional[str] = None,
-        file_name: Optional[str] = WEIGHTS_NAME,
+        file_name: str = WEIGHTS_NAME,
         local_files_only: bool = False,
         subfolder: str = "",
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         model_name_or_path = kwargs.pop("model_name_or_path", None)
@@ -143,8 +144,10 @@ class INCModel(OptimizedModel):
             if not is_torch_version("==", inc_config.torch_version):
                 msg = f"Quantized model was obtained with torch version {inc_config.torch_version} but {_torch_version} was found."
                 logger.warning(f"{msg}")
-        except Exception:
-            logger.info("Couldn't verify torch version.")
+        except EnvironmentError:
+            msg = (
+                f"Please check if torch quantization the model was obtained with is compatible with {_torch_version}."
+            )
 
         if getattr(config, "backend", None) == "ipex" or getattr(config, "torchscript", False):
             # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.
@@ -195,63 +198,26 @@ class INCModel(OptimizedModel):
 
     def eval(self):
         self.model.eval()
+        return self
 
-    @classmethod
-    def _from_transformers(
-        cls,
-        model_id: str,
-        config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: Optional[str] = None,
-        subfolder: str = "",
-        local_files_only: bool = False,
-        use_cache: bool = True,
-        torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
-        **kwargs,
-    ):
-        if is_torch_version("<", "2.0.0"):
-            raise ImportError("`torch>=2.0.0` is needed to trace your model")
+    @property
+    def device(self) -> torch.device:
+        return self._device
 
-        task = cls.export_feature
-        kwargs.get("file_name", None)
+    def to(self, device: Union[torch.device, str]):
+        self._device = device if isinstance(device, torch.device) else torch.device(device)
+        self.model.to(self._device)
+        return self
 
-        model_kwargs = {
-            "revision": revision,
-            "use_auth_token": use_auth_token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "torch_dtype": torch_dtype,
-        }
+    def can_generate(self):
+        return isinstance(self.model, GenerationMixin)
 
-        if config.torch_dtype == "int8" or config.torch_dtype == torch.int8:
-            raise ValueError("quantized model cannot be exported")
-
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-
-        if task == "text-generation":
-            model = patch_decoder_attention_mask(model)
-
-        traced_model = jit_trace(model, task, use_cache)
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
-        torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
-        config.torchscript = True
-
-        return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            use_cache=use_cache,
-            use_auth_token=use_auth_token,
-            revision=revision,
-            force_download=force_download,
-            cache_dir=cache_dir,
-            local_files_only=local_files_only,
-            **kwargs,
-        )
+    def generate(self, *args, **kwargs):
+        if not self.can_generate():
+            raise TypeError(
+                f"The current model class {self.model.__class__} is not compatible with `.generate()`, as it doesn't have a language model head."
+            )
+        return self.model.generate(*args, **kwargs)
 
 
 class INCModelForQuestionAnswering(INCModel):
