@@ -115,7 +115,7 @@ class inference_mode:
                                     use_cache = False
                                     if hasattr(self._original.config, "use_cache") and self._original.config.use_cache:
                                         use_cache = True
-                                    model = jit_trace(
+                                    model, has_position_ids = jit_trace(
                                         model=model,
                                         task=self._model.task,
                                         use_cache=use_cache,
@@ -126,6 +126,7 @@ class inference_mode:
                                             config=self._original.config,
                                             use_cache=use_cache,
                                             model_dtype=self._original.dtype,
+                                            has_position_ids=has_position_ids,
                                         )
                                 except Exception as e:
                                     logger.warning(f"failed to use PyTorch jit mode due to: {e}.")

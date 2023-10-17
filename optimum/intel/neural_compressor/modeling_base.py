@@ -235,7 +235,7 @@ class INCModel(OptimizedModel):
         if task == "text-generation":
             model = patch_decoder_attention_mask(model)
 
-        traced_model = jit_trace(model, task, use_cache)
+        traced_model, has_position_ids = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
@@ -250,6 +250,7 @@ class INCModel(OptimizedModel):
             force_download=force_download,
             cache_dir=cache_dir,
             local_files_only=local_files_only,
+            has_position_ids=has_position_ids,
             **kwargs,
         )
 
