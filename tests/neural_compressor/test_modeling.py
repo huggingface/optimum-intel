@@ -94,10 +94,10 @@ class INCModelingTest(unittest.TestCase):
         config = config_class(inc_model.config)
         model_inputs = config.generate_dummy_inputs(framework="pt")
         outputs = inc_model(**model_inputs)
-
+        file_name = "model.pt"
         with tempfile.TemporaryDirectory() as tmpdirname:
-            inc_model.save_pretrained(tmpdirname)
-            loaded_model = model_class.from_pretrained(tmpdirname)
+            inc_model.save_pretrained(tmpdirname, file_name)
+            loaded_model = model_class.from_pretrained(tmpdirname, file_name=file_name)
             outputs_loaded = loaded_model(**model_inputs)
 
         if task == "feature-extraction":
