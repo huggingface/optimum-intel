@@ -40,6 +40,7 @@ from optimum.intel import (  # noqa
 )
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS, WEIGHTS_NAME
 
+
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(1009)
 
