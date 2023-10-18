@@ -449,6 +449,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
+        "big_code",
         "blenderbot",
         "blenderbot-small",
         "bloom",
@@ -459,6 +460,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox",
         "llama",
         "marian",
+        # "mistral",
         "mpt",
         "opt",
         "pegasus",

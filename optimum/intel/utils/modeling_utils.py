@@ -18,6 +18,9 @@ import torch
 from transformers.modeling_utils import PreTrainedModel
 
 
+MULTI_QUERY_ATTN_MODELS = {"falcon", "gpt_bigcode"}
+
+
 # Modified from transformers.models.bloom.modeling_bloom._make_causal_mask
 def _make_causal_mask(
     input_ids_shape: torch.Size,
