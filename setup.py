@@ -33,6 +33,8 @@ TESTS_REQUIRE = [
     "rjieba",
     "timm",
     "invisible-watermark>=0.2.0",
+    "intel-extension-for-transformers",
+    "peft",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]

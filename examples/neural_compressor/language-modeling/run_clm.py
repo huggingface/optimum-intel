@@ -33,6 +33,7 @@ import evaluate
 import torch
 import transformers
 from datasets import load_dataset
+from intel_extension_for_transformers.transformers.utils.quantization_config import WeightOnlyQuantConfig
 from neural_compressor import (
     DistillationConfig,
     PostTrainingQuantConfig,
@@ -56,7 +57,7 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from optimum.intel.neural_compressor import INCModelForCausalLM, INCQuantizer, INCTrainer, WeightOnlyQuantConfig
+from optimum.intel.neural_compressor import INCModelForCausalLM, INCQuantizer, INCTrainer
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -626,7 +627,7 @@ def main():
                 recipes = {}
             if optim_args.quantization_approach == "weight_only":
                 if optim_args.apply_pruning or optim_args.apply_distillation:
-                    raise ValueError("Can't  mixture weight only quantization and pruning, distillation.")
+                    raise ValueError("Weight only quantization and pruning or distillation cannot be combined.")
                 quantization_config = WeightOnlyQuantConfig(
                     weight_dtype=optim_args.weight_dtype,
                     group_size=optim_args.group_size,
@@ -716,12 +717,11 @@ def main():
     if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic", "weight_only"}:
         model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
         quantizer = INCQuantizer.from_pretrained(model)
-        if optim_args.quantization_approach == "static":
+        if optim_args.quantization_approach != "dynamic":
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
             train_dataset = train_dataset.select(range(num_calibration_samples))
-            quantization_config.calibration_sampling_size = num_calibration_samples
-        elif optim_args.quantization_approach == "weight_only":
-            train_dataset = train_dataset.select(range(num_calibration_samples))
+            if optim_args.quantization_approach == "static":
+                quantization_config.calibration_sampling_size = num_calibration_samples
 
         quantizer.quantize(
             quantization_config=quantization_config,
@@ -735,7 +735,7 @@ def main():
         )
         trainer.model = quantizer._quantized_model
 
-    # Weight only quantization didn't support save/load function due to weight only model has private linear operator.
+    # TODO: Weight only quantization didn't support save/load function now. Will implement it soon.
     if (
         optim_args.apply_quantization
         and optim_args.verify_loading

@@ -23,7 +23,6 @@ from typing import Callable, Dict, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
-from intel_extension_for_transformers.llm.quantization.utils import convert_to_quantized_model
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
@@ -59,6 +58,7 @@ from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAM
 from ..utils.import_utils import (
     _ipex_version,
     _neural_compressor_version,
+    is_intel_extension_for_transformers_available,
     is_ipex_version,
     is_neural_compressor_version,
 )
@@ -76,6 +76,10 @@ from .modeling_base import (  # noqa
 )
 from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 
+
+if is_intel_extension_for_transformers_available():
+    from intel_extension_for_transformers.llm.quantization.utils import convert_to_quantized_model
+    from intel_extension_for_transformers.transformers.utils.quantization_config import WeightOnlyQuantConfig
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +149,7 @@ class INCQuantizer(OptimumQuantizer):
     def quantize(
         self,
         save_directory: Union[str, Path],
-        quantization_config: Union[PostTrainingQuantConfig, WeightOnlyQuantConfig] = None,
+        quantization_config=None,
         calibration_dataset: Dataset = None,
         batch_size: int = 8,
         data_collator: Optional[DataCollator] = None,
@@ -186,12 +190,17 @@ class INCQuantizer(OptimumQuantizer):
         calibration_dataloader = None
         self._set_task()
 
-        if weight_only or isinstance(quantization_config, WeightOnlyQuantConfig):
+        if weight_only or not isinstance(quantization_config, PostTrainingQuantConfig):
             # check neural-compressor version
             if is_neural_compressor_version("<", NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION):
                 raise ImportError(
                     f"Found an incompatible version of neural-compressor. Found version {_neural_compressor_version}, "
                     f"but only version {NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION} or higher supports weight-only quantization."
+                )
+            if not is_intel_extension_for_transformers_available():
+                raise ImportError(
+                    "Didn't find out intel-etension-for-transformers package. "
+                    "Please install packages: pip install intel-etension-for-transformers and pip install peft."
                 )
 
             if quantization_config is None:
