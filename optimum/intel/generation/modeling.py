@@ -284,6 +284,12 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
                     if self.model_dtype is not None:
                         empty_tensor = empty_tensor.to(self.model_dtype)
                     past_key_values = tuple([empty_tensor] * num_layers)
+                elif self.config.model_type == "qwen":
+                    new_shape = [input_ids.shape[0], 0, num_key_value_heads, d_k]
+                    empty_tensor = torch.empty(size=new_shape)
+                    if self.model_dtype is not None:
+                        empty_tensor = empty_tensor.to(self.model_dtype)
+                    pkv = tuple(empty_tensor for _ in range(nb_pkv))
                 elif self.config.model_type != "bloom":
                     new_shape = [input_ids.shape[0], num_key_value_heads, 0, d_k]
                     empty_tensor = torch.empty(size=new_shape)
