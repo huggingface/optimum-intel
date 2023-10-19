@@ -13,7 +13,7 @@
 #  limitations under the License.
 
 from ..utils.import_utils import is_diffusers_available
-from .configuration import INCConfig, WeightOnlyQuantConfig
+from .configuration import INCConfig
 from .modeling_base import (
     INCModel,
     INCModelForMaskedLM,
