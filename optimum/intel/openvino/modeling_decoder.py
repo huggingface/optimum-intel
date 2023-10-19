@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -33,10 +33,6 @@ from ...exporters.openvino import main_export
 from ..utils.import_utils import is_transformers_version
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import OV_XML_FILE_NAME, STR_TO_OV_TYPE
-
-
-if TYPE_CHECKING:
-    pass
 
 
 if is_transformers_version("<", "4.25.0"):

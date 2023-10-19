@@ -97,6 +97,8 @@ def _get_submodels_and_export_configs(
                     model=model, exporter="openvino", task=task
                 )
                 onnx_config = onnx_config_constructor(model.config)
+                if onnx_config.use_past:
+                    onnx_config.use_past_in_inputs = True
                 models_and_onnx_configs = {"model": (model, onnx_config)}
             elif model.config.model_type == "sam":
                 models_and_onnx_configs = get_sam_models_for_export(model, onnx_config)
