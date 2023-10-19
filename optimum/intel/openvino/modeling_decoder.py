@@ -352,7 +352,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             input_ids = input_ids[:, -1:]
 
         inputs = {}
+        past_len = 0
         if past_key_values is not None:
+            seq_len_dim = 1 if self.model.input(self.key_value_input_names[0]).get_partial_shape()[1].is_dynamic else 2
+            past_len = past_key_values[0][0].shape[seq_len_dim]
             if self._pkv_precision == Type.bf16:
                 # numpy does not support bf16, pretending f16, should change to bf16
                 past_key_values = tuple(
@@ -387,8 +390,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         inputs["input_ids"] = np.array(input_ids)
 
         # Add the attention_mask inputs when needed
-        if "attention_mask" in self.input_names and attention_mask is not None:
-            inputs["attention_mask"] = np.array(attention_mask)
+        if "attention_mask" in self.input_names:
+            if attention_mask is not None:
+                inputs["attention_mask"] = np.array(attention_mask)
+            else:
+                inputs["attention_mask"] = np.ones(
+                    (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
+                )
 
         # Run inference
         self.request.start_async(inputs, shared_memory=True)

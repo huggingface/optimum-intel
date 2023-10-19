@@ -573,6 +573,29 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             del model
             gc.collect()
 
+    def test_default_filling_attention_mask(self):
+        model_id = MODEL_NAMES["gpt2"]
+        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        texts = ["this is a simple input"]
+        tokens = tokenizer(texts, return_tensors="pt")
+        self.assertTrue("attention_mask" in model_with_cache.input_names)
+        outs = model_with_cache(**tokens)
+        attention_mask = tokens.pop("attention_mask")
+        outs_without_attn_mask = model_with_cache(**tokens)
+        self.assertTrue(torch.allclose(outs.logits, outs_without_attn_mask.logits))
+        input_ids = torch.argmax(outs.logits, dim=2)
+        past_key_values = outs.past_key_values
+        attention_mask = torch.ones((input_ids.shape[0], tokens.input_ids.shape[1] + 1), dtype=torch.long)
+        outs_step2 = model_with_cache(
+            input_ids=input_ids, attention_mask=attention_mask, past_key_values=past_key_values
+        )
+        outs_without_attn_mask_step2 = model_with_cache(input_ids=input_ids, past_key_values=past_key_values)
+        self.assertTrue(torch.allclose(outs_step2.logits, outs_without_attn_mask_step2.logits))
+        del model_with_cache
+        gc.collect()
+
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
