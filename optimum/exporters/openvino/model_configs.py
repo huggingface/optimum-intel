@@ -59,7 +59,6 @@ class ChatGLM2OpenVINOConfig(TextDecoderOnnxConfig):
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = super().inputs
-        common_inputs.pop("attention_mask")
         if not self.no_position_ids and self.task == "text-generation":
             common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
 

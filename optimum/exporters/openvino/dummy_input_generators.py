@@ -14,6 +14,8 @@
 
 from typing import Optional, Tuple
 
+import torch
+
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,
     DummyPastKeyValuesGenerator,
@@ -29,6 +31,16 @@ class ChatGLN2DummyTextInputGenerator(DummyTextInputGenerator):
         "token_type_ids",
         "position_ids",
     }
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        input = super().generate(input_name, framework, int_dtype, float_dtype)
+        if input_name == "attention_mask":
+            input = torch.ones((input.shape[0], input.shape[1] + 1), dtype=input.dtype)
+            # input[0] = 0
+        if input_name == "position_ids":
+            input = torch.range(0, input.shape[1] + 1, dtype=input.dtype).repeat(1, 1)
+            # input[0] = 0
+        return input
 
 
 class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
