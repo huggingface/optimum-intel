@@ -13,5 +13,4 @@
 #  limitations under the License.
 
 
-
 MULTI_QUERY_ATTN_MODELS = {"falcon", "gpt_bigcode"}
