@@ -27,7 +27,6 @@ from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
 from ...intel.utils.import_utils import is_nncf_available
-from ...intel.utils.modeling_utils import patch_decoder_attention_mask
 from .convert import export_models
 
 
@@ -222,24 +221,18 @@ def main_export(
     preprocessors = maybe_load_preprocessors(
         model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
-    if not task.startswith("text-generation"):
-        onnx_config, models_and_onnx_configs = optimum_main._get_submodels_and_onnx_configs(
-            model=model,
-            task=task,
-            monolith=False,
-            custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
-            custom_architecture=custom_architecture,
-            fn_get_submodels=fn_get_submodels,
-            preprocessors=preprocessors,
-            _variant="default",
-        )
-    else:
-        # TODO : ModelPatcher will be added in next optimum release
-        model = patch_decoder_attention_mask(model)
 
-        onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_constructor(model.config)
-        models_and_onnx_configs = {"model": (model, onnx_config)}
+    onnx_config, models_and_onnx_configs = optimum_main._get_submodels_and_onnx_configs(
+        model=model,
+        task=task,
+        monolith=False,
+        custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
+        custom_architecture=custom_architecture,
+        fn_get_submodels=fn_get_submodels,
+        preprocessors=preprocessors,
+        _variant="default",
+        legacy=False,
+    )
 
     if int8 is None:
         int8 = False

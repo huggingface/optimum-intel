@@ -346,6 +346,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
@@ -402,6 +403,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 inputs["attention_mask"] = np.ones(
                     (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
                 )
+
+        # Add the attention_mask inputs when needed
+        if "position_ids" in self.input_names and position_ids is not None:
+            inputs["position_ids"] = np.array(position_ids)
 
         # Run inference
         self.request.start_async(inputs, shared_memory=True)
