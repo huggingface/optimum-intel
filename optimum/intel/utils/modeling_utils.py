@@ -18,6 +18,12 @@ import torch
 from transformers.modeling_utils import PreTrainedModel
 
 
+# from ...utils.modeling_utils import _prepare_decoder_sliding_window_attention_mask
+
+
+MULTI_QUERY_ATTN_MODELS = {"falcon", "gpt_bigcode"}
+
+
 # Modified from transformers.models.bloom.modeling_bloom._make_causal_mask
 def _make_causal_mask(
     input_ids_shape: torch.Size,
@@ -106,6 +112,8 @@ def patch_decoder_attention_mask(model: "PreTrainedModel"):
         model.transformer._prepare_attn_mask = _prepare_attn_mask
     elif model.config.model_type == "llama":
         model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+    # elif model.config.model_type == "mistral":
+    #     model.model._prepare_decoder_attention_mask = _prepare_decoder_sliding_window_attention_mask
     elif model.config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
         model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
     return model
