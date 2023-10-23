@@ -229,6 +229,34 @@ class OVBaseDecoderModel(OVModel):
             if use_cache:
                 task = task + "-with-past"
 
+        # Patch the modules to export of GPTQ models w/o GPU
+        do_gptq_patching = False
+        config_dict = config.to_dict()
+        quantization_config = config_dict.get("quantization_config", None)
+        do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
+        if do_gptq_patching:
+            torch.set_default_dtype(torch.float32)
+            orig_cuda_check = torch.cuda.is_available
+            torch.cuda.is_available = lambda: True
+
+            from optimum.gptq import GPTQQuantizer
+
+            orig_post_init_model = GPTQQuantizer.post_init_model
+
+            def post_init_model(self, model):
+                from auto_gptq import exllama_set_max_input_length
+
+                class StoreAttr(object):
+                    pass
+
+                model.quantize_config = StoreAttr()
+                model.quantize_config.desc_act = self.desc_act
+                if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
+                    model = exllama_set_max_input_length(model, self.max_input_length)
+                return model
+
+            GPTQQuantizer.post_init_model = post_init_model
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -240,9 +268,13 @@ class OVBaseDecoderModel(OVModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            model_kwargs=kwargs,
             int8=load_in_8bit,
         )
+
+        # Unpatch modules after GPTQ export
+        if do_gptq_patching:
+            torch.cuda.is_available = orig_cuda_check
+            GPTQQuantizer.post_init_model = orig_post_init_model
 
         config.is_decoder = True
         config.is_encoder_decoder = False
@@ -322,7 +354,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if self.use_cache and past_key_values is not None:
             input_ids = input_ids[:, -1:]
 
+        inputs = {}
+        past_len = 0
         if past_key_values is not None:
+            past_len = past_key_values[0][1].shape[-2]
             if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
                 if self._pkv_precision == Type.bf16:
                     # numpy does not support bf16, pretending f16, should change to bf16
@@ -336,6 +371,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     past_key_values = tuple(
                         past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
                     )
+
             # Add the past_key_values to the decoder inputs
             inputs = dict(zip(self.key_value_input_names, past_key_values))
 
@@ -357,8 +393,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         inputs["input_ids"] = np.array(input_ids)
         # Add the attention_mask inputs when needed
-        if attention_mask is not None:
-            inputs["attention_mask"] = np.array(attention_mask)
+        if "attention_mask" in self.input_names:
+            if attention_mask is not None:
+                inputs["attention_mask"] = np.array(attention_mask)
+            else:
+                inputs["attention_mask"] = np.ones(
+                    (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
+                )
 
         # Run inference
         results = self.request.infer(inputs, share_inputs=True, share_outputs=True)
