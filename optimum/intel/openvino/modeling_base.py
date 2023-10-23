@@ -79,7 +79,13 @@ class OVBaseModel(PreTrainedModel):
             height = -1 if self.export_feature == "image-classification" else None
             width = -1 if self.export_feature == "image-classification" else None
             model = self._reshape(model, -1, -1, height, width)
-        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
+
+        input_names = {}
+        for idx, key in enumerate(model.inputs):
+            names = tuple(key.get_names())
+            input_names[next((name for name in names if "/" not in name), names[0])] = idx
+        self.input_names = input_names
+
         self.model = model
         self.request = None
         if enable_compilation:
