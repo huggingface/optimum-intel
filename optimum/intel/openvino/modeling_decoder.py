@@ -357,8 +357,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         inputs = {}
         past_len = 0
         if past_key_values is not None:
-            past_len = past_key_values[0][1].shape[-2]
             if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
+                past_len = past_key_values[0][1].shape[-2]
                 if self._pkv_precision == Type.bf16:
                     # numpy does not support bf16, pretending f16, should change to bf16
                     past_key_values = tuple(
@@ -371,6 +371,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     past_key_values = tuple(
                         past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
                     )
+            else:
+                past_len = past_key_values[0].shape[-2]
 
             # Add the past_key_values to the decoder inputs
             inputs = dict(zip(self.key_value_input_names, past_key_values))
