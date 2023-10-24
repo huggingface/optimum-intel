@@ -220,6 +220,15 @@ def is_ipex_version(operation: str, version: str):
     return compare_versions(parse(_ipex_version), operation, version)
 
 
+def is_timm_version(operation: str, version: str):
+    """
+    Compare the current timm version to a given reference with an operation.
+    """
+    if not _timm_available:
+        return False
+    return compare_versions(parse(_timm_version), operation, version)
+
+
 DIFFUSERS_IMPORT_ERROR = """
 {0} requires the diffusers library but it was not found in your environment. You can install it with pip:
 `pip install diffusers`. Please note that you may need to restart your runtime after installation.
