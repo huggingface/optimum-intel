@@ -111,6 +111,19 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         loaded_model_outputs = loaded_model(**tokens)
 
+        # Test that model caching is automatically enabled
+        openvino_cache_dir = loaded_model.model_save_dir / "model_cache"
+        self.assertTrue(openvino_cache_dir.is_dir())
+        self.assertGreaterEqual(len(list(openvino_cache_dir.glob("*.blob"))), 1)
+
+        # Test specifying ov_config with throughput hint and manual cache dir
+        manual_openvino_cache_dir = loaded_model.model_save_dir / "manual_model_cache"
+        ov_config = {"CACHE_DIR": str(manual_openvino_cache_dir), "PERFORMANCE_HINT": "THROUGHPUT"}
+        loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID, ov_config=ov_config)
+        self.assertTrue(manual_openvino_cache_dir.is_dir())
+        self.assertGreaterEqual(len(list(manual_openvino_cache_dir.glob("*.blob"))), 1)
+        self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
+
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
@@ -120,6 +133,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
         outputs = model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+
         del loaded_model
         del model
         gc.collect()
@@ -276,6 +290,10 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
             self.assertTrue(not model.is_dynamic)
             self.assertGreaterEqual(outputs[0]["score"], 0.0)
             self.assertIsInstance(outputs[0]["label"], str)
+            # Test that model caching was not automatically enabled for exported model
+            openvino_cache_dir = model.model_save_dir / "model_cache"
+            self.assertFalse(openvino_cache_dir.is_dir())
+
         del model
         del pipe
         gc.collect()
