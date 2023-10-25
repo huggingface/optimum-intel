@@ -203,7 +203,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.decoder_with_past = None
         enable_compilation = kwargs.get("compile", True)
         encoder_cache_dir = Path(self.model_save_dir).joinpath("encoder_cache")
-        ov_encoder_config = self.ov_config
+        ov_encoder_config = {**self.ov_config}
 
         if "CACHE_DIR" not in ov_encoder_config.keys() and not str(self.model_save_dir).startswith(gettempdir()):
             ov_encoder_config["CACHE_DIR"] = str(encoder_cache_dir)
@@ -213,7 +213,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         )
 
         decoder_cache_dir = Path(self.model_save_dir).joinpath("decoder_cache")
-        ov_decoder_config = self.ov_config
+        ov_decoder_config = {**self.ov_config}
 
         if "CACHE_DIR" not in ov_decoder_config.keys() and not str(self.model_save_dir).startswith(gettempdir()):
             ov_decoder_config["CACHE_DIR"] = str(decoder_cache_dir)
@@ -222,7 +222,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
 
         if self.use_cache:
             decoder_past_cache_dir = Path(self.model_save_dir).joinpath("decoder_past_cache")
-            ov_decoder_past_config = self.ov_config
+            ov_decoder_past_config = {**self.ov_config}
 
             if "CACHE_DIR" not in ov_decoder_past_config.keys() and not str(self.model_save_dir).startswith(
                 gettempdir()
