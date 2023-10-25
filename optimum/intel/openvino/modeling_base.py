@@ -339,7 +339,7 @@ class OVBaseModel(PreTrainedModel):
         if self.request is None:
             logger.info(f"Compiling the model to {self._device} ...")
             ov_config = {**self.ov_config}
-            if "CACHE_DIR" not in self.ov_config.keys() and not self.model_save_dir.is_relative_to(gettempdir()):
+            if "CACHE_DIR" not in self.ov_config.keys() and not str(self.model_save_dir).startswith(gettempdir()):
                 # Set default CACHE_DIR only if it is not set, and if the model is not in a temporary directory
                 cache_dir = Path(self.model_save_dir).joinpath("model_cache")
                 ov_config["CACHE_DIR"] = str(cache_dir)

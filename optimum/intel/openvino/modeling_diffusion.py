@@ -539,7 +539,7 @@ class OVModelPart:
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
         config_path = self._model_dir / model_name / self.CONFIG_NAME
         self.config = self.parent_model._dict_from_json_file(config_path) if config_path.is_file() else {}
-        if "CACHE_DIR" not in self.ov_config.keys() and not self._model_dir.is_relative_to(gettempdir()):
+        if "CACHE_DIR" not in self.ov_config.keys() and not str(self._model_dir).startswith(gettempdir()):
             self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
     def _compile(self):
