@@ -37,13 +37,12 @@ from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
 
+from optimum.pipelines.diffusers.pipeline_latent_consistency import LatentConsistencyPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion import StableDiffusionPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_img2img import StableDiffusionImg2ImgPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_inpaint import StableDiffusionInpaintPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_xl import StableDiffusionXLPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_xl_img2img import StableDiffusionXLImg2ImgPipelineMixin
-from optimum.pipelines.diffusers.pipeline_latent_consistency import LatentConsistencyPipelineMixin
-
 from optimum.pipelines.diffusers.pipeline_utils import VaeImageProcessor
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
@@ -273,7 +272,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             model_save_dir = new_model_save_dir
 
         return cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
-
 
     @classmethod
     def _from_transformers(

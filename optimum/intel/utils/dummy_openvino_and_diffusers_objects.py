@@ -70,7 +70,6 @@ class OVStableDiffusionXLImg2ImgPipeline(metaclass=DummyObject):
         requires_backends(cls, ["openvino", "diffusers"])
 
 
-
 class OVLatentConsistencyModelPipeline(metaclass=DummyObject):
     _backends = ["openvino", "diffusers"]
 
@@ -80,4 +79,3 @@ class OVLatentConsistencyModelPipeline(metaclass=DummyObject):
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["openvino", "diffusers"])
-

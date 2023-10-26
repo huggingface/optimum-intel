@@ -25,22 +25,21 @@ from diffusers import (
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
 )
-from packaging.version import Version, parse
 from diffusers.utils import load_image
 from diffusers.utils.testing_utils import floats_tensor
 from openvino.runtime.ie_api import CompiledModel
+from packaging.version import Version, parse
 from parameterized import parameterized
 from utils_tests import MODEL_NAMES, SEED
 
 from optimum.intel import (
+    OVLatentConsistencyModelPipeline,
     OVStableDiffusionImg2ImgPipeline,
     OVStableDiffusionInpaintPipeline,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
     OVStableDiffusionXLPipeline,
-    OVLatentConsistencyModelPipeline,
 )
-from optimum.utils.import_utils import _diffusers_version
 from optimum.intel.openvino.modeling_diffusion import (
     OVModelTextEncoder,
     OVModelUnet,
@@ -53,6 +52,7 @@ from optimum.onnxruntime import (
     ORTStableDiffusionXLImg2ImgPipeline,
     ORTStableDiffusionXLPipeline,
 )
+from optimum.utils.import_utils import _diffusers_version
 
 
 def _generate_inputs(batch_size=1):
@@ -528,7 +528,6 @@ class OVLatentConsistencyModelPipelineTest(unittest.TestCase):
         # Compare model devices
         self.assertEqual(pipeline.device.type, ov_pipeline.device)
 
-
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @unittest.skipIf(parse(_diffusers_version) <= Version("0.21.4"), "not supported with this diffusers version")
     def test_num_images_per_prompt_static_model(self, model_arch: str):
@@ -544,5 +543,3 @@ class OVLatentConsistencyModelPipelineTest(unittest.TestCase):
             inputs = _generate_inputs(batch_size)
             outputs = pipeline(**inputs, num_images_per_prompt=num_images, height=_height, width=width).images
             self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
-
-
