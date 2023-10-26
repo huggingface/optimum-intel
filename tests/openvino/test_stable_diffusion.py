@@ -25,6 +25,7 @@ from diffusers import (
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
 )
+from packaging.version import Version, parse
 from diffusers.utils import load_image
 from diffusers.utils.testing_utils import floats_tensor
 from openvino.runtime.ie_api import CompiledModel
@@ -37,7 +38,9 @@ from optimum.intel import (
     OVStableDiffusionPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
     OVStableDiffusionXLPipeline,
+    OVLatentConsistencyModelPipeline,
 )
+from optimum.utils.import_utils import _diffusers_version
 from optimum.intel.openvino.modeling_diffusion import (
     OVModelTextEncoder,
     OVModelUnet,
@@ -475,3 +478,71 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
         inputs["image"] = _create_image(height=height, width=width, batch_size=batch_size, input_type=input_type)
         inputs["strength"] = 0.75
         return inputs
+
+
+class OVLatentConsistencyModelPipelineTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("latent-consistency",)
+    MODEL_CLASS = OVLatentConsistencyModelPipeline
+    TASK = "text-to-image"
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(parse(_diffusers_version) <= Version("0.21.4"), "not supported with this diffusers version")
+    def test_compare_to_diffusers(self, model_arch: str):
+        ov_pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True)
+        self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
+        self.assertIsInstance(ov_pipeline.vae_encoder, OVModelVaeEncoder)
+        self.assertIsInstance(ov_pipeline.vae_decoder, OVModelVaeDecoder)
+        self.assertIsInstance(ov_pipeline.unet, OVModelUnet)
+        self.assertIsInstance(ov_pipeline.config, Dict)
+
+        from diffusers import LatentConsistencyModelPipeline
+
+        pipeline = LatentConsistencyModelPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        batch_size, num_images_per_prompt, height, width = 2, 3, 64, 128
+        latents = ov_pipeline.prepare_latents(
+            batch_size * num_images_per_prompt,
+            ov_pipeline.unet.config["in_channels"],
+            height,
+            width,
+            dtype=np.float32,
+            generator=np.random.RandomState(0),
+        )
+
+        kwargs = {
+            "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
+            "num_inference_steps": 1,
+            "num_images_per_prompt": num_images_per_prompt,
+            "height": height,
+            "width": width,
+            "guidance_scale": 8.5,
+        }
+
+        for output_type in ["latent", "np"]:
+            ov_outputs = ov_pipeline(latents=latents, output_type=output_type, **kwargs).images
+            self.assertIsInstance(ov_outputs, np.ndarray)
+            with torch.no_grad():
+                outputs = pipeline(latents=torch.from_numpy(latents), output_type=output_type, **kwargs).images
+
+            # Compare model outputs
+            self.assertTrue(np.allclose(ov_outputs, outputs, atol=1e-4))
+        # Compare model devices
+        self.assertEqual(pipeline.device.type, ov_pipeline.device)
+
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(parse(_diffusers_version) <= Version("0.21.4"), "not supported with this diffusers version")
+    def test_num_images_per_prompt_static_model(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
+        batch_size, num_images, height, width = 3, 4, 128, 64
+        pipeline.half()
+        pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
+        self.assertFalse(pipeline.is_dynamic)
+        pipeline.compile()
+
+        for _height in [height, height + 16]:
+            inputs = _generate_inputs(batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images, height=_height, width=width).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+
+
