@@ -114,6 +114,7 @@ except OptionalDependencyNotAvailable:
 else:
     _import_structure["neural_compressor"] = [
         "INCConfig",
+        "INCModel",
         "INCModelForCausalLM",
         "INCModelForMaskedLM",
         "INCModelForMultipleChoice",

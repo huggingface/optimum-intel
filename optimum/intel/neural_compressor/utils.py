@@ -41,6 +41,7 @@ _HEAD_TO_AUTOMODELS = {
     "question-answering": "INCModelForQuestionAnswering",
     "multiple-choice": "INCModelForMultipleChoice",
     "stable-diffusion": "INCStableDiffusionPipeline",
+    "feature-extraction": "INCModel",
 }
 
 

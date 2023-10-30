@@ -205,7 +205,10 @@ def is_torch_version(operation: str, version: str):
     """
     if not _torch_available:
         return False
-    return compare_versions(parse(_torch_version), operation, version)
+
+    import torch
+
+    return compare_versions(parse(parse(torch.__version__).base_version), operation, version)
 
 
 def is_ipex_version(operation: str, version: str):
@@ -215,6 +218,15 @@ def is_ipex_version(operation: str, version: str):
     if not _ipex_available:
         return False
     return compare_versions(parse(_ipex_version), operation, version)
+
+
+def is_timm_version(operation: str, version: str):
+    """
+    Compare the current timm version to a given reference with an operation.
+    """
+    if not _timm_available:
+        return False
+    return compare_versions(parse(_timm_version), operation, version)
 
 
 DIFFUSERS_IMPORT_ERROR = """
