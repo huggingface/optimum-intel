@@ -48,7 +48,7 @@ from transformers import (
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
 from optimum.onnxruntime import ORTModel
-from optimum.onnxruntime.modeling_decoder import ORTModelDecoder
+from optimum.onnxruntime.modeling_decoder import ORTModelForCausalLM
 from optimum.onnxruntime.modeling_seq2seq import ORTModelForConditionalGeneration
 from optimum.onnxruntime.utils import ONNX_DECODER_NAME
 from optimum.quantization_base import OptimumQuantizer
@@ -265,7 +265,7 @@ class INCQuantizer(OptimumQuantizer):
             if isinstance(self._original_model, ORTModelForConditionalGeneration):
                 raise RuntimeError("ORTModelForConditionalGeneration not supported for quantization")
 
-            if isinstance(self._original_model, ORTModelDecoder):
+            if isinstance(self._original_model, ORTModelForCausalLM):
                 model_or_path = self._original_model.onnx_paths
                 if len(model_or_path) > 1:
                     raise RuntimeError(
