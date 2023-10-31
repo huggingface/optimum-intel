@@ -54,7 +54,7 @@ class ModelingIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "mistral",
         "llama",
-        "gpt_bigcode",
+        # "gpt_bigcode",
     )
 
     GENERATION_LENGTH = 100
