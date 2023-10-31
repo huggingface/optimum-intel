@@ -26,16 +26,13 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
+from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_torch_version, is_transformers_version
-from ..utils.modeling_utils import patch_decoder_attention_mask
-
-from ..utils.modeling_utils import patch_decoder_attention_mask, MULTI_QUERY_ATTN_MODELS
-
-from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
+from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -142,9 +139,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
             if past_key_values[0][0].shape[0] == input_ids.shape[0]:
                 past_key_values = self._convert_to_bloom_cache(past_key_values)
 
-
         position_ids = kwargs.get("position_ids", None)
-
 
         attention_mask = kwargs.get("attention_mask", None)
 
@@ -154,9 +149,6 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
             position_ids.masked_fill_(attention_mask == 0, 1)
             if past_key_values:
                 position_ids = position_ids[:, -1].unsqueeze(-1)
-
-
-
 
         return {
             "input_ids": input_ids,
@@ -290,7 +282,9 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
                     shape_value = (batch_size * num_attention_heads, 0, d_k)
                     key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)
                     value = torch.empty(size=shape_value, dtype=self.model_dtype, device=self._device)
-                    past_key_values = tuple(tuple(key if idx % 2 == 0 else value for idx in range(nb_pkv)) for _ in range(num_layers))
+                    past_key_values = tuple(
+                        tuple(key if idx % 2 == 0 else value for idx in range(nb_pkv)) for _ in range(num_layers)
+                    )
                 elif model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS:
                     shape = (batch_size, 0, d_k * 2)
                     pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
