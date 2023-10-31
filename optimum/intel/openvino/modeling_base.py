@@ -297,7 +297,7 @@ class OVBaseModel(OptimizedModel):
     @classmethod
     def _to_load(
         cls,
-        model: "PreTrainedModel",
+        model,
         config: PretrainedConfig,
         onnx_config: OnnxConfig,
         use_auth_token: Optional[Union[bool, str]] = None,

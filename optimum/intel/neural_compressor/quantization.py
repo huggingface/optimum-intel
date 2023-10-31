@@ -20,6 +20,7 @@ from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, Optional, Union
 
+import warnings
 import torch
 from datasets import Dataset, load_dataset
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
