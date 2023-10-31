@@ -43,17 +43,12 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
-# workaround to enable compatibility between openvino models and transformers pipelines
-class PreTrainedModel(OptimizedModel):
-    pass
-
-
 @add_start_docstrings(
     """
     Base OVModel class.
     """,
 )
-class OVBaseModel(PreTrainedModel):
+class OVBaseModel(OptimizedModel):
     auto_model_class = None
     export_feature = None
 
@@ -302,7 +297,7 @@ class OVBaseModel(PreTrainedModel):
     @classmethod
     def _to_load(
         cls,
-        model: PreTrainedModel,
+        model: "PreTrainedModel",
         config: PretrainedConfig,
         onnx_config: OnnxConfig,
         use_auth_token: Optional[Union[bool, str]] = None,
