@@ -17,7 +17,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
@@ -539,10 +539,8 @@ class OVModelPart:
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
         config_path = self._model_dir / model_name / self.CONFIG_NAME
         self.config = self.parent_model._dict_from_json_file(config_path) if config_path.is_file() else {}
-
-        # TODO : disable if self._model_dir tmp directory
-        if "CACHE_DIR" not in self.ov_config:
-            self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name)
+        if "CACHE_DIR" not in self.ov_config.keys() and not str(self._model_dir).startswith(gettempdir()):
+            self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
     def _compile(self):
         if self.request is None:
