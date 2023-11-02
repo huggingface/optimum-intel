@@ -16,7 +16,7 @@ import unittest
 from tempfile import TemporaryDirectory
 
 from parameterized import parameterized
-from utils_tests import _ARCHITECTURES_TO_EXPECTED_INT8, MODEL_NAMES, get_num_quantized_nodes
+from utils_tests import _ARCHITECTURES_TO_EXPECTED_INT8, MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT4_INT8
 
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.intel import (  # noqa
@@ -56,10 +56,21 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("stable-diffusion-xl", "stable-diffusion-xl"),
         ("stable-diffusion-xl", "stable-diffusion-xl-refiner"),
     )
+    
+    SUPPORTED_4BIT_ARCHITECTURES = (
+        ("text-generation-with-past", "opt125m"),
+    )
+    
+    SUPPORTED_4BIT_OPTIONS = ["i4_sym_g128", "i4_asym_g128", "i4_sym_g64", "i4_asym_g64"]
+    
+    TEST_4BIT_CONFIGURATONS = []
+    for arch in SUPPORTED_4BIT_ARCHITECTURES:
+        for option in SUPPORTED_4BIT_OPTIONS:
+            TEST_4BIT_CONFIGURATONS.append([arch[0], arch[1], option])
 
-    def _openvino_export(self, model_name: str, task: str, fp16: bool = False, int8: bool = False):
+    def _openvino_export(self, model_name: str, task: str, compression_option: str = None, compression_ratio: float = None):
         with TemporaryDirectory() as tmpdir:
-            main_export(model_name_or_path=model_name, output=tmpdir, task=task, fp16=fp16, int8=int8)
+            main_export(model_name_or_path=model_name, output=tmpdir, task=task, compression_option=compression_option, compression_ratio=compression_ratio)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, task: str, model_type: str):
@@ -80,7 +91,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_fp16(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --fp16 {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --compress-weights f16 {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -91,7 +102,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_int8(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --int8 {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --compress-weights i8 {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -110,5 +121,21 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             for i, model in enumerate(models):
-                _, num_int8 = get_num_quantized_nodes(model)
+                _, num_int8, _ = get_num_quantized_nodes(model)
                 self.assertEqual(expected_int8[i], num_int8)
+
+    @parameterized.expand(TEST_4BIT_CONFIGURATONS)
+    def test_exporters_cli_int4(self, task: str, model_type: str, option: str):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --compress-weights {option} {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+
+            expected_int8, expected_int4 = _ARCHITECTURES_TO_EXPECTED_INT4_INT8[model_type]
+            _, num_int8, num_int4 = get_num_quantized_nodes(model)
+            self.assertEqual(expected_int8, num_int8)
+            self.assertEqual(expected_int4, num_int4)

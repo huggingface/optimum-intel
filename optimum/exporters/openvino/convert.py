@@ -53,16 +53,41 @@ if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
-def _save_model(model, path: str, compress_to_fp16=False, load_in_8bit=False):
-    if load_in_8bit:
+def _save_model(model, path: str, compression_option: Optional[str] = None, compression_ratio: Optional[float] = None):
+    if compression_option is not None and compression_option != "f16":
         if not is_nncf_available():
             raise ImportError(
                 "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
             )
 
         import nncf
-
-        model = nncf.compress_weights(model)
+        
+        COMPRESSION_OPTIONS = {
+            "i8": { "mode": nncf.CompressWeightsMode.INT8 },
+            "i4_sym_g128": {
+                "mode": nncf.CompressWeightsMode.INT4_SYM,
+                "group_size": 128,
+                "ratio": compression_ratio,
+            },
+            "i4_asym_g128": {
+                "mode": nncf.CompressWeightsMode.INT4_ASYM,
+                "group_size": 128,
+                "ratio": compression_ratio,
+            },
+            "i4_sym_g64": {
+                "mode": nncf.CompressWeightsMode.INT4_SYM,
+                "group_size": 64,
+                "ratio": compression_ratio,
+            },
+            "i4_asym_g64": {
+                "mode": nncf.CompressWeightsMode.INT4_ASYM,
+                "group_size": 64,
+                "ratio": compression_ratio,
+            },
+        }
+        model = nncf.compress_weights(model, **COMPRESSION_OPTIONS[compression_option])
+        
+    compress_to_fp16 = compression_option == "f16"
     save_model(model, path, compress_to_fp16)
 
 
@@ -74,8 +99,8 @@ def export(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    fp16: bool = False,
-    int8: bool = False,
+    compression_option: Optional[str] = None,
+    compression_ratio: Optional[float] = None,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -92,6 +117,11 @@ def export(
         device (`str`, *optional*, defaults to `cpu`):
             The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
             export on CUDA devices.
+        compression_option (`Optional[str]`, defaults to `None`):
+            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `i4_sym_g128` - INT4 symmetric weights w/ group size 128, `i4_asym_g128` - as previous but asymmetric w/ zero-point, 
+            `i4_sym_g64` - INT4 symmetric weights w/ group size 64, "i4_asym_g64" - as previous but asymmetric w/ zero-point.
+        compression_ratio (`Optional[float]`, defaults to `None`):
+            Compression ratio between primary and backup precision (only relevant to INT4).
         input_shapes (`Optional[Dict]`, defaults to `None`):
             If specified, allows to use specific shapes for the example input provided to the exporter.
 
@@ -116,9 +146,9 @@ def export(
             output,
             device=device,
             input_shapes=input_shapes,
+            compression_option=compression_option,
+            compression_ratio=compression_ratio,
             model_kwargs=model_kwargs,
-            fp16=fp16,
-            int8=int8,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -142,6 +172,9 @@ def export_tensorflow(
     config: OnnxConfig,
     opset: int,
     output: Path,
+    compression_option: Optional[str] = None,
+    compression_ratio: Optional[float] = None,
+    
 ):
     """
     Export the TensorFlow model to OpenVINO format.
@@ -160,7 +193,7 @@ def export_tensorflow(
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
-    _save_model(ov_model, output.parent / output, compress_to_fp16=False, load_in_8bit=False)
+    _save_model(ov_model, output.parent / output, compression_option=compression_option, compression_ratio=compression_ratio)
     return input_names, output_names, True
 
 
@@ -172,8 +205,8 @@ def export_pytorch_via_onnx(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    fp16: bool = False,
-    int8: bool = False,
+    compression_option: Optional[str] = None,
+    compression_ratio: Optional[float] = None,
 ):
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation via ONNX export.
@@ -193,7 +226,12 @@ def export_pytorch_via_onnx(
         input_shapes (`optional[Dict]`, defaults to `None`):
             If specified, allows to use specific shapes for the example input provided to the exporter.
         model_kwargs (optional[Dict[str, Any]], defaults to `None`):
-            Additional kwargs for model export
+            Additional kwargs for model export.
+        compression_option (`Optional[str]`, defaults to `None`):
+            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `i4_sym_g128` - INT4 symmetric weights w/ group size 128, `i4_asym_g128` - as previous but asymmetric w/ zero-point, 
+            `i4_sym_g64` - INT4 symmetric weights w/ group size 64, "i4_asym_g64" - as previous but asymmetric w/ zero-point.
+        compression_ratio (`Optional[float]`, defaults to `None`):
+            Compression ratio between primary and backup precision (only relevant to INT4).
 
     Returns:
         `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -215,8 +253,8 @@ def export_pytorch_via_onnx(
     _save_model(
         ov_model,
         output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
-        compress_to_fp16=fp16,
-        load_in_8bit=int8,
+        compression_option=compression_option,
+        compression_ratio=compression_ratio
     )
     return input_names, output_names, True
 
@@ -229,8 +267,8 @@ def export_pytorch(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    fp16: bool = False,
-    int8: bool = False,
+    compression_option: Optional[str] = None,
+    compression_ratio: Optional[float] = None,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -326,7 +364,8 @@ def export_pytorch(
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
             return export_pytorch_via_onnx(
-                model, config, opset, output, device, input_shapes, model_kwargs, fp16=fp16, int8=int8
+                model, config, opset, output, device, input_shapes, model_kwargs, compression_option=compression_option,
+                compression_ratio=compression_ratio
             )
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         ordered_input_names = list(inputs)
@@ -348,7 +387,7 @@ def export_pytorch(
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
-        _save_model(ov_model, output, compress_to_fp16=fp16, load_in_8bit=int8)
+        _save_model(ov_model, output, compression_option=compression_option, compression_ratio=compression_ratio)
         clear_class_registry()
         del model
         gc.collect()
@@ -365,8 +404,8 @@ def export_models(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    fp16: bool = False,
-    int8: bool = False,
+    compression_option: Optional[str] = None,
+    compression_ratio: Optional[int] = None,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -381,8 +420,13 @@ def export_models(
             export on CUDA devices.
         input_shapes (Optional[Dict], optional, Defaults to None):
             If specified, allows to use specific shapes for the example input provided to the exporter.
+        compression_option (`Optional[str]`, defaults to `None`):
+            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `i4_sym_g128` - INT4 symmetric weights w/ group size 128, `i4_asym_g128` - as previous but asymmetric w/ zero-point, 
+            `i4_sym_g64` - INT4 symmetric weights w/ group size 64, "i4_asym_g64" - as previous but asymmetric w/ zero-point.
+        compression_ratio (`Optional[int]`, defaults to `None`):
+            Compression ratio between primary and backup precision (only relevant to INT4).
         model_kwargs (Optional[Dict[str, Any]], optional):
-            Additional kwargs for model export
+            Additional kwargs for model export.
 
     Raises:
         ValueError: if custom names set not equal of number of models
@@ -411,8 +455,8 @@ def export_models(
                 device=device,
                 input_shapes=input_shapes,
                 model_kwargs=model_kwargs,
-                fp16=fp16,
-                int8=int8,
+                compression_option=compression_option,
+                compression_ratio=compression_ratio,
             )
         )
 

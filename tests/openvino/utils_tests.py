@@ -51,6 +51,7 @@ MODEL_NAMES = {
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
+    "opt125m": "facebook/opt-125m",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "mistral": "echarlaix/tiny-random-mistral",
@@ -97,28 +98,37 @@ SEED = 42
 
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
-    "bert": (34,),
-    "roberta": (34,),
-    "albert": (42,),
-    "vit": (31,),
-    "blenderbot": (35,),
-    "gpt2": (22,),
-    "wav2vec2": (15,),
-    "distilbert": (33,),
-    "t5": (32, 52, 42),
-    "stable-diffusion": (74, 4, 4, 32),
-    "stable-diffusion-xl": (148, 4, 4, 33),
-    "stable-diffusion-xl-refiner": (148, 4, 4, 33),
+    "bert": (68,),
+    "roberta": (68,),
+    "albert": (84,),
+    "vit": (62,),
+    "blenderbot": (70,),
+    "gpt2": (44,),
+    "wav2vec2": (30,),
+    "distilbert": (66,),
+    "t5": (64, 104, 84),
+    "stable-diffusion": (148, 8, 8, 64),
+    "stable-diffusion-xl": (296, 8, 8, 66),
+    "stable-diffusion-xl-refiner": (296, 4, 8, 66),
+}
+
+
+_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {
+    "opt125m": (128, 64)
 }
 
 
 def get_num_quantized_nodes(ov_model):
     num_fake_quantize = 0
     num_int8 = 0
+    num_int4 = 0
     for elem in ov_model.model.get_ops():
         if "FakeQuantize" in elem.name:
             num_fake_quantize += 1
         for i in range(elem.get_output_size()):
             if "8" in elem.get_output_element_type(i).get_type_name():
                 num_int8 += 1
-    return num_fake_quantize, num_int8
+            if "4" in elem.get_output_element_type(i).get_type_name():
+                num_int4 += 1
+    return num_fake_quantize, num_int8, num_int4
+

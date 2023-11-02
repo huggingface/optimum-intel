@@ -132,7 +132,7 @@ class OVQuantizerTest(unittest.TestCase):
 
             model = model_cls.from_pretrained(tmp_dir)
 
-            num_fake_quantize, num_int8 = get_num_quantized_nodes(model)
+            num_fake_quantize, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
             self.assertEqual(expected_int8, num_int8)
 
@@ -176,7 +176,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir, weights_only=True)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8 = get_num_quantized_nodes(model)
+            _, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_pt_int8, num_int8)
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
@@ -201,7 +201,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir, weights_only=True)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8 = get_num_quantized_nodes(model)
+            _, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int8, num_int8)
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
@@ -222,7 +222,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         for i, model in enumerate(models):
-            _, num_int8 = get_num_quantized_nodes(model)
+            _, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int8[i], num_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
@@ -238,7 +238,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             models = [model]
 
         for i, model in enumerate(models):
-            _, num_int8 = get_num_quantized_nodes(model)
+            _, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(0, num_int8)
 
 

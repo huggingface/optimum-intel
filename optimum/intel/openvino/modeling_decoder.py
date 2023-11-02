@@ -268,7 +268,7 @@ class OVBaseDecoderModel(OVModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            int8=load_in_8bit,
+            compression_option="i8" if load_in_8bit else None,
         )
 
         # Unpatch modules after GPTQ export
