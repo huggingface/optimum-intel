@@ -396,17 +396,27 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         inputs["input_ids"] = np.array(input_ids)
         # Add the attention_mask inputs when needed
-        if "attention_mask" in self.input_names:
+        if "attention_mask" in self.input_names or "position_ids" in self.input_names:
             if attention_mask is not None:
-                inputs["attention_mask"] = np.array(attention_mask)
+                attention_mask = np.array(attention_mask)
             else:
-                inputs["attention_mask"] = np.ones(
+                attention_mask = np.ones(
                     (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
                 )
 
-        # Add the attention_mask inputs when needed
-        if "position_ids" in self.input_names and position_ids is not None:
-            inputs["position_ids"] = np.array(position_ids)
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+
+        if "position_ids" in self.input_names:
+            if position_ids is not None:
+                position_ids = np.array(position_ids)
+            else:
+                position_ids = np.cumsum(attention_mask, axis=1) - 1
+                position_ids[attention_mask == 0] = 1
+                if past_key_values:
+                    position_ids = np.expand_dims(position_ids[:, -1], axis=-1)
+
+            inputs["position_ids"] = position_ids
 
         # Run inference
         self.request.start_async(inputs, shared_memory=True)

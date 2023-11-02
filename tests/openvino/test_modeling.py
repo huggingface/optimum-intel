@@ -51,6 +51,7 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from utils_tests import MODEL_NAMES
 
+from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
@@ -77,7 +78,6 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 from optimum.utils.testing_utils import require_diffusers
-from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 
 
 TENSOR_ALIAS_TO_TYPE = {
