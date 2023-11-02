@@ -109,12 +109,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "t5": (64, 104, 84),
     "stable-diffusion": (148, 8, 8, 64),
     "stable-diffusion-xl": (296, 8, 8, 66),
-    "stable-diffusion-xl-refiner": (296, 4, 8, 66),
+    "stable-diffusion-xl-refiner": (296, 8, 8, 66),
 }
 
 
 _ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {
-    "opt125m": (128, 64)
+    "opt125m": (82, 323)
 }
 
 
