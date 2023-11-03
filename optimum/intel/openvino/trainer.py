@@ -24,8 +24,13 @@ from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Type, Union
 
+# Integrations must be imported before ML frameworks:
+# isort: off
+from transformers.integrations import hp_params
+from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
+# isort: on
+
 import openvino
-import openvino.runtime
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -55,9 +60,6 @@ from torch.utils.data import Dataset, RandomSampler
 from transformers import Trainer
 from transformers.data.data_collator import DataCollator
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
-
-# Integrations must be imported before ML frameworks:
-from transformers.integrations import deepspeed_init, deepspeed_load_checkpoint, hp_params, is_deepspeed_available
 from transformers.modeling_utils import PreTrainedModel, unwrap_model
 from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase

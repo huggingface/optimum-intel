@@ -13,7 +13,7 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "optimum>=1.13.0",
-    "transformers>=4.20.0,<4.35.0",
+    "transformers>=4.33.0,<4.35.0",
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
