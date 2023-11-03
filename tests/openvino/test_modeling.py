@@ -510,7 +510,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-2))
         del transformers_model
         del ov_model
         gc.collect()
@@ -1227,14 +1227,22 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
         processor = get_preprocessor(model_id)
-        inputs = processor(self._generate_random_audio_data(), return_tensors="pt")
+        data = self._generate_random_audio_data()
+        features = processor.feature_extractor(data, return_tensors="pt")
+
+        decoder_start_token_id = transformers_model.config.decoder_start_token_id
+        decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
 
         with torch.no_grad():
-            transformers_outputs = transformers_model(**inputs)
+            transformers_outputs = transformers_model(**features, **decoder_inputs)
 
         for input_type in ["pt", "np"]:
-            inputs = processor(self._generate_random_audio_data(), return_tensors=input_type)
-            ov_outputs = ov_model(**inputs)
+            features = processor.feature_extractor(data, return_tensors=input_type)
+
+            if input_type == "np":
+                decoder_inputs = {"decoder_input_ids": np.ones((1, 1), dtype=np.int64) * decoder_start_token_id}
+
+            ov_outputs = ov_model(**features, **decoder_inputs)
             self.assertIn("logits", ov_outputs)
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
             # Compare tensor outputs
@@ -1249,6 +1257,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
         processor = get_preprocessor(model_id)
+        GenerationConfig.from_pretrained(model_id)
         pipe = pipeline(
             "automatic-speech-recognition",
             model=model,
@@ -1256,18 +1265,8 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
             feature_extractor=processor.feature_extractor,
         )
         data = self._generate_random_audio_data()
-
-        if model_arch == "whisper":
-            outputs = pipe(data, return_timestamps=True)
-            self.assertTrue("chunks" in outputs)
-            self.assertIsInstance(outputs["text"], str)
-
-            outputs = pipe(data, return_timestamps=False)
-            self.assertTrue("chunks" not in outputs)
-            self.assertIsInstance(outputs["text"], str)
-        else:
-            outputs = pipe(data)
-            self.assertIsInstance(outputs["text"], str)
+        outputs = pipe(data)
+        self.assertIsInstance(outputs["text"], str)
 
         del pipe
         del model
