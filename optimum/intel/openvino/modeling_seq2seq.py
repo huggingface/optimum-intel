@@ -13,16 +13,23 @@
 #  limitations under the License.
 
 import logging
+from abc import ABCMeta
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
 
 import numpy as np
 import openvino
 import torch
 import transformers
 from openvino.runtime import Core
-from transformers import AutoConfig, AutoModelForSeq2SeqLM, Pix2StructForConditionalGeneration
+from transformers import (
+    AutoConfig,
+    AutoModelForSeq2SeqLM,
+    AutoModelForSpeechSeq2Seq,
+    Pix2StructForConditionalGeneration,
+    WhisperForConditionalGeneration,
+)
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 
@@ -34,6 +41,9 @@ if is_transformers_version("<", "4.25.0"):
     from transformers.generation_utils import GenerationMixin
 else:
     from transformers.generation import GenerationMixin
+
+if TYPE_CHECKING:
+    from transformers import PretrainedConfig
 
 core = Core()
 
@@ -173,6 +183,56 @@ PIX2STRUCT_EXAMPLE = r"""
 
     >>> gen_tokens = model.generate(**inputs)
     >>> outputs = processor.batch_decode(gen_tokens, skip_special_tokens=True)
+    ```
+"""
+
+SPEECH_SEQ2SEQ_MODEL_DOCSTRING = r"""
+    Args:
+        input_features (`torch.FloatTensor`):
+            Mel features extracted from the raw speech waveform.
+            `(batch_size, feature_size, encoder_sequence_length)`.
+        decoder_input_ids (`torch.LongTensor`):
+            Indices of decoder input sequence tokens in the vocabulary of shape `(batch_size, decoder_sequence_length)`.
+        encoder_outputs (`torch.FloatTensor`):
+            The encoder `last_hidden_state` of shape `(batch_size, encoder_sequence_length, hidden_size)`.
+        past_key_values (`tuple(tuple(torch.FloatTensor), *optional*, defaults to `None`)`
+            Contains the precomputed key and value hidden states of the attention blocks used to speed up decoding.
+            The tuple is of length `config.n_layers` with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, decoder_sequence_length, embed_size_per_head)` and 2 additional tensors of shape
+            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+"""
+
+AUTOMATIC_SPEECH_RECOGNITION_EXAMPLE = r"""
+    Example of text generation:
+
+    ```python
+    >>> from transformers import {processor_class}
+    >>> from optimum.intel.openvino import {model_class}
+    >>> from datasets import load_dataset
+
+    >>> processor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}")
+
+    >>> ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    >>> inputs = processor.feature_extractor(ds[0]["audio"]["array"], return_tensors="pt")
+
+    >>> gen_tokens = model.generate(inputs=inputs.input_features)
+    >>> outputs = processor.tokenizer.batch_decode(gen_tokens)
+    ```
+
+    Example using `transformers.pipeline`:
+
+    ```python
+    >>> from transformers import {processor_class}, pipeline
+    >>> from optimum.intel.openvino import {model_class}
+    >>> from datasets import load_dataset
+
+    >>> processor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}")
+    >>> speech_recognition = pipeline("automatic-speech-recognition", model=model, tokenizer=processor.tokenizer, feature_extractor=processor.feature_extractor)
+
+    >>> ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    >>> pred = speech_recognition(ds[0]["audio"]["array"])
     ```
 """
 
@@ -610,3 +670,138 @@ class OVModelForPix2Struct(OVModelForSeq2SeqLM):
                     shapes[inputs][1] = -1
         model.reshape(shapes)
         return model
+
+
+@add_start_docstrings(
+    """
+    Speech Sequence-to-sequence model with a language modeling head for OpenVINO inference. This class officially supports whisper, speech_to_text.
+    """,
+    INPUTS_DOCSTRING,
+)
+class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
+    auto_model_class = AutoModelForSpeechSeq2Seq
+    main_input_name = "input_features"
+    export_feature = "automatic-speech-recognition"
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        input_features: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.BoolTensor] = None,
+        past_key_values=None,
+        head_mask=None,
+        decoder_head_mask=None,
+        cross_attn_head_mask=None,
+        use_cache=None,
+        encoder_outputs=None,
+        **kwargs,
+    ) -> Dict:
+        if decoder_attention_mask is None:
+            decoder_attention_mask = torch.ones_like(input_ids).to(input_ids.device)
+
+        return {
+            "input_features": input_features,
+            "decoder_input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "encoder_outputs": encoder_outputs,
+            "attention_mask": attention_mask,
+            "decoder_attention_mask": decoder_attention_mask,
+            "head_mask": head_mask,
+            "decoder_head_mask": decoder_head_mask,
+            "cross_attn_head_mask": cross_attn_head_mask,
+            "use_cache": use_cache,
+        }
+
+    @add_start_docstrings_to_model_forward(
+        SPEECH_SEQ2SEQ_MODEL_DOCSTRING
+        + AUTOMATIC_SPEECH_RECOGNITION_EXAMPLE.format(
+            processor_class=_PROCESSOR_FOR_DOC,
+            model_class="OVModelForSpeechSeq2Seq",
+            checkpoint="openai/whisper-tiny",
+        )
+    )
+    def forward(
+        self,
+        input_features: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        decoder_input_ids: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.BoolTensor] = None,
+        encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        **kwargs,
+    ) -> Seq2SeqLMOutput:
+        # Encode if needed : first prediction pass
+        # Encode if needed (training, first prediction pass)
+        if encoder_outputs is None:
+            encoder_outputs = self.encoder(
+                input_ids=input_features,
+                attention_mask=attention_mask,
+            )
+
+        # Decode
+        if past_key_values is None or self.use_cache is False:
+            decoder_outputs = self.decoder(
+                input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+                past_key_values=past_key_values,
+                encoder_hidden_states=encoder_outputs.last_hidden_state,
+                encoder_attention_mask=attention_mask,
+            )
+        else:
+            decoder_outputs = self.decoder_with_past(
+                input_ids=decoder_input_ids[:, -1:],  # Cut decoder_input_ids if past is used
+                decoder_attention_mask=decoder_attention_mask,
+                past_key_values=past_key_values,
+                encoder_hidden_states=encoder_outputs.last_hidden_state,
+                encoder_attention_mask=attention_mask,
+            )
+
+        return Seq2SeqLMOutput(
+            logits=decoder_outputs.logits,
+            past_key_values=decoder_outputs.past_key_values,
+        )
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: "PretrainedConfig",
+        **kwargs,
+    ):
+        if "WhisperForConditionalGeneration" in config.architectures:
+            return OVModelForWhisper._from_pretrained(model_id, config, **kwargs)
+        else:
+            return super()._from_pretrained(model_id, config, **kwargs)
+
+
+class MetaClassRemoveParentsAndReorder(ABCMeta):
+    def mro(cls):
+        """
+        Avoids inheritting from PreTrainedModel, nn.Module, ModuleUtilsMixin, PushToHubMixin,
+        and put GenerationMixin at the end of the MRO
+        """
+        top_inheritance_index = OVModelForSpeechSeq2Seq.__mro__.index(GenerationMixin)
+        return (
+            (cls,)
+            + OVModelForSpeechSeq2Seq.__mro__[:top_inheritance_index]
+            + (WhisperForConditionalGeneration,)
+            + OVModelForSpeechSeq2Seq.__mro__[top_inheritance_index:]
+        )
+
+
+class OVModelForWhisper(
+    OVModelForSpeechSeq2Seq, WhisperForConditionalGeneration, metaclass=MetaClassRemoveParentsAndReorder
+):
+    """
+    Whisper implements its own generate() method.
+    """
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: "PretrainedConfig",
+        **kwargs,
+    ):
+        return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
