@@ -40,6 +40,7 @@ from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSeq2SeqLM,
     AutoModelForSequenceClassification,
+    AutoModelForSpeechSeq2Seq,
     AutoModelForTokenClassification,
     AutoTokenizer,
     GenerationConfig,
@@ -65,6 +66,7 @@ from optimum.intel import (
     OVModelForQuestionAnswering,
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
+    OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVStableDiffusionPipeline,
 )
@@ -1204,4 +1206,69 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         )
         del model_with_pkv
         del model_without_pkv
+        gc.collect()
+
+
+class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("whisper", "speech_to_text")
+
+    def _generate_random_audio_data(self):
+        np.random.seed(10)
+        t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+        # generate pure sine wave at 220 Hz
+        audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
+        return audio_data
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
+        processor = get_preprocessor(model_id)
+        inputs = processor(self._generate_random_audio_data(), return_tensors="pt")
+
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+
+        for input_type in ["pt", "np"]:
+            inputs = processor(self._generate_random_audio_data(), return_tensors=input_type)
+            ov_outputs = ov_model(**inputs)
+            self.assertIn("logits", ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
+        processor = get_preprocessor(model_id)
+        pipe = pipeline(
+            "automatic-speech-recognition",
+            model=model,
+            tokenizer=processor.tokenizer,
+            feature_extractor=processor.feature_extractor,
+        )
+        data = self._generate_random_audio_data()
+
+        if model_arch == "whisper":
+            outputs = pipe(data, return_timestamps=True)
+            self.assertTrue("chunks" in outputs)
+            self.assertIsInstance(outputs["text"], str)
+
+            outputs = pipe(data, return_timestamps=False)
+            self.assertTrue("chunks" not in outputs)
+            self.assertIsInstance(outputs["text"], str)
+        else:
+            outputs = pipe(data)
+            self.assertIsInstance(outputs["text"], str)
+
+        del pipe
+        del model
         gc.collect()

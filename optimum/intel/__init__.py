@@ -99,6 +99,7 @@ else:
             "OVModelForPix2Struct",
             "OVModelForQuestionAnswering",
             "OVModelForSeq2SeqLM",
+            "OVModelForSpeechSeq2Seq",
             "OVModelForSequenceClassification",
             "OVModelForTokenClassification",
         ]
