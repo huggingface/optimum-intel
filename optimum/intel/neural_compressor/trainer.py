@@ -134,6 +134,8 @@ class INCTrainer(Trainer):
         task: Optional[str] = None,
         save_onnx_model: bool = False,
     ):
+        self.neftune_noise_alpha = None
+
         super().__init__(
             model,
             args,

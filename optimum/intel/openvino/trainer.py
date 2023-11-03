@@ -194,6 +194,8 @@ class OVTrainer(Trainer):
         task: Optional[str] = None,
         feature: Optional[str] = None,
     ):
+        self.neftune_noise_alpha = None
+
         super().__init__(
             model,
             args,
