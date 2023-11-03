@@ -21,7 +21,7 @@ import sys
 import time
 from itertools import chain
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Callable, Dict, List, Optional, Tuple, Type, Union
 
 import openvino
 import openvino.runtime
@@ -655,7 +655,7 @@ class OVTrainer(Trainer):
 
             self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
             self._maybe_log_save_evaluate(tr_loss, model, trial, epoch, ignore_keys_for_eval)
-            
+
             if self.control.should_training_stop:
                 break
 
