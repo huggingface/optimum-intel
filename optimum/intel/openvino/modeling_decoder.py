@@ -229,34 +229,6 @@ class OVBaseDecoderModel(OVModel):
             if use_cache:
                 task = task + "-with-past"
 
-        # Patch the modules to export of GPTQ models w/o GPU
-        do_gptq_patching = False
-        config_dict = config.to_dict()
-        quantization_config = config_dict.get("quantization_config", None)
-        do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
-        if do_gptq_patching:
-            torch.set_default_dtype(torch.float32)
-            orig_cuda_check = torch.cuda.is_available
-            torch.cuda.is_available = lambda: True
-
-            from optimum.gptq import GPTQQuantizer
-
-            orig_post_init_model = GPTQQuantizer.post_init_model
-
-            def post_init_model(self, model):
-                from auto_gptq import exllama_set_max_input_length
-
-                class StoreAttr(object):
-                    pass
-
-                model.quantize_config = StoreAttr()
-                model.quantize_config.desc_act = self.desc_act
-                if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
-                    model = exllama_set_max_input_length(model, self.max_input_length)
-                return model
-
-            GPTQQuantizer.post_init_model = post_init_model
-
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -270,11 +242,6 @@ class OVBaseDecoderModel(OVModel):
             trust_remote_code=trust_remote_code,
             compression_option="i8" if load_in_8bit else None,
         )
-
-        # Unpatch modules after GPTQ export
-        if do_gptq_patching:
-            torch.cuda.is_available = orig_cuda_check
-            GPTQQuantizer.post_init_model = orig_post_init_model
 
         config.is_decoder = True
         config.is_encoder_decoder = False
@@ -504,7 +471,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         elif model_type == "gpt-bigcode":
             init_cls = OVGPTBigCodeForCausalLM
         else:
-            init_cls = OVModelForCausalLM
+            init_cls = cls
 
         return init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
 
