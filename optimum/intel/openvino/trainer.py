@@ -19,6 +19,7 @@ import os
 import shutil
 import sys
 import time
+from collections import defaultdict
 from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Type, Union
@@ -491,6 +492,7 @@ class OVTrainer(Trainer):
 
         # tr_loss is a tensor to avoid synchronization of TPUs through .item()
         tr_loss = torch.tensor(0.0).to(args.device)
+        self.compression_metrics = defaultdict(lambda: torch.tensor(0.0).to(args.device))
         # _total_loss_scalar is updated everytime .item() has to be called on tr_loss and stores the sum of all losses
         self._total_loss_scalar = 0.0
         self._globalstep_last_logged = self.state.global_step
