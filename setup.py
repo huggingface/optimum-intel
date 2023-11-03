@@ -13,7 +13,7 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "optimum>=1.13.0",
-    "transformers>=4.20.0",
+    "transformers",
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
@@ -41,8 +41,9 @@ EXTRAS_REQUIRE = {
         "neural-compressor>=2.2.0",
         "onnx",
         "onnxruntime<1.15.0",
+        "transformers>=4.33.0",
     ],
-    "openvino": ["openvino>=2023.1.0", "onnx", "onnxruntime"],
+    "openvino": ["openvino>=2023.1.0", "onnx", "onnxruntime", "transformers>=4.33.0"],
     "nncf": ["nncf>=2.6.0"],
     "ipex": ["transformers<4.32.0", "intel-extension-for-pytorch", "onnx"],
     "diffusers": ["diffusers"],

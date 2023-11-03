@@ -19,6 +19,7 @@ import time
 import unittest
 
 import torch
+from packaging.version import Version, parse
 from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline, set_seed
 
@@ -39,6 +40,7 @@ from optimum.intel import (  # noqa
     INCTrainer,
 )
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS, WEIGHTS_NAME
+from optimum.version import __version__ as _optimum_version
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -133,6 +135,7 @@ class INCModelingTest(unittest.TestCase):
 
         pipe(*inputs)
 
+    @unittest.skipIf(parse(_optimum_version) < Version("1.14.0"), "not supported, needs optimum>=v1.14.0")
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
