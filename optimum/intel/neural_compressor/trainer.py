@@ -22,22 +22,24 @@ from collections.abc import Mapping
 from itertools import chain
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
+
 # Integrations must be imported before ML frameworks:
 # isort: off
 from transformers.integrations import hp_params
 from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
+
 # isort: on
 
 import datasets
 import torch
 import torch.distributed as dist
-from torch import nn
-from torch.utils.data import Dataset, RandomSampler
 from neural_compressor import training
 from neural_compressor.compression import DistillationCallbacks
 from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
 from neural_compressor.experimental.export import torch_to_fp32_onnx, torch_to_int8_onnx
 from packaging import version
+from torch import nn
+from torch.utils.data import Dataset, RandomSampler
 from transformers import Trainer
 from transformers.data.data_collator import DataCollator
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow

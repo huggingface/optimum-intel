@@ -24,10 +24,12 @@ from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Type, Union
 
+
 # Integrations must be imported before ML frameworks:
 # isort: off
 from transformers.integrations import hp_params
 from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
+
 # isort: on
 
 import openvino
