@@ -355,6 +355,9 @@ class OVTrainer(Trainer):
         if model is not self.model:
             self.model_wrapped = model
 
+        if delay_optimizer_creation:
+            self.create_optimizer_and_scheduler(num_training_steps=max_steps)
+
         # Check if saved optimizer or scheduler states exist
         self._load_optimizer_and_scheduler(resume_from_checkpoint)
 
