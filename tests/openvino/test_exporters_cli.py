@@ -16,7 +16,12 @@ import unittest
 from tempfile import TemporaryDirectory
 
 from parameterized import parameterized
-from utils_tests import _ARCHITECTURES_TO_EXPECTED_INT8, MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT4_INT8
+from utils_tests import (
+    _ARCHITECTURES_TO_EXPECTED_INT4_INT8,
+    _ARCHITECTURES_TO_EXPECTED_INT8,
+    MODEL_NAMES,
+    get_num_quantized_nodes,
+)
 
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.intel import (  # noqa
@@ -56,21 +61,27 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("stable-diffusion-xl", "stable-diffusion-xl"),
         ("stable-diffusion-xl", "stable-diffusion-xl-refiner"),
     )
-    
-    SUPPORTED_4BIT_ARCHITECTURES = (
-        ("text-generation-with-past", "opt125m"),
-    )
-    
+
+    SUPPORTED_4BIT_ARCHITECTURES = (("text-generation-with-past", "opt125m"),)
+
     SUPPORTED_4BIT_OPTIONS = ["i4_sym_g128", "i4_asym_g128", "i4_sym_g64", "i4_asym_g64"]
-    
+
     TEST_4BIT_CONFIGURATONS = []
     for arch in SUPPORTED_4BIT_ARCHITECTURES:
         for option in SUPPORTED_4BIT_OPTIONS:
             TEST_4BIT_CONFIGURATONS.append([arch[0], arch[1], option])
 
-    def _openvino_export(self, model_name: str, task: str, compression_option: str = None, compression_ratio: float = None):
+    def _openvino_export(
+        self, model_name: str, task: str, compression_option: str = None, compression_ratio: float = None
+    ):
         with TemporaryDirectory() as tmpdir:
-            main_export(model_name_or_path=model_name, output=tmpdir, task=task, compression_option=compression_option, compression_ratio=compression_ratio)
+            main_export(
+                model_name_or_path=model_name,
+                output=tmpdir,
+                task=task,
+                compression_option=compression_option,
+                compression_ratio=compression_ratio,
+            )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, task: str, model_type: str):

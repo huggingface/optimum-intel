@@ -107,7 +107,11 @@ class OVConfig(BaseConfig):
         # save_onnx_model is defaulted to false so that the final model output is
         # in OpenVINO IR to realize performance benefit in OpenVINO runtime.
         # True value of save_onnx_model will save a model in onnx format.
-        if isinstance(self.compression, dict) and "algorithm" in self.compression and self.compression["algorithm"] == "quantization":
+        if (
+            isinstance(self.compression, dict)
+            and "algorithm" in self.compression
+            and self.compression["algorithm"] == "quantization"
+        ):
             self.compression["export_to_onnx_standard_ops"] = self.save_onnx_model
         elif isinstance(self.compression, list):
             for i, algo_config in enumerate(self.compression):

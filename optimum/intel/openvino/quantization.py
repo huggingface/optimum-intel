@@ -50,24 +50,13 @@ from .utils import (
     OV_XML_FILE_NAME,
 )
 
+
 COMPRESSION_OPTIONS = {
-    "i8": { "mode": nncf.CompressWeightsMode.INT8 },
-    "i4_sym_g128": {
-        "mode": nncf.CompressWeightsMode.INT4_SYM,
-        "group_size": 128
-    },
-    "i4_asym_g128": {
-        "mode": nncf.CompressWeightsMode.INT4_ASYM,
-        "group_size": 128
-    },
-    "i4_sym_g64": {
-        "mode": nncf.CompressWeightsMode.INT4_SYM,
-        "group_size": 64
-    },
-    "i4_asym_g64": {
-        "mode": nncf.CompressWeightsMode.INT4_ASYM,
-        "group_size": 64
-    },
+    "i8": {"mode": nncf.CompressWeightsMode.INT8},
+    "i4_sym_g128": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128},
+    "i4_asym_g128": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 128},
+    "i4_sym_g64": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64},
+    "i4_asym_g64": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64},
 }
 
 register_module(ignored_algorithms=[])(Conv1D)

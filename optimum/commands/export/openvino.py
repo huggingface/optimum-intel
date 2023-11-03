@@ -78,7 +78,12 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "The weight compression option, e.g. f16 stands for float16 weights, i8 - INT8 weights, i4_* - for INT4 compressed weights."
         ),
     )
-    optional_group.add_argument("--ratio", type=float, default=0.8, help="Compression ratio between primary and backup precision (only relevant to INT4).")
+    optional_group.add_argument(
+        "--ratio",
+        type=float,
+        default=0.8,
+        help="Compression ratio between primary and backup precision (only relevant to INT4).",
+    )
 
 
 class OVExportCommand(BaseOptimumCLICommand):
