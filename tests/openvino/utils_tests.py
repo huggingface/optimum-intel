@@ -24,7 +24,7 @@ MODEL_NAMES = {
     "bart": "hf-internal-testing/tiny-random-bart",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
-    "blenderbot": "hf-internal-testing/tiny-random-blenderbot",
+    "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "camembert": "hf-internal-testing/tiny-random-camembert",
     "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
