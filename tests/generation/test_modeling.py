@@ -20,6 +20,7 @@ import torch
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, PretrainedConfig, pipeline, set_seed
 
+from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel.generation.modeling import TSModelForCausalLM
 
 
@@ -28,6 +29,9 @@ MODEL_NAMES = {
     "gptj": "hf-internal-testing/tiny-random-gptj",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
+    "mistral": "echarlaix/tiny-random-mistral",
+    "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
 }
 
 SEED = 42
@@ -48,7 +52,11 @@ class ModelingIntegrationTest(unittest.TestCase):
         "gpt2",
         "gptj",
         "gpt_neo",
+        "mistral",
+        "llama",
+        # "gpt_bigcode",
     )
+
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
 
@@ -61,7 +69,12 @@ class ModelingIntegrationTest(unittest.TestCase):
         trfs_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample", return_tensors="pt")
-        outputs = model(**tokens)
+
+        position_ids = None
+        if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
+            input_shape = tokens["input_ids"].shape
+            position_ids = torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
+        outputs = model(**tokens, position_ids=position_ids)
         self.assertIsInstance(outputs.logits, torch.Tensor)
         with torch.no_grad():
             trfs_outputs = trfs_model(**tokens)
@@ -71,7 +84,8 @@ class ModelingIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdirname:
             model.save_pretrained(tmpdirname)
             loaded_model = TSModelForCausalLM.from_pretrained(tmpdirname)
-            loaded_model_outputs = loaded_model(**tokens)
+            loaded_model_outputs = loaded_model(**tokens, position_ids=position_ids)
+
         self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -120,7 +134,6 @@ class ModelingIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES["gpt2"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-
         model_with_pkv = TSModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
         # Warmup
         _ = model_with_pkv.generate(**tokens)
@@ -136,6 +149,9 @@ class ModelingIntegrationTest(unittest.TestCase):
             outputs_model_without_pkv = model_without_pkv.generate(
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
+        self.assertTrue(model_with_pkv.use_cache)
+        self.assertFalse(model_without_pkv.use_cache)
+
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)

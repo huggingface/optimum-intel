@@ -51,6 +51,7 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from utils_tests import MODEL_NAMES
 
+from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
@@ -496,7 +497,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         tokens = tokenizer(
             "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
         )
-        ov_outputs = ov_model(**tokens)
+        position_ids = None
+        if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
+            input_shape = tokens["input_ids"].shape
+            position_ids = torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
+        ov_outputs = ov_model(**tokens, position_ids=position_ids)
+
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         with torch.no_grad():
