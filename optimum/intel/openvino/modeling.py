@@ -49,7 +49,7 @@ from transformers.modeling_outputs import (
 
 from optimum.exporters import TasksManager
 
-from ..utils.import_utils import is_timm_available
+from ..utils.import_utils import is_timm_available, is_timm_version
 from .modeling_base import OVBaseModel
 from .utils import _is_timm_ov_dir
 
@@ -538,6 +538,11 @@ class OVModelForImageClassification(OVModel):
             if not is_timm_available():
                 raise ImportError(
                     "To load a timm model, timm needs to be installed. Please install it with `pip install timm`."
+                )
+
+            if is_timm_version("<", "0.9.0"):
+                raise ImportError(
+                    "To load a timm model, please make sure to upgrade your `timm` version to at least 0.9.0, you can upgrade it by running `pip install --upgrade timm`"
                 )
 
             from .modeling_timm import TimmConfig, TimmForImageClassification, TimmOnnxConfig

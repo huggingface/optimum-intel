@@ -38,3 +38,9 @@ jobs:
     - name: Test with Pytest
       run: |
         pytest tests/openvino/ --ignore test_modeling_basic
+    - name: Test openvino-nightly import
+      run: |
+        pip uninstall -y openvino
+        pip install openvino-nightly
+        python -c "from optimum.intel import OVModelForCausalLM; OVModelForCausalLM.from_pretrained('hf-internal-testing/tiny-random-gpt2', export=True, compile=False)"
+

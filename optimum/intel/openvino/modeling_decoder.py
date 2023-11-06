@@ -129,7 +129,6 @@ class OVBaseDecoderModel(OVModel):
         self.main_input_name = "input_ids"
         self.num_pkv = 2
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
-        self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
@@ -229,34 +228,6 @@ class OVBaseDecoderModel(OVModel):
             if use_cache:
                 task = task + "-with-past"
 
-        # Patch the modules to export of GPTQ models w/o GPU
-        do_gptq_patching = False
-        config_dict = config.to_dict()
-        quantization_config = config_dict.get("quantization_config", None)
-        do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
-        if do_gptq_patching:
-            torch.set_default_dtype(torch.float32)
-            orig_cuda_check = torch.cuda.is_available
-            torch.cuda.is_available = lambda: True
-
-            from optimum.gptq import GPTQQuantizer
-
-            orig_post_init_model = GPTQQuantizer.post_init_model
-
-            def post_init_model(self, model):
-                from auto_gptq import exllama_set_max_input_length
-
-                class StoreAttr(object):
-                    pass
-
-                model.quantize_config = StoreAttr()
-                model.quantize_config.desc_act = self.desc_act
-                if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
-                    model = exllama_set_max_input_length(model, self.max_input_length)
-                return model
-
-            GPTQQuantizer.post_init_model = post_init_model
-
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -270,11 +241,6 @@ class OVBaseDecoderModel(OVModel):
             trust_remote_code=trust_remote_code,
             int8=load_in_8bit,
         )
-
-        # Unpatch modules after GPTQ export
-        if do_gptq_patching:
-            torch.cuda.is_available = orig_cuda_check
-            GPTQQuantizer.post_init_model = orig_post_init_model
 
         config.is_decoder = True
         config.is_encoder_decoder = False
@@ -346,6 +312,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
@@ -395,13 +362,27 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         inputs["input_ids"] = np.array(input_ids)
         # Add the attention_mask inputs when needed
-        if "attention_mask" in self.input_names:
+        if "attention_mask" in self.input_names or "position_ids" in self.input_names:
             if attention_mask is not None:
-                inputs["attention_mask"] = np.array(attention_mask)
+                attention_mask = np.array(attention_mask)
             else:
-                inputs["attention_mask"] = np.ones(
+                attention_mask = np.ones(
                     (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
                 )
+
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+
+        if "position_ids" in self.input_names:
+            if position_ids is not None:
+                position_ids = np.array(position_ids)
+            else:
+                position_ids = np.cumsum(attention_mask, axis=1) - 1
+                position_ids[attention_mask == 0] = 1
+                if past_key_values:
+                    position_ids = np.expand_dims(position_ids[:, -1], axis=-1)
+
+            inputs["position_ids"] = position_ids
 
         # Run inference
         self.request.start_async(inputs, shared_memory=True)
@@ -504,7 +485,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         elif model_type == "gpt-bigcode":
             init_cls = OVGPTBigCodeForCausalLM
         else:
-            init_cls = OVModelForCausalLM
+            init_cls = cls
 
         return init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
 
