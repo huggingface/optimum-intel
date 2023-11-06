@@ -24,8 +24,15 @@ from itertools import chain
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Type, Union
 
+
+# Integrations must be imported before ML frameworks:
+# isort: off
+from transformers.integrations import hp_params
+from transformers.integrations.deepspeed import deepspeed_init, deepspeed_load_checkpoint, is_deepspeed_available
+
+# isort: on
+
 import openvino
-import openvino.runtime
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -190,6 +197,8 @@ class OVTrainer(Trainer):
         task: Optional[str] = None,
         feature: Optional[str] = None,
     ):
+        self.neftune_noise_alpha = None
+
         super().__init__(
             model,
             args,
@@ -821,12 +830,12 @@ class OVTrainer(Trainer):
             if state_dict is None:
                 state_dict = self.model.state_dict()
             if is_pretrained_model:
-                unwrapped_model.save_pretrained(output_dir, state_dict=state_dict)
+                unwrapped_model.save_pretrained(output_dir, state_dict=state_dict, safe_serialization=False)
             else:
                 logger.info("Trainer.model is not a `PreTrainedModel`, only saving its state dict.")
                 torch.save(state_dict, os.path.join(output_dir, WEIGHTS_NAME))
         else:
-            self.model.save_pretrained(output_dir, state_dict=state_dict)
+            self.model.save_pretrained(output_dir, state_dict=state_dict, safe_serialization=False)
 
         if self.tokenizer is not None:
             self.tokenizer.save_pretrained(output_dir)

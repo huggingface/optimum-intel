@@ -12,6 +12,7 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
+<<<<<<< HEAD
     "optimum @ git+https://github.com/huggingface/optimum.git",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
@@ -41,8 +42,9 @@ EXTRAS_REQUIRE = {
         "neural-compressor>=2.2.0",
         "onnx",
         "onnxruntime<1.15.0",
+        "transformers>=4.33.0",
     ],
-    "openvino": ["openvino>=2023.1.0", "onnx", "onnxruntime"],
+    "openvino": ["openvino>=2023.1.0", "onnx", "onnxruntime", "transformers>=4.33.0"],
     "nncf": ["nncf>=2.6.0"],
     "ipex": ["transformers<4.32.0", "intel-extension-for-pytorch", "onnx"],
     "diffusers": ["diffusers"],

@@ -71,7 +71,10 @@ if _openvino_available:
     try:
         _openvino_version = importlib_metadata.version("openvino")
     except importlib_metadata.PackageNotFoundError:
-        _openvino_available = False
+        try:
+            _openvino_version = importlib_metadata.version("openvino-nightly")
+        except importlib_metadata.PackageNotFoundError:
+            _openvino_available = False
 
 
 _nncf_available = importlib.util.find_spec("nncf") is not None
