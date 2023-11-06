@@ -43,7 +43,7 @@ EXTRAS_REQUIRE = {
         "onnxruntime<1.15.0",
         "transformers>=4.33.0",
     ],
-    "openvino": ["openvino>=2023.1.0", "onnx", "onnxruntime", "transformers>=4.33.0"],
+    "openvino": ["openvino>=2023.1.0", "onnx", "onnxruntime", "transformers>=4.33.0,<4.35.0"],
     "nncf": ["nncf>=2.6.0"],
     "ipex": ["transformers<4.32.0", "intel-extension-for-pytorch", "onnx"],
     "diffusers": ["diffusers"],
