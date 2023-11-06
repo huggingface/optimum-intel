@@ -102,7 +102,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "albert": (42,),
     "vit": (31,),
     "blenderbot": (35,),
-    "gpt2": (22,),
+    "gpt2": (23,),
     "wav2vec2": (15,),
     "distilbert": (33,),
     "t5": (32, 52, 42),

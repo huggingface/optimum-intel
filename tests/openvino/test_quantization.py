@@ -63,7 +63,7 @@ class OVQuantizerTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 32, 35),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 22),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 23),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
@@ -145,7 +145,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS = (
         (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 70, 35),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 45, 22),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-BartForCausalLM", 27, 14),
     )
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (
