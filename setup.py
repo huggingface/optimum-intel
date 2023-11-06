@@ -12,7 +12,6 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-<<<<<<< HEAD
     "optimum @ git+https://github.com/huggingface/optimum.git",
     "transformers>=4.20.0",
     "datasets>=1.4.0",
