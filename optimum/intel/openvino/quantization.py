@@ -166,6 +166,10 @@ class OVQuantizer(OptimumQuantizer):
             raise ValueError("`save_directory` needs to be specified")
 
         if weights_only:
+            logger.warning(
+                "Weight only quantization will be deprecated in the `OVQuantizer` in optimum-intel next release. "
+                "To apply quantization on your wrights, please set `load_in_8bit=True` when loading your model with `from_pretrained()` or set `--int8` use when exporting your model with the CLI."
+            )
             if calibration_dataset is not None:
                 logger.warning(
                     "`calibration_dataset` was provided but will not be used as `weights_only` is set to `True`."
