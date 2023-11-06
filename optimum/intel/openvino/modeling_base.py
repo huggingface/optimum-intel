@@ -43,17 +43,12 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
-# workaround to enable compatibility between openvino models and transformers pipelines
-class PreTrainedModel(OptimizedModel):
-    pass
-
-
 @add_start_docstrings(
     """
     Base OVModel class.
     """,
 )
-class OVBaseModel(PreTrainedModel):
+class OVBaseModel(OptimizedModel):
     auto_model_class = None
     export_feature = None
 
@@ -85,6 +80,12 @@ class OVBaseModel(PreTrainedModel):
             names = tuple(key.get_names())
             input_names[next((name for name in names if "/" not in name), names[0])] = idx
         self.input_names = input_names
+
+        output_names = {}
+        for idx, key in enumerate(model.outputs):
+            names = tuple(key.get_names())
+            output_names[next((name for name in names if "/" not in name), names[0])] = idx
+        self.output_names = output_names
 
         self.model = model
         self.request = None
@@ -302,7 +303,7 @@ class OVBaseModel(PreTrainedModel):
     @classmethod
     def _to_load(
         cls,
-        model: PreTrainedModel,
+        model,
         config: PretrainedConfig,
         onnx_config: OnnxConfig,
         use_auth_token: Optional[Union[bool, str]] = None,

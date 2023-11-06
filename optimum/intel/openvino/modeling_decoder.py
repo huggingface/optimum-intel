@@ -129,7 +129,6 @@ class OVBaseDecoderModel(OVModel):
         self.main_input_name = "input_ids"
         self.num_pkv = 2
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
-        self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
@@ -313,6 +312,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
@@ -362,13 +362,27 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         inputs["input_ids"] = np.array(input_ids)
         # Add the attention_mask inputs when needed
-        if "attention_mask" in self.input_names:
+        if "attention_mask" in self.input_names or "position_ids" in self.input_names:
             if attention_mask is not None:
-                inputs["attention_mask"] = np.array(attention_mask)
+                attention_mask = np.array(attention_mask)
             else:
-                inputs["attention_mask"] = np.ones(
+                attention_mask = np.ones(
                     (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
                 )
+
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+
+        if "position_ids" in self.input_names:
+            if position_ids is not None:
+                position_ids = np.array(position_ids)
+            else:
+                position_ids = np.cumsum(attention_mask, axis=1) - 1
+                position_ids[attention_mask == 0] = 1
+                if past_key_values:
+                    position_ids = np.expand_dims(position_ids[:, -1], axis=-1)
+
+            inputs["position_ids"] = position_ids
 
         # Run inference
         self.request.start_async(inputs, shared_memory=True)
