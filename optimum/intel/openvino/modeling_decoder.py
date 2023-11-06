@@ -129,7 +129,6 @@ class OVBaseDecoderModel(OVModel):
         self.main_input_name = "input_ids"
         self.num_pkv = 2
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
-        self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
