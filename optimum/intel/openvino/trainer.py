@@ -62,9 +62,6 @@ from torch.utils.data import Dataset, RandomSampler
 from transformers import Trainer
 from transformers.data.data_collator import DataCollator
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
-
-# Integrations must be imported before ML frameworks:
-from transformers.integrations import deepspeed_init, deepspeed_load_checkpoint, hp_params, is_deepspeed_available
 from transformers.modeling_utils import PreTrainedModel, unwrap_model
 from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
