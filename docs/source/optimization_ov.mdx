@@ -62,28 +62,6 @@ tokenizer.save_pretrained(save_dir)
 
 The `quantize()` method applies post-training static quantization and export the resulting quantized model to the OpenVINO Intermediate Representation (IR). The resulting graph is represented with two files: an XML file describing the network topology and a binary file describing the weights. The resulting model can be run on any target Intel device.
 
-### Weights compression
-
-For large language models (LLMs), it is often beneficial to only quantize weights, and keep activations in floating point precision. This method does not require a calibration dataset. To enable weights compression, set the `weights_only` parameter of `OVQuantizer`:
-
-```python
-from optimum.intel.openvino import OVQuantizer, OVModelForCausalLM
-from transformers import AutoModelForCausalLM
-
-save_dir = "int8_weights_compressed_model"
-model = AutoModelForCausalLM.from_pretrained("databricks/dolly-v2-3b")
-quantizer = OVQuantizer.from_pretrained(model, task="text-generation")
-quantizer.quantize(save_directory=save_dir, weights_only=True)
-```
-
-To load the optimized model for inference:
-
-```python
-optimized_model = OVModelForCausalLM.from_pretrained(save_dir)
-```
-
-Weights compression is enabled for PyTorch and OpenVINO models: the starting model can be an `AutoModelForCausalLM` or `OVModelForCausalLM` instance.
-
 ## Training-time optimization
 
 Apart from optimizing a model after training like post-training quantization above, `optimum.openvino` also provides optimization methods during training, namely Quantization-Aware Training (QAT) and Joint Pruning, Quantization and Distillation (JPQD).
