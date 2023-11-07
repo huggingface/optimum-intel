@@ -165,10 +165,6 @@ class OVQuantizer(OptimumQuantizer):
             # TODO : can be set to self.model.config.name_or_path for OVModels when not provided
             raise ValueError("`save_directory` needs to be specified")
         if weights_only:
-            logger.warning(
-                "Applying weight only quantization using the `OVQuantizer` will be deprecated in the next release of optimum-intel. "
-                "To apply weight only quantization, please set `load_in_8bit=True` when loading your model with `from_pretrained()` or set `--int8` use when exporting your model with the CLI."
-            )
             if calibration_dataset is not None:
                 logger.warning(
                     "`calibration_dataset` was provided but will not be used as `weights_only` is set to `True`."
