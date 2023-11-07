@@ -112,6 +112,4 @@ class OVCLIExportTestCase(unittest.TestCase):
             for i, model in enumerate(models):
                 _, num_int8 = get_num_quantized_nodes(model)
                 expected = expected_int8[i]
-                if task == "text-generation":
-                    expected -= 1
                 self.assertEqual(expected, num_int8)
