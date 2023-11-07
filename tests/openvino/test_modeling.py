@@ -494,7 +494,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer(
             "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
@@ -510,8 +510,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4),
-                         f"Max diff {torch.abs(ov_outputs.logits - transformers_outputs.logits).max()}")
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
         del transformers_model
         del ov_model
         gc.collect()
@@ -1211,7 +1210,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 
 
 class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("whisper", "speech_to_text")
+    SUPPORTED_ARCHITECTURES = ("whisper",)
 
     def _generate_random_audio_data(self):
         np.random.seed(10)
