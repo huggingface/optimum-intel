@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from transformers import AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import __main__ as optimum_main
@@ -27,7 +27,6 @@ from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
 from ...intel.utils.import_utils import is_nncf_available
-from ...intel.utils.modeling_utils import patch_decoder_attention_mask
 from .convert import export_models
 
 
@@ -137,6 +136,41 @@ def main_export(
     original_task = task
     task = TasksManager.map_from_synonym(task)
 
+    # Patch the modules to export of GPTQ models w/o GPU
+    do_gptq_patching = False
+    try:
+        config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
+        config_dict = config.to_dict()
+        quantization_config = config_dict.get("quantization_config", None)
+        do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
+    except Exception:
+        pass
+
+    if do_gptq_patching:
+        import torch
+
+        torch.set_default_dtype(torch.float32)
+        orig_cuda_check = torch.cuda.is_available
+        torch.cuda.is_available = lambda: True
+
+        from optimum.gptq import GPTQQuantizer
+
+        orig_post_init_model = GPTQQuantizer.post_init_model
+
+        def post_init_model(self, model):
+            from auto_gptq import exllama_set_max_input_length
+
+            class StoreAttr(object):
+                pass
+
+            model.quantize_config = StoreAttr()
+            model.quantize_config.desc_act = self.desc_act
+            if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
+                model = exllama_set_max_input_length(model, self.max_input_length)
+            return model
+
+        GPTQQuantizer.post_init_model = post_init_model
+
     framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
 
     # get the shapes to be used to generate dummy inputs
@@ -222,24 +256,18 @@ def main_export(
     preprocessors = maybe_load_preprocessors(
         model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
-    if not task.startswith("text-generation"):
-        onnx_config, models_and_onnx_configs = optimum_main._get_submodels_and_onnx_configs(
-            model=model,
-            task=task,
-            monolith=False,
-            custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
-            custom_architecture=custom_architecture,
-            fn_get_submodels=fn_get_submodels,
-            preprocessors=preprocessors,
-            _variant="default",
-        )
-    else:
-        # TODO : ModelPatcher will be added in next optimum release
-        model = patch_decoder_attention_mask(model)
 
-        onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_constructor(model.config)
-        models_and_onnx_configs = {"model": (model, onnx_config)}
+    onnx_config, models_and_onnx_configs = optimum_main._get_submodels_and_onnx_configs(
+        model=model,
+        task=task,
+        monolith=False,
+        custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
+        custom_architecture=custom_architecture,
+        fn_get_submodels=fn_get_submodels,
+        preprocessors=preprocessors,
+        _variant="default",
+        legacy=False,
+    )
 
     if int8 is None:
         int8 = False
@@ -324,3 +352,8 @@ def main_export(
         int8=int8,
         model_kwargs=model_kwargs,
     )
+
+    # Unpatch modules after GPTQ export
+    if do_gptq_patching:
+        torch.cuda.is_available = orig_cuda_check
+        GPTQQuantizer.post_init_model = orig_post_init_model

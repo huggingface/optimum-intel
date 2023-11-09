@@ -26,13 +26,14 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
+from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_torch_version, is_transformers_version
-from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
+from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -48,43 +49,29 @@ def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = Fals
     task = _TASK_ALIASES.get(task, task)
     signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.__call__)
     onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-    onnx_config = onnx_config_class(model.config)
-    if task == "text-generation" and use_cache:
-        onnx_config = onnx_config_class(model.config, use_past=True, use_past_in_inputs=True)
+    if "text-generation" in task:
+        onnx_config = onnx_config_class(model.config, use_past=use_cache, use_past_in_inputs=use_cache)
+    else:
+        onnx_config = onnx_config_class(model.config)
+
     dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-    model_inputs = {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
-    if task == "text-generation" and use_cache and model.config.model_type != "gpt_bigcode":
-        # WA jit.trace issue of model like llama in https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L464, or else, generation output will be incorrect
-        pkv = []
-        for i in range(len(model_inputs["past_key_values"])):
-            pkv.append([])
-            for j in range(len(model_inputs["past_key_values"][0])):
-                pkv[i].append(model_inputs["past_key_values"][i][j].to(model.dtype))
-            pkv[i] = tuple(pkv[i])
-        model_inputs["past_key_values"] = tuple(pkv)
-        i = model_inputs["input_ids"]
-        a = model_inputs["attention_mask"]
-        model_inputs["input_ids"] = torch.cat([torch.zeros(i.shape[0], 1), i], -1).to(i.dtype)
-        model_inputs["attention_mask"] = torch.cat([torch.zeros(a.shape[0], 1), a], -1).to(a.dtype)
-    return model_inputs
+
+    return {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
 
 
 def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     model_inputs = prepare_jit_inputs(model, task, use_cache)
     # check if the model_inputs is correct.
     model(**model_inputs)
+
     torch._C._jit_set_texpr_fuser_enabled(False)
     if "past_key_values" in model_inputs.keys():
         model.config.return_dict = False
-        if is_torch_version(">", "2.0.1"):
-            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs, strict=False)
-        else:
-            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()), strict=False)
+    if is_torch_version(">=", "2.1.0"):
+        traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs, strict=False)
     else:
-        if is_torch_version(">=", "2.0.0"):
-            traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs, strict=False)
-        else:
-            traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()), strict=False)
+        traced_model = torch.jit.trace(model, example_inputs=tuple(model_inputs.values()), strict=False)
+
     traced_model = torch.jit.freeze(traced_model.eval())
     traced_model(**model_inputs)
     traced_model(**model_inputs)
@@ -92,11 +79,7 @@ def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     return traced_model
 
 
-class PreTrainedModel(OptimizedModel):
-    pass
-
-
-class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
+class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
     main_input_name = "input_ids"
@@ -159,6 +142,7 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
                 past_key_values = self._convert_to_bloom_cache(past_key_values)
 
         position_ids = kwargs.get("position_ids", None)
+        attention_mask = kwargs.get("attention_mask", None)
         if attention_mask is not None and position_ids is None:
             # create position_ids on the fly for batch generation
             position_ids = attention_mask.long().cumsum(-1) - 1
@@ -171,7 +155,7 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
             "past_key_values": past_key_values,
             "use_cache": self.use_cache,
             "position_ids": position_ids,
-            "attention_mask": kwargs.get("attention_mask", None),
+            "attention_mask": attention_mask,
             "token_type_ids": None,
         }
 
@@ -268,6 +252,7 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        position_ids: Optional[torch.FloatTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         if attention_mask is None:
@@ -278,41 +263,36 @@ class BaseModelForCausalLM(PreTrainedModel, GenerationMixin):
             "attention_mask": attention_mask,
         }
 
+        model_type = self.config.model_type.replace("_", "-")
+
         if self.use_cache:
             if past_key_values is None:
                 nb_pkv = 2
                 num_layers = self.normalized_config.num_layers
-                num_attention_heads = self.normalized_config.num_attention_heads
-                num_key_value_heads = num_attention_heads
-                if hasattr(self.normalized_config, "num_key_value_heads"):
-                    num_key_value_heads = self.normalized_config.num_key_value_heads
-                hidden_size = self.normalized_config.hidden_size
-                d_k = hidden_size // num_attention_heads
-                if self.config.model_type == "gpt_bigcode":
-                    new_shape = [input_ids.shape[0], 0, d_k * 2]
-                    empty_tensor = torch.empty(size=new_shape)
-                    if self.model_dtype is not None:
-                        empty_tensor = empty_tensor.to(self.model_dtype)
-                    past_key_values = tuple([empty_tensor] * num_layers)
-                elif self.config.model_type != "bloom":
-                    new_shape = [input_ids.shape[0], num_key_value_heads, 0, d_k]
-                    empty_tensor = torch.empty(size=new_shape)
-                    if self.model_dtype is not None:
-                        empty_tensor = empty_tensor.to(self.model_dtype)
-                    pkv = tuple(empty_tensor for _ in range(nb_pkv))
+                d_k = self.normalized_config.hidden_size // self.normalized_config.num_attention_heads
+                batch_size = input_ids.shape[0]
+
+                if model_type in {"mistral", "llama"}:
+                    num_attention_heads = self.normalized_config.num_key_value_heads
                 else:
-                    pkv = ()
-                    for i in range(nb_pkv):
-                        if i % 2 == 0:
-                            new_shape = [input_ids.shape[0] * num_key_value_heads, d_k, 0]
-                        else:
-                            new_shape = [input_ids.shape[0] * num_key_value_heads, 0, d_k]
-                        empty_tensor = torch.empty(size=new_shape)
-                        if self.model_dtype is not None:
-                            empty_tensor = empty_tensor.to(self.model_dtype)
-                        pkv = pkv + (empty_tensor,)
-                if past_key_values is None:
-                    past_key_values = tuple(tuple(pkv) for _ in range(num_layers))
+                    num_attention_heads = self.normalized_config.num_attention_heads
+
+                if model_type == "bloom":
+                    shape_key = (batch_size * num_attention_heads, d_k, 0)
+                    shape_value = (batch_size * num_attention_heads, 0, d_k)
+                    key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)
+                    value = torch.empty(size=shape_value, dtype=self.model_dtype, device=self._device)
+                    past_key_values = tuple(
+                        tuple(key if idx % 2 == 0 else value for idx in range(nb_pkv)) for _ in range(num_layers)
+                    )
+                elif model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS:
+                    shape = (batch_size, 0, d_k * 2)
+                    pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
+                    past_key_values = tuple(pkv for _ in range(num_layers))
+                else:
+                    shape = (batch_size, num_attention_heads, 0, d_k)
+                    pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
+                    past_key_values = tuple(tuple(pkv for _ in range(nb_pkv)) for _ in range(num_layers))
 
             inputs["past_key_values"] = past_key_values
 
@@ -417,7 +397,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         **kwargs,
     ):
-        if is_torch_version("<", "2.0.0"):
+        if is_torch_version("<", "2.1.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
         task = cls.export_feature
@@ -433,12 +413,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-
-        if model.config.model_type == "bloom":
-            model.transformer._prepare_attn_mask = _prepare_attn_mask
-
-        if model.config.model_type == "llama":
-            model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+        model = patch_decoder_attention_mask(model)
 
         traced_model = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
