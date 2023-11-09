@@ -70,7 +70,6 @@ INT8_WEIGHT_COMPRESSION_CONFIG = {
             "{re}.*conv_.*",
         ],
     },
-    "overflow_fix": "disable",
 }
 
 
