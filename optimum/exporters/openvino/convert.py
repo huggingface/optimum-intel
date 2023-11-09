@@ -28,6 +28,7 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
+from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
 
 from ...intel.utils.import_utils import is_nncf_available
@@ -336,6 +337,8 @@ def export_pytorch(
         dummy_inputs, dict_inputs = remove_none_from_dummy_inputs(dummy_inputs)
         input_info = get_input_shapes(dummy_inputs, inputs)
         custom_patcher = type(config).patch_model_for_export != OnnxConfig.patch_model_for_export
+        patch_model_forward = False
+        orig_forward = model.forward
         try:
             # TorchScript used behind OpenVINO conversion. Optimum supports only return_dict=True models for patching,
             # while TorchScript do not support dictionary with values of mixed types (e.g. Tensor and None) in model input/output
@@ -343,7 +346,12 @@ def export_pytorch(
             # model.config.torchscript = True can not be used for patching, because it overrides return_dict to Flase
             if custom_patcher or dict_inputs:
                 patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
-                patched_forward = patcher.patched_forward
+                # DecoderModelPatcher does not override model forward
+                if isinstance(patcher, DecoderModelPatcher) or patcher.orig_forward_name != "forward":
+                    patch_model_forward = True
+                    patched_forward = model.forward
+                else:
+                    patched_forward = patcher.patched_forward
 
                 @functools.wraps(patched_forward)
                 def ts_patched_forward(*args, **kwargs):
@@ -356,14 +364,20 @@ def export_pytorch(
                     outputs = patched_forward(*args, **kwargs)
                     return tuple(outputs.values())
 
-                patcher.patched_forward = ts_patched_forward
+                if not patch_model_forward:
+                    patcher.patched_forward = ts_patched_forward
+                else:
+                    model.forward = ts_patched_forward
                 with patcher:
                     ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
             else:
                 model.config.torchscript = True
+                model.config.retun_dict = False
                 ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
+            if patch_model_forward:
+                model.forward = orig_forward
             return export_pytorch_via_onnx(
                 model,
                 config,

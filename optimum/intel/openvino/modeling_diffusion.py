@@ -37,6 +37,7 @@ from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
 
+from optimum.pipelines.diffusers.pipeline_latent_consistency import LatentConsistencyPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion import StableDiffusionPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_img2img import StableDiffusionImg2ImgPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_inpaint import StableDiffusionInpaintPipelineMixin
@@ -69,16 +70,16 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     def __init__(
         self,
-        vae_decoder: openvino.runtime.Model,
-        text_encoder: openvino.runtime.Model,
         unet: openvino.runtime.Model,
         config: Dict[str, Any],
-        tokenizer: "CLIPTokenizer",
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"],
-        feature_extractor: Optional["CLIPFeatureExtractor"] = None,
+        vae_decoder: Optional[openvino.runtime.Model] = None,
         vae_encoder: Optional[openvino.runtime.Model] = None,
+        text_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder_2: Optional[openvino.runtime.Model] = None,
+        tokenizer: Optional["CLIPTokenizer"] = None,
         tokenizer_2: Optional["CLIPTokenizer"] = None,
+        feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
         compile: bool = True,
@@ -270,20 +271,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
-        return cls(
-            vae_decoder=components["vae_decoder"],
-            text_encoder=components["text_encoder"],
-            unet=unet,
-            config=config,
-            tokenizer=kwargs.pop("tokenizer", None),
-            scheduler=kwargs.pop("scheduler"),
-            feature_extractor=kwargs.pop("feature_extractor", None),
-            vae_encoder=components["vae_encoder"],
-            text_encoder_2=components["text_encoder_2"],
-            tokenizer_2=kwargs.pop("tokenizer_2", None),
-            model_save_dir=model_save_dir,
-            **kwargs,
-        )
+        return cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
 
     @classmethod
     def _from_transformers(
@@ -295,10 +283,11 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         force_download: bool = False,
         cache_dir: Optional[str] = None,
         local_files_only: bool = False,
-        tokenizer: "CLIPTokenizer" = None,
+        tokenizer: Optional["CLIPTokenizer"] = None,
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         load_in_8bit: bool = False,
+        tokenizer_2: Optional["CLIPTokenizer"] = None,
         **kwargs,
     ):
         save_dir = TemporaryDirectory()
@@ -329,6 +318,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             local_files_only=local_files_only,
             model_save_dir=save_dir,
             tokenizer=tokenizer,
+            tokenizer_2=tokenizer_2,
             scheduler=scheduler,
             feature_extractor=feature_extractor,
             load_in_8bit=load_in_8bit,
@@ -377,8 +367,10 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         if batch_size == -1 or num_images_per_prompt == -1:
             batch_size = -1
         else:
+            batch_size *= num_images_per_prompt
             # The factor of 2 comes from the guidance scale > 1
-            batch_size = 2 * batch_size * num_images_per_prompt
+            if "timestep_cond" not in {inputs.get_any_name() for inputs in model.inputs}:
+                batch_size *= 2
 
         height = height // self.vae_scale_factor if height > 0 else height
         width = width // self.vae_scale_factor if width > 0 else width
@@ -402,6 +394,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 shapes[inputs] = [batch_size, self.text_encoder_2.config["projection_dim"]]
             elif inputs.get_any_name() == "time_ids":
                 shapes[inputs] = [batch_size, inputs.get_partial_shape()[1]]
+            elif inputs.get_any_name() == "timestep_cond":
+                shapes[inputs] = [batch_size, self.unet.config["time_cond_proj_dim"]]
             else:
                 shapes[inputs][0] = batch_size
                 shapes[inputs][1] = tokenizer_max_length
@@ -585,6 +579,7 @@ class OVModelUnet(OVModelPart):
         encoder_hidden_states: np.ndarray,
         text_embeds: Optional[np.ndarray] = None,
         time_ids: Optional[np.ndarray] = None,
+        timestep_cond: Optional[np.ndarray] = None,
     ):
         self._compile()
 
@@ -598,6 +593,8 @@ class OVModelUnet(OVModelPart):
             inputs["text_embeds"] = text_embeds
         if time_ids is not None:
             inputs["time_ids"] = time_ids
+        if timestep_cond is not None:
+            inputs["timestep_cond"] = timestep_cond
 
         outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
@@ -925,6 +922,61 @@ class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, Stable
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             negative_prompt=negative_prompt,
+            num_images_per_prompt=num_images_per_prompt,
+            **kwargs,
+        )
+
+
+class OVLatentConsistencyModelPipeline(OVStableDiffusionPipelineBase, LatentConsistencyPipelineMixin):
+    def __call__(
+        self,
+        prompt: Optional[Union[str, List[str]]] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        num_inference_steps: int = 4,
+        original_inference_steps: int = None,
+        guidance_scale: float = 8.5,
+        num_images_per_prompt: int = 1,
+        **kwargs,
+    ):
+        height = height or self.unet.config["sample_size"] * self.vae_scale_factor
+        width = width or self.unet.config["sample_size"] * self.vae_scale_factor
+        _height = self.height
+        _width = self.width
+        expected_batch_size = self._batch_size
+
+        if _height != -1 and height != _height:
+            logger.warning(
+                f"`height` was set to {height} but the static model will output images of height {_height}."
+                "To fix the height, please reshape your model accordingly using the `.reshape()` method."
+            )
+            height = _height
+
+        if _width != -1 and width != _width:
+            logger.warning(
+                f"`width` was set to {width} but the static model will output images of width {_width}."
+                "To fix the width, please reshape your model accordingly using the `.reshape()` method."
+            )
+            width = _width
+
+        if expected_batch_size != -1:
+            if isinstance(prompt, str):
+                batch_size = 1
+            elif isinstance(prompt, list):
+                batch_size = len(prompt)
+            else:
+                batch_size = kwargs.get("prompt_embeds").shape[0]
+
+            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale=0.0)
+
+        return LatentConsistencyPipelineMixin.__call__(
+            self,
+            prompt=prompt,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            original_inference_steps=original_inference_steps,
+            guidance_scale=guidance_scale,
             num_images_per_prompt=num_images_per_prompt,
             **kwargs,
         )
