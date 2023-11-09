@@ -255,7 +255,7 @@ class OVQuantizer(OptimumQuantizer):
         )
         self.model.model = quantized_model
         self.model.save_pretrained(save_directory)
-        
+
     def _quantize_ovmodelforseq2seqlm(
         self,
         calibration_dataset: Dataset,
@@ -275,23 +275,21 @@ class OVQuantizer(OptimumQuantizer):
             data_collator=data_collator,
         )
         quantization_dataset = nncf.Dataset(calibration_dataloader, lambda x: x)
-        
+
         # Full quantization of encoder
-        quantized_model = nncf.quantize(
-            self.model.encoder.model,
+        self.model.encoder_model = nncf.quantize(
+            self.model.encoder_model,
             quantization_dataset,
-            model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
+            model_type=nncf.ModelType.TRANSFORMER,
             fast_bias_correction=kwargs.get("fast_bias_correction", True),
             **kwargs,
         )
-        self.model.encoder.model = quantized_model
-        
+
         # Compress weights of decoders for safity
-        if self.model.decoder:
-            self.model.decoder.model = nncf.compress_weights(self.model.decoder.model)
-        if self.model.decoder_with_past:
-            self.model.decoder_with_past.model = nncf.compress_weights(self.model.decoder_with_past.model)
-        
+        self.model.decoder_model = nncf.compress_weights(self.model.decoder_model)
+        if self.model.use_cache:
+            self.model.decoder_with_past_model = nncf.compress_weights(self.model.decoder_with_past_model)
+
         self.model.save_pretrained(save_directory)
 
     def _quantize_ovcausallm(
