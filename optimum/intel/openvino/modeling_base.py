@@ -15,7 +15,7 @@
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
 from typing import Dict, Optional, Union
 
 import openvino
@@ -43,17 +43,12 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
-# workaround to enable compatibility between openvino models and transformers pipelines
-class PreTrainedModel(OptimizedModel):
-    pass
-
-
 @add_start_docstrings(
     """
     Base OVModel class.
     """,
 )
-class OVBaseModel(PreTrainedModel):
+class OVBaseModel(OptimizedModel):
     auto_model_class = None
     export_feature = None
 
@@ -79,7 +74,19 @@ class OVBaseModel(PreTrainedModel):
             height = -1 if self.export_feature == "image-classification" else None
             width = -1 if self.export_feature == "image-classification" else None
             model = self._reshape(model, -1, -1, height, width)
-        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
+
+        input_names = {}
+        for idx, key in enumerate(model.inputs):
+            names = tuple(key.get_names())
+            input_names[next((name for name in names if "/" not in name), names[0])] = idx
+        self.input_names = input_names
+
+        output_names = {}
+        for idx, key in enumerate(model.outputs):
+            names = tuple(key.get_names())
+            output_names[next((name for name in names if "/" not in name), names[0])] = idx
+        self.output_names = output_names
+
         self.model = model
         self.request = None
         if enable_compilation:
@@ -153,6 +160,7 @@ class OVBaseModel(PreTrainedModel):
         force_download: bool = False,
         cache_dir: Optional[str] = None,
         file_name: Optional[str] = None,
+        subfolder: str = "",
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
@@ -184,38 +192,59 @@ class OVBaseModel(PreTrainedModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
+
+        model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
 
-        # Load the model from local directory
-        if os.path.isdir(model_id):
-            file_name = os.path.join(model_id, file_name)
-            model_save_dir = model_id
-        # Download the model from the hub
-        else:
-            model_file_names = [file_name]
-            # If not ONNX then OpenVINO IR
+        model_cache_path = cls._cached_file(
+            model_path=model_path,
+            use_auth_token=use_auth_token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            file_name=file_name,
+            subfolder=subfolder,
+            local_files_only=local_files_only,
+        )
+        model = cls.load_model(model_cache_path, load_in_8bit=load_in_8bit)
+        return cls(model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
 
-            if not from_onnx:
-                model_file_names.append(file_name.replace(".xml", ".bin"))
-            file_names = []
+    @staticmethod
+    def _cached_file(
+        model_path: Union[Path, str],
+        use_auth_token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: Optional[str] = None,
+        file_name: Optional[str] = None,
+        subfolder: str = "",
+        local_files_only: bool = False,
+    ):
+        # locates a file in a local folder and repo, downloads and cache it if necessary.
+        model_path = Path(model_path)
+        if model_path.is_dir():
+            model_cache_path = model_path / file_name
+        else:
+            file_name = Path(file_name)
+            if file_name.suffix != "onnx":
+                model_file_names = [file_name.with_suffix(".bin"), file_name]
+            else:
+                model_file_names = [file_name]
             for file_name in model_file_names:
                 model_cache_path = hf_hub_download(
-                    repo_id=model_id,
-                    filename=file_name,
+                    repo_id=model_path.as_posix(),
+                    filename=file_name.as_posix(),
+                    subfolder=subfolder,
                     use_auth_token=use_auth_token,
                     revision=revision,
                     cache_dir=cache_dir,
                     force_download=force_download,
                     local_files_only=local_files_only,
                 )
-                file_names.append(model_cache_path)
-            model_save_dir = Path(model_cache_path).parent
-            file_name = file_names[0]
+            model_cache_path = Path(model_cache_path)
 
-        model = cls.load_model(file_name, load_in_8bit=load_in_8bit)
-
-        return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
+        return model_cache_path
 
     @classmethod
     def _from_transformers(
@@ -274,7 +303,7 @@ class OVBaseModel(PreTrainedModel):
     @classmethod
     def _to_load(
         cls,
-        model: PreTrainedModel,
+        model,
         config: PretrainedConfig,
         onnx_config: OnnxConfig,
         use_auth_token: Optional[Union[bool, str]] = None,
@@ -311,11 +340,11 @@ class OVBaseModel(PreTrainedModel):
         if self.request is None:
             logger.info(f"Compiling the model to {self._device} ...")
             ov_config = {**self.ov_config}
-            if "CACHE_DIR" not in self.ov_config.keys():
-                # Set default CACHE_DIR only if it is not set.
+            if "CACHE_DIR" not in self.ov_config.keys() and not str(self.model_save_dir).startswith(gettempdir()):
+                # Set default CACHE_DIR only if it is not set, and if the model is not in a temporary directory
                 cache_dir = Path(self.model_save_dir).joinpath("model_cache")
                 ov_config["CACHE_DIR"] = str(cache_dir)
-                logger.info(f"Set CACHE_DIR to {str(cache_dir)}")
+                logger.info(f"Setting OpenVINO CACHE_DIR to {str(cache_dir)}")
             self.request = core.compile_model(self.model, self._device, ov_config)
 
     def _reshape(

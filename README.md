@@ -67,25 +67,50 @@ For more details on the supported compression techniques, please refer to the [d
 
 Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework to accelerate inference.
 
+#### Export:
+
+It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format with the CLI :
+
+```plain
+optimum-cli export openvino --model gpt2 ov_model
+```
+
+If you add `--int8`, the weights will be quantized to INT8, the activations will be kept in floating point precision.
+
+```plain
+optimum-cli export openvino --model gpt2 --int8 ov_model
+```
+
+
 #### Inference:
 
 To load a model and run inference with OpenVINO Runtime, you can just replace your `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
-If you want to load a PyTorch checkpoint, set `export=True` to convert your model to the OpenVINO IR.
+
 
 ```diff
-- from transformers import AutoModelForSequenceClassification
-+ from optimum.intel import OVModelForSequenceClassification
+- from transformers import AutoModelForSeq2SeqLM
++ from optimum.intel import OVModelForSeq2SeqLM
   from transformers import AutoTokenizer, pipeline
 
-  model_id = "distilbert-base-uncased-finetuned-sst-2-english"
-- model = AutoModelForSequenceClassification.from_pretrained(model_id)
-+ model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
+  model_id = "echarlaix/t5-small-openvino"
+- model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
++ model = OVModelForSeq2SeqLM.from_pretrained(model_id)
   tokenizer = AutoTokenizer.from_pretrained(model_id)
-  model.save_pretrained("./distilbert")
+  pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
+  results = pipe("He never went out without a book under his arm, and he often came back with two.")
 
-  classifier = pipeline("text-classification", model=model, tokenizer=tokenizer)
-  results = classifier("He's a dreadful magician.")
+  [{'translation_text': "Il n'est jamais sorti sans un livre sous son bras, et il est souvent revenu avec deux."}]
 ```
+
+If you want to load a PyTorch checkpoint, set `export=True` to convert your model to the OpenVINO IR.
+
+```python
+from optimum.intel import OVModelForCausalLM
+
+model = OVModelForCausalLM.from_pretrained("gpt2", export=True)
+model.save_pretrained("./ov_model")
+```
+
 
 #### Post-training static quantization:
 

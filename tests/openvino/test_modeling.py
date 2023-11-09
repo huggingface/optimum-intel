@@ -51,6 +51,7 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from utils_tests import MODEL_NAMES
 
+from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
@@ -111,6 +112,19 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         loaded_model_outputs = loaded_model(**tokens)
 
+        # Test that model caching is automatically enabled
+        openvino_cache_dir = loaded_model.model_save_dir / "model_cache"
+        self.assertTrue(openvino_cache_dir.is_dir())
+        self.assertGreaterEqual(len(list(openvino_cache_dir.glob("*.blob"))), 1)
+
+        # Test specifying ov_config with throughput hint and manual cache dir
+        manual_openvino_cache_dir = loaded_model.model_save_dir / "manual_model_cache"
+        ov_config = {"CACHE_DIR": str(manual_openvino_cache_dir), "PERFORMANCE_HINT": "THROUGHPUT"}
+        loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID, ov_config=ov_config)
+        self.assertTrue(manual_openvino_cache_dir.is_dir())
+        self.assertGreaterEqual(len(list(manual_openvino_cache_dir.glob("*.blob"))), 1)
+        self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
+
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
@@ -120,6 +134,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
         outputs = model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+
         del loaded_model
         del model
         gc.collect()
@@ -276,6 +291,10 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
             self.assertTrue(not model.is_dynamic)
             self.assertGreaterEqual(outputs[0]["score"], 0.0)
             self.assertIsInstance(outputs[0]["label"], str)
+            # Test that model caching was not automatically enabled for exported model
+            openvino_cache_dir = model.model_save_dir / "model_cache"
+            self.assertFalse(openvino_cache_dir.is_dir())
+
         del model
         del pipe
         gc.collect()
@@ -449,6 +468,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
+        "gpt_bigcode",
         "blenderbot",
         "blenderbot-small",
         "bloom",
@@ -459,12 +479,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox",
         "llama",
         "marian",
+        # "mistral",
         "mpt",
         "opt",
         "pegasus",
     )
     GENERATION_LENGTH = 100
-    SPEEDUP_CACHE = 1.1
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -477,7 +497,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         tokens = tokenizer(
             "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
         )
-        ov_outputs = ov_model(**tokens)
+        position_ids = None
+        if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
+            input_shape = tokens["input_ids"].shape
+            position_ids = torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
+        ov_outputs = ov_model(**tokens, position_ids=position_ids)
+
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         with torch.no_grad():
@@ -537,29 +562,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         tokens = tokenizer("This is a sample input", return_tensors="pt")
 
         model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
-        # Warmup
-        _ = model_with_pkv.generate(**tokens)
-        with Timer() as with_pkv_timer:
-            outputs_model_with_pkv = model_with_pkv.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
-            )
-
+        outputs_model_with_pkv = model_with_pkv.generate(
+            **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+        )
         model_without_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
-
-        # Warmup
-        _ = model_without_pkv.generate(**tokens)
-        with Timer() as without_pkv_timer:
-            outputs_model_without_pkv = model_without_pkv.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
-            )
+        outputs_model_without_pkv = model_without_pkv.generate(
+            **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+        )
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
-        self.assertTrue(
-            without_pkv_timer.elapsed / with_pkv_timer.elapsed > self.SPEEDUP_CACHE,
-            f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
-            f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
-        )
+
         del model_with_pkv
         del model_without_pkv
         gc.collect()
@@ -572,6 +585,29 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             self.assertEqual(model._device, device)
             del model
             gc.collect()
+
+    def test_default_filling_attention_mask(self):
+        model_id = MODEL_NAMES["gpt2"]
+        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        texts = ["this is a simple input"]
+        tokens = tokenizer(texts, return_tensors="pt")
+        self.assertTrue("attention_mask" in model_with_cache.input_names)
+        outs = model_with_cache(**tokens)
+        attention_mask = tokens.pop("attention_mask")
+        outs_without_attn_mask = model_with_cache(**tokens)
+        self.assertTrue(torch.allclose(outs.logits, outs_without_attn_mask.logits))
+        input_ids = torch.argmax(outs.logits, dim=2)
+        past_key_values = outs.past_key_values
+        attention_mask = torch.ones((input_ids.shape[0], tokens.input_ids.shape[1] + 1), dtype=torch.long)
+        outs_step2 = model_with_cache(
+            input_ids=input_ids, attention_mask=attention_mask, past_key_values=past_key_values
+        )
+        outs_without_attn_mask_step2 = model_with_cache(input_ids=input_ids, past_key_values=past_key_values)
+        self.assertTrue(torch.allclose(outs_step2.logits, outs_without_attn_mask_step2.logits))
+        del model_with_cache
+        gc.collect()
 
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):

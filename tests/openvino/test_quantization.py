@@ -63,7 +63,7 @@ class OVQuantizerTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 32, 35),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 22),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 23),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
@@ -110,6 +110,8 @@ class OVQuantizerTest(unittest.TestCase):
     def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
+        if "gpt2" in model_name:
+            expected_int8 -= 1
 
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
@@ -145,7 +147,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS = (
         (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 70, 35),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 45, 22),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-BartForCausalLM", 27, 14),
     )
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (

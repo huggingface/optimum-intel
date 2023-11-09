@@ -111,4 +111,5 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             for i, model in enumerate(models):
                 _, num_int8 = get_num_quantized_nodes(model)
-                self.assertEqual(expected_int8[i], num_int8)
+                expected = expected_int8[i]
+                self.assertEqual(expected, num_int8)

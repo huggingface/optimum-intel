@@ -18,6 +18,9 @@ import torch
 from transformers.modeling_utils import PreTrainedModel
 
 
+MULTI_QUERY_ATTN_MODELS = {"falcon", "gpt_bigcode"}
+
+
 # Modified from transformers.models.bloom.modeling_bloom._make_causal_mask
 def _make_causal_mask(
     input_ids_shape: torch.Size,
@@ -92,6 +95,40 @@ def _prepare_decoder_attention_mask(attention_mask, input_shape, inputs_embeds, 
     return combined_attention_mask
 
 
+# Modified from transformers.models.mistral.modeling_mistral._prepare_decoder_sliding_window_attention_mask
+def _prepare_decoder_sliding_window_attention_mask(
+    attention_mask: torch.Tensor,
+    input_shape: Tuple[int, int],
+    inputs_embeds: torch.Tensor,
+    past_key_values_length: int,
+    sliding_window: int,
+):
+    from transformers.models.mistral.modeling_mistral import _expand_mask, _make_sliding_window_causal_mask
+
+    # create causal mask
+    # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+    combined_attention_mask = None
+
+    combined_attention_mask = _make_sliding_window_causal_mask(
+        input_shape,
+        device=inputs_embeds.device,
+        dtype=inputs_embeds.dtype,
+        past_key_values_length=past_key_values_length,
+        sliding_window=sliding_window,
+    )
+
+    if attention_mask is not None:
+        # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
+        expanded_attn_mask = _expand_mask(attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]).to(
+            inputs_embeds.device
+        )
+        combined_attention_mask = (
+            expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask
+        )
+
+    return combined_attention_mask
+
+
 def patch_decoder_attention_mask(model: "PreTrainedModel"):
     """
     Apply patch on decoder with past model forward to resolve first inference based on model architecture
@@ -106,6 +143,8 @@ def patch_decoder_attention_mask(model: "PreTrainedModel"):
         model.transformer._prepare_attn_mask = _prepare_attn_mask
     elif model.config.model_type == "llama":
         model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
+    elif model.config.model_type == "mistral":
+        model.model._prepare_decoder_attention_mask = _prepare_decoder_sliding_window_attention_mask
     elif model.config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
         model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
     return model

@@ -39,7 +39,6 @@ from optimum.quantization_base import OptimumQuantizer
 
 from ...exporters.openvino import export, export_pytorch_via_onnx
 from ..utils.constant import _TASK_ALIASES
-from ..utils.modeling_utils import patch_decoder_attention_mask
 from .configuration import OVConfig
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel
@@ -165,7 +164,6 @@ class OVQuantizer(OptimumQuantizer):
         if save_directory is None:
             # TODO : can be set to self.model.config.name_or_path for OVModels when not provided
             raise ValueError("`save_directory` needs to be specified")
-
         if weights_only:
             if calibration_dataset is not None:
                 logger.warning(
@@ -394,9 +392,10 @@ class OVQuantizer(OptimumQuantizer):
         task = self.task
         model = self.model
         self.model.config.save_pretrained(save_directory)
-        model = patch_decoder_attention_mask(model)
-        if task == "text-generation":
-            onnx_config = onnx_config_class(model.config, use_past=model.config.use_cache)
+        if task.startswith("text-generation"):
+            onnx_config = onnx_config_class(
+                model.config, use_past=model.config.use_cache, use_past_in_inputs=model.config.use_cache
+            )
         else:
             onnx_config = onnx_config_class(model.config)
 
