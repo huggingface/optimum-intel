@@ -187,7 +187,7 @@ class OVQuantizer(OptimumQuantizer):
                 weights_only,
                 **kwargs,
             )
-        if isinstance(self.model, OVModelForSeq2SeqLM) and self.model.use_cache:
+        if isinstance(self.model, OVModelForSeq2SeqLM):
             self._quantize_ovmodelforseq2seqlm(
                 calibration_dataset,
                 save_directory,

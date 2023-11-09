@@ -165,7 +165,6 @@ class OVQuantizerSeq2SeqTest(unittest.TestCase):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_dir = "t5_test"
             transformers_model = OVModelForSeq2SeqLM.from_pretrained(model_name, export=True, use_cache=True)
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             if tokenizer.pad_token is None:
