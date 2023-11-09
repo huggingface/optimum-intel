@@ -169,6 +169,11 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         """
         if self.config.model_type == "bloom":
             return self._reorder_cache_bloom(past_key_values, beam_idx)
+        if self.config.model_type == "chatglm":
+            return tuple(
+                tuple(past_state.index_select(1, beam_idx.to(past_state.device)) for past_state in layer_past)
+                for layer_past in past_key_values
+            )
 
         # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
         return tuple(
