@@ -62,6 +62,7 @@ except OptionalDependencyNotAvailable:
         "OVStableDiffusionInpaintPipeline",
         "OVStableDiffusionXLPipeline",
         "OVStableDiffusionXLImg2ImgPipeline",
+        "OVLatentConsistencyModelPipeline",
     ]
 else:
     _import_structure["openvino"].extend(
@@ -71,6 +72,7 @@ else:
             "OVStableDiffusionInpaintPipeline",
             "OVStableDiffusionXLPipeline",
             "OVStableDiffusionXLImg2ImgPipeline",
+            "OVLatentConsistencyModelPipeline",
         ]
     )
 
@@ -94,6 +96,7 @@ else:
             "OVModelForFeatureExtraction",
             "OVModelForImageClassification",
             "OVModelForMaskedLM",
+            "OVModelForPix2Struct",
             "OVModelForQuestionAnswering",
             "OVModelForSeq2SeqLM",
             "OVModelForSequenceClassification",
@@ -113,6 +116,7 @@ except OptionalDependencyNotAvailable:
 else:
     _import_structure["neural_compressor"] = [
         "INCConfig",
+        "INCModel",
         "INCModelForCausalLM",
         "INCModelForMaskedLM",
         "INCModelForMultipleChoice",
@@ -156,6 +160,7 @@ if TYPE_CHECKING:
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
         from .utils.dummy_openvino_and_diffusers_objects import (
+            OVLatentConsistencyModelPipeline,
             OVStableDiffusionImg2ImgPipeline,
             OVStableDiffusionInpaintPipeline,
             OVStableDiffusionPipeline,
@@ -164,6 +169,7 @@ if TYPE_CHECKING:
         )
     else:
         from .openvino import (
+            OVLatentConsistencyModelPipeline,
             OVStableDiffusionImg2ImgPipeline,
             OVStableDiffusionInpaintPipeline,
             OVStableDiffusionPipeline,

@@ -27,12 +27,11 @@ from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from optimum.exporters.onnx import export
-from optimum.exporters.tasks import TasksManager
 from optimum.utils import NormalizedConfigManager
 
+from ...exporters.openvino import main_export
 from ..utils.import_utils import is_transformers_version
-from ..utils.modeling_utils import _prepare_attn_mask, _prepare_decoder_attention_mask
+from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
@@ -80,8 +79,9 @@ _SUPPORTED_ARCHITECTURES = {
     "bloom",
     "codegen",
     "gpt2",
-    "gpt_neo",
-    "gpt_neox",
+    "gpt-bigcode",
+    "gpt-neo",
+    "gpt-neox",
     "llama",
     "marian",
     "opt",
@@ -129,10 +129,10 @@ class OVBaseDecoderModel(OVModel):
         self.main_input_name = "input_ids"
         self.num_pkv = 2
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
-        self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
+        self._pkv_precision = Type.f32
         self.update_pkv_precision()
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
@@ -154,7 +154,12 @@ class OVBaseDecoderModel(OVModel):
         pkv_precision = Type.f32
         if not force_fp32:
             device = self._device.upper()
-            pkv_precision = core.get_property(device, "INFERENCE_PRECISION_HINT")
+            try:
+                if "INFERENCE_PRECISION_HINT" in core.get_property(device, "SUPPORTED_PROPERTIES"):
+                    pkv_precision = core.get_property(device, "INFERENCE_PRECISION_HINT")
+            except RuntimeError:  # use default precision when get_property fails, e.g. when device is "AUTO:GPU"
+                pass
+
             # ov_config["INFERENCE_PRECISION_HINT"] may override the prefer precision
             if self.ov_config:
                 inference_precision_hint = self.ov_config.get("INFERENCE_PRECISION_HINT", "")
@@ -190,7 +195,7 @@ class OVBaseDecoderModel(OVModel):
         """
         model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
-        openvino.runtime.serialize(model_to_save, dst_path)
+        openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
 
     @classmethod
     def _from_transformers(
@@ -206,54 +211,42 @@ class OVBaseDecoderModel(OVModel):
         task: Optional[str] = None,
         use_cache: bool = True,
         trust_remote_code: bool = False,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
-        if config.model_type not in _SUPPORTED_ARCHITECTURES:
+        if config.model_type.replace("_", "-") not in _SUPPORTED_ARCHITECTURES:
             logger.warning(
                 f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures were "
                 "validated, use at your own risk."
             )
-        task = task or cls.export_feature
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
-        model_kwargs = {
-            "revision": revision,
-            "use_auth_token": use_auth_token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "trust_remote_code": trust_remote_code,
-        }
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+
+        if task is None:
+            task = cls.export_feature
+
+            if use_cache:
+                task = task + "-with-past"
+
+        main_export(
+            model_name_or_path=model_id,
+            output=save_dir_path,
+            task=task,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            use_auth_token=use_auth_token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+            int8=load_in_8bit,
+        )
+
         config.is_decoder = True
         config.is_encoder_decoder = False
-        onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
-
-        # TODO : create ModelPatcher to patch each architecture
-        if config.model_type in {"bloom", "mpt"}:
-            model.transformer._prepare_attn_mask = _prepare_attn_mask
-        elif config.model_type == "llama":
-            model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
-        elif config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
-            model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
-
-        # Export the model to the ONNX format
-        export(model=model, config=onnx_config, output=save_dir_path / ONNX_WEIGHTS_NAME)
-
+        config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            from_onnx=True,
-            use_auth_token=use_auth_token,
-            revision=revision,
-            force_download=force_download,
-            cache_dir=cache_dir,
-            file_name=ONNX_WEIGHTS_NAME,
-            local_files_only=local_files_only,
-            use_cache=use_cache,
-            **kwargs,
+            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=load_in_8bit, **kwargs
         )
 
     def _reshape(
@@ -319,65 +312,91 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
+        inputs = {}
 
         if self.use_cache and past_key_values is not None:
             input_ids = input_ids[:, -1:]
 
         inputs = {}
+        past_len = 0
         if past_key_values is not None:
-            if self._pkv_precision == Type.bf16:
-                # numpy does not support bf16, pretending f16, should change to bf16
-                past_key_values = tuple(
-                    Tensor(past_key_value, past_key_value.shape, Type.bf16)
-                    for pkv_per_layer in past_key_values
-                    for past_key_value in pkv_per_layer
-                )
+            if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
+                past_len = past_key_values[0][1].shape[-2]
+                if self._pkv_precision == Type.bf16:
+                    # numpy does not support bf16, pretending f16, should change to bf16
+                    past_key_values = tuple(
+                        Tensor(past_key_value, past_key_value.shape, Type.bf16)
+                        for pkv_per_layer in past_key_values
+                        for past_key_value in pkv_per_layer
+                    )
+                else:
+                    # Flatten the past_key_values
+                    past_key_values = tuple(
+                        past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
+                    )
             else:
-                # Flatten the past_key_values
-                past_key_values = tuple(
-                    past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
-                )
+                past_len = past_key_values[0].shape[-2]
+
             # Add the past_key_values to the decoder inputs
             inputs = dict(zip(self.key_value_input_names, past_key_values))
 
         # Create empty past_key_values for decoder_with_past first generation step
         elif self.use_cache:
-            shape_input_ids = input_ids.shape
-            num_attention_heads = (
-                self.normalized_config.num_attention_heads if self.config.model_type == "bloom" else 1
-            )
+            batch_size = input_ids.shape[0]
+            if self.config.model_type == "bloom":
+                batch_size *= self.normalized_config.num_attention_heads
+
             for input_name in self.key_value_input_names:
                 model_inputs = self.model.input(input_name)
                 shape = model_inputs.get_partial_shape()
-                shape[0] = shape_input_ids[0] * num_attention_heads
+                shape[0] = batch_size
                 if shape[2].is_dynamic:
                     shape[2] = 0
-                if shape[1].is_dynamic:
+                else:
                     shape[1] = 0
                 inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
 
         inputs["input_ids"] = np.array(input_ids)
-
         # Add the attention_mask inputs when needed
-        if "attention_mask" in self.input_names and attention_mask is not None:
-            inputs["attention_mask"] = np.array(attention_mask)
+        if "attention_mask" in self.input_names or "position_ids" in self.input_names:
+            if attention_mask is not None:
+                attention_mask = np.array(attention_mask)
+            else:
+                attention_mask = np.ones(
+                    (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
+                )
+
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+
+        if "position_ids" in self.input_names:
+            if position_ids is not None:
+                position_ids = np.array(position_ids)
+            else:
+                position_ids = np.cumsum(attention_mask, axis=1) - 1
+                position_ids[attention_mask == 0] = 1
+                if past_key_values:
+                    position_ids = np.expand_dims(position_ids[:, -1], axis=-1)
+
+            inputs["position_ids"] = position_ids
 
         # Run inference
         self.request.start_async(inputs, shared_memory=True)
         self.request.wait()
-
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
         if self.use_cache:
             # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
             past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
-            # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
-            past_key_values = tuple(
-                past_key_values[i : i + self.num_pkv] for i in range(0, len(past_key_values), self.num_pkv)
-            )
+            if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
+                # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
+                past_key_values = tuple(
+                    past_key_values[i : i + self.num_pkv] for i in range(0, len(past_key_values), self.num_pkv)
+                )
         else:
             past_key_values = None
 
@@ -385,41 +404,114 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        past_key_values = past_key_values or kwargs.get("past", None)
+        # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
+        attention_mask = kwargs.get("attention_mask", None)
+        use_cache = kwargs.get("use_cache", None)
 
-        # `past_key_values` may be in the stardard format (e.g. in contrastive search), converts to bloom's format if needed
-        if past_key_values is not None and self.config.model_type == "bloom":
-            if past_key_values[0][0].shape[0] == input_ids.shape[0]:
-                past_key_values = self._convert_to_bloom_cache(past_key_values)
+        position_ids = kwargs.get("position_ids", None)
+        if attention_mask is not None and position_ids is None:
+            # create position_ids on the fly for batch generation
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values:
+                position_ids = position_ids[:, -1].unsqueeze(-1)
 
         return {
             "input_ids": input_ids,
             "past_key_values": past_key_values,
-            "use_cache": self.use_cache,
-            "position_ids": None,
-            "attention_mask": kwargs.get("attention_mask", None),
-            "token_type_ids": None,
+            "use_cache": use_cache,
+            "position_ids": position_ids,
+            "attention_mask": attention_mask,
         }
 
+    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
+    @staticmethod
     def _reorder_cache(
-        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+        past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
     ) -> Tuple[Tuple[torch.Tensor]]:
         """
         This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
         [`~PreTrainedModel.beam_sample`] is called.
         This is required to match `past_key_values` with the correct beam_idx at every generation step.
         """
-
-        if self.config.model_type == "bloom":
-            return self._reorder_cache_bloom(past_key_values, beam_idx)
-
-        # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
         return tuple(
             tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past) for layer_past in past_key_values
         )
 
-    # Copied from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
-    def _reorder_cache_bloom(
+    def can_generate(self):
+        """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
+        return True
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: PretrainedConfig,
+        use_auth_token: Optional[Union[bool, str, None]] = None,
+        revision: Optional[Union[str, None]] = None,
+        force_download: bool = False,
+        cache_dir: Optional[str] = None,
+        file_name: Optional[str] = None,
+        subfolder: str = "",
+        from_onnx: bool = False,
+        local_files_only: bool = False,
+        load_in_8bit: bool = False,
+        **kwargs,
+    ):
+        model_path = Path(model_id)
+        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
+        file_name = file_name or default_file_name
+
+        model_cache_path = cls._cached_file(
+            model_path=model_path,
+            use_auth_token=use_auth_token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            file_name=file_name,
+            subfolder=subfolder,
+            local_files_only=local_files_only,
+        )
+
+        model = cls.load_model(model_cache_path, load_in_8bit=load_in_8bit)
+
+        model_type = config.model_type.replace("_", "-")
+        if model_type == "bloom":
+            init_cls = OVBloomForCausalLM
+        elif model_type == "mpt":
+            init_cls = OVMPTForCausalLM
+        elif model_type == "opt":
+            init_cls = OVOPTForCausalLM
+        elif model_type == "gpt-bigcode":
+            init_cls = OVGPTBigCodeForCausalLM
+        else:
+            init_cls = cls
+
+        return init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
+
+
+class OVBloomForCausalLM(OVModelForCausalLM):
+    # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM.prepare_inputs_for_generation
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
+        attention_mask = kwargs.get("attention_mask", None)
+        use_cache = kwargs.get("use_cache", None)
+
+        # only last token for input_ids if past is not None
+        if past_key_values:
+            # the cache may be in the stardard format (e.g. in contrastive search), convert to bloom's format if needed
+            if past_key_values[0][0].shape[0] == input_ids.shape[0]:
+                past_key_values = self._convert_to_bloom_cache(past_key_values)
+
+        return {
+            "input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "use_cache": use_cache,
+            "position_ids": None,
+            "attention_mask": attention_mask,
+        }
+
+    # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
+    def _reorder_cache(
         self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
     ) -> Tuple[Tuple[torch.Tensor]]:
         """
@@ -428,7 +520,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         This is required to match `past_key_values` with the correct beam_idx at every generation step.
         """
         standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
-
         reordered_past = tuple(
             (
                 np.take(layer_past[0], beam_idx, 0),
@@ -463,9 +554,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         """
         Standardizes the format of the cache so as to match most implementations, i.e. to tuple(tuple([batch_size, num_heads, ...]))
         """
-        if self.config.model_type != "bloom":
-            return past_key_value
-
         batch_size_times_num_heads, head_dim, seq_length = past_key_value[0][0].shape
         num_heads = batch_size_times_num_heads // batch_size
         # key: [batch_size * num_heads, head_dim, seq_length] -> [batch_size, num_heads, head_dim, seq_length]
@@ -478,6 +566,41 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             for layer_past in past_key_value
         )
 
-    def can_generate(self):
-        """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
-        return True
+
+class OVOPTForCausalLM(OVModelForCausalLM):
+    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
+        attention_mask = kwargs.get("attention_mask", None)
+        use_cache = kwargs.get("use_cache", None)
+
+        return {
+            "input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "use_cache": use_cache,
+            "position_ids": None,
+            "attention_mask": attention_mask,
+        }
+
+
+class OVMPTForCausalLM(OVModelForCausalLM):
+    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
+        attention_mask = kwargs.get("attention_mask", None)
+        use_cache = kwargs.get("use_cache", None)
+
+        return {
+            "input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "use_cache": use_cache,
+            "position_ids": None,
+            "attention_mask": attention_mask,
+        }
+
+
+class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
+    # Adapted from transformers.models.gpt_bigcode.modeling_gpt_bigcode.GPTBigCodeForCausalLM._reorder_cache
+    @staticmethod
+    def _reorder_cache(
+        past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)

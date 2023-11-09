@@ -24,7 +24,7 @@ MODEL_NAMES = {
     "bart": "hf-internal-testing/tiny-random-bart",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
-    "blenderbot": "hf-internal-testing/tiny-random-blenderbot",
+    "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "camembert": "hf-internal-testing/tiny-random-camembert",
     "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
@@ -39,7 +39,7 @@ MODEL_NAMES = {
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "electra": "hf-internal-testing/tiny-random-electra",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
-    # "gpt_bigcode": "bigcode/tiny_starcoder_py",
+    "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
@@ -51,8 +51,9 @@ MODEL_NAMES = {
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
-    "marian": "sshleifer/tiny-marian-en-de",  # hf-internal-testing ones are broken
+    "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
+    "mistral": "echarlaix/tiny-random-mistral",
     "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
     "mobilenet_v1": "google/mobilenet_v1_0.75_192",
     "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
@@ -61,6 +62,7 @@ MODEL_NAMES = {
     "mt5": "stas/mt5-tiny-random",
     "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
     "pegasus": "hf-internal-testing/tiny-random-pegasus",
+    "pix2struct": "fxmarty/pix2struct-tiny-random",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
@@ -70,6 +72,7 @@ MODEL_NAMES = {
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
+    "latent-consistency": "echarlaix/tiny-random-latent-consistency",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
     "sew_d": "hf-internal-testing/tiny-random-SEWDModel",
     "swin": "hf-internal-testing/tiny-random-SwinModel",
@@ -92,3 +95,31 @@ TENSOR_ALIAS_TO_TYPE = {
 }
 
 SEED = 42
+
+
+_ARCHITECTURES_TO_EXPECTED_INT8 = {
+    "bert": (34,),
+    "roberta": (34,),
+    "albert": (42,),
+    "vit": (31,),
+    "blenderbot": (35,),
+    "gpt2": (22,),
+    "wav2vec2": (15,),
+    "distilbert": (33,),
+    "t5": (32, 52, 42),
+    "stable-diffusion": (74, 4, 4, 32),
+    "stable-diffusion-xl": (148, 4, 4, 33),
+    "stable-diffusion-xl-refiner": (148, 4, 4, 33),
+}
+
+
+def get_num_quantized_nodes(ov_model):
+    num_fake_quantize = 0
+    num_int8 = 0
+    for elem in ov_model.model.get_ops():
+        if "FakeQuantize" in elem.name:
+            num_fake_quantize += 1
+        for i in range(elem.get_output_size()):
+            if "8" in elem.get_output_element_type(i).get_type_name():
+                num_int8 += 1
+    return num_fake_quantize, num_int8

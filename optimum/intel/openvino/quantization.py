@@ -24,21 +24,22 @@ import torch
 import transformers
 from accelerate.data_loader import DataLoaderStateMixin
 from datasets import Dataset, load_dataset
-from nncf import NNCFConfig
-from nncf.torch import create_compressed_model, register_default_init_args
+from nncf import NNCFConfig, compress_weights
+from nncf.torch import create_compressed_model, register_default_init_args, register_module
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, Tensor
-from torch.utils.data import DataLoader, RandomSampler, TensorDataset
+from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
+from transformers.pytorch_utils import Conv1D
 
-from optimum.exporters.onnx import export
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
+from ...exporters.openvino import export, export_pytorch_via_onnx
 from ..utils.constant import _TASK_ALIASES
-from .configuration import INT8_WEIGHT_COMPRESSION_CONFIG, OVConfig
+from .configuration import OVConfig
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel
 from .modeling_seq2seq import OVModelForSeq2SeqLM
@@ -49,6 +50,8 @@ from .utils import (
     OV_XML_FILE_NAME,
 )
 
+
+register_module(ignored_algorithms=[])(Conv1D)
 
 core = Core()
 logger = logging.getLogger(__name__)
@@ -162,12 +165,7 @@ class OVQuantizer(OptimumQuantizer):
         if save_directory is None:
             # TODO : can be set to self.model.config.name_or_path for OVModels when not provided
             raise ValueError("`save_directory` needs to be specified")
-
         if weights_only:
-            if isinstance(self.model, OVBaseModel):
-                raise ValueError(
-                    "`weights_only` currently not supported for `OVModels`, only available for torch.nn.Module."
-                )
             if calibration_dataset is not None:
                 logger.warning(
                     "`calibration_dataset` was provided but will not be used as `weights_only` is set to `True`."
@@ -186,6 +184,7 @@ class OVQuantizer(OptimumQuantizer):
                 batch_size,
                 data_collator,
                 remove_unused_columns,
+                weights_only,
                 **kwargs,
             )
         if isinstance(self.model, OVModelForSeq2SeqLM) and self.model.use_cache:
@@ -204,6 +203,7 @@ class OVQuantizer(OptimumQuantizer):
                 batch_size,
                 data_collator,
                 remove_unused_columns,
+                weights_only,
                 **kwargs,
             )
         elif isinstance(self.model, torch.nn.Module):
@@ -227,10 +227,16 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        weights_only: bool = False,
         **kwargs,
     ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
+
+        if weights_only:
+            self.model.model = nncf.compress_weights(self.model.model)
+            self.model.save_pretrained(save_directory)
+            return
 
         calibration_dataloader = self._get_calibration_dataloader(
             calibration_dataset=calibration_dataset,
@@ -295,10 +301,16 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        weights_only: bool = False,
         **kwargs,
     ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
+
+        if weights_only:
+            self.model.model = nncf.compress_weights(self.model.model)
+            self.model.save_pretrained(save_directory)
+            return
 
         calibration_dataloader = self._get_calibration_dataloader(
             calibration_dataset=calibration_dataset,
@@ -380,8 +392,8 @@ class OVQuantizer(OptimumQuantizer):
         self._set_task()
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
-        file_name = file_name if file_name is not None else OV_XML_FILE_NAME
-        output_path = save_directory.joinpath(file_name)
+        ov_file_name = file_name if file_name is not None else OV_XML_FILE_NAME
+        output_path = save_directory.joinpath(ov_file_name)
         output_path = output_path.with_suffix(".xml").as_posix()
 
         model_type = self.model.config.model_type.replace("_", "-")
@@ -392,73 +404,74 @@ class OVQuantizer(OptimumQuantizer):
             model_type=model_type,
         )
 
-        if weights_only:
-            calibration_dataset = TensorDataset(torch.tensor([0.0, 1.0]))
-            calibration_dataset.column_names = []
-            remove_unused_columns = False
-            onnx_config = onnx_config_class(self.model.config)
-
-            def data_collator(batch):
-                return onnx_config.generate_dummy_inputs(framework="pt")
-
-        calibration_dataloader = self._get_calibration_dataloader(
-            calibration_dataset=calibration_dataset,
-            batch_size=batch_size,
-            remove_unused_columns=remove_unused_columns,
-            data_collator=data_collator,
-        )
-
         if quantization_config is None:
             logger.info(
                 "No configuration describing the quantization process was provided, a default OVConfig will be generated."
             )
-            quantization_config = OVConfig(compression=INT8_WEIGHT_COMPRESSION_CONFIG) if weights_only else OVConfig()
-
-        model_inputs = next(iter(calibration_dataloader))
-        quantization_config.add_input_info(model_inputs)
-        nncf_config = NNCFConfig.from_dict(quantization_config.__dict__)
-        nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
-        controller, compressed_model = create_compressed_model(
-            self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
+            quantization_config = OVConfig()
+        onnx_file_name = (
+            ONNX_WEIGHTS_NAME
+            if file_name is None and quantization_config.save_onnx_model
+            else Path(ov_file_name).with_suffix(".onnx")
         )
-        compressed_model = controller.strip(do_copy=False)
+        if weights_only:
+            if getattr(self.model.config, "tie_word_embeddings", True):
+                # to fix problem with shared embedding weights in nncf compress_weights()
+                self.model.tie_weights()
+            compressed_model = compress_weights(self.model)
+            self.model = compressed_model
+        else:
+            calibration_dataloader = self._get_calibration_dataloader(
+                calibration_dataset=calibration_dataset,
+                batch_size=batch_size,
+                remove_unused_columns=remove_unused_columns,
+                data_collator=data_collator,
+            )
+
+            model_inputs = next(iter(calibration_dataloader))
+            quantization_config.add_input_info(model_inputs)
+            nncf_config = NNCFConfig.from_dict(quantization_config.__dict__)
+            nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
+            controller, compressed_model = create_compressed_model(
+                self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
+            )
+            compressed_model = controller.strip(do_copy=False)
 
         task = self.task
         model = self.model
         self.model.config.save_pretrained(save_directory)
-
-        if task == "text-generation":
-            onnx_config = onnx_config_class(model.config, use_past=model.config.use_cache)
+        if task.startswith("text-generation"):
+            onnx_config = onnx_config_class(
+                model.config, use_past=model.config.use_cache, use_past_in_inputs=model.config.use_cache
+            )
         else:
             onnx_config = onnx_config_class(model.config)
 
-        onnx_path = save_directory / ONNX_WEIGHTS_NAME
-
-        # Export the model to the ONNX format
+        model_path = save_directory / (onnx_file_name if quantization_config.save_onnx_model else ov_file_name)
+        onnx_path = save_directory / onnx_file_name
+        export_fn = export if not quantization_config.save_onnx_model else export_pytorch_via_onnx
         opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = max(opset, MIN_ONNX_QDQ_OPSET)
-        export(
-            model=compressed_model,
-            config=onnx_config,
-            opset=opset,
-            output=onnx_path,
-        )
+        _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset)
+        if is_onnx:
+            # Load and save the compressed model
+            model = core.read_model(onnx_path)
+            # Model required second saving for appling weights compression transformations
+            self._save_pretrained(model, output_path)
+            # if onnx conversion happens as fallback for pytorch conversion, remove onnx model
+            if not quantization_config.save_onnx_model:
+                os.remove(onnx_path)
+                try:
+                    os.remove(f"{onnx_path}_data")
+                except FileNotFoundError:
+                    pass
 
-        # Load and save the compressed model
-        model = core.read_model(onnx_path)
-        self._save_pretrained(model, output_path)
         quantization_config.save_pretrained(save_directory)
-        if not quantization_config.save_onnx_model:
-            os.remove(onnx_path)
-            try:
-                os.remove(f"{onnx_path}_data")
-            except FileNotFoundError:
-                pass
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
         compress_quantize_weights_transformation(model)
-        openvino.runtime.serialize(model, output_path)
+        openvino.save_model(model, output_path, compress_to_fp16=False)
 
     def _set_task(self):
         if self.task is None:
@@ -472,6 +485,9 @@ class OVQuantizer(OptimumQuantizer):
 
         if self.task == "text2text-generation":
             raise ValueError("Seq2Seq models are currently not supported for post-training static quantization.")
+
+        if self.task == "image-to-text":
+            raise ValueError("Image2Text models are currently not supported for post-training static quantization.")
 
     def get_calibration_dataset(
         self,

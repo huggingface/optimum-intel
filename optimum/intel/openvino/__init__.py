@@ -46,11 +46,12 @@ from .modeling import (
     OVModelForTokenClassification,
 )
 from .modeling_decoder import OVModelForCausalLM
-from .modeling_seq2seq import OVModelForSeq2SeqLM
+from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM
 
 
 if is_diffusers_available():
     from .modeling_diffusion import (
+        OVLatentConsistencyModelPipeline,
         OVStableDiffusionImg2ImgPipeline,
         OVStableDiffusionInpaintPipeline,
         OVStableDiffusionPipeline,

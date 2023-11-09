@@ -22,6 +22,7 @@ _TASK_ALIASES = {
     "seq2seq-lm": "text2text-generation",
     "summarization": "text2text-generation",
     "translation": "text2text-generation",
+    "visual-question-answering": "image-to-text",
 }
 
 _TASK_LEGACY = {

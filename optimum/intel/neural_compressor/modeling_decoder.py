@@ -15,14 +15,14 @@
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
-from transformers import PretrainedConfig
+from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from optimum.intel.generation import BaseModelForCausalLM
 
-from .modeling_base import MODEL_START_DOCSTRING, INCBaseModel
+from .modeling_base import MODEL_START_DOCSTRING, INCModel
 
 
 logger = logging.getLogger(__name__)
@@ -35,15 +35,29 @@ logger = logging.getLogger(__name__)
     """,
     MODEL_START_DOCSTRING,
 )
-class INCModelForCausalLM(INCBaseModel, BaseModelForCausalLM):
+class INCModelForCausalLM(INCModel, BaseModelForCausalLM):
+    auto_model_class = AutoModelForCausalLM
+    export_feature = "text-generation"
+    forward = BaseModelForCausalLM.forward
+    generate = BaseModelForCausalLM.generate
+    can_generate = BaseModelForCausalLM.can_generate
+
     def __init__(
         self,
         model,
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        q_config: Dict = None,
+        inc_config: Dict = None,
         use_cache: bool = True,
         **kwargs,
     ):
         super(INCModelForCausalLM, self).__init__(
-            model=model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs
+            model=model,
+            config=config,
+            model_save_dir=model_save_dir,
+            q_config=q_config,
+            inc_config=inc_config,
+            use_cache=use_cache,
+            **kwargs,
         )

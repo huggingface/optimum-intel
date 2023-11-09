@@ -24,9 +24,7 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from optimum.exporters.onnx import export_models, get_encoder_decoder_models_for_export
-from optimum.exporters.tasks import TasksManager
-
+from ...exporters.openvino import main_export
 from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 from .utils import (
@@ -104,7 +102,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
         for src_file, dst_file_name in zip(src_files, dst_file_names):
             dst_path = os.path.join(save_directory, dst_file_name)
-            openvino.runtime.serialize(src_file, dst_path)
+            openvino.save_model(src_file, dst_path, compress_to_fp16=False)
 
     @classmethod
     def _from_pretrained(
@@ -121,6 +119,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         local_files_only: bool = False,
         use_cache: bool = True,
         from_onnx: bool = False,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         """
@@ -161,14 +160,14 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         encoder_file_name = encoder_file_name or default_encoder_file_name
         decoder_file_name = decoder_file_name or default_decoder_file_name
         decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
-
+        decoder_with_past = None
         # Load model from a local directory
         if os.path.isdir(model_id):
-            encoder = cls.load_model(os.path.join(model_id, encoder_file_name))
-            decoder = cls.load_model(os.path.join(model_id, decoder_file_name))
-            decoder_with_past = (
-                cls.load_model(os.path.join(model_id, decoder_with_past_file_name)) if use_cache else None
-            )
+            encoder = cls.load_model(os.path.join(model_id, encoder_file_name), load_in_8bit)
+            decoder = cls.load_model(os.path.join(model_id, decoder_file_name), load_in_8bit)
+            if use_cache:
+                decoder_with_past = cls.load_model(os.path.join(model_id, decoder_with_past_file_name), load_in_8bit)
+
             model_save_dir = Path(model_id)
 
         # Load model from hub
@@ -195,9 +194,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 file_names[name] = model_cache_path
 
             model_save_dir = Path(model_cache_path).parent
-            encoder = cls.load_model(file_names["encoder"])
-            decoder = cls.load_model(file_names["decoder"])
-            decoder_with_past = cls.load_model(file_names["decoder_with_past"]) if use_cache else None
+            encoder = cls.load_model(file_names["encoder"], load_in_8bit)
+            decoder = cls.load_model(file_names["decoder"], load_in_8bit)
+            if use_cache:
+                decoder_with_past = cls.load_model(file_names["decoder_with_past"], load_in_8bit)
 
         return cls(
             encoder=encoder,
@@ -222,6 +222,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         task: Optional[str] = None,
         use_cache: bool = True,
         trust_remote_code: bool = False,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         """
@@ -243,54 +244,32 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        encoder_file_name = os.path.join("encoder", ONNX_ENCODER_NAME)
-        decoder_file_name = os.path.join("decoder", ONNX_DECODER_NAME)
-        decoder_with_past_file_name = os.path.join("decoder_with_past", ONNX_DECODER_WITH_PAST_NAME)
-        task = task or cls.export_feature
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
-        model_kwargs = {
-            "revision": revision,
-            "use_auth_token": use_auth_token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "trust_remote_code": trust_remote_code,
-        }
+        if task is None:
+            task = cls.export_feature
 
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        onnx_config_constructor = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
-        onnx_config = onnx_config_constructor(model.config, use_past=use_cache)
-        models_and_onnx_configs = get_encoder_decoder_models_for_export(model, onnx_config)
+            if use_cache:
+                task = task + "-with-past"
 
-        output_names = [encoder_file_name, decoder_file_name]
-        if use_cache is True:
-            output_names.append(decoder_with_past_file_name)
-
-        export_models(
-            models_and_onnx_configs=models_and_onnx_configs,
-            opset=onnx_config.DEFAULT_ONNX_OPSET,
-            output_dir=save_dir_path,
-            output_names=output_names,
+        main_export(
+            model_name_or_path=model_id,
+            output=save_dir_path,
+            task=task,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            use_auth_token=use_auth_token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+            int8=load_in_8bit,
         )
 
+        config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            use_cache=use_cache,
-            from_onnx=True,
-            use_auth_token=use_auth_token,
-            revision=revision,
-            force_download=force_download,
-            cache_dir=cache_dir,
-            encoder_file_name=encoder_file_name,
-            decoder_file_name=decoder_file_name,
-            decoder_with_past_file_name=decoder_with_past_file_name,
-            local_files_only=local_files_only,
-            **kwargs,
+            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=load_in_8bit, **kwargs
         )
 
     def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):

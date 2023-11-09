@@ -15,26 +15,22 @@
 import copy
 import inspect
 import logging
-import os
 import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
-from typing import Callable, ClassVar, Dict, Optional, Union
+from typing import Callable, Dict, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
-from huggingface_hub import hf_hub_download
 from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
+from neural_compressor.model.onnx_model import ONNXModel
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
-from neural_compressor.utils.pytorch import load
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import (
-    AutoConfig,
-    AutoModel,
     AutoModelForCausalLM,
     AutoModelForMaskedLM,
     AutoModelForMultipleChoice,
@@ -49,31 +45,41 @@ from transformers import (
     XLNetLMHeadModel,
     default_data_collator,
 )
-from transformers.modeling_utils import no_init_weights
-from transformers.models.auto.auto_factory import _get_model_class
-from transformers.utils import TRANSFORMERS_CACHE, is_offline_mode
-from transformers.utils.generic import ContextManagers
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
+from optimum.onnxruntime import ORTModel
+from optimum.onnxruntime.modeling_decoder import ORTModelForCausalLM
+from optimum.onnxruntime.modeling_seq2seq import ORTModelForConditionalGeneration
+from optimum.onnxruntime.utils import ONNX_DECODER_NAME
 from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME
 from ..utils.import_utils import (
     _ipex_version,
     _neural_compressor_version,
-    _torch_version,
     is_ipex_version,
     is_neural_compressor_version,
-    is_torch_version,
 )
 from .configuration import INCConfig
+from .modeling_base import (  # noqa
+    INCModel,
+    INCModelForMaskedLM,
+    INCModelForMultipleChoice,
+    INCModelForQuestionAnswering,
+    INCModelForSeq2SeqLM,
+    INCModelForSequenceClassification,
+    INCModelForTokenClassification,
+    INCModelForVision2Seq,
+    INCModelForXLNetLM,
+)
 from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 
 
 logger = logging.getLogger(__name__)
 
 NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
+NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION = "2.3.0"
 IPEX_MINIMUM_VERSION = "2.1.0"
 
 if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
@@ -87,6 +93,7 @@ class INCQuantizationMode(Enum):
     DYNAMIC = "post_training_dynamic_quant"
     STATIC = "post_training_static_quant"
     AWARE_TRAINING = "quant_aware_training"
+    WEIGHT_ONLY = "post_training_weight_only"
 
 
 SUPPORTED_QUANT_MODE = {approach.value for approach in INCQuantizationMode}
@@ -118,6 +125,7 @@ class INCQuantizer(OptimumQuantizer):
                 The random seed to use when shuffling the calibration dataset.
         """
         super().__init__()
+
         self._original_model = model
         self.eval_fn = eval_fn if eval_fn is not None else lambda model: 1
         self.calibration_fn = calibration_fn
@@ -142,6 +150,7 @@ class INCQuantizer(OptimumQuantizer):
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         file_name: str = None,
+        weight_only: bool = False,
         **kwargs,
     ):
         """
@@ -160,15 +169,56 @@ class INCQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether or not to remove the columns unused by the model forward method.
+            weight_only (`bool`, defaults to `False`):
+                Whether compress weights to integer precision (4-bit by default) while keeping activations
+                floating-point. Fits best for LLM footprint reduction and performance acceleration.
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         save_onnx_model = kwargs.pop("save_onnx_model", False)
-        output_path = save_directory.joinpath(file_name or WEIGHTS_NAME)
+
+        if save_onnx_model and isinstance(self._original_model, ORTModel):
+            save_onnx_model = False
+            logger.warning("Model provided is an ONNX model, `save_onnx_model` is set to False")
+
+        default_name = WEIGHTS_NAME if not isinstance(self._original_model, ORTModel) else ONNX_WEIGHTS_NAME
         calibration_dataloader = None
         self._set_task()
 
-        if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
+        if weight_only:
+            # check neural-compressor version
+            if is_neural_compressor_version("<", NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION):
+                raise ImportError(
+                    f"Found an incompatible version of neural-compressor. Found version {_neural_compressor_version}, "
+                    f"but only version {NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION} or higher supports weight-only quantization."
+                )
+
+            # If op_type_dict of quantization_config is not defined, it will use default values for weight-only quantization:
+            # {"bits": 4, "group_size": 32, "scheme": "sym", "algorithm": "RTN"}
+            if isinstance(quantization_config.op_type_dict, dict) and len(quantization_config.op_type_dict) > 0:
+                algo = []
+                for _, val in quantization_config.op_type_dict.items():
+                    algo += val.get("weight", {}).get("algorithm", ["RTN"])
+            else:
+                algo = ["RTN"]
+
+            if calibration_dataset is None and ("GPTQ" in algo or "AWQ" in algo):
+                raise ValueError(
+                    "Weight-only quantization needs a calibration dataset for both GPTQ and AWQ methodologies."
+                )
+
+            if calibration_dataset is None:
+                calibration_dataloader = None
+            else:
+                calibration_dataloader = self._get_calibration_dataloader(
+                    calibration_dataset=calibration_dataset,
+                    batch_size=batch_size,
+                    remove_unused_columns=remove_unused_columns,
+                    data_collator=data_collator,
+                    use_label=False if "GPTQ" in algo else True,
+                )
+
+        elif INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
             # Since PyTorch fx trace does not really require an example_inputs, only need calibration_dataset or calibration_fn here.
             if calibration_dataset is None and self.calibration_fn is None:
                 raise ValueError(
@@ -211,8 +261,26 @@ class INCQuantizer(OptimumQuantizer):
         if isinstance(self._original_model.config, PretrainedConfig):
             self._original_model.config.backend = quantization_config.backend
 
+        if isinstance(self._original_model, ORTModel):
+            # TODO : enable seq2seq models
+            if isinstance(self._original_model, ORTModelForConditionalGeneration):
+                raise RuntimeError("ORTModelForConditionalGeneration not supported for quantization")
+
+            if isinstance(self._original_model, ORTModelForCausalLM):
+                model_or_path = self._original_model.onnx_paths
+                if len(model_or_path) > 1:
+                    raise RuntimeError(
+                        f"Too many ONNX model files were found in {self._original_model.onnx_paths}, only `use_cache=False` is supported"
+                    )
+                model_or_path = str(model_or_path[0])
+                default_name = ONNX_DECODER_NAME
+            else:
+                model_or_path = str(self._original_model.model_path)
+        else:
+            model_or_path = self._original_model
+
         compressed_model = fit(
-            self._original_model,
+            model_or_path,
             conf=quantization_config,
             calib_dataloader=calibration_dataloader,
             eval_func=self.eval_fn,
@@ -224,6 +292,7 @@ class INCQuantizer(OptimumQuantizer):
                 "The maximum number of trials specified has been reached and no quantized model meeting the specified"
                 " accuracy tolerance has been found. Either the tolerance or the number of trials need to be increased."
             )
+
         if isinstance(self._original_model.config, PretrainedConfig):
             # If backend is IPEX, then the quantized model is JIT model which will drop the config attribute,
             # so need set config from original_model.
@@ -232,7 +301,7 @@ class INCQuantizer(OptimumQuantizer):
             if isinstance(compressed_model, IPEXModel):
                 model_config.torchscript = True
                 model_config.backend = "ipex"
-            else:
+            elif not isinstance(compressed_model, ONNXModel):
                 compressed_model._model.config = model_config
             model_config.save_pretrained(save_directory)
 
@@ -254,6 +323,7 @@ class INCQuantizer(OptimumQuantizer):
             # Export the compressed model to the ONNX format
             self._onnx_export(compressed_model, onnx_config, output_onnx_path)
 
+        output_path = save_directory.joinpath(file_name or default_name)
         # Save the quantized model
         self._save_pretrained(compressed_model, output_path)
         quantization_config = INCConfig(quantization=quantization_config, save_onnx_model=save_onnx_model)
@@ -263,13 +333,14 @@ class INCQuantizer(OptimumQuantizer):
     def _save_pretrained(model: Union[PyTorchModel, IPEXModel], output_path: str):
         if isinstance(model, IPEXModel):
             model._model.save(output_path)
-            logger.info(f"Model weights saved to {output_path}")
-            return
-        state_dict = model._model.state_dict()
+        elif isinstance(model, ONNXModel):
+            model.save(output_path)
+        else:
+            state_dict = model._model.state_dict()
+            if hasattr(model, "q_config"):
+                state_dict["best_configure"] = model.q_config
+            torch.save(state_dict, output_path)
 
-        if hasattr(model, "q_config"):
-            state_dict["best_configure"] = model.q_config
-        torch.save(state_dict, output_path)
         logger.info(f"Model weights saved to {output_path}")
 
     def _onnx_export(
@@ -378,6 +449,7 @@ class INCQuantizer(OptimumQuantizer):
         batch_size: int,
         remove_unused_columns: bool,
         data_collator: Optional[DataCollator] = None,
+        use_label: Optional[bool] = True,
     ) -> INCDataLoader:
         data_collator = data_collator if data_collator is not None else default_data_collator
         if remove_unused_columns:
@@ -394,7 +466,7 @@ class INCQuantizer(OptimumQuantizer):
             drop_last=False,
         )
 
-        return INCDataLoader.from_pytorch_dataloader(calibration_dataloader)
+        return INCDataLoader.from_pytorch_dataloader(calibration_dataloader, use_label)
 
     def _remove_unused_columns(self, dataset: Dataset):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
@@ -468,238 +540,47 @@ def _apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> t
     return q_model
 
 
-class INCModel:
-    TRANSFORMERS_AUTO_CLASS: ClassVar = AutoModel
-
-    def __init__(self, *args, **kwargs):
-        raise EnvironmentError(
-            f"{self.__class__.__name__} is designed to be instantiated using the"
-            f"`{self.__class__.__name__}.from_pretrained(model_name_or_path)` method."
-        )
-
-    @classmethod
-    def from_pretrained(cls, model_name_or_path: str, q_model_name: Optional[str] = None, **kwargs) -> torch.nn.Module:
-        """
-        Instantiate a quantized pytorch model from a given Intel Neural Compressor configuration file.
-        Arguments:
-            model_name_or_path (`str`):
-                Repository name in the Hugging Face Hub or path to a local directory hosting the model.
-            q_model_name (`str`, *optional*):
-                Name of the state dictionary located in model_name_or_path used to load the quantized model. If
-                state_dict is specified, the latter will not be used.
-            cache_dir (`str`, *optional*):
-                Path to a directory in which a downloaded configuration should be cached if the standard cache should
-                not be used.
-            force_download (`bool`, *optional*, defaults to `False`):
-                Whether or not to force to (re-)download the configuration files and override the cached versions if
-                they exist.
-            resume_download (`bool`, *optional*, defaults to `False`):
-                Whether or not to delete incompletely received file. Attempts to resume the download if such a file
-                exists.
-            revision(`str`, *optional*):
-                The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a
-                git-based system for storing models and other artifacts on huggingface.co, so ``revision`` can be any
-                identifier allowed by git.
-            state_dict_path (`str`, *optional*):
-                The path to the state dictionary of the quantized model.
-        Returns:
-            q_model: Quantized model.
-        """
-        if q_model_name is not None:
-            logger.warning("The argument of `q_model_name` will be deprecated in next release.")
-        download_kwarg_default = [
-            ("cache_dir", None),
-            ("force_download", False),
-            ("resume_download", False),
-            ("revision", None),
-        ]
-        download_kwargs = {name: kwargs.get(name, default_value) for (name, default_value) in download_kwarg_default}
-        state_dict_path = kwargs.get("state_dict_path", None)
-
-        config = AutoConfig.from_pretrained(model_name_or_path)
-        model_class = _get_model_class(config, cls.TRANSFORMERS_AUTO_CLASS._model_mapping)
-        keys_to_ignore_on_load_unexpected = copy.deepcopy(
-            getattr(model_class, "_keys_to_ignore_on_load_unexpected", None)
-        )
-        keys_to_ignore_on_load_missing = copy.deepcopy(getattr(model_class, "_keys_to_ignore_on_load_missing", None))
-        # Avoid unnecessary warnings resulting from quantized model initialization
-        quantized_keys_to_ignore_on_load = [
-            r"zero_point",
-            r"scale",
-            r"packed_params",
-            r"constant",
-            r"module",
-            r"best_configure",
-            r"max_val",
-            r"min_val",
-            r"eps",
-            r"fake_quant_enabled",
-            r"observer_enabled",
-        ]
-        if keys_to_ignore_on_load_unexpected is None:
-            model_class._keys_to_ignore_on_load_unexpected = quantized_keys_to_ignore_on_load
-        else:
-            model_class._keys_to_ignore_on_load_unexpected.extend(quantized_keys_to_ignore_on_load)
-        missing_keys_to_ignore_on_load = [r"weight", r"bias"]
-        if keys_to_ignore_on_load_missing is None:
-            model_class._keys_to_ignore_on_load_missing = missing_keys_to_ignore_on_load
-        else:
-            model_class._keys_to_ignore_on_load_missing.extend(missing_keys_to_ignore_on_load)
-
-        try:
-            model = model_class.from_pretrained(model_name_or_path, **kwargs)
-        except AttributeError:
-            init_contexts = [no_init_weights(_enable=True)]
-            with ContextManagers(init_contexts):
-                model = model_class(config, **kwargs)
-
-        model_class._keys_to_ignore_on_load_unexpected = keys_to_ignore_on_load_unexpected
-        model_class._keys_to_ignore_on_load_missing = keys_to_ignore_on_load_missing
-
-        if state_dict_path is None:
-            q_model_name = q_model_name if q_model_name is not None else WEIGHTS_NAME
-            revision = download_kwargs.pop("revision", None)
-            if os.path.isdir(model_name_or_path):
-                state_dict_path = os.path.join(model_name_or_path, q_model_name)
-            elif os.path.isfile(model_name_or_path):
-                state_dict_path = model_name_or_path
-            else:
-                local_files_only = False
-                if is_offline_mode():
-                    logger.info("Offline mode: forcing local_files_only=True")
-                    local_files_only = True
-                cache_dir = download_kwargs.get("cache_dir", None)
-                if cache_dir is None:
-                    cache_dir = TRANSFORMERS_CACHE
-                if isinstance(cache_dir, Path):
-                    cache_dir = str(cache_dir)
-                try:
-                    state_dict_path = hf_hub_download(
-                        repo_id=model_name_or_path,
-                        filename=q_model_name,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        local_files_only=local_files_only,
-                    )
-                except EnvironmentError as err:
-                    logger.error(err)
-                    msg = (
-                        f"Can't load config for '{model_name_or_path}'. Make sure that:\n\n"
-                        f"-'{model_name_or_path}' is a correct model identifier listed on 'https://huggingface.co/models'\n\n"
-                        f"-or '{model_name_or_path}' is a correct path to a directory containing a {q_model_name} file\n\n"
-                    )
-
-                    if revision is not None:
-                        msg += (
-                            f"- or '{revision}' is a valid git identifier (branch name, a tag name, or a commit id) that "
-                            f"exists for this model name as listed on its model page on 'https://huggingface.co/models'\n\n"
-                        )
-
-                    raise EnvironmentError(msg)
-
-        msg = None
-        try:
-            inc_config = INCConfig.from_pretrained(model_name_or_path)
-            if not is_torch_version("==", inc_config.torch_version):
-                msg = f"Quantized model was obtained with torch version {inc_config.torch_version} but {_torch_version} was found."
-                logger.warning(f"{msg}")
-        except Exception:
-            logger.info("Couldn't verify torch version.")
-
-        if getattr(config, "backend", None) == "ipex" or getattr(config, "torchscript", False):
-            # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.
-            # return load(state_dict_path)
-            load_model = torch.jit.load(state_dict_path)
-            load_model = torch.jit.freeze(load_model.eval())
-            return load_model
-
-        # Load the state dictionary of the model to verify whether the model is quantized or not
-        state_dict = torch.load(state_dict_path, map_location="cpu")
-
-        if "best_configure" in state_dict and state_dict["best_configure"] is not None:
-            try:
-                model = load(state_dict_path, model)
-            except Exception as e:
-                if msg is not None:
-                    e.args += (msg,)
-                raise
-
-        return model.eval()
-
-
-class INCModelForQuestionAnswering(INCModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
-
-
-class INCModelForSequenceClassification(INCModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
-
-
-class INCModelForTokenClassification(INCModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
-
-
-class INCModelForMultipleChoice(INCModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForMultipleChoice
-
-
-class INCModelForSeq2SeqLM(INCModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
-
-
-class INCModelForMaskedLM(INCModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForMaskedLM
-
-
-class INCModelForXLNetLM(INCModel):
-    TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel
-
-
-class INCModelForVision2Seq(INCModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq
-
-
 class IncQuantizedModel(INCModel):
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         warnings.warn(
-            f"The class `{cls.__name__}` has been depreciated and will be removed in optimum-intel v1.7, please use "
+            f"The class `{cls.__name__}` has been depreciated and will be removed in optimum-intel v1.12, please use "
             f"`{cls.__name__.replace('IncQuantized', 'INC')}` instead."
         )
         return super().from_pretrained(*args, **kwargs)
 
 
 class IncQuantizedModelForQuestionAnswering(IncQuantizedModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForQuestionAnswering
+    auto_model_class = AutoModelForQuestionAnswering
 
 
 class IncQuantizedModelForSequenceClassification(IncQuantizedModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForSequenceClassification
+    auto_model_class = AutoModelForSequenceClassification
 
 
 class IncQuantizedModelForTokenClassification(IncQuantizedModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForTokenClassification
+    auto_model_class = AutoModelForTokenClassification
 
 
 class IncQuantizedModelForMultipleChoice(IncQuantizedModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForMultipleChoice
+    auto_model_class = AutoModelForMultipleChoice
 
 
 class IncQuantizedModelForSeq2SeqLM(IncQuantizedModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForSeq2SeqLM
+    auto_model_class = AutoModelForSeq2SeqLM
 
 
 class IncQuantizedModelForCausalLM(IncQuantizedModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForCausalLM
+    auto_model_class = AutoModelForCausalLM
 
 
 class IncQuantizedModelForMaskedLM(IncQuantizedModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForMaskedLM
+    auto_model_class = AutoModelForMaskedLM
 
 
 class IncQuantizedModelForXLNetLM(IncQuantizedModel):
-    TRANSFORMERS_AUTO_CLASS = XLNetLMHeadModel
+    auto_model_class = XLNetLMHeadModel
 
 
 class IncQuantizedModelForVision2Seq(IncQuantizedModel):
-    TRANSFORMERS_AUTO_CLASS = AutoModelForVision2Seq
+    auto_model_class = AutoModelForVision2Seq

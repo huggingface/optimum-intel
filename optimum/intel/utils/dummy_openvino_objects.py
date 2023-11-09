@@ -103,6 +103,17 @@ class OVModelForMaskedLM(metaclass=DummyObject):
         requires_backends(cls, ["openvino"])
 
 
+class OVModelForPix2Struct(metaclass=DummyObject):
+    _backends = ["openvino"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino"])
+
+
 class OVModelForQuestionAnswering(metaclass=DummyObject):
     _backends = ["openvino"]
 

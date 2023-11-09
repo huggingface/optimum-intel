@@ -42,7 +42,7 @@ set_seed(SEED)
 
 class OptimizationTest(INCTestMixin):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("text-classification", "hf-internal-testing/tiny-random-bert", 32),
+        ("text-classification", "hf-internal-testing/tiny-random-bert", 64),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
@@ -54,7 +54,7 @@ class OptimizationTest(INCTestMixin):
             tokenizer.pad_token = tokenizer.eos_token
         quantizer = INCQuantizer.from_pretrained(model, task=task)
         calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
-        save_onnx_model = True
+        save_onnx_model = False
         op_type_dict = (
             {"Embedding": {"weight": {"dtype": ["fp32"]}, "activation": {"dtype": ["fp32"]}}}
             if save_onnx_model

@@ -17,11 +17,12 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
 from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import openvino
+import PIL
 from diffusers import (
     DDIMScheduler,
     LMSDiscreteScheduler,
@@ -36,7 +37,7 @@ from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
 
-from optimum.exporters.onnx import main_export
+from optimum.pipelines.diffusers.pipeline_latent_consistency import LatentConsistencyPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion import StableDiffusionPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_img2img import StableDiffusionImg2ImgPipelineMixin
 from optimum.pipelines.diffusers.pipeline_stable_diffusion_inpaint import StableDiffusionInpaintPipelineMixin
@@ -51,6 +52,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 
+from ...exporters.openvino import main_export
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
 from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME
@@ -68,16 +70,16 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     def __init__(
         self,
-        vae_decoder: openvino.runtime.Model,
-        text_encoder: openvino.runtime.Model,
         unet: openvino.runtime.Model,
         config: Dict[str, Any],
-        tokenizer: "CLIPTokenizer",
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"],
-        feature_extractor: Optional["CLIPFeatureExtractor"] = None,
+        vae_decoder: Optional[openvino.runtime.Model] = None,
         vae_encoder: Optional[openvino.runtime.Model] = None,
+        text_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder_2: Optional[openvino.runtime.Model] = None,
+        tokenizer: Optional["CLIPTokenizer"] = None,
         tokenizer_2: Optional["CLIPTokenizer"] = None,
+        feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
         compile: bool = True,
@@ -159,7 +161,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             if ov_model is not None:
                 dst_path = save_directory / dst_path / OV_XML_FILE_NAME
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
-                openvino.runtime.serialize(ov_model.model, dst_path)
+                openvino.save_model(ov_model.model, dst_path, compress_to_fp16=False)
                 model_dir = ov_model.config.get("_name_or_path", None) or ov_model._model_dir / ov_model._model_name
                 config_path = Path(model_dir) / ov_model.CONFIG_NAME
                 if config_path.is_file():
@@ -189,6 +191,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         local_files_only: bool = False,
         from_onnx: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
@@ -251,7 +254,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 else:
                     kwargs[name] = load_method(new_model_save_dir)
 
-        unet = cls.load_model(new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name)
+        unet = cls.load_model(
+            new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name, load_in_8bit=load_in_8bit
+        )
 
         components = {
             "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
@@ -261,25 +266,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         }
 
         for key, value in components.items():
-            components[key] = cls.load_model(value) if value.is_file() else None
+            components[key] = cls.load_model(value, load_in_8bit=load_in_8bit) if value.is_file() else None
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
-        return cls(
-            vae_decoder=components["vae_decoder"],
-            text_encoder=components["text_encoder"],
-            unet=unet,
-            config=config,
-            tokenizer=kwargs.pop("tokenizer", None),
-            scheduler=kwargs.pop("scheduler"),
-            feature_extractor=kwargs.pop("feature_extractor", None),
-            vae_encoder=components["vae_encoder"],
-            text_encoder_2=components["text_encoder_2"],
-            tokenizer_2=kwargs.pop("tokenizer_2", None),
-            model_save_dir=model_save_dir,
-            **kwargs,
-        )
+        return cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
 
     @classmethod
     def _from_transformers(
@@ -291,9 +283,11 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         force_download: bool = False,
         cache_dir: Optional[str] = None,
         local_files_only: bool = False,
-        tokenizer: "CLIPTokenizer" = None,
+        tokenizer: Optional["CLIPTokenizer"] = None,
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
+        load_in_8bit: bool = False,
+        tokenizer_2: Optional["CLIPTokenizer"] = None,
         **kwargs,
     ):
         save_dir = TemporaryDirectory()
@@ -310,12 +304,13 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             use_auth_token=use_auth_token,
             local_files_only=local_files_only,
             force_download=force_download,
+            int8=load_in_8bit,
         )
 
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
-            from_onnx=True,
+            from_onnx=False,
             use_auth_token=use_auth_token,
             revision=revision,
             force_download=force_download,
@@ -323,8 +318,10 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             local_files_only=local_files_only,
             model_save_dir=save_dir,
             tokenizer=tokenizer,
+            tokenizer_2=tokenizer_2,
             scheduler=scheduler,
             feature_extractor=feature_extractor,
+            load_in_8bit=load_in_8bit,
             **kwargs,
         )
 
@@ -351,6 +348,13 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             return -1
         return width.get_length() * self.vae_scale_factor
 
+    @property
+    def _batch_size(self) -> int:
+        batch_size = self.unet.model.inputs[0].get_partial_shape()[0]
+        if batch_size.is_dynamic:
+            return -1
+        return batch_size.get_length()
+
     def _reshape_unet(
         self,
         model: openvino.runtime.Model,
@@ -363,8 +367,10 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         if batch_size == -1 or num_images_per_prompt == -1:
             batch_size = -1
         else:
+            batch_size *= num_images_per_prompt
             # The factor of 2 comes from the guidance scale > 1
-            batch_size = 2 * batch_size * num_images_per_prompt
+            if "timestep_cond" not in {inputs.get_any_name() for inputs in model.inputs}:
+                batch_size *= 2
 
         height = height // self.vae_scale_factor if height > 0 else height
         width = width // self.vae_scale_factor if width > 0 else width
@@ -388,6 +394,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 shapes[inputs] = [batch_size, self.text_encoder_2.config["projection_dim"]]
             elif inputs.get_any_name() == "time_ids":
                 shapes[inputs] = [batch_size, inputs.get_partial_shape()[1]]
+            elif inputs.get_any_name() == "timestep_cond":
+                shapes[inputs] = [batch_size, self.unet.config["time_cond_proj_dim"]]
             else:
                 shapes[inputs][0] = batch_size
                 shapes[inputs][1] = tokenizer_max_length
@@ -525,14 +533,12 @@ class OVModelPart:
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
         config_path = self._model_dir / model_name / self.CONFIG_NAME
         self.config = self.parent_model._dict_from_json_file(config_path) if config_path.is_file() else {}
-
-        # TODO : disable if self._model_dir tmp directory
-        if "CACHE_DIR" not in self.ov_config:
-            self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name)
+        if "CACHE_DIR" not in self.ov_config.keys() and not str(self._model_dir).startswith(gettempdir()):
+            self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
     def _compile(self):
         if self.request is None:
-            logger.info(f"Compiling the {self._model_name}...")
+            logger.info(f"Compiling the {self._model_name} to {self.device} ...")
             self.request = core.compile_model(self.model, self.device, self.ov_config)
 
     @property
@@ -573,6 +579,7 @@ class OVModelUnet(OVModelPart):
         encoder_hidden_states: np.ndarray,
         text_embeds: Optional[np.ndarray] = None,
         time_ids: Optional[np.ndarray] = None,
+        timestep_cond: Optional[np.ndarray] = None,
     ):
         self._compile()
 
@@ -586,6 +593,8 @@ class OVModelUnet(OVModelPart):
             inputs["text_embeds"] = text_embeds
         if time_ids is not None:
             inputs["time_ids"] = time_ids
+        if timestep_cond is not None:
+            inputs["timestep_cond"] = timestep_cond
 
         outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
@@ -606,6 +615,11 @@ class OVModelVaeDecoder(OVModelPart):
         outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
 
+    def _compile(self):
+        if "GPU" in self.device:
+            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
+        super()._compile()
+
 
 class OVModelVaeEncoder(OVModelPart):
     def __init__(
@@ -621,6 +635,11 @@ class OVModelVaeEncoder(OVModelPart):
         }
         outputs = self.request(inputs, shared_memory=True)
         return list(outputs.values())
+
+    def _compile(self):
+        if "GPU" in self.device:
+            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
+        super()._compile()
 
 
 class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPipelineMixin):
@@ -639,6 +658,7 @@ class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPi
         width = width or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
         _height = self.height
         _width = self.width
+        expected_batch_size = self._batch_size
 
         if _height != -1 and height != _height:
             logger.warning(
@@ -654,11 +674,15 @@ class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPi
             )
             width = _width
 
-        if guidance_scale is not None and guidance_scale <= 1 and not self.is_dynamic:
-            raise ValueError(
-                f"`guidance_scale` was set to {guidance_scale}, static shapes are only supported for `guidance_scale` > 1, "
-                "please set `dynamic_shapes` to `True` when loading the model."
-            )
+        if expected_batch_size != -1:
+            if isinstance(prompt, str):
+                batch_size = 1
+            elif isinstance(prompt, list):
+                batch_size = len(prompt)
+            else:
+                batch_size = kwargs.get("prompt_embeds").shape[0]
+
+            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
 
         return StableDiffusionPipelineMixin.__call__(
             self,
@@ -674,16 +698,115 @@ class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPi
 
 
 class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiffusionImg2ImgPipelineMixin):
-    def __call__(self, *args, **kwargs):
-        # TODO : add default height and width if model statically reshaped
-        # resize image if doesn't match height and width given during reshaping
-        return StableDiffusionImg2ImgPipelineMixin.__call__(self, *args, **kwargs)
+    def __call__(
+        self,
+        prompt: Optional[Union[str, List[str]]] = None,
+        image: Union[np.ndarray, PIL.Image.Image] = None,
+        strength: float = 0.8,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 7.5,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: int = 1,
+        **kwargs,
+    ):
+        _height = self.height
+        _width = self.width
+        expected_batch_size = self._batch_size
+
+        if _height != -1 and _width != -1:
+            image = self.image_processor.preprocess(image, height=_height, width=_width).transpose(0, 2, 3, 1)
+
+        if expected_batch_size != -1:
+            if isinstance(prompt, str):
+                batch_size = 1
+            elif isinstance(prompt, list):
+                batch_size = len(prompt)
+            else:
+                batch_size = kwargs.get("prompt_embeds").shape[0]
+
+            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
+
+        return StableDiffusionImg2ImgPipelineMixin.__call__(
+            self,
+            prompt=prompt,
+            image=image,
+            strength=strength,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            negative_prompt=negative_prompt,
+            num_images_per_prompt=num_images_per_prompt,
+            **kwargs,
+        )
 
 
 class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiffusionInpaintPipelineMixin):
-    def __call__(self, *args, **kwargs):
-        # TODO : add default height and width if model statically reshaped
-        return StableDiffusionInpaintPipelineMixin.__call__(self, *args, **kwargs)
+    def __call__(
+        self,
+        prompt: Optional[Union[str, List[str]]],
+        image: PIL.Image.Image,
+        mask_image: PIL.Image.Image,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 7.5,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: int = 1,
+        **kwargs,
+    ):
+        height = height or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
+        width = width or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
+        _height = self.height
+        _width = self.width
+        expected_batch_size = self._batch_size
+
+        if _height != -1 and _width != -1:
+            if height != _height:
+                logger.warning(
+                    f"`height` was set to {height} but the static model will output images of height {_height}."
+                    "To fix the height, please reshape your model accordingly using the `.reshape()` method."
+                )
+                height = _height
+
+            if width != _width:
+                logger.warning(
+                    f"`width` was set to {width} but the static model will output images of width {_width}."
+                    "To fix the width, please reshape your model accordingly using the `.reshape()` method."
+                )
+                width = _width
+
+            if isinstance(image, list):
+                image = [self.image_processor.resize(i, _height, _width) for i in image]
+            else:
+                image = self.image_processor.resize(image, _height, _width)
+
+            if isinstance(mask_image, list):
+                mask_image = [self.image_processor.resize(i, _height, _width) for i in mask_image]
+            else:
+                mask_image = self.image_processor.resize(mask_image, _height, _width)
+
+        if expected_batch_size != -1:
+            if isinstance(prompt, str):
+                batch_size = 1
+            elif isinstance(prompt, list):
+                batch_size = len(prompt)
+            else:
+                batch_size = kwargs.get("prompt_embeds").shape[0]
+
+            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
+
+        return StableDiffusionInpaintPipelineMixin.__call__(
+            self,
+            prompt=prompt,
+            image=image,
+            mask_image=mask_image,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            negative_prompt=negative_prompt,
+            num_images_per_prompt=num_images_per_prompt,
+            **kwargs,
+        )
 
 
 class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
@@ -708,10 +831,171 @@ class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
 
 
 class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLPipelineMixin):
-    def __call__(self, *args, **kwargs):
-        return StableDiffusionXLPipelineMixin.__call__(self, *args, **kwargs)
+    def __call__(
+        self,
+        prompt: Optional[Union[str, List[str]]] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 5.0,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: int = 1,
+        **kwargs,
+    ):
+        height = height or self.unet.config["sample_size"] * self.vae_scale_factor
+        width = width or self.unet.config["sample_size"] * self.vae_scale_factor
+        _height = self.height
+        _width = self.width
+        expected_batch_size = self._batch_size
+
+        if _height != -1 and height != _height:
+            logger.warning(
+                f"`height` was set to {height} but the static model will output images of height {_height}."
+                "To fix the height, please reshape your model accordingly using the `.reshape()` method."
+            )
+            height = _height
+
+        if _width != -1 and width != _width:
+            logger.warning(
+                f"`width` was set to {width} but the static model will output images of width {_width}."
+                "To fix the width, please reshape your model accordingly using the `.reshape()` method."
+            )
+            width = _width
+
+        if expected_batch_size != -1:
+            if isinstance(prompt, str):
+                batch_size = 1
+            elif isinstance(prompt, list):
+                batch_size = len(prompt)
+            else:
+                batch_size = kwargs.get("prompt_embeds").shape[0]
+
+            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
+
+        return StableDiffusionXLPipelineMixin.__call__(
+            self,
+            prompt=prompt,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            negative_prompt=negative_prompt,
+            num_images_per_prompt=num_images_per_prompt,
+            **kwargs,
+        )
 
 
 class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLImg2ImgPipelineMixin):
-    def __call__(self, *args, **kwargs):
-        return StableDiffusionXLImg2ImgPipelineMixin.__call__(self, *args, **kwargs)
+    def __call__(
+        self,
+        prompt: Optional[Union[str, List[str]]] = None,
+        image: Union[np.ndarray, PIL.Image.Image] = None,
+        strength: float = 0.3,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 5.0,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: int = 1,
+        **kwargs,
+    ):
+        _height = self.height
+        _width = self.width
+        expected_batch_size = self._batch_size
+
+        if _height != -1 and _width != -1:
+            image = self.image_processor.preprocess(image, height=_height, width=_width).transpose(0, 2, 3, 1)
+
+        if expected_batch_size != -1:
+            if isinstance(prompt, str):
+                batch_size = 1
+            elif isinstance(prompt, list):
+                batch_size = len(prompt)
+            else:
+                batch_size = kwargs.get("prompt_embeds").shape[0]
+
+            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
+
+        return StableDiffusionXLImg2ImgPipelineMixin.__call__(
+            self,
+            prompt=prompt,
+            image=image,
+            strength=strength,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            negative_prompt=negative_prompt,
+            num_images_per_prompt=num_images_per_prompt,
+            **kwargs,
+        )
+
+
+class OVLatentConsistencyModelPipeline(OVStableDiffusionPipelineBase, LatentConsistencyPipelineMixin):
+    def __call__(
+        self,
+        prompt: Optional[Union[str, List[str]]] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        num_inference_steps: int = 4,
+        original_inference_steps: int = None,
+        guidance_scale: float = 8.5,
+        num_images_per_prompt: int = 1,
+        **kwargs,
+    ):
+        height = height or self.unet.config["sample_size"] * self.vae_scale_factor
+        width = width or self.unet.config["sample_size"] * self.vae_scale_factor
+        _height = self.height
+        _width = self.width
+        expected_batch_size = self._batch_size
+
+        if _height != -1 and height != _height:
+            logger.warning(
+                f"`height` was set to {height} but the static model will output images of height {_height}."
+                "To fix the height, please reshape your model accordingly using the `.reshape()` method."
+            )
+            height = _height
+
+        if _width != -1 and width != _width:
+            logger.warning(
+                f"`width` was set to {width} but the static model will output images of width {_width}."
+                "To fix the width, please reshape your model accordingly using the `.reshape()` method."
+            )
+            width = _width
+
+        if expected_batch_size != -1:
+            if isinstance(prompt, str):
+                batch_size = 1
+            elif isinstance(prompt, list):
+                batch_size = len(prompt)
+            else:
+                batch_size = kwargs.get("prompt_embeds").shape[0]
+
+            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale=0.0)
+
+        return LatentConsistencyPipelineMixin.__call__(
+            self,
+            prompt=prompt,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            original_inference_steps=original_inference_steps,
+            guidance_scale=guidance_scale,
+            num_images_per_prompt=num_images_per_prompt,
+            **kwargs,
+        )
+
+
+def _raise_invalid_batch_size(
+    expected_batch_size: int, batch_size: int, num_images_per_prompt: int, guidance_scale: float
+):
+    current_batch_size = batch_size * num_images_per_prompt * (1 if guidance_scale <= 1 else 2)
+
+    if expected_batch_size != current_batch_size:
+        msg = ""
+        if guidance_scale is not None and guidance_scale <= 1:
+            msg = f"`guidance_scale` was set to {guidance_scale}, static shapes are currently only supported for `guidance_scale` > 1 "
+
+        raise ValueError(
+            "The model was statically reshaped and the pipeline inputs do not match the expected shapes. "
+            f"The `batch_size`, `num_images_per_prompt` and `guidance_scale` were respectively set to {batch_size}, {num_images_per_prompt} and {guidance_scale}. "
+            f"The static model expects an input of size equal to {expected_batch_size} and got the following value instead : {current_batch_size}. "
+            f"To fix this, please either provide a different inputs to your model so that `batch_size` * `num_images_per_prompt` * 2 is equal to {expected_batch_size} "
+            "or reshape it again accordingly using the `.reshape()` method by setting `batch_size` to -1. " + msg
+        )

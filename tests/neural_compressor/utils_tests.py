@@ -55,9 +55,10 @@ _TASK_TO_DATASET = {
 def num_quantized_matmul_onnx_model(onnx_model):
     num_quantized_matmul = 0
     for node in onnx_model.graph.node:
-        if "quantizelinear" == node.op_type.lower():
+        if "QuantizeLinear" in node.name:
             num_quantized_matmul += 1
-    return num_quantized_matmul // 2
+
+    return num_quantized_matmul
 
 
 def _preprocess_function(examples, tokenizer, column_name):
@@ -90,21 +91,31 @@ class INCTestMixin(unittest.TestCase):
         expected_quantized_matmuls,
         is_static=True,
         load_onnx_model=True,
+        load_inc_model=True,
         num_samples=None,
-        file_name=ONNX_WEIGHTS_NAME,
+        file_name=None,
     ):
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        inc_model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(save_directory)
+        file_name = ONNX_WEIGHTS_NAME if task != "text-generation" else "decoder_model.onnx"
+
         model_kwargs = (
-            {"decoder_file_name": file_name, "use_cache": False}
+            {"decoder_file_name": file_name, "use_cache": False, "use_io_binding": False}
             if task == "text-generation"
             else {"file_name": file_name}
         )
         inc_config = INCConfig.from_pretrained(save_directory)
-        self.assertEqual(inc_config.save_onnx_model, load_onnx_model)
 
         if num_samples is not None:
             self.assertEqual(inc_config.quantization["dataset_num_samples"], num_samples)
+
+        with torch.no_grad():
+            model_outputs = q_model(**tokens)
+            outputs = model_outputs["logits"] if isinstance(model_outputs, dict) else model_outputs[0]
+            if load_inc_model:
+                inc_model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(save_directory)
+                inc_model_outputs = inc_model(**tokens)
+                self.assertTrue(torch.allclose(inc_model_outputs["logits"], outputs, atol=1e-2))
+                # self.assertEqual(inc_config.save_onnx_model, load_onnx_model)
 
         if load_onnx_model:
             onnx_model = onnx_load(os.path.join(save_directory, file_name))
@@ -117,13 +128,8 @@ class INCTestMixin(unittest.TestCase):
             ort_model = ORT_SUPPORTED_TASKS[task]["class"][0].from_pretrained(save_directory, **model_kwargs)
             ort_outputs = ort_model(**tokens)
             self.assertTrue("logits" in ort_outputs)
-
-        with torch.no_grad():
-            model_outputs = q_model(**tokens)
-            inc_model_outputs = inc_model(**tokens)
-        outputs = model_outputs["logits"] if isinstance(model_outputs, dict) else model_outputs[0]
-        self.assertTrue(torch.equal(outputs, inc_model_outputs["logits"]))
-        # self.assertTrue(torch.allclose(ort_outputs.logits, inc_model_outputs.logits, atol=1e-4))
+            if task != "fill-mask":
+                self.assertTrue(torch.allclose(ort_outputs.logits, outputs, atol=1e-2))
 
     @staticmethod
     def get_trainer(

@@ -25,12 +25,15 @@ from diffusers import (
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
 )
-from diffusers.utils import floats_tensor, load_image
+from diffusers.utils import load_image
+from diffusers.utils.testing_utils import floats_tensor
 from openvino.runtime.ie_api import CompiledModel
+from packaging.version import Version, parse
 from parameterized import parameterized
 from utils_tests import MODEL_NAMES, SEED
 
 from optimum.intel import (
+    OVLatentConsistencyModelPipeline,
     OVStableDiffusionImg2ImgPipeline,
     OVStableDiffusionInpaintPipeline,
     OVStableDiffusionPipeline,
@@ -49,6 +52,7 @@ from optimum.onnxruntime import (
     ORTStableDiffusionXLImg2ImgPipeline,
     ORTStableDiffusionXLPipeline,
 )
+from optimum.utils.import_utils import _diffusers_version
 
 
 def _generate_inputs(batch_size=1):
@@ -183,10 +187,11 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
         batch_size, num_images, height, width = 2, 3, 128, 64
         pipeline.half()
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
-        outputs = pipeline(**inputs, num_images_per_prompt=num_images, generator=np.random.RandomState(0)).images
-        self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+        for _height in [height, height + 16]:
+            inputs = self.generate_inputs(height=_height, width=width, batch_size=batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
     def generate_inputs(self, height=128, width=128, batch_size=1, input_type="np"):
         inputs = _generate_inputs(batch_size)
@@ -263,21 +268,15 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False)
         batch_size, num_images, height, width = 3, 4, 128, 64
-        prompt = "sailing ship in storm by Leonardo da Vinci"
         pipeline.half()
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
         self.assertFalse(pipeline.is_dynamic)
         pipeline.compile()
-        # Verify output shapes requirements not matching the static model don't impact the final outputs
-        outputs = pipeline(
-            [prompt] * batch_size,
-            num_inference_steps=2,
-            num_images_per_prompt=num_images,
-            height=height + 8,
-            width=width,
-            output_type="np",
-        ).images
-        self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+        # Verify output shapes requirements not matching the static model doesn't impact the final outputs
+        for _height in [height, height + 16]:
+            inputs = _generate_inputs(batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images, height=_height, width=width).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_height_width_properties(self, model_arch: str):
@@ -340,10 +339,11 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
         batch_size, num_images, height, width = 1, 3, 128, 64
         pipeline.half()
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
-        outputs = pipeline(**inputs, num_images_per_prompt=num_images, generator=np.random.RandomState(0)).images
-        self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+        for _height in [height, height + 16]:
+            inputs = self.generate_inputs(height=_height, width=width, batch_size=batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
     def generate_inputs(self, height=128, width=128, batch_size=1):
         inputs = super(OVStableDiffusionInpaintPipelineTest, self).generate_inputs(height, width, batch_size)
@@ -431,10 +431,11 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
         self.assertFalse(pipeline.is_dynamic)
         pipeline.compile()
-        # Verify output shapes requirements not matching the static model don't impact the final outputs
-        inputs = _generate_inputs(batch_size)
-        outputs = pipeline(**inputs, num_images_per_prompt=num_images, height=height, width=width).images
-        self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+
+        for _height in [height, height + 16]:
+            inputs = _generate_inputs(batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images, height=_height, width=width).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
 
 class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
@@ -466,13 +467,79 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
         batch_size, num_images, height, width = 2, 3, 128, 64
         pipeline.half()
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
-        outputs = pipeline(**inputs, num_images_per_prompt=num_images, generator=np.random.RandomState(0)).images
-        self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+        for _height in [height, height + 16]:
+            inputs = self.generate_inputs(height=_height, width=width, batch_size=batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
     def generate_inputs(self, height=128, width=128, batch_size=1, input_type="np"):
         inputs = _generate_inputs(batch_size)
         inputs["image"] = _create_image(height=height, width=width, batch_size=batch_size, input_type=input_type)
         inputs["strength"] = 0.75
         return inputs
+
+
+class OVLatentConsistencyModelPipelineTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ("latent-consistency",)
+    MODEL_CLASS = OVLatentConsistencyModelPipeline
+    TASK = "text-to-image"
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(parse(_diffusers_version) <= Version("0.21.4"), "not supported with this diffusers version")
+    def test_compare_to_diffusers(self, model_arch: str):
+        ov_pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True)
+        self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
+        self.assertIsInstance(ov_pipeline.vae_encoder, OVModelVaeEncoder)
+        self.assertIsInstance(ov_pipeline.vae_decoder, OVModelVaeDecoder)
+        self.assertIsInstance(ov_pipeline.unet, OVModelUnet)
+        self.assertIsInstance(ov_pipeline.config, Dict)
+
+        from diffusers import LatentConsistencyModelPipeline
+
+        pipeline = LatentConsistencyModelPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        batch_size, num_images_per_prompt, height, width = 2, 3, 64, 128
+        latents = ov_pipeline.prepare_latents(
+            batch_size * num_images_per_prompt,
+            ov_pipeline.unet.config["in_channels"],
+            height,
+            width,
+            dtype=np.float32,
+            generator=np.random.RandomState(0),
+        )
+
+        kwargs = {
+            "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
+            "num_inference_steps": 1,
+            "num_images_per_prompt": num_images_per_prompt,
+            "height": height,
+            "width": width,
+            "guidance_scale": 8.5,
+        }
+
+        for output_type in ["latent", "np"]:
+            ov_outputs = ov_pipeline(latents=latents, output_type=output_type, **kwargs).images
+            self.assertIsInstance(ov_outputs, np.ndarray)
+            with torch.no_grad():
+                outputs = pipeline(latents=torch.from_numpy(latents), output_type=output_type, **kwargs).images
+
+            # Compare model outputs
+            self.assertTrue(np.allclose(ov_outputs, outputs, atol=1e-4))
+        # Compare model devices
+        self.assertEqual(pipeline.device.type, ov_pipeline.device)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(parse(_diffusers_version) <= Version("0.21.4"), "not supported with this diffusers version")
+    def test_num_images_per_prompt_static_model(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
+        batch_size, num_images, height, width = 3, 4, 128, 64
+        pipeline.half()
+        pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
+        self.assertFalse(pipeline.is_dynamic)
+        pipeline.compile()
+
+        for _height in [height, height + 16]:
+            inputs = _generate_inputs(batch_size)
+            outputs = pipeline(**inputs, num_images_per_prompt=num_images, height=_height, width=width).images
+            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))

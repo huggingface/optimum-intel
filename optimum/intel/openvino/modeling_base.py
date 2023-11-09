@@ -15,21 +15,21 @@
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
 from typing import Dict, Optional, Union
 
 import openvino
 from huggingface_hub import hf_hub_download
+from openvino import Core, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from openvino.runtime import Core
 from transformers import PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from optimum.exporters.onnx import OnnxConfig, export
-from optimum.exporters.tasks import TasksManager
+from optimum.exporters.onnx import OnnxConfig
 from optimum.modeling_base import OptimizedModel
 
-from ..utils.import_utils import is_transformers_version
+from ...exporters.openvino import export, main_export
+from ..utils.import_utils import is_nncf_available, is_transformers_version
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME
 
 
@@ -42,29 +42,13 @@ core = Core()
 
 logger = logging.getLogger(__name__)
 
-_SUPPORTED_DEVICES = {
-    "CPU",
-    "GPU",
-    "AUTO",
-    "AUTO:CPU,GPU",
-    "AUTO:GPU,CPU",
-    "MULTI",
-    "MULTI:CPU,GPU",
-    "MULTI:GPU,CPU",
-}
-
-
-# workaround to enable compatibility between openvino models and transformers pipelines
-class PreTrainedModel(OptimizedModel):
-    pass
-
 
 @add_start_docstrings(
     """
     Base OVModel class.
     """,
 )
-class OVBaseModel(PreTrainedModel):
+class OVBaseModel(OptimizedModel):
     auto_model_class = None
     export_feature = None
 
@@ -90,7 +74,19 @@ class OVBaseModel(PreTrainedModel):
             height = -1 if self.export_feature == "image-classification" else None
             width = -1 if self.export_feature == "image-classification" else None
             model = self._reshape(model, -1, -1, height, width)
-        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(model.inputs)}
+
+        input_names = {}
+        for idx, key in enumerate(model.inputs):
+            names = tuple(key.get_names())
+            input_names[next((name for name in names if "/" not in name), names[0])] = idx
+        self.input_names = input_names
+
+        output_names = {}
+        for idx, key in enumerate(model.outputs):
+            names = tuple(key.get_names())
+            output_names[next((name for name in names if "/" not in name), names[0])] = idx
+        self.output_names = output_names
+
         self.model = model
         self.request = None
         if enable_compilation:
@@ -104,7 +100,7 @@ class OVBaseModel(PreTrainedModel):
             self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
     @staticmethod
-    def load_model(file_name: Union[str, Path]):
+    def load_model(file_name: Union[str, Path], load_in_8bit: bool = False):
         """
         Loads the model.
 
@@ -127,11 +123,18 @@ class OVBaseModel(PreTrainedModel):
 
         if isinstance(file_name, str):
             file_name = Path(file_name)
-        bin_file_name = file_name.with_suffix(".bin") if file_name.suffix == ".xml" else None
-
-        model = core.read_model(file_name, bin_file_name)
+        model = core.read_model(file_name) if not file_name.suffix == ".onnx" else convert_model(file_name)
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
+
+        if load_in_8bit:
+            if not is_nncf_available():
+                raise ImportError(
+                    "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
+                )
+            import nncf
+
+            model = nncf.compress_weights(model)
 
         return model
 
@@ -145,7 +148,7 @@ class OVBaseModel(PreTrainedModel):
                 The directory where to save the model files.
         """
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
-        openvino.runtime.serialize(self.model, dst_path)
+        openvino.save_model(self.model, dst_path, compress_to_fp16=False)
 
     @classmethod
     def _from_pretrained(
@@ -157,8 +160,10 @@ class OVBaseModel(PreTrainedModel):
         force_download: bool = False,
         cache_dir: Optional[str] = None,
         file_name: Optional[str] = None,
+        subfolder: str = "",
         from_onnx: bool = False,
         local_files_only: bool = False,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         """
@@ -187,36 +192,59 @@ class OVBaseModel(PreTrainedModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
+
+        model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
 
-        # Load the model from local directory
-        if os.path.isdir(model_id):
-            file_name = os.path.join(model_id, file_name)
-            model_save_dir = model_id
-        # Download the model from the hub
+        model_cache_path = cls._cached_file(
+            model_path=model_path,
+            use_auth_token=use_auth_token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            file_name=file_name,
+            subfolder=subfolder,
+            local_files_only=local_files_only,
+        )
+        model = cls.load_model(model_cache_path, load_in_8bit=load_in_8bit)
+        return cls(model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
+
+    @staticmethod
+    def _cached_file(
+        model_path: Union[Path, str],
+        use_auth_token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: Optional[str] = None,
+        file_name: Optional[str] = None,
+        subfolder: str = "",
+        local_files_only: bool = False,
+    ):
+        # locates a file in a local folder and repo, downloads and cache it if necessary.
+        model_path = Path(model_path)
+        if model_path.is_dir():
+            model_cache_path = model_path / file_name
         else:
-            model_file_names = [file_name]
-            # If not ONNX then OpenVINO IR
-            if not from_onnx:
-                model_file_names.append(file_name.replace(".xml", ".bin"))
-            file_names = []
+            file_name = Path(file_name)
+            if file_name.suffix != "onnx":
+                model_file_names = [file_name.with_suffix(".bin"), file_name]
+            else:
+                model_file_names = [file_name]
             for file_name in model_file_names:
                 model_cache_path = hf_hub_download(
-                    repo_id=model_id,
-                    filename=file_name,
+                    repo_id=model_path.as_posix(),
+                    filename=file_name.as_posix(),
+                    subfolder=subfolder,
                     use_auth_token=use_auth_token,
                     revision=revision,
                     cache_dir=cache_dir,
                     force_download=force_download,
                     local_files_only=local_files_only,
                 )
-                file_names.append(model_cache_path)
-            model_save_dir = Path(model_cache_path).parent
-            file_name = file_names[0]
+            model_cache_path = Path(model_cache_path)
 
-        model = cls.load_model(file_name)
-        return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
+        return model_cache_path
 
     @classmethod
     def _from_transformers(
@@ -231,6 +259,7 @@ class OVBaseModel(PreTrainedModel):
         local_files_only: bool = False,
         task: Optional[str] = None,
         trust_remote_code: bool = False,
+        load_in_8bit: bool = False,
         **kwargs,
     ):
         """
@@ -251,46 +280,30 @@ class OVBaseModel(PreTrainedModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        task = task or cls.export_feature
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
 
-        model_kwargs = {
-            "revision": revision,
-            "use_auth_token": use_auth_token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "trust_remote_code": trust_remote_code,
-        }
-
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        model_type = model.config.model_type.replace("_", "-")
-
-        onnx_config_class = TasksManager.get_exporter_config_constructor(
-            exporter="onnx",
-            model=model,
-            task=task,
-            model_name=model_id,
-            model_type=model_type,
-        )
-
-        onnx_config = onnx_config_class(model.config)
-
-        return cls._to_onnx_to_load(
-            model=model,
-            config=config,
-            onnx_config=onnx_config,
-            use_auth_token=use_auth_token,
+        main_export(
+            model_name_or_path=model_id,
+            output=save_dir_path,
+            task=task or cls.export_feature,
+            subfolder=subfolder,
             revision=revision,
-            force_download=force_download,
             cache_dir=cache_dir,
+            use_auth_token=use_auth_token,
             local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+            int8=load_in_8bit,
         )
+
+        config.save_pretrained(save_dir_path)
+        return cls._from_pretrained(model_id=save_dir_path, config=config, load_in_8bit=load_in_8bit, **kwargs)
 
     @classmethod
-    def _to_onnx_to_load(
+    def _to_load(
         cls,
-        model: PreTrainedModel,
+        model,
         config: PretrainedConfig,
         onnx_config: OnnxConfig,
         use_auth_token: Optional[Union[bool, str]] = None,
@@ -308,13 +321,13 @@ class OVBaseModel(PreTrainedModel):
             model=model,
             config=onnx_config,
             opset=onnx_config.DEFAULT_ONNX_OPSET,
-            output=save_dir_path / ONNX_WEIGHTS_NAME,
+            output=save_dir_path / OV_XML_FILE_NAME,
         )
 
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
-            from_onnx=True,
+            from_onnx=False,
             use_auth_token=use_auth_token,
             revision=revision,
             force_download=force_download,
@@ -325,13 +338,13 @@ class OVBaseModel(PreTrainedModel):
 
     def compile(self):
         if self.request is None:
-            logger.info("Compiling the model...")
+            logger.info(f"Compiling the model to {self._device} ...")
             ov_config = {**self.ov_config}
-            if "CACHE_DIR" not in self.ov_config.keys():
-                # Set default CACHE_DIR only if it is not set.
+            if "CACHE_DIR" not in self.ov_config.keys() and not str(self.model_save_dir).startswith(gettempdir()):
+                # Set default CACHE_DIR only if it is not set, and if the model is not in a temporary directory
                 cache_dir = Path(self.model_save_dir).joinpath("model_cache")
                 ov_config["CACHE_DIR"] = str(cache_dir)
-                logger.info(f"Set CACHE_DIR to {str(cache_dir)}")
+                logger.info(f"Setting OpenVINO CACHE_DIR to {str(cache_dir)}")
             self.request = core.compile_model(self.model, self._device, ov_config)
 
     def _reshape(
@@ -381,11 +394,6 @@ class OVBaseModel(PreTrainedModel):
         compress_model_transformation(self.model)
         self.request = None
         return self
-
-    def _ensure_supported_device(self, device: str = None):
-        device = device if device is not None else self._device
-        if device not in _SUPPORTED_DEVICES:
-            raise ValueError(f"Unknown device: {device}. Expected one of {_SUPPORTED_DEVICES}.")
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
