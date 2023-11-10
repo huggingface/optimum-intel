@@ -41,8 +41,8 @@ from ...exporters.openvino import export, export_pytorch_via_onnx
 from ..utils.constant import _TASK_ALIASES
 from .configuration import OVConfig
 from .modeling_base import OVBaseModel
+from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 from .modeling_decoder import OVBaseDecoderModel
-from .modeling_seq2seq import OVModelForSeq2SeqLM
 from .utils import (
     MAX_ONNX_OPSET,
     MIN_ONNX_QDQ_OPSET,
@@ -177,6 +177,15 @@ class OVQuantizer(OptimumQuantizer):
                     "In case you only want to apply quantization on the weights, please set `weights_only=True`."
                 )
 
+        if isinstance(self.model, OVBaseModelForSeq2SeqLM):
+            self._quantize_ovmodelforseq2seqlm(
+                calibration_dataset,
+                save_directory,
+                batch_size,
+                data_collator,
+                remove_unused_columns,
+                **kwargs,
+            )
         if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
             self._quantize_ovcausallm(
                 calibration_dataset,
@@ -185,15 +194,6 @@ class OVQuantizer(OptimumQuantizer):
                 data_collator,
                 remove_unused_columns,
                 weights_only,
-                **kwargs,
-            )
-        if isinstance(self.model, OVModelForSeq2SeqLM):
-            self._quantize_ovmodelforseq2seqlm(
-                calibration_dataset,
-                save_directory,
-                batch_size,
-                data_collator,
-                remove_unused_columns,
                 **kwargs,
             )
         elif isinstance(self.model, OVBaseModel):
