@@ -186,7 +186,7 @@ class OVQuantizer(OptimumQuantizer):
                 remove_unused_columns,
                 **kwargs,
             )
-        if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
+        elif isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
             self._quantize_ovcausallm(
                 calibration_dataset,
                 save_directory,
