@@ -146,7 +146,7 @@ class OVQuantizerTest(unittest.TestCase):
 
 class OVQuantizerSeq2SeqTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("hf-internal-testing/tiny-random-t5", 30, 32, 104, 84),
+        ("hf-internal-testing/tiny-random-t5", 30, 32, 52, 84),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
