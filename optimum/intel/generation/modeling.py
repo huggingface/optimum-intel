@@ -29,7 +29,6 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
-from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_torch_version, is_transformers_version
@@ -100,7 +99,6 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
-        self.has_position_ids = True if config.model_type in MODEL_TYPES_REQUIRING_POSITION_IDS else False
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
@@ -264,6 +262,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         }
 
         model_type = self.config.model_type.replace("_", "-")
+        has_position_ids = True if model_type in MODEL_TYPES_REQUIRING_POSITION_IDS else False
 
         if self.use_cache:
             if past_key_values is None:
@@ -296,10 +295,9 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
 
             inputs["past_key_values"] = past_key_values
 
-        position_ids = kwargs.get("position_ids", None)
-        if self.has_position_ids and position_ids is not None:
+        if has_position_ids and position_ids is not None:
             inputs.update({"position_ids": position_ids})
-        elif self.has_position_ids and position_ids is None:
+        elif has_position_ids and position_ids is None:
             seq_length = input_ids.shape[-1]
             if not self.use_cache:
                 past_key_values_length = 0
@@ -309,7 +307,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
                 past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=self._device
             ).unsqueeze(0)
             inputs.update({"position_ids": position_ids})
-        elif not self.has_position_ids and position_ids is not None:
+        elif not has_position_ids and position_ids is not None:
             logger.warning("You miss the position_ids in the inputs")
 
         outputs = self.model(**inputs)
