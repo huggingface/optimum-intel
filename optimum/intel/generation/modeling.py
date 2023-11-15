@@ -128,7 +128,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
 
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, attention_mask=None, **kwargs):
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
         past_key_values = past_key_values or kwargs.get("past", None)
 
         if self.use_cache and past_key_values is not None:
