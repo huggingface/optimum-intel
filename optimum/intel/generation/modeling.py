@@ -302,7 +302,11 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
             if not self.use_cache:
                 past_key_values_length = 0
             else:
-                past_key_values_length = past_key_values[0][1].shape[-2]
+                past_key_values_length = (
+                    past_key_values[0].shape[-2]
+                    if model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS
+                    else past_key_values[0][1].shape[-2]
+                )
             position_ids = torch.arange(
                 past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=self._device
             ).unsqueeze(0)
