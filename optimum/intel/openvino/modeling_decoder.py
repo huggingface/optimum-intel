@@ -287,7 +287,6 @@ class OVBaseDecoderModel(OVModel):
     def compile(self):
         if self.compiled_model is None:
             super().compile()
-            self.compiled_model = core.compile_model(self.model, self.device, self.ov_config)
 
 
 @add_start_docstrings(
