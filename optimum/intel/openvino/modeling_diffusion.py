@@ -19,6 +19,7 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
 from typing import Any, Dict, List, Optional, Union
+import queue
 
 import numpy as np
 import openvino
@@ -528,7 +529,8 @@ class OVModelPart:
             for inputs in self.model.inputs
         }
         self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self.request = None
+        self.compiled_model = None
+        
         self._model_name = model_name
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
         config_path = self._model_dir / model_name / self.CONFIG_NAME
@@ -537,9 +539,9 @@ class OVModelPart:
             self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
     def _compile(self):
-        if self.request is None:
+        if self.compiled_model is None:
             logger.info(f"Compiling the {self._model_name} to {self.device} ...")
-            self.request = core.compile_model(self.model, self.device, self.ov_config)
+            self.compiled_model = core.compile_model(self.model, self.device, self.ov_config)
 
     @property
     def device(self):
@@ -562,8 +564,12 @@ class OVModelTextEncoder(OVModelPart):
         inputs = {
             "input_ids": input_ids,
         }
-        outputs = self.request(inputs, shared_memory=True)
-        return list(outputs.values())
+        infer_request = self.compiled_model.create_infer_request()
+        infer_request.start_async(inputs, shared_memory=True)
+        infer_request.wait()
+        outputs = infer_request.outputs
+        
+        return outputs
 
 
 class OVModelUnet(OVModelPart):
@@ -596,8 +602,12 @@ class OVModelUnet(OVModelPart):
         if timestep_cond is not None:
             inputs["timestep_cond"] = timestep_cond
 
-        outputs = self.request(inputs, shared_memory=True)
-        return list(outputs.values())
+        infer_request = self.compiled_model.create_infer_request()
+        infer_request.start_async(inputs, shared_memory=True)
+        infer_request.wait()
+        outputs = infer_request.outputs
+        
+        return outputs
 
 
 class OVModelVaeDecoder(OVModelPart):
@@ -612,8 +622,12 @@ class OVModelVaeDecoder(OVModelPart):
         inputs = {
             "latent_sample": latent_sample,
         }
-        outputs = self.request(inputs, shared_memory=True)
-        return list(outputs.values())
+        infer_request = self.compiled_model.create_infer_request()
+        infer_request.start_async(inputs, shared_memory=True)
+        infer_request.wait()
+        outputs = infer_request.outputs
+        
+        return outputs
 
     def _compile(self):
         if "GPU" in self.device:
@@ -633,8 +647,12 @@ class OVModelVaeEncoder(OVModelPart):
         inputs = {
             "sample": sample,
         }
-        outputs = self.request(inputs, shared_memory=True)
-        return list(outputs.values())
+        infer_request = self.compiled_model.create_infer_request()
+        infer_request.start_async(inputs, shared_memory=True)
+        infer_request.wait()
+        outputs = infer_request.outputs
+        
+        return outputs
 
     def _compile(self):
         if "GPU" in self.device:

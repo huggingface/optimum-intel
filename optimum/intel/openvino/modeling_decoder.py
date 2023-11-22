@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
+import queue
 
 import numpy as np
 import openvino
@@ -182,7 +183,8 @@ class OVBaseDecoderModel(OVModel):
                 self.model = self._original_model.clone()
                 if self.is_dynamic:
                     self.model = self._reshape(self.model, -1, -1)
-                self.request = None
+                self.compiled_model = None
+                
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -283,9 +285,9 @@ class OVBaseDecoderModel(OVModel):
         return self
 
     def compile(self):
-        if self.request is None:
+        if self.compiled_model is None:
             super().compile()
-            self.request = self.request.create_infer_request()
+            self.compiled_model = core.compile_model(self.model, self.device, self.ov_config)
 
 
 @add_start_docstrings(
@@ -385,13 +387,15 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             inputs["position_ids"] = position_ids
 
         # Run inference
-        self.request.start_async(inputs, shared_memory=True)
-        self.request.wait()
-        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        infer_request = self.compiled_model.create_infer_request()
+        infer_request.start_async(inputs, shared_memory=True)
+        infer_request.wait()
+        logits = torch.from_numpy(infer_request.get_tensor("logits").data).to(self.device)
 
         if self.use_cache:
             # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
-            past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+            past_key_values = tuple(infer_request.get_tensor(key).data for key in self.key_value_output_names)
+            
             if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
                 # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
                 past_key_values = tuple(

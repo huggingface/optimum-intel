@@ -279,15 +279,20 @@ class OVQuantizer(OptimumQuantizer):
 
         class InferRequestWrapper:
             def __init__(self, request):
-                self.request = request
+                self.compiled_model = request
 
             def __call__(self, *args, **kwargs):
                 data_cache.append(*args)
-                return self.request(*args, *kwargs)
+                infer_request = self.compiled_model.create_infer_request()
+                infer_request.start_async(*args, *kwargs)
+                infer_request.wait()
+                outputs = infer_request.outputs
+                
+                return outputs
 
             def infer(self, inputs: Any = None, shared_memory: bool = False):
                 data_cache.append(inputs)
-                return self.request.infer(inputs, shared_memory)
+                return self.compiled_model.infer(inputs, shared_memory)
 
             def start_async(
                 self,
@@ -296,18 +301,18 @@ class OVQuantizer(OptimumQuantizer):
                 shared_memory: bool = False,
             ):
                 data_cache.append(inputs)
-                self.request.infer(inputs, shared_memory)
+                self.compiled_model.infer(inputs, shared_memory)
 
             def wait(self):
                 pass
 
             def get_tensor(self, name: str):
-                return Tensor(self.request.results[name])
+                return Tensor(self.compiled_model.results[name])
 
             def __getattr__(self, attr):
                 if attr in self.__dict__:
                     return getattr(self, attr)
-                return getattr(self.request, attr)
+                return getattr(self.compiled_model, attr)
 
         self.model.request = InferRequestWrapper(self.model.request)
         for _, data in enumerate(calibration_dataloader):
