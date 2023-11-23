@@ -19,7 +19,7 @@ import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
 from typing import Any, Dict, List, Optional, Union
-import queue
+import copy
 
 import numpy as np
 import openvino
@@ -564,11 +564,11 @@ class OVModelTextEncoder(OVModelPart):
         inputs = {
             "input_ids": input_ids,
         }
+
         infer_request = self.compiled_model.create_infer_request()
         infer_request.start_async(inputs, shared_memory=True)
         infer_request.wait()
-        outputs = infer_request.outputs
-        
+        outputs = [output.data for output in infer_request.outputs]
         return outputs
 
 
@@ -605,7 +605,7 @@ class OVModelUnet(OVModelPart):
         infer_request = self.compiled_model.create_infer_request()
         infer_request.start_async(inputs, shared_memory=True)
         infer_request.wait()
-        outputs = infer_request.outputs
+        outputs = [output.data for output in infer_request.outputs]
         
         return outputs
 
@@ -625,7 +625,7 @@ class OVModelVaeDecoder(OVModelPart):
         infer_request = self.compiled_model.create_infer_request()
         infer_request.start_async(inputs, shared_memory=True)
         infer_request.wait()
-        outputs = infer_request.outputs
+        outputs = [output.data for output in infer_request.outputs]
         
         return outputs
 
@@ -650,7 +650,7 @@ class OVModelVaeEncoder(OVModelPart):
         infer_request = self.compiled_model.create_infer_request()
         infer_request.start_async(inputs, shared_memory=True)
         infer_request.wait()
-        outputs = infer_request.outputs
+        outputs = [output.data for output in infer_request.outputs]
         
         return outputs
 
