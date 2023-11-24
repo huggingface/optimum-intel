@@ -454,3 +454,25 @@ refiner = OVStableDiffusionXLImg2ImgPipeline.from_pretrained(model_id, export=Tr
 image = base(prompt=prompt, output_type="latent").images[0]
 image = refiner(prompt=prompt, image=image[None, :]).images[0]
 ```
+
+
+## Latent Consistency Models
+
+
+| Task                                 | Auto Class                           |
+|--------------------------------------|--------------------------------------|
+| `text-to-image`                      | `OVLatentConsistencyModelPipeline`   |
+
+
+### Text-to-Image
+
+Here is an example of how you can load a Latent Consistency Models (LCMs) from [SimianLuo/LCM_Dreamshaper_v7](https://huggingface.co/SimianLuo/LCM_Dreamshaper_v7) and run inference using OpenVINO :
+
+```python
+from optimum.intel import OVLatentConsistencyModelPipeline
+
+model_id = "SimianLuo/LCM_Dreamshaper_v7"
+pipeline = OVLatentConsistencyModelPipeline.from_pretrained(model_id, export=True)
+prompt = "sailing ship in storm by Leonardo da Vinci"
+images = pipeline(prompt, num_inference_steps=4, guidance_scale=8.0).images
+```
