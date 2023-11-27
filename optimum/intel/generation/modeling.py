@@ -310,7 +310,9 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
 
         if position_ids is not None and model_type in MODEL_TYPES_REQUIRING_POSITION_IDS:
             inputs["position_ids"] = position_ids
-
+        if position_ids is None and model_type in MODEL_TYPES_REQUIRING_POSITION_IDS:
+            position_ids = torch.arange(input_ids.shape[1]).repeat(input_ids.shape[0], 1)
+            inputs["position_ids"] = position_ids
         outputs = self.model(**inputs)
 
         if isinstance(outputs, (list, tuple)):
