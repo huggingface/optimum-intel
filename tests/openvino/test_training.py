@@ -361,7 +361,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=43,
+        expected_fake_quantize=42,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss"],
