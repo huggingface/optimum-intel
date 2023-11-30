@@ -98,18 +98,18 @@ SEED = 42
 
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
-    "bert": (34,),
-    "roberta": (34,),
-    "albert": (42,),
-    "vit": (31,),
-    "blenderbot": (35,),
-    "gpt2": (22,),
-    "wav2vec2": (15,),
-    "distilbert": (33,),
-    "t5": (32, 52, 42),
-    "stable-diffusion": (74, 4, 4, 32),
-    "stable-diffusion-xl": (148, 4, 4, 33),
-    "stable-diffusion-xl-refiner": (148, 4, 4, 33),
+    "bert": (68,),
+    "roberta": (68,),
+    "albert": (84,),
+    "vit": (62,),
+    "blenderbot": (70,),
+    "gpt2": (44,),
+    "wav2vec2": (30,),
+    "distilbert": (66,),
+    "t5": (64, 104, 84),
+    "stable-diffusion": (148, 8, 8, 64),
+    "stable-diffusion-xl": (296, 8, 8, 66),
+    "stable-diffusion-xl-refiner": (296, 8, 8, 66),
 }
 
 
