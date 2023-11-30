@@ -163,7 +163,7 @@ class TimmImageProcessor(BaseImageProcessor, ImageFeatureExtractionMixin):
         pretrained_model_name_or_path: Union[str, os.PathLike],
         **kwargs,
     ):
-        timm_config_dict, _ = load_model_config_from_hf(pretrained_model_name_or_path)
+        timm_config_dict = load_model_config_from_hf(pretrained_model_name_or_path)[0]
 
         _, im_h, im_w = timm_config_dict.get("input_size", [3, 224, 224])
 
