@@ -125,7 +125,8 @@ class OVBaseDecoderModel(OVModel):
 
         self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
-        self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs)
+        # TODO: Provide a better than get_sinks-way based on the variables availability, but OV Python API doesn't expose required methods:
+        self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs) or len(model.get_sinks()) > 0  # TODO:
         self.main_input_name = "input_ids"
         self.num_pkv = 2
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
@@ -273,6 +274,8 @@ class OVBaseDecoderModel(OVModel):
                     shapes[inputs][1] = -1
                 else:
                     shapes[inputs][2] = -1
+            elif input_name.startswith("beam_idx"):
+                shapes[inputs][0] = -1
             else:
                 shapes[inputs][1] = -1
         model.reshape(shapes)
