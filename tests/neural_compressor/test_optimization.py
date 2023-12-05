@@ -77,7 +77,7 @@ class OptimizationTest(INCTestMixin):
     )
 
     TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
-        "hf-internal-testing/tiny-random-BloomForCausalLM",
+        "hf-tiny-model-private/tiny-random-BloomForCausalLM",
         "hf-internal-testing/tiny-random-GPTNeoForCausalLM",
     )
 
