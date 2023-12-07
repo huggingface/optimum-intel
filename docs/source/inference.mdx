@@ -102,7 +102,7 @@ You can also apply INT8 quantization on your models weights when exporting your 
 optimum-cli export openvino --model gpt2 --int8 ov_model
 ```
 
-This will results in the exported model linear and embedding layers to be quanrtized to INT8, the activations will be kept in floating point precision.
+This will results in the exported model linear and embedding layers to be quantized to INT8, the activations will be kept in floating point precision.
 
 This can also be done when loading your model by setting the `load_in_8bit` argument when calling the `from_pretrained()` method.
 
