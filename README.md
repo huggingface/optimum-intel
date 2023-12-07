@@ -81,7 +81,7 @@ If you add `--int8`, the model linear and embedding weights will be quantized to
 optimum-cli export openvino --model gpt2 --int8 ov_model
 ```
 
-To apply quantization on both weights and activations, you can more information in the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov).
+To apply quantization on both weights and activations, you can find more information in the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov).
 
 #### Inference:
 
