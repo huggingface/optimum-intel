@@ -34,6 +34,7 @@ from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
+from ...exporters.openvino import patch_stateful
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -125,8 +126,13 @@ class OVBaseDecoderModel(OVModel):
 
         self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
-        # TODO: Provide a better than get_sinks-way based on the variables availability, but OV Python API doesn't expose required methods:
-        self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs) or len(model.get_sinks()) > 0  # TODO:
+        if "stateful" in kwargs:
+            stateful = kwargs.pop("stateful", True)
+        else:
+            stateful = None
+        model_has_sinks = len(model.get_sinks()) > 0
+        self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs) or model_has_sinks
+        self.stateful = model_has_sinks
         self.main_input_name = "input_ids"
         self.num_pkv = 2
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
@@ -137,19 +143,32 @@ class OVBaseDecoderModel(OVModel):
         self.update_pkv_precision()
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
+
+        def raise_error(model_prop, user_prop, name):
+            raise ValueError(
+                f"`{name}` was set to `{user_prop}` but the loaded model only supports `{name}={model_prop}`. "
+                f"Please load your current model with `{name}={model_prop}` or export the original model "
+                f"once again with `{name}={user_prop}` when calling the `from_pretrained` method. "
+                "To export your model, simply set `export=True`."
+            )
+
+        if stateful is not None and self.stateful and not stateful:
+            # We cannot transform stateful model to stateless
+            raise_error(self.stateful, stateful, "stateful")
+
+        if not self.stateful and stateful:
+            # We can transform stateless model to stateful
+            self._make_stateful()
+
         if enable_compilation:
             self.compile()
 
         if use_cache ^ self.use_cache:
-            raise ValueError(
-                f"`use_cache` was set to `{use_cache}` but the loaded model only supports `use_cache={self.use_cache}`. "
-                f"Please load your current model with `use_cache={self.use_cache}` or export the original model "
-                f"once again with `use_cache={use_cache}` when calling the `from_pretrained` method. "
-                "To export your model, simply set `export=True`."
-            )
+            raise_error(self.use_cache, use_cache, 'use_cache')
+
 
     def update_pkv_precision(self, force_fp32=False):
-        if not self.use_cache:
+        if not self.use_cache or self.stateful:
             return
 
         pkv_precision = Type.f32
@@ -290,6 +309,10 @@ class OVBaseDecoderModel(OVModel):
             super().compile()
             self.request = self.request.create_infer_request()
 
+    def _make_stateful(self):
+        patch_stateful(self, self.model)
+        self.stateful = True
+
 
 @add_start_docstrings(
     """
@@ -319,49 +342,62 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
-        inputs = {}
 
         if self.use_cache and past_key_values is not None:
             input_ids = input_ids[:, -1:]
 
+        batch_size = input_ids.shape[0]
+        if self.config.model_type == "bloom":
+            batch_size *= self.normalized_config.num_attention_heads
+
         inputs = {}
         past_len = 0
-        if past_key_values is not None:
-            if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
-                past_len = past_key_values[0][1].shape[-2]
-                if self._pkv_precision == Type.bf16:
-                    # numpy does not support bf16, pretending f16, should change to bf16
-                    past_key_values = tuple(
-                        Tensor(past_key_value, past_key_value.shape, Type.bf16)
-                        for pkv_per_layer in past_key_values
-                        for past_key_value in pkv_per_layer
-                    )
+        if not self.stateful:
+            if past_key_values is not None:
+                if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
+                    past_len = past_key_values[0][1].shape[-2]
+                    if self._pkv_precision == Type.bf16:
+                        # numpy does not support bf16, pretending f16, should change to bf16
+                        past_key_values = tuple(
+                            Tensor(past_key_value, past_key_value.shape, Type.bf16)
+                            for pkv_per_layer in past_key_values
+                            for past_key_value in pkv_per_layer
+                        )
+                    else:
+                        # Flatten the past_key_values
+                        past_key_values = tuple(
+                            past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
+                        )
                 else:
-                    # Flatten the past_key_values
-                    past_key_values = tuple(
-                        past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
-                    )
-            else:
-                past_len = past_key_values[0].shape[-2]
+                    past_len = past_key_values[0].shape[-2]
 
-            # Add the past_key_values to the decoder inputs
-            inputs = dict(zip(self.key_value_input_names, past_key_values))
+                # Add the past_key_values to the decoder inputs
+                inputs = dict(zip(self.key_value_input_names, past_key_values))
 
-        # Create empty past_key_values for decoder_with_past first generation step
-        elif self.use_cache:
-            batch_size = input_ids.shape[0]
-            if self.config.model_type == "bloom":
-                batch_size *= self.normalized_config.num_attention_heads
-
-            for input_name in self.key_value_input_names:
-                model_inputs = self.model.input(input_name)
-                shape = model_inputs.get_partial_shape()
-                shape[0] = batch_size
-                if shape[2].is_dynamic:
-                    shape[2] = 0
-                else:
-                    shape[1] = 0
-                inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
+            # Create empty past_key_values for decoder_with_past first generation step
+            elif self.use_cache:
+                for input_name in self.key_value_input_names:
+                    model_inputs = self.model.input(input_name)
+                    shape = model_inputs.get_partial_shape()
+                    shape[0] = batch_size
+                    if shape[2].is_dynamic:
+                        shape[2] = 0
+                    else:
+                        shape[1] = 0
+                    inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
+        else:
+            # past_key_values are not used explicitly, instead they are handled inside the model
+            if past_key_values is None:
+                # Need a marker to differentiate the first generate iteration from the others in
+                # the first condition at the function beginning above.
+                # It should be something that is not None and it should be True when converted to Boolean.
+                past_key_values = ((),)
+                # This is the first iteration in a sequence, reset all states
+                for state in self.request.query_state():
+                    state.reset()
+                # Set initial value for the next beam_idx input that will be used at the current iteration
+                # and will be optionally updated by _reorder_cache at the next iterations if beam_search is used
+                self.next_beam_idx = np.array(range(batch_size), dtype=int)
 
         inputs["input_ids"] = np.array(input_ids)
         # Add the attention_mask inputs when needed
@@ -387,21 +423,25 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             inputs["position_ids"] = position_ids
 
+        if hasattr(self, 'next_beam_idx'):
+            inputs['beam_idx'] = self.next_beam_idx
+
         # Run inference
         self.request.start_async(inputs, shared_memory=True)
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
-        if self.use_cache:
-            # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
-            past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
-            if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
-                # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
-                past_key_values = tuple(
-                    past_key_values[i : i + self.num_pkv] for i in range(0, len(past_key_values), self.num_pkv)
-                )
-        else:
-            past_key_values = None
+        if not self.stateful:
+            if self.use_cache:
+                # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
+                past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+                if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
+                    # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
+                    past_key_values = tuple(
+                        past_key_values[i : i + self.num_pkv] for i in range(0, len(past_key_values), self.num_pkv)
+                    )
+            else:
+                past_key_values = None
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
@@ -428,18 +468,23 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         }
 
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
-    @staticmethod
     def _reorder_cache(
-        past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
     ) -> Tuple[Tuple[torch.Tensor]]:
         """
         This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
         [`~PreTrainedModel.beam_sample`] is called.
         This is required to match `past_key_values` with the correct beam_idx at every generation step.
         """
-        return tuple(
-            tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past) for layer_past in past_key_values
-        )
+        if self.stateful:
+            # TODO: Apply it differently based on model type
+            # TODO: At least for bloom we need to replicate values for each attention head
+            self.next_beam_idx = np.array(beam_idx)  # save beam_idx to be used as an input in the next iteration
+            return past_key_values
+        else:
+            return tuple(
+                tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past) for layer_past in past_key_values
+            )
 
     def can_generate(self):
         """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
@@ -522,15 +567,23 @@ class OVBloomForCausalLM(OVModelForCausalLM):
         [`~PreTrainedModel.beam_sample`] is called for bloom architecture.
         This is required to match `past_key_values` with the correct beam_idx at every generation step.
         """
-        standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
-        reordered_past = tuple(
-            (
-                np.take(layer_past[0], beam_idx, 0),
-                np.take(layer_past[1], beam_idx, 0),
+        if self.stateful:
+            beam_idx = np.array(beam_idx)
+            batch_size = beam_idx.shape[0]
+            indices = np.array(range(batch_size * self.normalized_config.num_attention_heads))
+            indices = indices.reshape([batch_size, self.normalized_config.num_attention_heads])
+            self.next_beam_idx = np.take(indices, beam_idx, 0).flatten()
+            return past_key_values
+        else:
+            standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
+            reordered_past = tuple(
+                (
+                    np.take(layer_past[0], beam_idx, 0),
+                    np.take(layer_past[1], beam_idx, 0),
+                )
+                for layer_past in standardized_past
             )
-            for layer_past in standardized_past
-        )
-        return self._convert_to_bloom_cache(reordered_past)
+            return self._convert_to_bloom_cache(reordered_past)
 
     # Copied from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_bloom_cache
     @staticmethod
@@ -602,8 +655,11 @@ class OVMPTForCausalLM(OVModelForCausalLM):
 
 class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
     # Adapted from transformers.models.gpt_bigcode.modeling_gpt_bigcode.GPTBigCodeForCausalLM._reorder_cache
-    @staticmethod
     def _reorder_cache(
-        past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
     ) -> Tuple[Tuple[torch.Tensor]]:
-        return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)
+        if self.stateful:
+            self.next_beam_idx = np.array(beam_idx)  # save beam_idx to be used as an input in the next iteration
+            return past_key_values
+        else:
+            return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)

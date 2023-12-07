@@ -30,6 +30,7 @@ from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_o
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
+from .stateful import patch_stateful
 
 from ...intel.utils.import_utils import is_nncf_available
 from .utils import (
@@ -362,6 +363,13 @@ def export_pytorch(
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
+
+        if "stateful" in model_kwargs and model_kwargs["stateful"]:
+            # Patching model according to stateful parameters
+            model.key_value_input_names = [name for name in input_names if name.startswith('past_key_values.')]
+            model.key_value_output_names = [name for name in output_names if name.startswith('present.')]
+            patch_stateful(model, ov_model)
+
         _save_model(ov_model, output, compress_to_fp16=fp16, load_in_8bit=int8)
         clear_class_registry()
         del model
