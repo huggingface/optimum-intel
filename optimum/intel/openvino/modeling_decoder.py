@@ -379,11 +379,15 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 for input_name in self.key_value_input_names:
                     model_inputs = self.model.input(input_name)
                     shape = model_inputs.get_partial_shape()
-                    shape[0] = batch_size
-                    if shape[2].is_dynamic:
-                        shape[2] = 0
+                    if self.config.model_type == 'chatglm':
+                        shape[0] = 0
+                        shape[1] = batch_size
                     else:
-                        shape[1] = 0
+                        shape[0] = batch_size
+                        if shape[2].is_dynamic:
+                            shape[2] = 0
+                        else:
+                            shape[1] = 0
                     inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
         else:
             # past_key_values are not used explicitly, instead they are handled inside the model
