@@ -165,12 +165,7 @@ class OVBaseDecoderModel(OVModel):
             self.compile()
 
         if use_cache ^ self.use_cache:
-<<<<<<< HEAD
             raise_error(self.use_cache, use_cache, "use_cache")
-=======
-            raise_error(self.use_cache, use_cache, 'use_cache')
-
->>>>>>> Stateful models support
 
     def update_pkv_precision(self, force_fp32=False):
         if not self.use_cache or self.stateful:
@@ -318,11 +313,7 @@ class OVBaseDecoderModel(OVModel):
             self.request = self.request.create_infer_request()
 
     def _make_stateful(self):
-<<<<<<< HEAD
         patch_stateful(self.config, self.model)
-=======
-        patch_stateful(self, self.model)
->>>>>>> Stateful models support
         self.stateful = True
 
 
@@ -380,7 +371,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                         past_key_values = tuple(
                             past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
                         )
-<<<<<<< HEAD
                 else:
                     past_len = past_key_values[0].shape[-2]
 
@@ -415,39 +405,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 else:
                     for state in self.request.query_state():
                         state.reset()
-=======
-                else:
-                    past_len = past_key_values[0].shape[-2]
-
-                # Add the past_key_values to the decoder inputs
-                inputs = dict(zip(self.key_value_input_names, past_key_values))
-
-            # Create empty past_key_values for decoder_with_past first generation step
-            elif self.use_cache:
-                for input_name in self.key_value_input_names:
-                    model_inputs = self.model.input(input_name)
-                    shape = model_inputs.get_partial_shape()
-                    if self.config.model_type == 'chatglm':
-                        shape[0] = 0
-                        shape[1] = batch_size
-                    else:
-                        shape[0] = batch_size
-                        if shape[2].is_dynamic:
-                            shape[2] = 0
-                        else:
-                            shape[1] = 0
-                    inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
-        else:
-            # past_key_values are not used explicitly, instead they are handled inside the model
-            if past_key_values is None:
-                # Need a marker to differentiate the first generate iteration from the others in
-                # the first condition at the function beginning above.
-                # It should be something that is not None and it should be True when converted to Boolean.
-                past_key_values = ((),)
-                # This is the first iteration in a sequence, reset all states
-                for state in self.request.query_state():
-                    state.reset()
->>>>>>> Stateful models support
                 # Set initial value for the next beam_idx input that will be used at the current iteration
                 # and will be optionally updated by _reorder_cache at the next iterations if beam_search is used
                 self.next_beam_idx = np.array(range(batch_size), dtype=int)
@@ -476,13 +433,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             inputs["position_ids"] = position_ids
 
-<<<<<<< HEAD
         if hasattr(self, "next_beam_idx"):
             inputs["beam_idx"] = self.next_beam_idx
-=======
-        if hasattr(self, 'next_beam_idx'):
-            inputs['beam_idx'] = self.next_beam_idx
->>>>>>> Stateful models support
 
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
