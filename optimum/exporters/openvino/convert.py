@@ -78,6 +78,7 @@ def export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     fp16: bool = False,
     int8: bool = False,
+    stateful: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -121,6 +122,7 @@ def export(
             model_kwargs=model_kwargs,
             fp16=fp16,
             int8=int8,
+            stateful=stateful,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -233,6 +235,7 @@ def export_pytorch(
     model_kwargs: Optional[Dict[str, Any]] = None,
     fp16: bool = False,
     int8: bool = False,
+    stateful: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -364,7 +367,7 @@ def export_pytorch(
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
 
-        if "stateful" in model_kwargs and model_kwargs["stateful"]:
+        if stateful:
             # Patching model according to stateful parameters
             model.key_value_input_names = [name for name in input_names if name.startswith('past_key_values.')]
             model.key_value_output_names = [name for name in output_names if name.startswith('present.')]
@@ -389,6 +392,7 @@ def export_models(
     model_kwargs: Optional[Dict[str, Any]] = None,
     fp16: bool = False,
     int8: bool = False,
+    stateful: bool = False,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -435,6 +439,7 @@ def export_models(
                 model_kwargs=model_kwargs,
                 fp16=fp16,
                 int8=int8,
+                stateful=stateful,
             )
         )
 
