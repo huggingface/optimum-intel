@@ -15,6 +15,7 @@
 
 import openvino as ov
 from openvino.runtime import opset13
+import numpy as np
 
 
 def model_has_name(ov_model: ov.Model, name: str):
@@ -62,12 +63,12 @@ def fuse_cache_reorder(ov_model: ov.Model, not_kv_inputs, key_value_input_names,
 def build_state_initializer(ov_model: ov.Model, batch_dim):
     """Build initialization ShapeOf Expression for all ReadValue ops"""
     input_ids = ov_model.input('input_ids')
-    batch = opset13.gather(opset13.shape_of(input_ids), opset13.constant([0]), opset13.constant(0))
+    batch = opset13.gather(opset13.shape_of(input_ids, output_type='i64'), opset13.constant([0]), opset13.constant(0))
     for op in ov_model.get_ops():
         if op.get_type_name() == 'ReadValue':
             dims = [dim.min_length for dim in list(op.get_output_partial_shape(0))]
             dims[batch_dim] = batch
-            dims = [opset13.constant([dim]) if type(dim) is int else dim for dim in dims]
+            dims = [opset13.constant(np.array([dim], dtype=np.int64)) if type(dim) is int else dim for dim in dims]
             shape = opset13.concat(dims, axis=0)
             broadcast = opset13.broadcast(opset13.constant(0.0, dtype=op.get_output_element_type(0)), shape)
             op.set_arguments([broadcast])
