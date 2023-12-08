@@ -103,6 +103,7 @@ def export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
+    stateful: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -151,6 +152,7 @@ def export(
             compression_option=compression_option,
             compression_ratio=compression_ratio,
             model_kwargs=model_kwargs,
+            stateful=stateful,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -272,6 +274,7 @@ def export_pytorch(
     model_kwargs: Optional[Dict[str, Any]] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
+    stateful: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -413,7 +416,7 @@ def export_pytorch(
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
 
-        if "stateful" in model_kwargs and model_kwargs["stateful"]:
+        if stateful:
             # Patching model according to stateful parameters
             model.key_value_input_names = [name for name in input_names if name.startswith('past_key_values.')]
             model.key_value_output_names = [name for name in output_names if name.startswith('present.')]
@@ -438,6 +441,7 @@ def export_models(
     model_kwargs: Optional[Dict[str, Any]] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[int] = None,
+    stateful: bool = False,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -489,6 +493,7 @@ def export_models(
                 model_kwargs=model_kwargs,
                 compression_option=compression_option,
                 compression_ratio=compression_ratio,
+                stateful=stateful,
             )
         )
 
