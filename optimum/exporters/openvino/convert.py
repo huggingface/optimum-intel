@@ -31,7 +31,7 @@ from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflo
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
 
-from ...intel.utils.import_utils import is_nncf_available
+from ...intel.utils.import_utils import is_nncf_available, is_optimum_version
 from .utils import (
     OV_XML_FILE_NAME,
     clear_class_registry,
@@ -307,8 +307,10 @@ def export_pytorch(
             # model.config.torchscript = True can not be used for patching, because it overrides return_dict to Flase
             if custom_patcher or dict_inputs:
                 patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
-                # DecoderModelPatcher does not override model forward
-                if isinstance(patcher, DecoderModelPatcher) or patcher.orig_forward_name != "forward":
+                # DecoderModelPatcher does not override model forward in optimum < 1.15
+                if (
+                    isinstance(patcher, DecoderModelPatcher) and is_optimum_version("<", "1.15.0")
+                ) or patcher.orig_forward_name != "forward":
                     patch_model_forward = True
                     patched_forward = model.forward
                 else:
