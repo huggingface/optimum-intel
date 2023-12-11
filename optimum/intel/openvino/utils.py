@@ -16,12 +16,15 @@
 import json
 import os
 from glob import glob
+import logging
 
 import numpy as np
 from huggingface_hub import model_info
 from openvino.runtime import Type
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
+
+logger = logging.getLogger(__name__)
 
 OV_XML_FILE_NAME = "openvino_model.xml"
 OV_ENCODER_NAME = "openvino_encoder_model.xml"
@@ -123,3 +126,21 @@ def _is_timm_ov_dir(model_dir):
         if hf_hub_id and model_info(hf_hub_id).library_name == "timm":
             return True
     return False
+
+
+def param_to_string(parameters) -> str:
+    """Convert a list / tuple of parameters returned from IE to a string."""
+    if isinstance(parameters, (list, tuple)):
+        return ', '.join([str(x) for x in parameters])
+    else:
+        return str(parameters)
+    
+
+def print_compile_model_properties(compile_model):
+    for property_key in compile_model.get_property('SUPPORTED_PROPERTIES'):
+        if property_key not in ('SUPPORTED_METRICS', 'SUPPORTED_CONFIG_KEYS', 'SUPPORTED_PROPERTIES'):
+            try:
+                property_val = compile_model.get_property(property_key)
+            except TypeError:
+                property_val = 'UNSUPPORTED TYPE'
+            logger.info(f'\t{property_key}: {param_to_string(property_val)}')
