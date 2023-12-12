@@ -20,7 +20,7 @@ import logging
 
 import numpy as np
 from huggingface_hub import model_info
-from openvino.runtime import Type
+from openvino.runtime import Type,properties
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 
@@ -128,19 +128,17 @@ def _is_timm_ov_dir(model_dir):
     return False
 
 
-def param_to_string(parameters) -> str:
-    """Convert a list / tuple of parameters returned from IE to a string."""
-    if isinstance(parameters, (list, tuple)):
-        return ', '.join([str(x) for x in parameters])
-    else:
-        return str(parameters)
-    
-
-def print_compile_model_properties(compile_model):
-    for property_key in compile_model.get_property('SUPPORTED_PROPERTIES'):
-        if property_key not in ('SUPPORTED_METRICS', 'SUPPORTED_CONFIG_KEYS', 'SUPPORTED_PROPERTIES'):
-            try:
-                property_val = compile_model.get_property(property_key)
-            except TypeError:
-                property_val = 'UNSUPPORTED TYPE'
-            logger.info(f'\t{property_key}: {param_to_string(property_val)}')
+def print_compiled_model_properties(compiled_model):
+    keys = compiled_model.get_property(properties.supported_properties())
+    for k in keys:
+        skip_keys = ('SUPPORTED_METRICS', 'SUPPORTED_CONFIG_KEYS', properties.supported_properties())
+        if k not in skip_keys:
+            value = compiled_model.get_property(k)
+            if k == properties.device.properties():
+                for device_key in value.keys():
+                    logger.info(f'  {device_key}:')
+                    for k2, value2 in value.get(device_key).items():
+                        if k2 not in skip_keys:
+                            logger.info(f'    {k2}: {value2}')
+            else:
+                logger.info(f'  {k}: {value}')
