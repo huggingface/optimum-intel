@@ -431,7 +431,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             inputs['beam_idx'] = self.next_beam_idx
 
         # Run inference
-        self.request.start_async(inputs, shared_inputs=True)
+        self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
 
