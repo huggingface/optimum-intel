@@ -260,7 +260,8 @@ class OVQuantizer(OptimumQuantizer):
         save_directory.mkdir(parents=True, exist_ok=True)
 
         if weights_only:
-            self.model.model = nncf.compress_weights(self.model.model)
+            model = nncf.compress_weights(self.model._original_model)
+            self.model.model = model
             self.model.save_pretrained(save_directory)
             return
 
