@@ -31,6 +31,7 @@ from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflo
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
 from .stateful import patch_stateful
+from .better_transformer_patch import patch_model_with_bettertransformer
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version
 from .better_transformer_patch import patch_model_with_bettertransformer
