@@ -347,10 +347,9 @@ class OVBaseModel(OptimizedModel):
                 logger.info(f"Setting OpenVINO CACHE_DIR to {str(cache_dir)}")
             self.request = core.compile_model(self.model, self._device, ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
-            if 'OPENVINO_LOG_LEVEL' in os.environ and int(os.environ['OPENVINO_LOG_LEVEL']) > 2:
-                logger.info(f'{self._device} SUPPORTED_PROPERTIES:')
+            if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
+                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
                 print_compiled_model_properties(self.request)
-
 
     def _reshape(
         self,
