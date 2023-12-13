@@ -92,6 +92,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "precision (by default 20% in INT8). This helps to achieve better accuracy after weight quantization."
         ),
     )
+    optional_group.add_argument(
+        "--stateful",
+        action="store_true",
+        help="Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs"
+    ),
 
 
 class OVExportCommand(BaseOptimumCLICommand):
@@ -138,6 +143,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             trust_remote_code=self.args.trust_remote_code,
             pad_token_id=self.args.pad_token_id,
             compression_option=self.args.weight_format,
-            compression_ratio=self.args.ratio
+            compression_ratio=self.args.ratio,
+            stateful=self.args.stateful,
             # **input_shapes,
         )
