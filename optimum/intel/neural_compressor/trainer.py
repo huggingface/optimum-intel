@@ -70,8 +70,7 @@ from transformers.utils import (
 from optimum.exporters import TasksManager
 
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
-from ..utils.import_utils import is_transformers_version, is_neural_compressor_version
-
+from ..utils.import_utils import is_neural_compressor_version, is_transformers_version
 from .configuration import INCConfig
 
 
