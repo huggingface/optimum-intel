@@ -27,9 +27,9 @@ from transformers import AutoConfig, AutoModelForSeq2SeqLM, Pix2StructForConditi
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 
-from .utils import print_compiled_model_properties
 from ..utils.import_utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
+from .utils import print_compiled_model_properties
 
 
 if is_transformers_version("<", "4.25.0"):
