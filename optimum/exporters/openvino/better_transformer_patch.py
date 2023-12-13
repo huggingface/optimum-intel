@@ -18,7 +18,11 @@ import types
 
 
 def patch_model_with_bettertransformer(model, model_config):
-    model = model.to_bettertransformer()
+    try:
+        model = model.to_bettertransformer()
+    except Exception as e:
+        print(f'[ WARNING ] Cannot apply model.to_bettertransformer because of the exception:\n{e}')
+        return model
 
     # for better transformers we need sequence lenght to be not 1 to make a correct trace
     # patch generate_dummy_inputs in the config
