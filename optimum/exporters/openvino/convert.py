@@ -31,6 +31,7 @@ from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflo
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
 from .stateful import patch_stateful
+from .better_transformer_patch import patch_model_with_bettertransformer
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version
 from .utils import (
@@ -305,6 +306,15 @@ def export_pytorch(
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
+
+    if stateful:
+        # Trigger bettertransformer together with stateful model because OpenVINO HW-dependent transformations expect
+        # both of them are applied to demonstrate the best performance.
+        # TODO: Consider applying bettertransformer regardless of stateful flag -- requires additional validation.
+        model = patch_model_with_bettertransformer(model, config)
+        # TODO: Consider unpatching model after export is done in the end of this function.
+        #       Now it is left as-is because the model is not expected to be used after call export_pytorch, and
+        #       this function is one of the _internal_ steps in a bigger model conversion pipeline.
 
     with torch.no_grad():
         model.config.torchscript = False
