@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+import os
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Dict, Optional, Tuple
@@ -26,6 +27,7 @@ from transformers import AutoConfig, AutoModelForSeq2SeqLM, Pix2StructForConditi
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 
+from .utils import print_compiled_model_properties
 from ..utils.import_utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 
@@ -407,6 +409,10 @@ class OVEncoder:
         if self.request is None:
             logger.info(f"Compiling the encoder to {self._device} ...")
             self.request = core.compile_model(self.model, self._device, self.ov_config)
+            # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
+            if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
+                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
+                print_compiled_model_properties(self.request)
 
 
 class OVDecoder:
@@ -505,7 +511,12 @@ class OVDecoder:
     def _compile(self):
         if self.request is None:
             logger.info(f"Compiling the decoder to {self._device} ...")
-            self.request = core.compile_model(self.model, self._device, self.ov_config).create_infer_request()
+            compiled_model = core.compile_model(self.model, self._device, self.ov_config)
+            self.request = compiled_model.create_infer_request()
+            # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
+            if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
+                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
+                print_compiled_model_properties(compiled_model)
 
 
 @add_start_docstrings(
