@@ -14,9 +14,9 @@
 
 
 import json
+import logging
 import os
 from glob import glob
-import logging
 
 import numpy as np
 from huggingface_hub import model_info
