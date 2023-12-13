@@ -65,6 +65,7 @@ def main_export(
     fn_get_submodels: Optional[Callable] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
+    stateful: Optional[bool] = None,
     **kwargs_shapes,
 ):
     """
@@ -373,6 +374,7 @@ def main_export(
         device=device,
         compression_option=compression_option,
         compression_ratio=compression_ratio,
+        stateful=stateful,
         model_kwargs=model_kwargs,
     )
 
