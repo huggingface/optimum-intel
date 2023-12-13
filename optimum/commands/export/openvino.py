@@ -70,6 +70,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
     )
     optional_group.add_argument("--fp16", action="store_true", help="Compress weights to fp16"),
     optional_group.add_argument("--int8", action="store_true", help="Compress weights to int8"),
+    optional_group.add_argument(
+        "--stateful",
+        action="store_true",
+        help="Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs"
+    ),
 
 
 class OVExportCommand(BaseOptimumCLICommand):
@@ -106,5 +111,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             pad_token_id=self.args.pad_token_id,
             fp16=self.args.fp16,
             int8=self.args.int8,
+            stateful=self.args.stateful,
             # **input_shapes,
         )

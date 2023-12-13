@@ -56,6 +56,7 @@ def main_export(
     custom_onnx_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
     int8: Optional[bool] = None,
+    stateful: Optional[bool] = None,
     **kwargs_shapes,
 ):
     """
@@ -350,6 +351,7 @@ def main_export(
         device=device,
         fp16=fp16,
         int8=int8,
+        stateful=stateful,
         model_kwargs=model_kwargs,
     )
 
