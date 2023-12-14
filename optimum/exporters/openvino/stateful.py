@@ -120,7 +120,7 @@ def make_stateful(
 
 
 def raise_if_openvino_is_too_old():
-    if is_openvino_version("<", "2023.3.0"):
+    if is_openvino_version("<=", "2023.2"):
         raise ValueError(f'Could not create or use stateful model when using old version of openvino=={ov.__version__}. Install openvino>=2023.3.0.')
 
 
