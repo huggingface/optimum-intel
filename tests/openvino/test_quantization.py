@@ -56,6 +56,7 @@ from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_
 _TASK_TO_DATASET = {
     "text-generation": ("wikitext", "wikitext-2-raw-v1", "text"),
     "text-classification": ("glue", "sst2", "sentence"),
+    "text2text-generation": ("wikitext", "wikitext-2-raw-v1", "text"),
 }
 
 
@@ -134,13 +135,63 @@ class OVQuantizerTest(unittest.TestCase):
 
             model = model_cls.from_pretrained(tmp_dir)
 
-            num_fake_quantize, num_int8 = get_num_quantized_nodes(model)
+            num_fake_quantize, num_int8 = get_num_quantized_nodes(model.model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
             self.assertEqual(expected_int8, num_int8)
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
+
+
+class OVQuantizerSeq2SeqTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("hf-internal-testing/tiny-random-t5", 30, 32, 52, 42),)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    def test_ovmodel_hybrid_quantization(
+        self,
+        model_name,
+        expected_encoder_fq,
+        expected_encoder_int8,
+        expected_decoder_int8,
+        expected_decoder_with_past_int8,
+    ):
+        task = OVModelForSeq2SeqLM.export_feature
+        dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
+
+        def preprocess_function(examples, tokenizer):
+            return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            transformers_model = OVModelForSeq2SeqLM.from_pretrained(model_name, export=True, use_cache=True)
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
+            calibration_dataset = quantizer.get_calibration_dataset(
+                dataset_name,
+                dataset_config_name=dataset_config_name,
+                preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
+                num_samples=10,
+                dataset_split="train",
+            )
+            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
+            model = OVModelForSeq2SeqLM.from_pretrained(tmp_dir, use_cache=True)
+
+            num_fake_quantize, num_int8 = get_num_quantized_nodes(model.encoder.model)
+            self.assertEqual(expected_encoder_fq, num_fake_quantize)
+            self.assertEqual(expected_encoder_int8, num_int8)
+
+            _, num_int8 = get_num_quantized_nodes(model.decoder.model)
+            self.assertEqual(expected_decoder_int8, num_int8)
+
+            if model.use_cache:
+                _, num_int8 = get_num_quantized_nodes(model.decoder_with_past.model)
+            self.assertEqual(expected_decoder_with_past_int8, num_int8)
+
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            outputs = model.generate(**tokens)
 
 
 class OVWeightCompressionTest(unittest.TestCase):
@@ -178,7 +229,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir, weights_only=True)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8 = get_num_quantized_nodes(model)
+            _, num_int8 = get_num_quantized_nodes(model.model)
             self.assertEqual(expected_pt_int8, num_int8)
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
@@ -203,7 +254,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir, weights_only=True)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8 = get_num_quantized_nodes(model)
+            _, num_int8 = get_num_quantized_nodes(model.model)
             self.assertEqual(expected_ov_int8, num_int8)
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
@@ -224,7 +275,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         for i, model in enumerate(models):
-            _, num_int8 = get_num_quantized_nodes(model)
+            _, num_int8 = get_num_quantized_nodes(model.model)
             self.assertEqual(expected_ov_int8[i], num_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
@@ -240,7 +291,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             models = [model]
 
         for i, model in enumerate(models):
-            _, num_int8 = get_num_quantized_nodes(model)
+            _, num_int8 = get_num_quantized_nodes(model.model)
             self.assertEqual(0, num_int8)
 
 
@@ -351,7 +402,7 @@ class OVTrainerTest(unittest.TestCase):
             trainer.save_model()
 
             model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
-            num_fake_quantize, num_int8 = get_num_quantized_nodes(model)
+            num_fake_quantize, num_int8 = get_num_quantized_nodes(model.model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
             self.assertEqual(expected_int8, num_int8)
 

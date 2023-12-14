@@ -41,6 +41,7 @@ from ...exporters.openvino import export, export_pytorch_via_onnx
 from ..utils.constant import _TASK_ALIASES
 from .configuration import OVConfig
 from .modeling_base import OVBaseModel
+from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 from .modeling_decoder import OVBaseDecoderModel
 from .utils import (
     MAX_ONNX_OPSET,
@@ -176,7 +177,16 @@ class OVQuantizer(OptimumQuantizer):
                     "In case you only want to apply quantization on the weights, please set `weights_only=True`."
                 )
 
-        if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
+        if isinstance(self.model, OVBaseModelForSeq2SeqLM):
+            self._quantize_ovmodelforseq2seqlm(
+                calibration_dataset,
+                save_directory,
+                batch_size,
+                data_collator,
+                remove_unused_columns,
+                **kwargs,
+            )
+        elif isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
             self._quantize_ovcausallm(
                 calibration_dataset,
                 save_directory,
@@ -244,6 +254,42 @@ class OVQuantizer(OptimumQuantizer):
             **kwargs,
         )
         self.model.model = quantized_model
+        self.model.save_pretrained(save_directory)
+
+    def _quantize_ovmodelforseq2seqlm(
+        self,
+        calibration_dataset: Dataset,
+        save_directory: Union[str, Path],
+        batch_size: int = 1,
+        data_collator: Optional[DataCollator] = None,
+        remove_unused_columns: bool = True,
+        **kwargs,
+    ):
+        save_directory = Path(save_directory)
+        save_directory.mkdir(parents=True, exist_ok=True)
+
+        calibration_dataloader = self._get_calibration_dataloader(
+            calibration_dataset=calibration_dataset,
+            batch_size=batch_size,
+            remove_unused_columns=remove_unused_columns,
+            data_collator=data_collator,
+        )
+        quantization_dataset = nncf.Dataset(calibration_dataloader, lambda x: x)
+
+        # Full quantization of encoder
+        self.model.encoder_model = nncf.quantize(
+            self.model.encoder_model,
+            quantization_dataset,
+            model_type=nncf.ModelType.TRANSFORMER,
+            fast_bias_correction=kwargs.get("fast_bias_correction", True),
+            **kwargs,
+        )
+
+        # Compress weights of decoders for safity
+        self.model.decoder_model = nncf.compress_weights(self.model.decoder_model)
+        if self.model.use_cache:
+            self.model.decoder_with_past_model = nncf.compress_weights(self.model.decoder_with_past_model)
+
         self.model.save_pretrained(save_directory)
 
     def _quantize_ovcausallm(
