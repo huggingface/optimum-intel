@@ -68,6 +68,7 @@ MODEL_NAMES = {
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
     "segformer": "hf-internal-testing/tiny-random-SegformerModel",
+    "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
@@ -84,6 +85,7 @@ MODEL_NAMES = {
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
     "wav2vec2-hf": "hf-internal-testing/tiny-random-Wav2Vec2Model",
     "wav2vec2-conformer": "hf-internal-testing/tiny-random-wav2vec2-conformer",
+    "whisper": "openai/whisper-tiny.en",
     "xlm": "hf-internal-testing/tiny-random-xlm",
     "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
 }
