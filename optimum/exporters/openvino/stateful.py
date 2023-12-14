@@ -13,9 +13,11 @@
 #  limitations under the License.
 
 
+import numpy as np
+from packaging import version
 import openvino as ov
 from openvino.runtime import opset13
-import numpy as np
+from optimum.intel.utils.import_utils import is_openvino_version
 
 
 def model_has_name(ov_model: ov.Model, name: str):
@@ -116,7 +118,14 @@ def make_stateful(
     if num_beams_and_batch is None:
         build_state_initializer(ov_model, batch_dim)
 
+
+def raise_if_openvino_is_too_old():
+    if is_openvino_version("<", "2023.3.0"):
+        raise ValueError(f'Could not create or use stateful model when using old version of openvino=={ov.__version__}. Install openvino>=2023.3.0.')
+
+
 def patch_stateful(model, ov_model):
+    raise_if_openvino_is_too_old()
     not_kv_inputs = [input for input in ov_model.inputs if not any(name in model.key_value_input_names for name in input.get_names())]
 
     # By default, batch is the 0-th but chatglm uses 1-st dimension as batch

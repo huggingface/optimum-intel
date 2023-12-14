@@ -30,7 +30,7 @@ from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_o
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
-from .stateful import patch_stateful
+from .stateful import patch_stateful, raise_if_openvino_is_too_old
 from .better_transformer_patch import patch_model_with_bettertransformer
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version
@@ -355,6 +355,10 @@ def export_pytorch(
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
             if patch_model_forward:
                 model.forward = orig_forward
+            if stateful:
+                raise ValueError(
+                    'Making stateful models is not supported when exporting to ONNX as an intermediate step. '
+                    'Set stateful=False, or provide a model that can be converted to OpenVINO without fallback to ONNX conversion path.')
             return export_pytorch_via_onnx(
                 model, config, opset, output, device, input_shapes, model_kwargs, fp16=fp16, int8=int8
             )
@@ -428,6 +432,9 @@ def export_models(
     Returns:
         list of input_names and output_names from ONNX configuration
     """
+    if stateful:
+        # This will be checked anyway after the model conversion, but checking it earlier will save time for a user if not suitable version is used
+        raise_if_openvino_is_too_old()
     outputs = []
 
     if output_names is not None and len(output_names) != len(models_and_onnx_configs):
