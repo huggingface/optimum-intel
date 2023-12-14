@@ -75,7 +75,7 @@ MODEL_NAMES = {
     "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
-    "sew_d": "hf-internal-testing/tiny-random-SEWDModel",
+    "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",
     "swin": "hf-internal-testing/tiny-random-SwinModel",
     "t5": "hf-internal-testing/tiny-random-t5",
     "unispeech": "hf-internal-testing/tiny-random-unispeech",
