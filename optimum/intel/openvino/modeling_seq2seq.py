@@ -324,6 +324,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         decoder_input_ids: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.LongTensor] = None,
         encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         **kwargs,
@@ -338,6 +339,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
                 input_ids=decoder_input_ids,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
                 encoder_attention_mask=attention_mask,
+                decoder_attention_mask=decoder_attention_mask,
             )
         else:
             decoder_outputs = self.decoder_with_past(
@@ -345,6 +347,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
                 past_key_values=past_key_values,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
                 encoder_attention_mask=attention_mask,
+                decoder_attention_mask=decoder_attention_mask,
             )
 
         return Seq2SeqLMOutput(logits=decoder_outputs.logits, past_key_values=decoder_outputs.past_key_values)
@@ -636,7 +639,6 @@ class OVModelForPix2Struct(OVModelForSeq2SeqLM):
             decoder_attention_mask=decoder_attention_mask,
             encoder_outputs=encoder_outputs,
             past_key_values=past_key_values,
-            encoder_attention_mask=attention_mask,
             **kwargs,
         )
 
@@ -738,6 +740,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq):
     """
     Whisper implements its own generate() method.
     """
+
     auto_model_class = WhisperForConditionalGeneration
 
     @classmethod
