@@ -22,12 +22,8 @@ import numpy as np
 from packaging import version
 import openvino as ov
 from openvino.runtime import opset13
-<<<<<<< HEAD
 from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version
 from optimum.utils.normalized_config import NormalizedConfigManager
-=======
-from optimum.intel.utils.import_utils import is_openvino_version
->>>>>>> Raise if too old version of opevino is used ans stateful=True
 
 
 def model_has_state(ov_model: ov.Model):
