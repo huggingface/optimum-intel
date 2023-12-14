@@ -23,23 +23,21 @@ from transformers import AutoConfig, AutoTokenizer
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import __main__ as optimum_main
 from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
+from optimum.utils import DEFAULT_DUMMY_SHAPES
+from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
+
+from ...intel.utils.import_utils import is_nncf_available, is_optimum_version, is_transformers_version
+from .convert import export_models
 
 
-try:
+if is_optimum_version(">=", "1.16.0"):
     from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-except ImportError:
-    # Duplicated from https://github.com/huggingface/optimum/blob/main/optimum/exporters/onnx/constants.py
-    # until it is not part of package
+else:
+    # Copied from https://github.com/huggingface/optimum/blob/main/optimum/exporters/onnx/constants.py
     SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED = [
         "bart",
         "whisper",
     ]
-from optimum.utils import DEFAULT_DUMMY_SHAPES
-from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
-
-from ...intel.utils.import_utils import is_nncf_available, is_transformers_version
-from .convert import export_models
-
 
 OV_XML_FILE_NAME = "openvino_model.xml"
 

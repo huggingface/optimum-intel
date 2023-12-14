@@ -12,9 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import logging
 import copy
-from abc import ABCMeta
+import logging
 from pathlib import Path
 from tempfile import gettempdir
 from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
@@ -31,8 +30,8 @@ from transformers import (
     Pix2StructForConditionalGeneration,
     WhisperForConditionalGeneration,
 )
-from transformers.generation.logits_process import WhisperTimeStampLogitsProcessor
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
+from transformers.generation.logits_process import WhisperTimeStampLogitsProcessor
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from transformers.models.whisper.tokenization_whisper import TASK_IDS, TO_LANGUAGE_CODE
 
@@ -735,25 +734,11 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             return super()._from_pretrained(model_id, config, **kwargs)
 
 
-class MetaClassRemoveParentsAndReorder(ABCMeta):
-    def mro(cls):
-        """
-        Avoids inheritting from PreTrainedModel, nn.Module, ModuleUtilsMixin, PushToHubMixin,
-        and put GenerationMixin at the end of the MRO
-        """
-        top_inheritance_index = OVModelForSpeechSeq2Seq.__mro__.index(GenerationMixin)
-        return (
-            (cls,)
-            + OVModelForSpeechSeq2Seq.__mro__[:top_inheritance_index]
-            + (WhisperForConditionalGeneration,)
-            + OVModelForSpeechSeq2Seq.__mro__[top_inheritance_index:]
-        )
-
-
 class _OVModelForWhisper(OVModelForSpeechSeq2Seq):
     """
     Whisper implements its own generate() method.
     """
+    auto_model_class = WhisperForConditionalGeneration
 
     @classmethod
     def _from_pretrained(
