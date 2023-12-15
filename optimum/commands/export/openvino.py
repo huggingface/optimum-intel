@@ -117,7 +117,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             cache_dir=self.args.cache_dir,
             trust_remote_code=self.args.trust_remote_code,
             pad_token_id=self.args.pad_token_id,
-            compression_option=self.args.weights_format,
+            compression_option=self.args.weight_format,
             compression_ratio=self.args.ratio
             # **input_shapes,
         )
