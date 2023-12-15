@@ -134,7 +134,12 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_onnx/")
     ```
     """
-    if compression_option is not None and compression_option != "f16" and compression_option != "f32" and not is_nncf_available():
+    if (
+        compression_option is not None
+        and compression_option != "f16"
+        and compression_option != "f32"
+        and not is_nncf_available()
+    ):
         raise ImportError(
             f"Compression of the weights to {compression_option} requires nncf, please install it with `pip install nncf`"
         )
