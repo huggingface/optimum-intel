@@ -13,12 +13,16 @@
 # limitations under the License.
 """Defines the command line for the export with OpenVINO."""
 
+import logging
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from ...exporters import TasksManager
 from ..base import BaseOptimumCLICommand, CommandInfo
+
+
+logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
@@ -68,6 +72,8 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "This is needed by some models, for some tasks. If not provided, will attempt to use the tokenizer to guess it."
         ),
     )
+    optional_group.add_argument("--fp16", action="store_true", help="Compress weights to fp16")
+    optional_group.add_argument("--int8", action="store_true", help="Compress weights to int8")
     optional_group.add_argument(
         "--weight-format",
         type=str,
@@ -81,7 +87,10 @@ def parse_args_openvino(parser: "ArgumentParser"):
         "--ratio",
         type=float,
         default=0.8,
-        help="Compression ratio between primary and backup precision (only applicable to INT4 type).",
+        help=(
+            "Compression ratio between primary and backup precision. In the case of INT4, NNCF evaluates layer sensitivity and keeps the most impactful layers in INT8"
+            "precision (by default 20% in INT8). This helps to achieve better accuracy after weight quantization."
+        ),
     )
 
 
@@ -107,6 +116,17 @@ class OVExportCommand(BaseOptimumCLICommand):
 
     def run(self):
         from ...exporters.openvino.__main__ import main_export
+
+        if self.args.fp16:
+            logger.warning(
+                "`--fp16` option is deprecated and will be removed in a future version. Use `--weight-format` instead."
+            )
+            self.args.weight_format = "f16"
+        if self.args.int8:
+            logger.warning(
+                "`--int8` option is deprecated and will be removed in a future version. Use `--weight-format` instead."
+            )
+            self.args.weight_format = "i8"
 
         # TODO : add input shapes
         main_export(
