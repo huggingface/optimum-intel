@@ -55,7 +55,7 @@ if is_tf_available():
 
 
 def _save_model(model, path: str, compression_option: Optional[str] = None, compression_ratio: Optional[float] = None):
-    if compression_option is not None and compression_option != "f16":
+    if compression_option is not None and compression_option != "f16" and compression_option != "f32":
         if not is_nncf_available():
             raise ImportError(
                 "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"

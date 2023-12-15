@@ -69,20 +69,19 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
-        "-c",
-        "--compress-weights",
+        "--weight-format",
         type=str,
-        choices=["f16", "i8", "i4_sym_g128", "i4_asym_g128", "i4_sym_g64", "i4_asym_g64"],
+        choices=["f32", "f16", "i8", "i4_sym_g128", "i4_asym_g128", "i4_sym_g64", "i4_asym_g64"],
         default=None,
         help=(
-            "The weight compression option, e.g. f16 stands for float16 weights, i8 - INT8 weights, i4_* - for INT4 compressed weights."
+            "The weight format of the exporting model, e.g. f32 stands for float32 weights, f16 - for float16 weights, i8 - INT8 weights, i4_* - for INT4 compressed weights."
         ),
     )
     optional_group.add_argument(
         "--ratio",
         type=float,
         default=0.8,
-        help="Compression ratio between primary and backup precision (only relevant to INT4).",
+        help="Compression ratio between primary and backup precision (only applicable to INT4 type).",
     )
 
 
@@ -118,7 +117,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             cache_dir=self.args.cache_dir,
             trust_remote_code=self.args.trust_remote_code,
             pad_token_id=self.args.pad_token_id,
-            compression_option=self.args.compress_weights,
+            compression_option=self.args.weights_format,
             compression_ratio=self.args.ratio
             # **input_shapes,
         )

@@ -43,7 +43,7 @@ EXTRAS_REQUIRE = {
         "onnxruntime<1.15.0",
         "transformers>=4.33.0",
     ],
-    "openvino": ["openvino-nightly", "onnx", "onnxruntime", "transformers>=4.33.0"],
+    "openvino": ["openvino", "onnx", "onnxruntime", "transformers>=4.33.0"],
     "nncf": ["nncf @ git+https://github.com/openvinotoolkit/nncf.git"],
     "ipex": ["transformers<4.32.0", "intel-extension-for-pytorch", "onnx"],
     "diffusers": ["diffusers"],
