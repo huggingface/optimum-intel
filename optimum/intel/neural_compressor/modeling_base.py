@@ -164,7 +164,7 @@ class INCModel(OptimizedModel):
         if q_config is None:
             model = model_class.from_pretrained(model_save_dir)
         else:
-            init_contexts = [no_init_weights(_enable=True)]
+            init_contexts = [no_init_weights(_enable=False)]
             with ContextManagers(init_contexts):
                 model = model_class(config)
             try:

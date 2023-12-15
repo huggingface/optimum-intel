@@ -26,9 +26,18 @@ from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
-from ...intel.utils.import_utils import is_nncf_available
+from ...intel.utils.import_utils import is_nncf_available, is_optimum_version, is_transformers_version
 from .convert import export_models
 
+
+if is_optimum_version(">=", "1.16.0"):
+    from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
+else:
+    # Copied from https://github.com/huggingface/optimum/blob/main/optimum/exporters/onnx/constants.py
+    SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED = [
+        "bart",
+        "whisper",
+    ]
 
 OV_XML_FILE_NAME = "openvino_model.xml"
 
@@ -143,10 +152,12 @@ def main_export(
     do_gptq_patching = False
     try:
         config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
+        model_type = config.model_type.replace("_", "-")
         config_dict = config.to_dict()
         quantization_config = config_dict.get("quantization_config", None)
         do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
     except Exception:
+        model_type = None
         pass
 
     if do_gptq_patching:
@@ -195,6 +206,10 @@ def main_export(
                 f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
             )
 
+    loading_kwargs = {}
+    if is_transformers_version(">=", "4.36") and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED:
+        loading_kwargs["attn_implementation"] = "eager"
+
     model = TasksManager.get_model_from_task(
         task,
         model_name_or_path,
@@ -207,6 +222,7 @@ def main_export(
         trust_remote_code=trust_remote_code,
         framework=framework,
         device=device,
+        **loading_kwargs,
     )
 
     custom_architecture = False
