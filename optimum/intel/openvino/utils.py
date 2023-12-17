@@ -128,7 +128,7 @@ def _is_timm_ov_dir(model_dir):
     return False
 
 
-def print_compiled_model_properties(compiled_model):
+def _print_compiled_model_properties(compiled_model):
     properties = properties.supported_properties()
     skip_keys = {"SUPPORTED_METRICS", "SUPPORTED_CONFIG_KEYS", properties}
     keys = set(compiled_model.get_property(properties)) - skip_keys
