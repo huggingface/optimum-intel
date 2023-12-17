@@ -129,10 +129,10 @@ def _is_timm_ov_dir(model_dir):
 
 
 def print_compiled_model_properties(compiled_model):
-    keys = compiled_model.get_property(properties.supported_properties())
+    properties = properties.supported_properties()
+    skip_keys = {"SUPPORTED_METRICS", "SUPPORTED_CONFIG_KEYS", properties}
+    keys = set(compiled_model.get_property(properties)) - skip_keys
     for k in keys:
-        skip_keys = ("SUPPORTED_METRICS", "SUPPORTED_CONFIG_KEYS", properties.supported_properties())
-        if k not in skip_keys:
             value = compiled_model.get_property(k)
             if k == properties.device.properties():
                 for device_key in value.keys():
