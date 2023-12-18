@@ -51,11 +51,11 @@ from .utils import (
 
 
 COMPRESSION_OPTIONS = {
-    "i8": {"mode": nncf.CompressWeightsMode.INT8},
-    "i4_sym_g128": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128},
-    "i4_asym_g128": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 128},
-    "i4_sym_g64": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64},
-    "i4_asym_g64": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64},
+    "int8": {"mode": nncf.CompressWeightsMode.INT8},
+    "int4_sym_g128": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128},
+    "int4_asym_g128": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 128},
+    "int4_sym_g64": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64},
+    "int4_asym_g64": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64},
 }
 
 register_module(ignored_algorithms=[])(Conv1D)

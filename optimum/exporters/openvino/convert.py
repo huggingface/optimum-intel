@@ -55,7 +55,7 @@ if is_tf_available():
 
 
 def _save_model(model, path: str, compression_option: Optional[str] = None, compression_ratio: Optional[float] = None):
-    if compression_option is not None and compression_option != "f16" and compression_option != "f32":
+    if compression_option is not None and compression_option != "fp16" and compression_option != "fp32":
         if not is_nncf_available():
             raise ImportError(
                 "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
@@ -64,23 +64,23 @@ def _save_model(model, path: str, compression_option: Optional[str] = None, comp
         import nncf
 
         COMPRESSION_OPTIONS = {
-            "i8": {"mode": nncf.CompressWeightsMode.INT8},
-            "i4_sym_g128": {
+            "int8": {"mode": nncf.CompressWeightsMode.INT8},
+            "int4_sym_g128": {
                 "mode": nncf.CompressWeightsMode.INT4_SYM,
                 "group_size": 128,
                 "ratio": compression_ratio,
             },
-            "i4_asym_g128": {
+            "int4_asym_g128": {
                 "mode": nncf.CompressWeightsMode.INT4_ASYM,
                 "group_size": 128,
                 "ratio": compression_ratio,
             },
-            "i4_sym_g64": {
+            "int4_sym_g64": {
                 "mode": nncf.CompressWeightsMode.INT4_SYM,
                 "group_size": 64,
                 "ratio": compression_ratio,
             },
-            "i4_asym_g64": {
+            "int4_asym_g64": {
                 "mode": nncf.CompressWeightsMode.INT4_ASYM,
                 "group_size": 64,
                 "ratio": compression_ratio,
@@ -88,7 +88,7 @@ def _save_model(model, path: str, compression_option: Optional[str] = None, comp
         }
         model = nncf.compress_weights(model, **COMPRESSION_OPTIONS[compression_option])
 
-    compress_to_fp16 = compression_option == "f16"
+    compress_to_fp16 = compression_option == "fp16"
     save_model(model, path, compress_to_fp16)
 
 
@@ -119,8 +119,8 @@ def export(
             The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
             export on CUDA devices.
         compression_option (`Optional[str]`, defaults to `None`):
-            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `i4_sym_g128` - INT4 symmetric weights w/ group size 128, `i4_asym_g128` - as previous but asymmetric w/ zero-point,
-            `i4_sym_g64` - INT4 symmetric weights w/ group size 64, "i4_asym_g64" - as previous but asymmetric w/ zero-point.
+            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
+            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
         input_shapes (`Optional[Dict]`, defaults to `None`):
@@ -230,8 +230,8 @@ def export_pytorch_via_onnx(
         model_kwargs (optional[Dict[str, Any]], defaults to `None`):
             Additional kwargs for model export.
         compression_option (`Optional[str]`, defaults to `None`):
-            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `i4_sym_g128` - INT4 symmetric weights w/ group size 128, `i4_asym_g128` - as previous but asymmetric w/ zero-point,
-            `i4_sym_g64` - INT4 symmetric weights w/ group size 64, "i4_asym_g64" - as previous but asymmetric w/ zero-point.
+            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
+            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
 
@@ -445,8 +445,8 @@ def export_models(
         input_shapes (Optional[Dict], optional, Defaults to None):
             If specified, allows to use specific shapes for the example input provided to the exporter.
         compression_option (`Optional[str]`, defaults to `None`):
-            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `i4_sym_g128` - INT4 symmetric weights w/ group size 128, `i4_asym_g128` - as previous but asymmetric w/ zero-point,
-            `i4_sym_g64` - INT4 symmetric weights w/ group size 64, "i4_asym_g64" - as previous but asymmetric w/ zero-point.
+            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
+            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
         compression_ratio (`Optional[int]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
         model_kwargs (Optional[Dict[str, Any]], optional):

@@ -77,10 +77,10 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["f32", "f16", "i8", "i4_sym_g128", "i4_asym_g128", "i4_sym_g64", "i4_asym_g64"],
+        choices=["fp32", "fp16", "int8", "int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"],
         default=None,
         help=(
-            "The weight format of the exporting model, e.g. f32 stands for float32 weights, f16 - for float16 weights, i8 - INT8 weights, i4_* - for INT4 compressed weights."
+            "The weight format of the exporting model, e.g. f32 stands for float32 weights, f16 - for float16 weights, i8 - INT8 weights, int4_* - for INT4 compressed weights."
         ),
     )
     optional_group.add_argument(
@@ -121,12 +121,12 @@ class OVExportCommand(BaseOptimumCLICommand):
             logger.warning(
                 "`--fp16` option is deprecated and will be removed in a future version. Use `--weight-format` instead."
             )
-            self.args.weight_format = "f16"
+            self.args.weight_format = "fp16"
         if self.args.int8:
             logger.warning(
                 "`--int8` option is deprecated and will be removed in a future version. Use `--weight-format` instead."
             )
-            self.args.weight_format = "i8"
+            self.args.weight_format = "int8"
 
         # TODO : add input shapes
         main_export(

@@ -64,7 +64,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     SUPPORTED_4BIT_ARCHITECTURES = (("text-generation-with-past", "opt125m"),)
 
-    SUPPORTED_4BIT_OPTIONS = ["i4_sym_g128", "i4_asym_g128", "i4_sym_g64", "i4_asym_g64"]
+    SUPPORTED_4BIT_OPTIONS = ["int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"]
 
     TEST_4BIT_CONFIGURATONS = []
     for arch in SUPPORTED_4BIT_ARCHITECTURES:
@@ -102,7 +102,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_fp16(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --compress-weights f16 {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format fp16 {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -113,7 +113,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_int8(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --compress-weights i8 {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --weight-format int8 {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -139,7 +139,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_int4(self, task: str, model_type: str, option: str):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --compress-weights {option} {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --weight-format {option} {tmpdir}",
                 shell=True,
                 check=True,
             )

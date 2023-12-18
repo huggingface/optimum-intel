@@ -120,8 +120,8 @@ def main_export(
             Experimental usage: Override the default submodels that are used at the export. This is
             especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
         compression_option (`Optional[str]`, defaults to `None`):
-            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `i4_sym_g128` - INT4 symmetric weights w/ group size 128, `i4_asym_g128` - as previous but asymmetric w/ zero-point,
-            `i4_sym_g64` - INT4 symmetric weights w/ group size 64, "i4_asym_g64" - as previous but asymmetric w/ zero-point, `f32` - means no compression.
+            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
+            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point, `f32` - means no compression.
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
         **kwargs_shapes (`Dict`):
@@ -136,8 +136,8 @@ def main_export(
     """
     if (
         compression_option is not None
-        and compression_option != "f16"
-        and compression_option != "f32"
+        and compression_option != "fp16"
+        and compression_option != "fp32"
         and not is_nncf_available()
     ):
         raise ImportError(
@@ -297,7 +297,7 @@ def main_export(
         num_parameters = model.num_parameters() if not is_stable_diffusion else model.unet.num_parameters()
         if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
             if is_nncf_available():
-                compression_option = "i8"
+                compression_option = "int8"
                 logger.info("The model weights will be quantized to int8.")
             else:
                 logger.warning(
