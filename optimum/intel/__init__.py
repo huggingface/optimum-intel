@@ -99,6 +99,7 @@ else:
             "OVModelForPix2Struct",
             "OVModelForQuestionAnswering",
             "OVModelForSeq2SeqLM",
+            "OVModelForSpeechSeq2Seq",
             "OVModelForSequenceClassification",
             "OVModelForTokenClassification",
         ]
@@ -195,6 +196,7 @@ if TYPE_CHECKING:
             OVModelForQuestionAnswering,
             OVModelForSeq2SeqLM,
             OVModelForSequenceClassification,
+            OVModelForSpeechSeq2Seq,
             OVModelForTokenClassification,
         )
 

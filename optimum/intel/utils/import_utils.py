@@ -29,6 +29,7 @@ else:
 
 STR_OPERATION_TO_FUNC = {">": op.gt, ">=": op.ge, "==": op.eq, "!=": op.ne, "<=": op.le, "<": op.lt}
 
+_optimum_version = importlib_metadata.version("optimum")
 
 _transformers_available = importlib.util.find_spec("transformers") is not None
 _transformers_version = "N/A"
@@ -173,6 +174,10 @@ def is_transformers_version(operation: str, version: str):
     if not _transformers_available:
         return False
     return compare_versions(parse(_transformers_version), operation, version)
+
+
+def is_optimum_version(operation: str, version: str):
+    return compare_versions(parse(_optimum_version), operation, version)
 
 
 def is_neural_compressor_version(operation: str, version: str):

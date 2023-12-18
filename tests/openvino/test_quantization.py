@@ -146,8 +146,8 @@ class OVQuantizerTest(unittest.TestCase):
 class OVWeightCompressionTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_COMPRESSED_MATMULS = (
-        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 70, 35),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-BartForCausalLM", 27, 14),
+        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 70, 70),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 45, 44),
     )
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (

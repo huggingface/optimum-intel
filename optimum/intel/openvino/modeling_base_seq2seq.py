@@ -68,8 +68,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.ov_config = ov_config if ov_config is not None else {}
         self.preprocessors = kwargs.get("preprocessors", [])
 
-        if "GPU" in self._device:
-            raise ValueError("Support of dynamic shapes for GPU devices is not yet available.")
         if self.is_dynamic:
             encoder = self._reshape(encoder, -1, -1, is_decoder=False)
             decoder = self._reshape(decoder, -1, -1)
