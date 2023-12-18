@@ -150,7 +150,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 45, 44),
     )
 
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 82, 323),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 82, 295),)
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (
         (OVModelForCausalLM, "gpt2"),
@@ -227,7 +227,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(
                 save_directory=tmp_dir,
                 weights_only=True,
-                quantization_config=OVConfig(compression={"type": "i4_sym_g128", "ratio": 0.8}),
+                quantization_config=OVConfig(compression={"type": "int4_sym_g128", "ratio": 0.8}),
             )
             model = model_cls.from_pretrained(tmp_dir)
 
