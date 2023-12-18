@@ -51,6 +51,7 @@ MODEL_NAMES = {
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
+    "opt125m": "facebook/opt-125m",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "mistral": "echarlaix/tiny-random-mistral",
@@ -115,13 +116,19 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
 }
 
 
+_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (82, 295)}
+
+
 def get_num_quantized_nodes(ov_model):
     num_fake_quantize = 0
     num_int8 = 0
+    num_int4 = 0
     for elem in ov_model.model.get_ops():
         if "FakeQuantize" in elem.name:
             num_fake_quantize += 1
         for i in range(elem.get_output_size()):
             if "8" in elem.get_output_element_type(i).get_type_name():
                 num_int8 += 1
-    return num_fake_quantize, num_int8
+            if "4" in elem.get_output_element_type(i).get_type_name():
+                num_int4 += 1
+    return num_fake_quantize, num_int8, num_int4

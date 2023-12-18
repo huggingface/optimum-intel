@@ -50,6 +50,14 @@ from .utils import (
 )
 
 
+COMPRESSION_OPTIONS = {
+    "int8": {"mode": nncf.CompressWeightsMode.INT8},
+    "int4_sym_g128": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128},
+    "int4_asym_g128": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 128},
+    "int4_sym_g64": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64},
+    "int4_asym_g64": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64},
+}
+
 register_module(ignored_algorithms=[])(Conv1D)
 
 core = Core()
@@ -184,6 +192,7 @@ class OVQuantizer(OptimumQuantizer):
                 data_collator,
                 remove_unused_columns,
                 weights_only,
+                quantization_config,
                 **kwargs,
             )
         elif isinstance(self.model, OVBaseModel):
@@ -209,6 +218,14 @@ class OVQuantizer(OptimumQuantizer):
             )
         else:
             raise TypeError(f"Unsupported model type: {type(self.model)}")
+
+    def _get_compression_options(self, config: OVConfig):
+        options = {}
+        if config is not None and "type" in config.compression:
+            options = COMPRESSION_OPTIONS[config.compression["type"]]
+            if "ratio" in config.compression:
+                options["ratio"] = config.compression["ratio"]
+        return options
 
     def _quantize_ovbasemodel(
         self,
@@ -254,14 +271,15 @@ class OVQuantizer(OptimumQuantizer):
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         weights_only: bool = False,
+        quantization_config: OVConfig = None,
         **kwargs,
     ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
 
         if weights_only:
-            model = nncf.compress_weights(self.model._original_model)
-            self.model.model = model
+            options = self._get_compression_options(quantization_config)
+            self.model.model = nncf.compress_weights(self.model.model, **options)
             self.model.save_pretrained(save_directory)
             return
 
