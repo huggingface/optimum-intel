@@ -116,7 +116,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
 }
 
 
-_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (82, 323)}
+_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (82, 295)}
 
 
 def get_num_quantized_nodes(ov_model):
