@@ -55,7 +55,7 @@ from optimum.utils import (
 from ...exporters.openvino import main_export
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
-from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, print_compiled_model_properties
+from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, _print_compiled_model_properties
 
 
 core = Core()
@@ -543,7 +543,7 @@ class OVModelPart:
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self.device} SUPPORTED_PROPERTIES:")
-                print_compiled_model_properties(self.request)
+                _print_compiled_model_properties(self.request)
 
     @property
     def device(self):

@@ -29,7 +29,7 @@ from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
-from .utils import print_compiled_model_properties
+from .utils import _print_compiled_model_properties
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -412,7 +412,7 @@ class OVEncoder:
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                print_compiled_model_properties(self.request)
+                _print_compiled_model_properties(self.request)
 
 
 class OVDecoder:
@@ -516,7 +516,7 @@ class OVDecoder:
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                print_compiled_model_properties(compiled_model)
+                _print_compiled_model_properties(compiled_model)
 
 
 @add_start_docstrings(
