@@ -161,7 +161,7 @@ class INCModelingTest(unittest.TestCase):
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertTrue(
-            with_pkv_timer.elapsed / without_pkv_timer.elapsed > self.SPEEDUP_CACHE,
+            without_pkv_timer.elapsed / with_pkv_timer.elapsed > self.SPEEDUP_CACHE,
             f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
             f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
         )
