@@ -59,6 +59,7 @@ from ..utils.import_utils import (
     _ipex_version,
     _neural_compressor_version,
     is_intel_extension_for_transformers_available,
+    is_intel_extension_for_transformers_version,
     is_ipex_version,
     is_neural_compressor_version,
 )
@@ -79,7 +80,10 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 
 if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.llm.quantization.utils import convert_to_quantized_model
-    from intel_extension_for_transformers.transformers.utils.quantization_config import WeightOnlyQuantConfig
+    if is_intel_extension_for_transformers_version("<=", "1.2.2"):
+        from intel_extension_for_transformers.transformers.utils.quantization_config import WeightOnlyQuantConfig
+    else:
+        from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
 logger = logging.getLogger(__name__)
 
