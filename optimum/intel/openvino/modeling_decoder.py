@@ -549,7 +549,7 @@ class OVBloomForCausalLM(OVModelForCausalLM):
         use_cache = kwargs.get("use_cache", None)
 
         # only last token for input_ids if past is not None
-        if past_key_values:
+        if past_key_values and not self.stateful:
             # the cache may be in the stardard format (e.g. in contrastive search), convert to bloom's format if needed
             if past_key_values[0][0].shape[0] == input_ids.shape[0]:
                 past_key_values = self._convert_to_bloom_cache(past_key_values)
