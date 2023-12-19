@@ -18,6 +18,7 @@ from packaging import version
 import openvino as ov
 from openvino.runtime import opset13
 from optimum.intel.utils.import_utils import is_openvino_version
+from optimum.utils.normalized_config import NormalizedConfigManager
 
 
 def model_has_name(ov_model: ov.Model, name: str):
@@ -134,7 +135,8 @@ def patch_stateful(model, ov_model):
 
     fuse_cache_reorder(ov_model, not_kv_inputs, model.key_value_input_names, batch_dim)
 
-    num_attention_heads = model.normalized_config.num_attention_heads if model.config.model_type == 'bloom' else 1
+    normalized_config = NormalizedConfigManager.get_normalized_config_class(model.config.model_type)(model.config)
+    num_attention_heads = normalized_config.num_attention_heads if model.config.model_type == 'bloom' else 1
 
     make_stateful(
         ov_model,
