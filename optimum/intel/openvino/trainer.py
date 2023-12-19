@@ -637,6 +637,10 @@ class OVTrainer(Trainer):
                     if args.max_grad_norm is not None and args.max_grad_norm > 0:
                         # deepspeed does its own clipping
 
+                        if getattr(self, "do_grad_scaling", False):
+                            # AMP: gradients need unscaling
+                            self.scaler.unscale_(self.optimizer)
+
                         if is_sagemaker_mp_enabled() and args.fp16:
                             self.optimizer.clip_master_grads(args.max_grad_norm)
                         elif self.use_apex:
@@ -652,12 +656,20 @@ class OVTrainer(Trainer):
                             )
 
                     # Optimizer step
-                    self.optimizer.step()
-                    optimizer_was_run = not self.accelerator.optimizer_step_was_skipped
-                    if optimizer_was_run:
-                        # Delay optimizer scheduling until metrics are generated
-                        if not isinstance(self.lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                            self.lr_scheduler.step()
+                    optimizer_was_run = True
+                    if self.deepspeed:
+                        pass  # called outside the loop
+                    elif getattr(self, "do_grad_scaling", False):
+                        scale_before = self.scaler.get_scale()
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                        scale_after = self.scaler.get_scale()
+                        optimizer_was_run = scale_before <= scale_after
+                    else:
+                        self.optimizer.step()
+
+                    if optimizer_was_run and not self.deepspeed:
+                        self.lr_scheduler.step()
 
                     model.zero_grad()
                     self.state.global_step += 1

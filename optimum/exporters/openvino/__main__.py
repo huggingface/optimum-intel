@@ -26,9 +26,18 @@ from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
-from ...intel.utils.import_utils import is_nncf_available
+from ...intel.utils.import_utils import is_nncf_available, is_optimum_version, is_transformers_version
 from .convert import export_models
 
+
+if is_optimum_version(">=", "1.16.0"):
+    from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
+else:
+    # Copied from https://github.com/huggingface/optimum/blob/main/optimum/exporters/onnx/constants.py
+    SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED = [
+        "bart",
+        "whisper",
+    ]
 
 OV_XML_FILE_NAME = "openvino_model.xml"
 
@@ -42,7 +51,6 @@ def main_export(
     output: Union[str, Path],
     task: str = "auto",
     device: str = "cpu",
-    fp16: Optional[bool] = False,
     framework: Optional[str] = None,
     cache_dir: Optional[str] = None,
     trust_remote_code: bool = False,
@@ -55,7 +63,8 @@ def main_export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_onnx_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
-    int8: Optional[bool] = None,
+    compression_option: Optional[str] = None,
+    compression_ratio: Optional[float] = None,
     stateful: Optional[bool] = None,
     **kwargs_shapes,
 ):
@@ -77,8 +86,6 @@ def main_export(
             use `xxx-with-past` to export the model using past key values in the decoder.
         device (`str`, defaults to `"cpu"`):
             The device to use to do the export. Defaults to "cpu".
-        fp16 (`Optional[bool]`, defaults to `"False"`):
-            Use half precision during the export. PyTorch-only, requires `device="cuda"`.
         framework (`Optional[str]`, defaults to `None`):
             The framework to use for the ONNX export (`"pt"` or `"tf"`). If not provided, will attempt to automatically detect
             the framework for the checkpoint.
@@ -113,6 +120,11 @@ def main_export(
         fn_get_submodels (`Optional[Callable]`, defaults to `None`):
             Experimental usage: Override the default submodels that are used at the export. This is
             especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
+        compression_option (`Optional[str]`, defaults to `None`):
+            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
+            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point, `f32` - means no compression.
+        compression_ratio (`Optional[float]`, defaults to `None`):
+            Compression ratio between primary and backup precision (only relevant to INT4).
         **kwargs_shapes (`Dict`):
             Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
 
@@ -123,9 +135,14 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_onnx/")
     ```
     """
-    if int8 and not is_nncf_available():
+    if (
+        compression_option is not None
+        and compression_option != "fp16"
+        and compression_option != "fp32"
+        and not is_nncf_available()
+    ):
         raise ImportError(
-            "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
+            f"Compression of the weights to {compression_option} requires nncf, please install it with `pip install nncf`"
         )
 
     model_kwargs = model_kwargs or {}
@@ -141,10 +158,12 @@ def main_export(
     do_gptq_patching = False
     try:
         config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
+        model_type = config.model_type.replace("_", "-")
         config_dict = config.to_dict()
         quantization_config = config_dict.get("quantization_config", None)
         do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
     except Exception:
+        model_type = None
         pass
 
     if do_gptq_patching:
@@ -193,6 +212,10 @@ def main_export(
                 f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
             )
 
+    loading_kwargs = {}
+    if is_transformers_version(">=", "4.36") and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED:
+        loading_kwargs["attn_implementation"] = "eager"
+
     model = TasksManager.get_model_from_task(
         task,
         model_name_or_path,
@@ -205,6 +228,7 @@ def main_export(
         trust_remote_code=trust_remote_code,
         framework=framework,
         device=device,
+        **loading_kwargs,
     )
 
     custom_architecture = False
@@ -270,12 +294,11 @@ def main_export(
         legacy=False,
     )
 
-    if int8 is None:
-        int8 = False
+    if compression_option is None:
         num_parameters = model.num_parameters() if not is_stable_diffusion else model.unet.num_parameters()
         if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
             if is_nncf_available():
-                int8 = True
+                compression_option = "int8"
                 logger.info("The model weights will be quantized to int8.")
             else:
                 logger.warning(
@@ -349,8 +372,8 @@ def main_export(
         output_names=files_subpaths,
         input_shapes=input_shapes,
         device=device,
-        fp16=fp16,
-        int8=int8,
+        compression_option=compression_option,
+        compression_ratio=compression_ratio,
         stateful=stateful,
         model_kwargs=model_kwargs,
     )

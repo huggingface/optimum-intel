@@ -13,12 +13,16 @@
 # limitations under the License.
 """Defines the command line for the export with OpenVINO."""
 
+import logging
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from ...exporters import TasksManager
 from ..base import BaseOptimumCLICommand, CommandInfo
+
+
+logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
@@ -68,13 +72,31 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "This is needed by some models, for some tasks. If not provided, will attempt to use the tokenizer to guess it."
         ),
     )
-    optional_group.add_argument("--fp16", action="store_true", help="Compress weights to fp16"),
-    optional_group.add_argument("--int8", action="store_true", help="Compress weights to int8"),
+    optional_group.add_argument("--fp16", action="store_true", help="Compress weights to fp16")
+    optional_group.add_argument("--int8", action="store_true", help="Compress weights to int8")
+    optional_group.add_argument(
+        "--weight-format",
+        type=str,
+        choices=["fp32", "fp16", "int8", "int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"],
+        default=None,
+        help=(
+            "The weight format of the exporting model, e.g. f32 stands for float32 weights, f16 - for float16 weights, i8 - INT8 weights, int4_* - for INT4 compressed weights."
+        ),
+    )
+    optional_group.add_argument(
+        "--ratio",
+        type=float,
+        default=0.8,
+        help=(
+            "Compression ratio between primary and backup precision. In the case of INT4, NNCF evaluates layer sensitivity and keeps the most impactful layers in INT8"
+            "precision (by default 20% in INT8). This helps to achieve better accuracy after weight quantization."
+        ),
+    )
     optional_group.add_argument(
         "--stateful",
         action="store_true",
         help="Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs"
-    ),
+    )
 
 
 class OVExportCommand(BaseOptimumCLICommand):
@@ -100,6 +122,17 @@ class OVExportCommand(BaseOptimumCLICommand):
     def run(self):
         from ...exporters.openvino.__main__ import main_export
 
+        if self.args.fp16:
+            logger.warning(
+                "`--fp16` option is deprecated and will be removed in a future version. Use `--weight-format` instead."
+            )
+            self.args.weight_format = "fp16"
+        if self.args.int8:
+            logger.warning(
+                "`--int8` option is deprecated and will be removed in a future version. Use `--weight-format` instead."
+            )
+            self.args.weight_format = "int8"
+
         # TODO : add input shapes
         main_export(
             model_name_or_path=self.args.model,
@@ -109,8 +142,8 @@ class OVExportCommand(BaseOptimumCLICommand):
             cache_dir=self.args.cache_dir,
             trust_remote_code=self.args.trust_remote_code,
             pad_token_id=self.args.pad_token_id,
-            fp16=self.args.fp16,
-            int8=self.args.int8,
+            compression_option=self.args.weight_format,
+            compression_ratio=self.args.ratio
             stateful=self.args.stateful,
             # **input_shapes,
         )

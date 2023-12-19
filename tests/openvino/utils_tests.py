@@ -51,6 +51,7 @@ MODEL_NAMES = {
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
+    "opt125m": "facebook/opt-125m",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "mistral": "echarlaix/tiny-random-mistral",
@@ -68,13 +69,14 @@ MODEL_NAMES = {
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
     "segformer": "hf-internal-testing/tiny-random-SegformerModel",
+    "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
-    "sew_d": "hf-internal-testing/tiny-random-SEWDModel",
+    "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",
     "swin": "hf-internal-testing/tiny-random-SwinModel",
     "t5": "hf-internal-testing/tiny-random-t5",
     "unispeech": "hf-internal-testing/tiny-random-unispeech",
@@ -84,6 +86,7 @@ MODEL_NAMES = {
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
     "wav2vec2-hf": "hf-internal-testing/tiny-random-Wav2Vec2Model",
     "wav2vec2-conformer": "hf-internal-testing/tiny-random-wav2vec2-conformer",
+    "whisper": "openai/whisper-tiny.en",
     "xlm": "hf-internal-testing/tiny-random-xlm",
     "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
 }
@@ -113,13 +116,19 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
 }
 
 
+_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (82, 295)}
+
+
 def get_num_quantized_nodes(ov_model):
     num_fake_quantize = 0
     num_int8 = 0
+    num_int4 = 0
     for elem in ov_model.model.get_ops():
         if "FakeQuantize" in elem.name:
             num_fake_quantize += 1
         for i in range(elem.get_output_size()):
             if "8" in elem.get_output_element_type(i).get_type_name():
                 num_int8 += 1
-    return num_fake_quantize, num_int8
+            if "4" in elem.get_output_element_type(i).get_type_name():
+                num_int4 += 1
+    return num_fake_quantize, num_int8, num_int4
