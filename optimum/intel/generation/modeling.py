@@ -266,12 +266,16 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         position_ids: Optional[torch.FloatTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
-        # 1. Check and mock model inputs
-        if "attention_mask" in self.input_names and attention_mask is None:
-            attention_mask = torch.ones_like(input_ids)
+        # 1. Prepare model inputs
+        inputs = {"input_ids": input_ids}
+
+        if "attention_mask" in self.input_names:
+            if attention_mask is None:
+                attention_mask = torch.ones_like(input_ids)
+            inputs["attention_mask"] = attention_mask
 
         model_type = self.config.model_type.replace("_", "-")
-        if self.use_cache:
+        if "past_key_values" in self.input_names and self.use_cache:
             if past_key_values is None:
                 nb_pkv = 2
                 num_layers = self.normalized_config.num_layers
@@ -300,9 +304,9 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
                     pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
                     past_key_values = tuple(tuple(pkv for _ in range(nb_pkv)) for _ in range(num_layers))
 
+            inputs["past_key_values"] = past_key_values
+
         if "position_ids" in self.input_names:
-            if attention_mask is None:
-                attention_mask = torch.ones_like(input_ids)
             if position_ids is None:
                 seq_length = input_ids.shape[-1]
                 if not self.use_cache:
@@ -317,19 +321,12 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
                     past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=self._device
                 ).unsqueeze(0)
 
-        # 2. Fill model inputs
-        inputs = {"input_ids": input_ids}
-        if "attention_mask" in self.input_names:
-            inputs["attention_mask"] = attention_mask
-        if "past_key_values" in self.input_names:
-            inputs["past_key_values"] = past_key_values
-        if "position_ids" in self.input_names:
             inputs["position_ids"] = position_ids
 
-        # 3. Model forward
+        # 2. Model forward
         outputs = self.model(**inputs)
 
-        # 4. Process model outputs
+        # 3. Process model outputs
         if isinstance(outputs, (list, tuple)):
             logits = outputs[0]
             past_key_values = outputs[1] if self.use_cache else None
