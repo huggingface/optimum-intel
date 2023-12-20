@@ -17,7 +17,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -26,7 +26,6 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
@@ -87,7 +86,7 @@ def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     traced_model(**model_inputs)
     traced_model(**model_inputs)
 
-    return traced_model
+    return traced_model, model_inputs.keys()
 
 
 class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
@@ -99,12 +98,14 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
     def __init__(
         self,
         model,
+        input_names: List[str],
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
         **kwargs,
     ):
         super(BaseModelForCausalLM, self).__init__(model=model, config=config)
+        self.input_names = input_names
         self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
         self.use_cache = use_cache
@@ -265,17 +266,11 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         position_ids: Optional[torch.FloatTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
-        if attention_mask is None:
+        # 1. Check and mock model inputs
+        if "attention_mask" in self.input_names and attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
 
-        inputs = {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-        }
-
         model_type = self.config.model_type.replace("_", "-")
-        has_position_ids = True if model_type in MODEL_TYPES_REQUIRING_POSITION_IDS else False
-
         if self.use_cache:
             if past_key_values is None:
                 nb_pkv = 2
@@ -305,29 +300,36 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
                     pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
                     past_key_values = tuple(tuple(pkv for _ in range(nb_pkv)) for _ in range(num_layers))
 
+        if "position_ids" in self.input_names:
+            if attention_mask is None:
+                attention_mask = torch.ones_like(input_ids)
+            if position_ids is None:
+                seq_length = input_ids.shape[-1]
+                if not self.use_cache:
+                    past_key_values_length = 0
+                else:
+                    past_key_values_length = (
+                        past_key_values[0].shape[-2]
+                        if model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS
+                        else past_key_values[0][1].shape[-2]
+                    )
+                position_ids = torch.arange(
+                    past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=self._device
+                ).unsqueeze(0)
+
+        # 2. Fill model inputs
+        inputs = {"input_ids": input_ids}
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+        if "past_key_values" in self.input_names:
             inputs["past_key_values"] = past_key_values
+        if "position_ids" in self.input_names:
+            inputs["position_ids"] = position_ids
 
-        if has_position_ids and position_ids is not None:
-            inputs.update({"position_ids": position_ids})
-        elif has_position_ids and position_ids is None:
-            seq_length = input_ids.shape[-1]
-            if not self.use_cache:
-                past_key_values_length = 0
-            else:
-                past_key_values_length = (
-                    past_key_values[0].shape[-2]
-                    if model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS
-                    else past_key_values[0][1].shape[-2]
-                )
-            position_ids = torch.arange(
-                past_key_values_length, seq_length + past_key_values_length, dtype=torch.long, device=self._device
-            ).unsqueeze(0)
-            inputs.update({"position_ids": position_ids})
-        elif not has_position_ids and position_ids is not None:
-            logger.warning("You miss the position_ids in the inputs")
-
+        # 3. Model forward
         outputs = self.model(**inputs)
 
+        # 4. Process model outputs
         if isinstance(outputs, (list, tuple)):
             logits = outputs[0]
             past_key_values = outputs[1] if self.use_cache else None
@@ -356,6 +358,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
+        input_names: List[str],
         config: PretrainedConfig,
         use_auth_token: Optional[Union[bool, str, None]] = None,
         revision: Optional[Union[str, None]] = None,
@@ -390,6 +393,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
 
         return cls(
             model,
+            input_names=input_names,
             config=config,
             model_save_dir=model_save_dir,
             use_cache=use_cache,
@@ -429,7 +433,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         model = patch_decoder_attention_mask(model)
 
-        traced_model = jit_trace(model, task, use_cache)
+        traced_model, input_names = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
@@ -437,6 +441,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
 
         return cls._from_pretrained(
             model_id=save_dir_path,
+            input_names=input_names,
             config=config,
             use_cache=use_cache,
             use_auth_token=use_auth_token,
