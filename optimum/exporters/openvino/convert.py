@@ -30,10 +30,10 @@ from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_o
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
-from .stateful import patch_stateful, raise_if_openvino_is_too_old
-from .better_transformer_patch import patch_model_with_bettertransformer
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version
+from .better_transformer_patch import patch_model_with_bettertransformer
+from .stateful import patch_stateful, raise_if_openvino_is_too_old
 from .utils import (
     OV_XML_FILE_NAME,
     clear_class_registry,
@@ -396,8 +396,9 @@ def export_pytorch(
                 model.forward = orig_forward
             if stateful:
                 raise ValueError(
-                    'Making stateful models is not supported when exporting to ONNX as an intermediate step. '
-                    'Set stateful=False, or provide a model that can be converted to OpenVINO without fallback to ONNX conversion path.')
+                    "Making stateful models is not supported when exporting to ONNX as an intermediate step. "
+                    "Set stateful=False, or provide a model that can be converted to OpenVINO without fallback to ONNX conversion path."
+                )
             return export_pytorch_via_onnx(
                 model,
                 config,
@@ -432,8 +433,8 @@ def export_pytorch(
 
         if stateful:
             # Patching model according to stateful parameters
-            model.key_value_input_names = [name for name in input_names if name.startswith('past_key_values.')]
-            model.key_value_output_names = [name for name in output_names if name.startswith('present.')]
+            model.key_value_input_names = [name for name in input_names if name.startswith("past_key_values.")]
+            model.key_value_output_names = [name for name in output_names if name.startswith("present.")]
             patch_stateful(model, ov_model)
 
         _save_model(ov_model, output, compression_option=compression_option, compression_ratio=compression_ratio)

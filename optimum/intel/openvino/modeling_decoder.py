@@ -29,12 +29,11 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from optimum.utils import NormalizedConfigManager
 
-from ...exporters.openvino import main_export
+from ...exporters.openvino import main_export, patch_stateful, raise_if_openvino_is_too_old
 from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
-from ...exporters.openvino import patch_stateful, raise_if_openvino_is_too_old
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -164,8 +163,7 @@ class OVBaseDecoderModel(OVModel):
             self.compile()
 
         if use_cache ^ self.use_cache:
-            raise_error(self.use_cache, use_cache, 'use_cache')
-
+            raise_error(self.use_cache, use_cache, "use_cache")
 
     def update_pkv_precision(self, force_fp32=False):
         if not self.use_cache or self.stateful:
@@ -313,7 +311,7 @@ class OVBaseDecoderModel(OVModel):
             self.request = self.request.create_infer_request()
 
     def _make_stateful(self):
-        patch_stateful(self, self.model)
+        patch_stateful(self.config, self.model)
         self.stateful = True
 
 
@@ -382,7 +380,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 for input_name in self.key_value_input_names:
                     model_inputs = self.model.input(input_name)
                     shape = model_inputs.get_partial_shape()
-                    if self.config.model_type == 'chatglm':
+                    if self.config.model_type == "chatglm":
                         shape[0] = 0
                         shape[1] = batch_size
                     else:
@@ -430,8 +428,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             inputs["position_ids"] = position_ids
 
-        if hasattr(self, 'next_beam_idx'):
-            inputs['beam_idx'] = self.next_beam_idx
+        if hasattr(self, "next_beam_idx"):
+            inputs["beam_idx"] = self.next_beam_idx
 
         # Run inference
         self.request.start_async(inputs, share_inputs=True)

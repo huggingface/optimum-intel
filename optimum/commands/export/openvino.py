@@ -95,8 +95,8 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--stateful",
         action="store_true",
-        help="Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs"
-    ),
+        help="Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs",
+    )
 
 
 class OVExportCommand(BaseOptimumCLICommand):
