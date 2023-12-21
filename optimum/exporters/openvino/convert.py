@@ -128,6 +128,8 @@ def export(
             Compression ratio between primary and backup precision (only relevant to INT4).
         input_shapes (`Optional[Dict]`, defaults to `None`):
             If specified, allows to use specific shapes for the example input provided to the exporter.
+         stateful (`Optional[bool]`):
+            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
 
     Returns:
         `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -238,6 +240,8 @@ def export_pytorch_via_onnx(
             `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
+        stateful (`Optional[bool]`):
+            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
 
     Returns:
         `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -296,6 +300,13 @@ def export_pytorch(
             If specified, allows to use specific shapes for the example input provided to the exporter.
         model_kwargs (optional[Dict[str, Any]], defaults to `None`):
             Additional kwargs for model export
+        compression_option (`Optional[str]`, defaults to `None`):
+            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
+            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
+        compression_ratio (`Optional[float]`, defaults to `None`):
+            Compression ratio between primary and backup precision (only relevant to INT4).
+        stateful (`Optional[bool]`):
+            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
 
     Returns:
         `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -475,6 +486,8 @@ def export_models(
             Compression ratio between primary and backup precision (only relevant to INT4).
         model_kwargs (Optional[Dict[str, Any]], optional):
             Additional kwargs for model export.
+        stateful (`Optional[bool]`)
+            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
 
     Raises:
         ValueError: if custom names set not equal of number of models
