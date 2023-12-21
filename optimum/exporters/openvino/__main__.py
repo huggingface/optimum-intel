@@ -125,6 +125,7 @@ def main_export(
             `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point, `f32` - means no compression.
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
+        stateful (`Optional[bool]`)  - Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
         **kwargs_shapes (`Dict`):
             Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
 

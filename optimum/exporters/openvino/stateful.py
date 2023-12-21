@@ -12,8 +12,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import logging as log
+from typing import List
 
 import numpy as np
+from transformers import PretrainedConfig
 
 import openvino as ov
 from openvino.runtime import opset13
@@ -22,29 +25,67 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 
 
 def model_has_input_output_name(ov_model: ov.Model, name: str):
+    """
+    Helper function for checking that model has specified input or output name
+
+    Parameters:
+      ov_model (ov.Model):   # TODO: Can we derive the dimensions from the model topology?
+      name (str):
+          name of input or output
+
+    Returns:
+      True if input or output with requested name exists else False
+    """
     return name in sum([list(t.get_names()) for t in ov_model.inputs + ov_model.outputs], [])
 
 
 def model_has_input(ov_model: ov.Model, name: str):
+    """
+    Helper function for checking that model has specified input name
+
+    Parameters:
+      ov_model (ov.Model):
+          opennvino model
+      name (str):
+          name of input
+
+    Returns:
+      True if input with requested name exists else False
+    """
     return name in sum([list(t.get_names()) for t in ov_model.inputs], [])
 
 
-def model_has_cache_reorder(ov_model):
+def model_has_cache_reorder(ov_model: ov.Model):
     return model_has_input(ov_model, "beam_idx")
 
 
-def model_has_state(ov_model):
+def model_has_state(ov_model: ov.Model):
     # TODO: Provide a better way based on the variables availability, but OV Python API doesn't expose required methods
     return len(ov_model.get_sinks()) > 0
 
 
-def fuse_cache_reorder(ov_model: ov.Model, not_kv_inputs, key_value_input_names, gather_dim: int):
-    """Adds a new beam_idx parameter and Gather op per each kv-cache input in a given model.
+def fuse_cache_reorder(
+    ov_model: ov.Model, not_kv_inputs: List[str], key_value_input_names: List[str], gather_dim: int
+):
+    """
+    Fuses reored_cache during generate cycle into ov.Model. Used with stateful models, because we can not modify model state directly.
+
+    Adds a new beam_idx parameter and Gather op per each kv-cache input in a given model.
     Should be run before make_stateful. Implements optimumum's _reorder_cache
     inside the model in the beginning of each iteration.
     Gather works along given gather_dim dimension that may vary from model to model.
     KV-cache inputs are identified based on names in key_value_input_names.
     Append the new beam_idx parameter to not_kv_inputs.
+
+    Parameters:
+      ov_model (`ov.Model`):
+          openvino model for processing
+      not_kv_inputs (`List[str]`):
+          list of input nodes in model that not related to past key values
+      key_value_input_names (`List[str]`):
+          list of names for key value input layers
+      gather_dim (int):
+          dimension for gathering cache during reorder pass
     """
 
     assert not model_has_input_output_name(ov_model, "beam_idx")
@@ -63,8 +104,16 @@ def fuse_cache_reorder(ov_model: ov.Model, not_kv_inputs, key_value_input_names,
     ov_model.validate_nodes_and_infer_types()
 
 
-def build_state_initializer(ov_model: ov.Model, batch_dim):
-    """Build initialization ShapeOf Expression for all ReadValue ops"""
+def build_state_initializer(ov_model: ov.Model, batch_dim: int):
+    """
+    Build initialization ShapeOf Expression for all ReadValue ops
+
+    Parameters:
+      ov_model (ov.Model):
+          openvino model
+      batch_dim (int):
+          index of dimension corresponding to batch size
+    """
     input_ids = ov_model.input("input_ids")
     batch = opset13.gather(opset13.shape_of(input_ids, output_type="i64"), opset13.constant([0]), opset13.constant(0))
     for op in ov_model.get_ops():
@@ -80,14 +129,32 @@ def build_state_initializer(ov_model: ov.Model, batch_dim):
 
 def make_stateful(
     ov_model: ov.Model,
-    not_kv_inputs,
-    key_value_input_names,
-    key_value_output_names,
-    batch_dim,
-    num_attention_heads,
-    num_beams_and_batch=None,
+    not_kv_inputs: List[str],
+    key_value_input_names: List[str],
+    key_value_output_names: List[str],
+    batch_dim: int,
+    num_attention_heads: int,
+    num_beams_and_batch: int = None,
 ):
-    """Hides kv-cache inputs and outputs inside the model as variables."""
+    """
+    Hides kv-cache inputs and outputs inside the model as variables.
+
+    Parameters:
+        ov_model (ov.Model):
+            openvino model
+        not_kv_inputs (`List[str]`):
+            list of input nodes in model that not related to past key values
+        key_value_input_names (`List[str]`):
+            list of names for key value input layers
+        key_value_output_names (`List[str]`):
+            list of names for key value input layers
+        batch_dim (int):
+            index of batch dimension in key value layers
+        num_attention_heads (int):
+            number of attention heads for batch dimension initialization
+        num_beams_an_batch (int):
+            precalculated number of beams and batch for shapes initialization
+    """
     from openvino._offline_transformations import apply_make_stateful_transformation
 
     input_output_map = {}
@@ -101,7 +168,7 @@ def make_stateful(
                 shape[0] = num_beams_and_batch
                 input.get_node().set_partial_shape(shape)
             else:
-                print(f"[ WARNING ] Rank of {input.get_any_name()} input of the model is not 2, batch size is not set")
+                log.warn(f"Rank of {input.get_any_name()} input of the model is not 2, batch size is not set")
 
     for kv_name_pair in zip(key_value_input_names, key_value_output_names):
         input_output_map[kv_name_pair[0]] = kv_name_pair[1]
@@ -121,13 +188,26 @@ def make_stateful(
 
 
 def raise_if_openvino_is_too_old():
+    """
+    Check openvino version and raise error if it does not support stateful models
+    """
     if is_openvino_version("<", "2023.3"):
         raise ValueError(
             f"Could not create or use stateful model when using old version of openvino=={_openvino_version}. Install openvino>=2023.3.0."
         )
 
 
-def patch_stateful(config, ov_model):
+def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
+    """
+    Apply make stateful transofrmation to model fo hiding key values inputs inside model.
+    Select transformation parameters based on model architecture
+
+    Parameters:
+        config (`PretrainedConfig`):
+            model pretrained config
+        ov_model (`ov.Model`):
+            openvino model
+    """
     raise_if_openvino_is_too_old()
 
     key_value_input_names = [
