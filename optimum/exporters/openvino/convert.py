@@ -311,7 +311,7 @@ def export_pytorch(
         # Trigger bettertransformer together with stateful model because OpenVINO HW-dependent transformations expect
         # both of them are applied to demonstrate the best performance.
         # TODO: Consider applying bettertransformer regardless of stateful flag -- requires additional validation.
-        model = patch_model_with_bettertransformer(model, config)
+        model = patch_model_with_bettertransformer(model)
         # TODO: Consider unpatching model after export is done in the end of this function.
         #       Now it is left as-is because the model is not expected to be used after call export_pytorch, and
         #       this function is one of the _internal_ steps in a bigger model conversion pipeline.
