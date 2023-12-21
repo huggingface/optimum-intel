@@ -17,7 +17,7 @@ import numpy as np
 
 import openvino as ov
 from openvino.runtime import opset13
-from optimum.intel.utils.import_utils import is_openvino_version
+from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version
 from optimum.utils.normalized_config import NormalizedConfigManager
 
 
@@ -121,9 +121,9 @@ def make_stateful(
 
 
 def raise_if_openvino_is_too_old():
-    if is_openvino_version("<=", "2023.2"):
+    if is_openvino_version("<", "2023.3"):
         raise ValueError(
-            f"Could not create or use stateful model when using old version of openvino=={ov.__version__}. Install openvino>=2023.3.0."
+            f"Could not create or use stateful model when using old version of openvino=={_openvino_version}. Install openvino>=2023.3.0."
         )
 
 
@@ -131,10 +131,10 @@ def patch_stateful(config, ov_model):
     raise_if_openvino_is_too_old()
 
     key_value_input_names = [
-        key.get_any_name() for key in ov_model.inputs if any("key_values" in key_name for key_name in key.names)
+        key.get_any_name() for key in ov_model.inputs if any("key_values" in key_name for key_name in key.get_names())
     ]
     key_value_output_names = [
-        key.get_any_name() for key in ov_model.output if any("present" in key_name for key_name in key.names)
+        key.get_any_name() for key in ov_model.outputs if any("present" in key_name for key_name in key.get_names())
     ]
     not_kv_inputs = [
         input for input in ov_model.inputs if not any(name in key_value_input_names for name in input.get_names())

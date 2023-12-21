@@ -432,10 +432,7 @@ def export_pytorch(
         ov_model.validate_nodes_and_infer_types()
 
         if stateful:
-            # Patching model according to stateful parameters
-            model.key_value_input_names = [name for name in input_names if name.startswith("past_key_values.")]
-            model.key_value_output_names = [name for name in output_names if name.startswith("present.")]
-            patch_stateful(model, ov_model)
+            patch_stateful(model.config, ov_model)
 
         _save_model(ov_model, output, compression_option=compression_option, compression_ratio=compression_ratio)
         clear_class_registry()
