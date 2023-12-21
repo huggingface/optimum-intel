@@ -80,6 +80,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
 )
 from optimum.utils.testing_utils import require_diffusers
+from optimum.intel.utils.import_utils import is_openvino_version
 
 
 TENSOR_ALIAS_TO_TYPE = {
@@ -487,6 +488,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "pegasus",
     )
     GENERATION_LENGTH = 100
+    IS_SUPPORT_STATEFUL = is_openvino_version(">=" , "2023.3")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -600,7 +602,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         attention_mask = tokens.pop("attention_mask")
         outs_without_attn_mask = model_with_cache(**tokens)
         self.assertTrue(torch.allclose(outs.logits, outs_without_attn_mask.logits))
-        input_ids = torch.argmax(outs.logits, dim=2)
+        input_ids = torch.argmax(outs.logits[:, -1:, :], dim=2)
         past_key_values = outs.past_key_values
         attention_mask = torch.ones((input_ids.shape[0], tokens.input_ids.shape[1] + 1), dtype=torch.long)
         outs_step2 = model_with_cache(
@@ -609,6 +611,53 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         outs_without_attn_mask_step2 = model_with_cache(input_ids=input_ids, past_key_values=past_key_values)
         self.assertTrue(torch.allclose(outs_step2.logits, outs_without_attn_mask_step2.logits))
         del model_with_cache
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
+    def test_stateful(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, stateful=True)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(ov_model.stateful)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer(
+            "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
+        )
+        position_ids = None
+        input_shape = tokens["input_ids"].shape
+        if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
+            position_ids = torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
+        ov_outputs = ov_model(**tokens, position_ids=position_ids)
+
+        self.assertTrue("logits" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        self.assertTrue("past_key_values" in ov_outputs)
+        self.assertIsInstance(ov_outputs.past_key_values, tuple)
+        self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        next_token = torch.argmax(ov_outputs.logits[..., -1:, :], dim=2)
+        attention_mask = torch.ones((input_shape[0], input_shape[1] + 1), dtype=torch.long)
+        if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
+            position_ids = position_ids[:, -1:] + 1
+        pkv = ov_outputs.past_key_values
+        ov_outputs = ov_model(input_ids=next_token, position_ids=position_ids, attention_mask=attention_mask, past_key_values=pkv)
+        self.assertTrue("logits" in ov_outputs)
+        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        self.assertTrue("past_key_values" in ov_outputs)
+        self.assertIsInstance(ov_outputs.past_key_values, tuple)
+        self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(input_ids=next_token, attention_mask=attention_mask, past_key_values=transformers_outputs.past_key_values)
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+        del transformers_model
+        del ov_model
         gc.collect()
 
 
