@@ -398,8 +398,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 # It should be something that is not None and it should be True when converted to Boolean.
                 past_key_values = ((),)
                 # This is the first iteration in a sequence, reset all states
-                for state in self.request.query_state():
-                    state.reset()
+                if hasattr(self.request, "reset_state"):
+                    self.request.reset_state()
+                else:
+                    for state in self.request.query_state():
+                        state.reset()
                 # Set initial value for the next beam_idx input that will be used at the current iteration
                 # and will be optionally updated by _reorder_cache at the next iterations if beam_search is used
                 self.next_beam_idx = np.array(range(batch_size), dtype=int)
