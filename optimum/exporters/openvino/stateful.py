@@ -24,6 +24,11 @@ from optimum.intel.utils.import_utils import _openvino_version, is_openvino_vers
 from optimum.utils.normalized_config import NormalizedConfigManager
 
 
+def model_has_state(ov_model: ov.Model):
+    # TODO: Provide a better way based on the variables availability, but OV Python API doesn't expose required methods
+    return len(ov_model.get_sinks()) > 0
+
+
 def model_has_input_output_name(ov_model: ov.Model, name: str):
     """
     Helper function for checking that model has specified input or output name
@@ -53,15 +58,6 @@ def model_has_input(ov_model: ov.Model, name: str):
       True if input with requested name exists else False
     """
     return name in sum([list(t.get_names()) for t in ov_model.inputs], [])
-
-
-def model_has_cache_reorder(ov_model: ov.Model):
-    return model_has_input(ov_model, "beam_idx")
-
-
-def model_has_state(ov_model: ov.Model):
-    # TODO: Provide a better way based on the variables availability, but OV Python API doesn't expose required methods
-    return len(ov_model.get_sinks()) > 0
 
 
 def fuse_cache_reorder(

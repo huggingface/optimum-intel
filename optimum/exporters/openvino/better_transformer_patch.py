@@ -14,12 +14,26 @@
 
 import logging as log
 
+from optimum.intel.utils.import_utils import is_torch_version
+
 
 def patch_model_with_bettertransformer(model):
+    if is_torch_version("<", "2.0"):
+        log.warn(
+            "integration Scaled Dot Product Attention optimization supported only with torch > 2.0."
+            "Usage model with stateful=True may be non-effective if model does not contain torch.functional.scaled_dot_product_attention"
+            "It is recommended to upgrade PyTorch version for using stateful model or use stateful=Flase"
+        )
+    # model already has required SDPA implementation
+    if getattr(model, "_supports_sdpa", False) and getattr(model.config, "_attn_implementation", "eager") == "sdpa":
+        return model
     try:
         model = model.to_bettertransformer()
     except Exception as e:
-        log.warn(f"Cannot apply model.to_bettertransformer because of the exception:\n{e}")
+        log.warn(
+            f"Cannot apply model.to_bettertransformer because of the exception:\n{e}."
+            " Usage model with stateful=True may be non-effective if model does not contain torch.functional.scaled_dot_product_attention"
+        )
         return model
 
     return model
