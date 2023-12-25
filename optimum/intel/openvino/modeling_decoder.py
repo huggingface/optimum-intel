@@ -30,6 +30,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from optimum.utils import NormalizedConfigManager
 
 from ...exporters.openvino import main_export, patch_stateful, raise_if_openvino_is_too_old
+from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
@@ -126,7 +127,7 @@ class OVBaseDecoderModel(OVModel):
         self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
         stateful = kwargs.pop("stateful", None)  # None means taking a model "as-is"
-        model_has_sinks = len(model.get_sinks()) > 0
+        model_has_sinks = model_has_state(self.model)
         self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs) or model_has_sinks
         self.stateful = model_has_sinks
         self.main_input_name = "input_ids"

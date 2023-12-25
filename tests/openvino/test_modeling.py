@@ -621,6 +621,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, stateful=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.stateful)
+        self.assertTrue(ov_model.use_cache)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer(
@@ -664,6 +665,52 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         del transformers_model
         del ov_model
+        gc.collect()
+
+    @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
+    def test_stateful_on_converted_model(self):
+        model_id = "vuiseng9/ov-gpt2-fp32-kv-cache"
+        # reference without state
+        loaded_model = OVModelForCausalLM.from_pretrained(model_id)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        self.assertFalse(loaded_model.stateful)
+        self.assertTrue(loaded_model.use_cache)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        loaded_model_outputs = loaded_model(**tokens)
+
+        # explicit stateful model specified during loading
+        loaded_stateful_model = OVModelForCausalLM.from_pretrained(model_id, stateful=True)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        self.assertTrue(loaded_model.stateful)
+        self.assertTrue(loaded_model.use_cache)
+        loaded_stateful_model_outputs = loaded_stateful_model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, loaded_stateful_model_outputs.logits))
+        self.assertTrue("past_key_values" in loaded_stateful_model_outputs)
+        self.assertIsInstance(loaded_stateful_model_outputs.past_key_values, tuple)
+        self.assertTrue(
+            len(loaded_stateful_model_outputs.past_key_values) == 1
+            and len(loaded_stateful_model_outputs.past_key_values[0]) == 0
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            loaded_stateful_model.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertTrue(OV_XML_FILE_NAME in folder_contents)
+            self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
+            # implicit load stateful model from disk
+            model = OVModelForCausalLM.from_pretrained(tmpdirname)
+            self.assertTrue(model.stateful)
+            self.assertTrue(model.use_cache)
+
+        outputs = model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+        self.assertTrue("past_key_values" in outputs)
+        self.assertIsInstance(outputs.past_key_values, tuple)
+        self.assertTrue(len(outputs.past_key_values) == 1 and len(outputs.past_key_values[0]) == 0)
+        del loaded_model
+        del loaded_stateful_model
+        del model
         gc.collect()
 
 
