@@ -302,7 +302,7 @@ class OVBaseModel(OptimizedModel):
         )
 
         config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(model_id=save_dir_path, config=config, load_in_8bit=load_in_8bit, **kwargs)
+        return cls._from_pretrained(model_id=save_dir_path, config=config, load_in_8bit=False, **kwargs)
 
     @classmethod
     def _to_load(

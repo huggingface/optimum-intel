@@ -249,7 +249,7 @@ class OVBaseDecoderModel(OVModel):
         config.is_encoder_decoder = False
         config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
-            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=load_in_8bit, **kwargs
+            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=False, **kwargs
         )
 
     def _reshape(

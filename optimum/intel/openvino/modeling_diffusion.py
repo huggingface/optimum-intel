@@ -325,7 +325,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             tokenizer_2=tokenizer_2,
             scheduler=scheduler,
             feature_extractor=feature_extractor,
-            load_in_8bit=load_in_8bit,
+            load_in_8bit=False,
             **kwargs,
         )
 
