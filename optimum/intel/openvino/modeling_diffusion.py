@@ -286,12 +286,16 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         tokenizer: Optional["CLIPTokenizer"] = None,
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
-        load_in_8bit: bool = False,
+        load_in_8bit: Optional[bool] = None,
         tokenizer_2: Optional["CLIPTokenizer"] = None,
         **kwargs,
     ):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
+
+        compression_option = None
+        if load_in_8bit is not None:
+            compression_option = "int8" if load_in_8bit else "fp32"
 
         main_export(
             model_name_or_path=model_id,
@@ -304,7 +308,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             use_auth_token=use_auth_token,
             local_files_only=local_files_only,
             force_download=force_download,
-            int8=load_in_8bit,
+            compression_option=compression_option,
         )
 
         return cls._from_pretrained(

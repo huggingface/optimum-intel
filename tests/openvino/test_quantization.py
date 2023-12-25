@@ -272,6 +272,38 @@ class OVWeightCompressionTest(unittest.TestCase):
             _, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(0, num_int8)
 
+    def test_ovmodel_load_large_model_with_default_compressed_weights(self):
+        with unittest.mock.patch("transformers.modeling_utils.ModuleUtilsMixin") as model_mixin_patch:
+            model_mixin_patch.num_parameters.return_value = 2e9
+            with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
+                with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
+                    _ = OVModelForCausalLM.from_pretrained(
+                        MODEL_NAMES["llama"], export=True, compile=False, use_cache=False
+                    )
+                    saving_params = {
+                        "model": unittest.mock.ANY,
+                        "path": unittest.mock.ANY,
+                        "compression_option": "int8",
+                        "compression_ratio": None,
+                    }
+                    save_model_patch.aasert_called_with(saving_params)
+
+    def test_ovmodel_load_large_model_with_uncompressed_weights(self):
+        with unittest.mock.patch("transformers.modeling_utils.ModuleUtilsMixin") as model_mixin_patch:
+            model_mixin_patch.num_parameters.return_value = 2e9
+            with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
+                with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
+                    _ = OVModelForCausalLM.from_pretrained(
+                        MODEL_NAMES["llama"], export=True, load_in_8bit=False, compile=False, use_cache=False
+                    )
+                    saving_params = {
+                        "model": unittest.mock.ANY,
+                        "path": unittest.mock.ANY,
+                        "compression_option": "fp32",
+                        "compression_ratio": None,
+                    }
+                    save_model_patch.aasert_called_with(saving_params)
+
 
 class OVQuantizerQATest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (("hf-internal-testing/tiny-random-BertForQuestionAnswering",),)

@@ -211,7 +211,7 @@ class OVBaseDecoderModel(OVModel):
         task: Optional[str] = None,
         use_cache: bool = True,
         trust_remote_code: bool = False,
-        load_in_8bit: bool = False,
+        load_in_8bit: Optional[bool] = None,
         **kwargs,
     ):
         if config.model_type.replace("_", "-") not in _SUPPORTED_ARCHITECTURES:
@@ -228,6 +228,9 @@ class OVBaseDecoderModel(OVModel):
             if use_cache:
                 task = task + "-with-past"
 
+        compression_option = None
+        if load_in_8bit is not None:
+            compression_option = "int8" if load_in_8bit else "fp32"
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -239,7 +242,7 @@ class OVBaseDecoderModel(OVModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            compression_option="int8" if load_in_8bit else None,
+            compression_option=compression_option,
         )
 
         config.is_decoder = True
