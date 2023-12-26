@@ -259,7 +259,7 @@ class OVBaseModel(OptimizedModel):
         local_files_only: bool = False,
         task: Optional[str] = None,
         trust_remote_code: bool = False,
-        load_in_8bit: bool = False,
+        load_in_8bit: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -283,6 +283,10 @@ class OVBaseModel(OptimizedModel):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
+        compression_option = None
+        if load_in_8bit is not None:
+            compression_option = "int8" if load_in_8bit else "fp32"
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -294,11 +298,11 @@ class OVBaseModel(OptimizedModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            int8=load_in_8bit,
+            compression_option=compression_option,
         )
 
         config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(model_id=save_dir_path, config=config, load_in_8bit=load_in_8bit, **kwargs)
+        return cls._from_pretrained(model_id=save_dir_path, config=config, load_in_8bit=False, **kwargs)
 
     @classmethod
     def _to_load(
