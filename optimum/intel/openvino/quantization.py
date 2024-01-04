@@ -313,9 +313,11 @@ class OVQuantizer(OptimumQuantizer):
                 inputs: Any = None,
                 userdata: Any = None,
                 share_inputs: bool = False,
+                *,
+                shared_memory: Any = None,
             ):
                 data_cache.append(inputs)
-                self.request.infer(inputs, share_inputs)
+                self.request.infer(inputs, share_inputs, share_outputs=True, shared_memory=shared_memory)
 
             def wait(self):
                 pass
