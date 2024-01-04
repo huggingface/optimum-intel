@@ -14,6 +14,7 @@
 
 import copy
 import logging
+import os
 from pathlib import Path
 from tempfile import gettempdir
 from typing import TYPE_CHECKING, Dict, Optional, Tuple, Union
@@ -37,6 +38,7 @@ from transformers.models.whisper.tokenization_whisper import TASK_IDS, TO_LANGUA
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
+from .utils import _print_compiled_model_properties
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -472,6 +474,10 @@ class OVEncoder:
         if self.request is None:
             logger.info(f"Compiling the encoder to {self._device} ...")
             self.request = core.compile_model(self.model, self._device, self.ov_config)
+            # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
+            if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
+                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
+                _print_compiled_model_properties(self.request)
 
 
 class OVDecoder:
@@ -570,7 +576,12 @@ class OVDecoder:
     def _compile(self):
         if self.request is None:
             logger.info(f"Compiling the decoder to {self._device} ...")
-            self.request = core.compile_model(self.model, self._device, self.ov_config).create_infer_request()
+            compiled_model = core.compile_model(self.model, self._device, self.ov_config)
+            self.request = compiled_model.create_infer_request()
+            # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
+            if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
+                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
+                _print_compiled_model_properties(compiled_model)
 
 
 @add_start_docstrings(
