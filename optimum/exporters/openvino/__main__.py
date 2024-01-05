@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, Optional, Union
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer
+from openvino import save_model
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import __main__ as optimum_main
@@ -44,6 +45,24 @@ OV_XML_FILE_NAME = "openvino_model.xml"
 _MAX_UNCOMPRESSED_SIZE = 1e9
 
 logger = logging.getLogger(__name__)
+
+
+def tokenizer_export(
+    tokenizer,
+    output: Union[str, Path],
+    suffix: Optional[str] = ""
+):
+    try:
+        from openvino_tokenizers import convert_tokenizer
+        ov_tokenizer, ov_detokenizer = convert_tokenizer(tokenizer, with_detokenizer=True)
+        if isinstance(output, str):
+            output = Path(output)
+        tokenizer_path = output.joinpath("openvino_tokenizer" + suffix + ".xml")
+        detokenizer_path = output.joinpath("openvino_detokenizer" + suffix + ".xml")
+        save_model(ov_tokenizer, tokenizer_path)
+        save_model(ov_detokenizer, detokenizer_path)
+    except Exception as exception:
+        print("[ WARNING ] OpenVINO tokenizer/detokenizer models couldn't be exported because of exception:", exception)
 
 
 def main_export(
@@ -328,6 +347,12 @@ def main_export(
         if generation_config is not None:
             generation_config.save_pretrained(output)
         maybe_save_preprocessors(model_name_or_path, output)
+        try:
+            # Avoid loding it for the second time if loaded before
+            tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+            tokenizer_export(tokenizer, output)
+        except:
+            print("[ WARNING ] Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer models won't be generated.")
 
         if model.config.is_encoder_decoder and task.startswith("text-generation"):
             raise ValueError(
@@ -358,10 +383,12 @@ def main_export(
         tokenizer = getattr(model, "tokenizer", None)
         if tokenizer is not None:
             tokenizer.save_pretrained(output.joinpath("tokenizer"))
+            tokenizer_export(tokenizer, output)
 
         tokenizer_2 = getattr(model, "tokenizer_2", None)
         if tokenizer_2 is not None:
             tokenizer_2.save_pretrained(output.joinpath("tokenizer_2"))
+            tokenizer_export(tokenizer, output, "_2")
 
         model.save_config(output)
 
