@@ -570,7 +570,7 @@ class OVModelTextEncoder(OVModelPart):
         inputs = {
             "input_ids": input_ids,
         }
-        outputs = self.request(inputs, shared_memory=True)
+        outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
 
 
@@ -604,7 +604,7 @@ class OVModelUnet(OVModelPart):
         if timestep_cond is not None:
             inputs["timestep_cond"] = timestep_cond
 
-        outputs = self.request(inputs, shared_memory=True)
+        outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
 
 
@@ -620,7 +620,7 @@ class OVModelVaeDecoder(OVModelPart):
         inputs = {
             "latent_sample": latent_sample,
         }
-        outputs = self.request(inputs, shared_memory=True)
+        outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
 
     def _compile(self):
@@ -641,7 +641,7 @@ class OVModelVaeEncoder(OVModelPart):
         inputs = {
             "sample": sample,
         }
-        outputs = self.request(inputs, shared_memory=True)
+        outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
 
     def _compile(self):
