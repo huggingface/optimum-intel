@@ -115,7 +115,7 @@ class inference_mode:
                                     use_cache = False
                                     if hasattr(self._original.config, "use_cache") and self._original.config.use_cache:
                                         use_cache = True
-                                    model, input_names = jit_trace(
+                                    model = jit_trace(
                                         model=model,
                                         task=self._model.task,
                                         use_cache=use_cache,
@@ -123,7 +123,6 @@ class inference_mode:
                                     if self._model.task == "text-generation":
                                         model = TSModelForCausalLM(
                                             model=model,
-                                            input_names=input_names,
                                             config=self._original.config,
                                             use_cache=use_cache,
                                             model_dtype=self._original.dtype,

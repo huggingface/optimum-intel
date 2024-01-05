@@ -17,7 +17,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -86,7 +86,7 @@ def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     traced_model(**model_inputs)
     traced_model(**model_inputs)
 
-    return traced_model, model_inputs.keys()
+    return traced_model
 
 
 class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
@@ -98,20 +98,21 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
     def __init__(
         self,
         model,
-        input_names: List[str],
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
         **kwargs,
     ):
         super(BaseModelForCausalLM, self).__init__(model=model, config=config)
-        self.input_names = input_names
         self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
         self.use_cache = use_cache
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
+        self.input_names = list(
+            map(lambda x: x.split(".")[0], [inputs.debugName() for inputs in model.graph.inputs()])
+        )
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
@@ -267,7 +268,11 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         # 1. Prepare model inputs
-        inputs = {"input_ids": input_ids}
+        inputs = {}
+        if "input_ids" in self.input_names:
+            if input_ids is None:
+                raise ValueError("input_ids is missing")
+            inputs["input_ids"] = input_ids
 
         if "attention_mask" in self.input_names:
             if attention_mask is None:
@@ -355,7 +360,6 @@ class TSModelForCausalLM(BaseModelForCausalLM):
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
-        input_names: List[str],
         config: PretrainedConfig,
         use_auth_token: Optional[Union[bool, str, None]] = None,
         revision: Optional[Union[str, None]] = None,
@@ -390,7 +394,6 @@ class TSModelForCausalLM(BaseModelForCausalLM):
 
         return cls(
             model,
-            input_names=input_names,
             config=config,
             model_save_dir=model_save_dir,
             use_cache=use_cache,
@@ -430,7 +433,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         model = patch_decoder_attention_mask(model)
 
-        traced_model, input_names = jit_trace(model, task, use_cache)
+        traced_model = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
@@ -438,7 +441,6 @@ class TSModelForCausalLM(BaseModelForCausalLM):
 
         return cls._from_pretrained(
             model_id=save_dir_path,
-            input_names=input_names,
             config=config,
             use_cache=use_cache,
             use_auth_token=use_auth_token,
