@@ -21,7 +21,8 @@ from typing import Optional, Tuple, Union
 
 import torch
 from huggingface_hub import hf_hub_download
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
+from transformers import AutoConfig, AutoModelForCausalLM, GenerationConfig, PretrainedConfig, PreTrainedModel
+from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
@@ -30,14 +31,8 @@ from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
 from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import is_torch_version, is_transformers_version
+from ..utils.import_utils import is_torch_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
-
-
-if is_transformers_version("<", "4.25.0"):
-    from transformers.generation_utils import GenerationMixin
-else:
-    from transformers.generation import GenerationMixin
 
 
 logger = logging.getLogger(__name__)
@@ -110,18 +105,15 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
-        self.input_names = (
-            [inputs.debugName().split(".")[0] for inputs in model.graph.inputs()]
-            if isinstance(model, torch.jit.RecursiveScriptModule)
-            else None
-        )
 
-        if is_transformers_version("<=", "4.25.1"):
-            self.generation_config = None
+        if isinstance(model, torch.jit.ScriptModule):
+            self.input_names = {
+                inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
+            }
         else:
-            from transformers import GenerationConfig
+            self.input_names = set()
 
-            self.generation_config = GenerationConfig.from_model_config(config)
+        self.generation_config = GenerationConfig.from_model_config(config)
 
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -156,7 +148,9 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
                 past_key_values = self._convert_to_bloom_cache(past_key_values)
 
         position_ids = kwargs.get("position_ids", None)
+
         attention_mask = kwargs.get("attention_mask", None)
+
         if attention_mask is not None and position_ids is None:
             # create position_ids on the fly for batch generation
             position_ids = attention_mask.long().cumsum(-1) - 1
@@ -270,76 +264,55 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         # 1. Prepare model inputs
-        if self.input_names is not None:
-            inputs = {}
-            if "input_ids" in self.input_names:
-                if input_ids is None:
-                    raise ValueError("input_ids is missing")
-                inputs["input_ids"] = input_ids
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
 
-            if "attention_mask" in self.input_names:
-                if attention_mask is None:
-                    attention_mask = torch.ones_like(input_ids)
-                inputs["attention_mask"] = attention_mask
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
 
-            model_type = self.config.model_type.replace("_", "-")
-            if "past_key_values" in self.input_names and self.use_cache:
-                if past_key_values is None:
-                    nb_pkv = 2
-                    num_layers = self.normalized_config.num_layers
-                    d_k = self.normalized_config.hidden_size // self.normalized_config.num_attention_heads
-                    batch_size = input_ids.shape[0]
+        if "position_ids" in self.input_names:
+            if position_ids is None:
+                position_ids = attention_mask.long().cumsum(-1) - 1
+                position_ids.masked_fill_(attention_mask == 0, 1)
+                if past_key_values:
+                    position_ids = position_ids[:, -1].unsqueeze(-1)
 
-                    if model_type in {"mistral", "llama"}:
-                        num_attention_heads = self.normalized_config.num_key_value_heads
-                    else:
-                        num_attention_heads = self.normalized_config.num_attention_heads
+            inputs["position_ids"] = position_ids
 
-                    if model_type == "bloom":
-                        shape_key = (batch_size * num_attention_heads, d_k, 0)
-                        shape_value = (batch_size * num_attention_heads, 0, d_k)
-                        key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)
-                        value = torch.empty(size=shape_value, dtype=self.model_dtype, device=self._device)
-                        past_key_values = tuple(
-                            tuple(key if idx % 2 == 0 else value for idx in range(nb_pkv)) for _ in range(num_layers)
-                        )
-                    elif model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS:
-                        shape = (batch_size, 0, d_k * 2)
-                        pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
-                        past_key_values = tuple(pkv for _ in range(num_layers))
-                    else:
-                        shape = (batch_size, num_attention_heads, 0, d_k)
-                        pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
-                        past_key_values = tuple(tuple(pkv for _ in range(nb_pkv)) for _ in range(num_layers))
+        model_type = self.config.model_type.replace("_", "-")
 
-                inputs["past_key_values"] = past_key_values
+        if self.use_cache:
+            if past_key_values is None:
+                nb_pkv = 2
+                num_layers = self.normalized_config.num_layers
+                d_k = self.normalized_config.hidden_size // self.normalized_config.num_attention_heads
+                batch_size = input_ids.shape[0]
 
-            if "position_ids" in self.input_names:
-                if position_ids is None:
-                    seq_length = input_ids.shape[-1]
-                    if not self.use_cache:
-                        past_key_values_length = 0
-                    else:
-                        past_key_values_length = (
-                            past_key_values[0].shape[-2]
-                            if model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS
-                            else past_key_values[0][1].shape[-2]
-                        )
-                    position_ids = torch.arange(
-                        past_key_values_length,
-                        seq_length + past_key_values_length,
-                        dtype=torch.long,
-                        device=self._device,
-                    ).unsqueeze(0)
+                if model_type in {"mistral", "llama"}:
+                    num_attention_heads = self.normalized_config.num_key_value_heads
+                else:
+                    num_attention_heads = self.normalized_config.num_attention_heads
 
-                inputs["position_ids"] = position_ids
-        else:
-            inputs = {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "past_key_values": past_key_values,
-                "position_ids": position_ids,
-            }
+                if model_type == "bloom":
+                    shape_key = (batch_size * num_attention_heads, d_k, 0)
+                    shape_value = (batch_size * num_attention_heads, 0, d_k)
+                    key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)
+                    value = torch.empty(size=shape_value, dtype=self.model_dtype, device=self._device)
+                    past_key_values = tuple(
+                        tuple(key if idx % 2 == 0 else value for idx in range(nb_pkv)) for _ in range(num_layers)
+                    )
+                elif model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS:
+                    shape = (batch_size, 0, d_k * 2)
+                    pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
+                    past_key_values = tuple(pkv for _ in range(num_layers))
+                else:
+                    shape = (batch_size, num_attention_heads, 0, d_k)
+                    pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
+                    past_key_values = tuple(tuple(pkv for _ in range(nb_pkv)) for _ in range(num_layers))
+
+            inputs["past_key_values"] = past_key_values
 
         # 2. Model forward
         outputs = self.model(**inputs)
