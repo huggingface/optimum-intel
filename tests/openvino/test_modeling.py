@@ -671,7 +671,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_stateful_on_converted_model(self):
         model_id = "vuiseng9/ov-gpt2-fp32-kv-cache"
         # reference without state
-        loaded_model = OVModelForCausalLM.from_pretrained(model_id)
+        loaded_model = OVModelForCausalLM.from_pretrained(model_id, stateful=False)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         self.assertFalse(loaded_model.stateful)
         self.assertTrue(loaded_model.use_cache)

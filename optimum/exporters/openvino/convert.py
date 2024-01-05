@@ -104,7 +104,7 @@ def export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
-    stateful: bool = False,
+    stateful: bool = True,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -128,7 +128,7 @@ def export(
             Compression ratio between primary and backup precision (only relevant to INT4).
         input_shapes (`Optional[Dict]`, defaults to `None`):
             If specified, allows to use specific shapes for the example input provided to the exporter.
-         stateful (`Optional[bool]`):
+        stateful (`Optional[bool]`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
 
     Returns:
@@ -240,8 +240,6 @@ def export_pytorch_via_onnx(
             `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
-        stateful (`Optional[bool]`):
-            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
 
     Returns:
         `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -279,7 +277,7 @@ def export_pytorch(
     model_kwargs: Optional[Dict[str, Any]] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
-    stateful: bool = False,
+    stateful: bool = True,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -305,7 +303,7 @@ def export_pytorch(
             `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
-        stateful (`Optional[bool]`):
+        stateful (`Optional[bool]`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
 
     Returns:
@@ -406,9 +404,11 @@ def export_pytorch(
             if patch_model_forward:
                 model.forward = orig_forward
             if stateful:
-                raise ValueError(
-                    "Making stateful models is not supported when exporting to ONNX as an intermediate step. "
-                    "Set stateful=False, or provide a model that can be converted to OpenVINO without fallback to ONNX conversion path."
+                # cannot raise because stateful is enabled by default and it would break backward compatibility for models that couldn't convert to OV directly
+                # TODO: Implement stateful for ONNX path as well, not doing it right now because of lack of validation
+                print(
+                    "[ WARNING ] Making stateful models is not supported when exporting to ONNX as an intermediate step. Stateless model will be exported instead. "
+                    "Provide a model that can be converted to OpenVINO without fallback to ONNX conversion path."
                 )
             return export_pytorch_via_onnx(
                 model,
@@ -464,7 +464,7 @@ def export_models(
     model_kwargs: Optional[Dict[str, Any]] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[int] = None,
-    stateful: bool = False,
+    stateful: bool = True,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -486,7 +486,7 @@ def export_models(
             Compression ratio between primary and backup precision (only relevant to INT4).
         model_kwargs (Optional[Dict[str, Any]], optional):
             Additional kwargs for model export.
-        stateful (`Optional[bool]`)
+        stateful (`Optional[bool]`, defaults to `True`)
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
 
     Raises:
