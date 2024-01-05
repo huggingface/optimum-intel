@@ -110,9 +110,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
-        self.input_names = list(
-            map(lambda x: x.split(".")[0], [inputs.debugName() for inputs in model.graph.inputs()])
-        )
+        self.input_names = [inputs.debugName().split(".")[0] for inputs in model.graph.inputs()]
 
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
