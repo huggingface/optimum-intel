@@ -348,7 +348,7 @@ def main_export(
             generation_config.save_pretrained(output)
         maybe_save_preprocessors(model_name_or_path, output)
         try:
-            # Avoid loding it for the second time if loaded before
+            # TODO: Avoid loading the tokenizer again if loaded before
             tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
             tokenizer_export(tokenizer, output)
         except:
