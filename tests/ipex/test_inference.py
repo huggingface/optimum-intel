@@ -41,6 +41,7 @@ MODEL_NAMES = {
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
+    "llama": "fxmarty/tiny-llama-fast-tokenizer",
 }
 
 _CLASSIFICATION_TASK_TO_AUTOMODELS = {
@@ -56,7 +57,7 @@ class IPEXIntegrationTest(unittest.TestCase):
         "roberta",
     )
 
-    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("gptj", "gpt2", "gpt_neo", "gpt_bigcode")
+    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("gptj", "gpt2", "gpt_neo", "gpt_bigcode", "llama", "bloom")
 
     QA_SUPPORTED_ARCHITECTURES = (
         "bert",
