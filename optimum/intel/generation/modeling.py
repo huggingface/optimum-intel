@@ -272,14 +272,14 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
             "attention_mask": attention_mask,
         }
 
-        if "position_ids" in self.input_names:
-            if position_ids is None:
-                position_ids = attention_mask.long().cumsum(-1) - 1
-                position_ids.masked_fill_(attention_mask == 0, 1)
-                if past_key_values:
-                    position_ids = position_ids[:, -1].unsqueeze(-1)
-
+        if "position_ids" in self.input_names and position_ids is None:
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values:
+                position_ids = position_ids[:, -1].unsqueeze(-1)
+        if position_ids is not None:
             inputs["position_ids"] = position_ids
+
 
         model_type = self.config.model_type.replace("_", "-")
 
