@@ -18,8 +18,6 @@ from typing import List
 import numpy as np
 from transformers import PretrainedConfig
 
-import numpy as np
-from packaging import version
 import openvino as ov
 from openvino.runtime import opset13
 from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version
