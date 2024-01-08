@@ -236,20 +236,11 @@ def pipeline(
     Examples:
 
     ```python
-    >>> from transformers import pipeline, AutoModelForTokenClassification, AutoTokenizer
+    >>> import torch
+    >>> from optimum.intel.pipelines import pipeline
 
-    >>> # Sentiment analysis pipeline
-    >>> analyzer = pipeline("sentiment-analysis")
-
-    >>> # Question answering pipeline, specifying the checkpoint identifier
-    >>> oracle = pipeline(
-    ...     "question-answering", model="distilbert-base-cased-distilled-squad", tokenizer="bert-base-cased"
-    ... )
-
-    >>> # Named entity recognition pipeline, passing in a specific model and tokenizer
-    >>> model = AutoModelForTokenClassification.from_pretrained("dbmdz/bert-large-cased-finetuned-conll03-english")
-    >>> tokenizer = AutoTokenizer.from_pretrained("bert-base-cased")
-    >>> recognizer = pipeline("ner", model=model, tokenizer=tokenizer)
+    >>> pipe = pipeline('text-generation', 'gpt2', torch_dtype=torch.bfloat16)
+    >>> pipe("Describe a real-world application of AI in sustainable energy.")
     ```"""
     if model_kwargs is None:
         model_kwargs = {}
