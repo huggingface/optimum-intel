@@ -277,7 +277,8 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
             position_ids.masked_fill_(attention_mask == 0, 1)
             if past_key_values:
                 position_ids = position_ids[:, -1].unsqueeze(-1)
-        if position_ids is not None:
+
+        if "position_ids" in self.input_names or not self.input_names:
             inputs["position_ids"] = position_ids
 
         model_type = self.config.model_type.replace("_", "-")
