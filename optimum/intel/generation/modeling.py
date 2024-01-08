@@ -280,7 +280,6 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         if position_ids is not None:
             inputs["position_ids"] = position_ids
 
-
         model_type = self.config.model_type.replace("_", "-")
 
         if self.use_cache:
