@@ -428,5 +428,6 @@ class TSModelForCausalLM(BaseModelForCausalLM):
             force_download=force_download,
             cache_dir=cache_dir,
             local_files_only=local_files_only,
+            model_dtype=torch_dtype,
             **kwargs,
         )
