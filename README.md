@@ -41,6 +41,46 @@ where `extras` can be one or more of `neural-compressor`, `openvino`, `nncf`.
 
 # Quick tour
 
+## IPEX
+### pipeline
+Hugging Face pipelines provide a simple yet powerful abstraction to quickly set up inference. If you already have a pipeline from transformers, you can unlock the performance benefits of Optimum-Intel by just changing one line.
+```diff
+import torch
+- from transformers.pipelines import pipeline
++ from optimum.intel.pipelines import pipeline
+
+pipe = pipeline('text-generation', 'gpt2', torch_dtype=torch.bfloat16)
+pipe("Describe a real-world application of AI in sustainable energy.")
+```
+
+### generate
+If you want control over advanced features like quantization and token selection strategies, we recommend using the generate() API. Just like with pipelines, switching from existing transformers code is super simple.
+```diff
+import torch
+from transformers import AutoTokenizer, AutoConfig
+- from transformers import AutoModelForCausalLM
++ from optimum.intel.generation.modeling import TSModelForCausalLM
+
+name = 'gpt2'
+config = AutoConfig.from_pretrained(name, trust_remote_code=True)
+
+model = TSModelForCausalLM.from_pretrained(
+  name,
+  config=config,
+  torch_dtype=torch.bfloat16,
+  export=True,
+)
+
+tokenizer = AutoTokenizer.from_pretrained(name)
+input_sentence = ["Answer the following yes/no question by reasoning step-by-step please. Can you write a whole Haiku in a single tweet?"]
+model_inputs = tokenizer(input_sentence, return_tensors="pt")
+generation_kwargs = dict(max_new_tokens=32, do_sample=False, num_beams=4, num_beam_groups=1, no_repeat_ngram_size=2, use_cache=True)
+
+generated_ids = model.generate(**model_inputs, **generation_kwargs)
+output = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+print(output)
+```
+
 ## Neural Compressor
 
 Dynamic quantization can be used through the Optimum command-line interface:

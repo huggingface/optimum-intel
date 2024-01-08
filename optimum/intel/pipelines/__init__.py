@@ -31,12 +31,17 @@ from transformers.utils import (
     HUGGINGFACE_CO_RESOLVE_ENDPOINT,
     cached_file,
     extract_commit_hash,
+    is_ipex_available,
     is_offline_mode,
     is_torch_available,
     logging,
 )
 
 from ..generation.modeling import TSModelForCausalLM
+
+
+if is_ipex_available():
+    import intel_extension_for_pytorch
 
 
 if is_torch_available():
