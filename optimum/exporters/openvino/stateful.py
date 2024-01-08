@@ -22,11 +22,7 @@ import numpy as np
 from packaging import version
 import openvino as ov
 from openvino.runtime import opset13
-<<<<<<< HEAD
 from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version
-=======
-from optimum.intel.utils.import_utils import is_openvino_version
->>>>>>> Fix for bloom family
 from optimum.utils.normalized_config import NormalizedConfigManager
 
 
@@ -228,14 +224,8 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
 
     fuse_cache_reorder(ov_model, not_kv_inputs, key_value_input_names, batch_dim)
 
-<<<<<<< HEAD
     normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
     num_attention_heads = normalized_config.num_attention_heads if config.model_type == "bloom" else 1
-=======
-    normalized_config = NormalizedConfigManager.get_normalized_config_class(model.config.model_type)(model.config)
-    num_attention_heads = normalized_config.num_attention_heads if model.config.model_type == 'bloom' else 1
->>>>>>> Fix for bloom family
-
     make_stateful(
         ov_model, not_kv_inputs, key_value_input_names, key_value_output_names, batch_dim, num_attention_heads, None
     )
