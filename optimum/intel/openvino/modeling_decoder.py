@@ -29,7 +29,7 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from optimum.utils import NormalizedConfigManager
 
-from ...exporters.openvino import main_export, patch_stateful, raise_if_openvino_is_too_old
+from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
@@ -143,7 +143,7 @@ class OVBaseDecoderModel(OVModel):
             self.model = self._reshape(self.model, -1, -1)
 
         if self.stateful or stateful:
-            raise_if_openvino_is_too_old()
+            ensure_stateful_is_available()
 
         def raise_error(model_prop, user_prop, name):
             raise ValueError(

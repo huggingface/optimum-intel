@@ -32,8 +32,8 @@ from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version
-from .better_transformer_patch import patch_model_with_bettertransformer
-from .stateful import patch_stateful, raise_if_openvino_is_too_old
+from .model_patcher import patch_model_with_bettertransformer
+from .stateful import ensure_stateful_is_available, patch_stateful
 from .utils import (
     OV_XML_FILE_NAME,
     clear_class_registry,
@@ -497,7 +497,7 @@ def export_models(
     """
     if stateful:
         # This will be checked anyway after the model conversion, but checking it earlier will save time for a user if not suitable version is used
-        raise_if_openvino_is_too_old()
+        ensure_stateful_is_available()
     outputs = []
 
     if output_names is not None and len(output_names) != len(models_and_onnx_configs):

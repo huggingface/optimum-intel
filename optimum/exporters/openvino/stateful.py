@@ -84,7 +84,8 @@ def fuse_cache_reorder(
           dimension for gathering cache during reorder pass
     """
 
-    assert not model_has_input_output_name(ov_model, "beam_idx")
+    if model_has_input_output_name(ov_model, "beam_idx"):
+        raise ValueError("Model already has fused cache")
     input_batch = ov_model.input("input_ids").get_partial_shape()[0]
     beam_idx = opset13.parameter(name="beam_idx", dtype=ov.Type.i32, shape=ov.PartialShape([input_batch]))
     beam_idx.output(0).get_tensor().add_names({"beam_idx"})  # why list is not accepted?
@@ -183,7 +184,7 @@ def make_stateful(
         build_state_initializer(ov_model, batch_dim)
 
 
-def raise_if_openvino_is_too_old():
+def ensure_stateful_is_available():
     """
     Check openvino version and raise error if it does not support stateful models
     """
@@ -195,7 +196,7 @@ def raise_if_openvino_is_too_old():
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     """
-    Apply make stateful transofrmation to model fo hiding key values inputs inside model.
+    Apply stateful transformation to model to hiding key values inputs inside model.
     Select transformation parameters based on model architecture
 
     Parameters:
@@ -204,7 +205,7 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
         ov_model (`ov.Model`):
             openvino model
     """
-    raise_if_openvino_is_too_old()
+    ensure_stateful_is_available()
 
     key_value_input_names = [
         key.get_any_name() for key in ov_model.inputs if any("key_values" in key_name for key_name in key.get_names())
