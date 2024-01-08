@@ -160,3 +160,15 @@ class ModelingIntegrationTest(unittest.TestCase):
             f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
             f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
         )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_input_names(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = TSModelForCausalLM.from_pretrained(model_id, export=True)
+        self.assertTrue(isinstance(model.input_names, set))
+        self.assertTrue("input_ids" in model.input_names)
+        self.assertTrue("attention_mask" in model.input_names)
+        if model.use_cache:
+            self.assertTrue("past_key_values" in model.input_names)
+        else:
+            self.assertTrue("past_key_values" not in model.input_names)
