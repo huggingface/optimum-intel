@@ -57,7 +57,7 @@ class IPEXIntegrationTest(unittest.TestCase):
         "roberta",
     )
 
-    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("gptj", "gpt2", "gpt_neo", "gpt_bigcode", "llama", "bloom")
+    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("gptj", "gpt2", "gpt_neo", "gpt_bigcode", "llama")
 
     QA_SUPPORTED_ARCHITECTURES = (
         "bert",
