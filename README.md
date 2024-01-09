@@ -49,7 +49,7 @@ import torch
 - from transformers.pipelines import pipeline
 + from optimum.intel.pipelines import pipeline
 
-pipe = pipeline('text-generation', 'gpt2', torch_dtype=torch.bfloat16)
+pipe = pipeline("text-generation", "gpt2", torch_dtype=torch.bfloat16)
 pipe("Describe a real-world application of AI in sustainable energy.")
 ```
 
@@ -61,17 +61,14 @@ from transformers import AutoTokenizer, AutoConfig
 - from transformers import AutoModelForCausalLM
 + from optimum.intel.generation.modeling import TSModelForCausalLM
 
-name = 'gpt2'
-config = AutoConfig.from_pretrained(name, trust_remote_code=True)
-
+config = AutoConfig.from_pretrained("gpt2")
 model = TSModelForCausalLM.from_pretrained(
-  name,
+  "gpt2",
   config=config,
   torch_dtype=torch.bfloat16,
   export=True,
 )
-
-tokenizer = AutoTokenizer.from_pretrained(name)
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
 input_sentence = ["Answer the following yes/no question by reasoning step-by-step please. Can you write a whole Haiku in a single tweet?"]
 model_inputs = tokenizer(input_sentence, return_tensors="pt")
 generation_kwargs = dict(max_new_tokens=32, do_sample=False, num_beams=4, num_beam_groups=1, no_repeat_ngram_size=2, use_cache=True)
