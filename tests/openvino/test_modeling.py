@@ -25,7 +25,6 @@ import timm
 import torch
 from datasets import load_dataset
 from evaluate import evaluator
-from openvino.runtime import get_version
 from parameterized import parameterized
 from PIL import Image
 from transformers import (
@@ -74,6 +73,7 @@ from optimum.intel import (
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
+from optimum.intel.utils.import_utils import is_openvino_version
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
@@ -128,7 +128,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID, ov_config=ov_config)
         self.assertTrue(manual_openvino_cache_dir.is_dir())
         self.assertGreaterEqual(len(list(manual_openvino_cache_dir.glob("*.blob"))), 1)
-        if get_version() < "2023.3":
+        if is_openvino_version("<", "2023.3"):
             self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
         else:
             self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
