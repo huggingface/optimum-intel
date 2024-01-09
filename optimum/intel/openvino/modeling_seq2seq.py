@@ -32,13 +32,13 @@ from transformers import (
     WhisperForConditionalGeneration,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
+from transformers.generation import GenerationMixin
 from transformers.generation.logits_process import WhisperTimeStampLogitsProcessor
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from transformers.models.whisper.tokenization_whisper import TASK_IDS, TO_LANGUAGE_CODE
 
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 from .utils import _print_compiled_model_properties
-from transformers.generation import GenerationMixin
 
 
 if TYPE_CHECKING:
