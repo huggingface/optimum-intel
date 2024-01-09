@@ -387,7 +387,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         )
 
     @classmethod
-    def _from_transformers(
+    def _export(
         cls,
         model_id: str,
         config: PretrainedConfig,
@@ -437,3 +437,9 @@ class TSModelForCausalLM(BaseModelForCausalLM):
             model_dtype=torch_dtype,
             **kwargs,
         )
+
+    @classmethod
+    def _from_transformers(cls, *args, **kwargs):
+        # TODO : add warning when from_pretrained_method is set to cls._export instead of cls._from_transformers when export=True
+        # logger.warning("The method `_from_transformers` is deprecated, please use `_export` instead")
+        return cls._export(*args, **kwargs)
