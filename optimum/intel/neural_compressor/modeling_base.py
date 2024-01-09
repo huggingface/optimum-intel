@@ -223,6 +223,7 @@ class INCModel(OptimizedModel):
     def _export(cls, *args, **kwargs):
         raise NotImplementedError(f"Export not supported for INC model {cls.__name__}")
 
+
 class INCModelForQuestionAnswering(INCModel):
     auto_model_class = AutoModelForQuestionAnswering
     export_feature = "question-answering"
