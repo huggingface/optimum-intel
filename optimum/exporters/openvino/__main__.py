@@ -41,6 +41,8 @@ else:
     ]
 
 OV_XML_FILE_NAME = "openvino_model.xml"
+OV_TOKENIZER_FILE_NAME = "openvino_tokenizer{}.xml"
+OV_DETOKENIZER_FILE_NAME = "openvino_detokenizer{}.xml"
 
 _MAX_UNCOMPRESSED_SIZE = 1e9
 
@@ -49,20 +51,33 @@ logger = logging.getLogger(__name__)
 
 def tokenizer_export(
     tokenizer,
-    output: Union[str, Path],
-    suffix: Optional[str] = ""
+    output_path: Union[str, Path],
+    suffix: Optional[str] = "",
 ):
+    from openvino.runtime.exceptions import OVTypeError
+
     try:
         from openvino_tokenizers import convert_tokenizer
-        ov_tokenizer, ov_detokenizer = convert_tokenizer(tokenizer, with_detokenizer=True)
-        if isinstance(output, str):
-            output = Path(output)
-        tokenizer_path = output.joinpath("openvino_tokenizer" + suffix + ".xml")
-        detokenizer_path = output.joinpath("openvino_detokenizer" + suffix + ".xml")
-        save_model(ov_tokenizer, tokenizer_path)
-        save_model(ov_detokenizer, detokenizer_path)
-    except Exception as exception:
-        print("[ WARNING ] OpenVINO tokenizer/detokenizer models couldn't be exported because of exception:", exception)
+    except ModuleNotFoundError:
+        logger.info("Run `pip install openvino-tokenizers` to get OpenVINO tokenizer/detokenizer models.")
+
+    if not isinstance(output_path, Path):
+        output_path = Path(output_path)
+
+    try:
+        converted = convert_tokenizer(tokenizer, with_detokenizer=True)
+    except NotImplementedError:
+        logger.info("Detokenizer is not supported, convert tokenizer only.")
+        converted = convert_tokenizer(tokenizer, with_detokenizer=False)
+    except OVTypeError:
+        logger.info("OpenVINO Tokenizer for this model is not supported.")
+        return
+
+    if not isinstance(converted, tuple):
+        converted = (converted,)
+
+    for model, file_name in zip(converted, (OV_TOKENIZER_FILE_NAME, OV_DETOKENIZER_FILE_NAME)):
+        save_model(model, output_path / file_name.format(suffix))
 
 
 def main_export(
@@ -351,8 +366,11 @@ def main_export(
             # TODO: Avoid loading the tokenizer again if loaded before
             tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
             tokenizer_export(tokenizer, output)
-        except:
-            print("[ WARNING ] Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer models won't be generated.")
+        except Exception as exception:
+            logger.warning(
+                "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer models won't "
+                f"be generated. Exception: {exception}"
+            )
 
         if model.config.is_encoder_decoder and task.startswith("text-generation"):
             raise ValueError(
@@ -388,7 +406,7 @@ def main_export(
         tokenizer_2 = getattr(model, "tokenizer_2", None)
         if tokenizer_2 is not None:
             tokenizer_2.save_pretrained(output.joinpath("tokenizer_2"))
-            tokenizer_export(tokenizer, output, "_2")
+            tokenizer_export(tokenizer, output, suffix="_2")
 
         model.save_config(output)
 

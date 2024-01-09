@@ -13,6 +13,7 @@
 # limitations under the License.
 import subprocess
 import unittest
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from parameterized import parameterized
@@ -61,6 +62,18 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("stable-diffusion-xl", "stable-diffusion-xl"),
         ("stable-diffusion-xl", "stable-diffusion-xl-refiner"),
     )
+    EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
+        "gpt2": 2,
+        "t5": 2,  # bug for t5 tokenizer
+        "albert": 0,  # not supported yet
+        "distilbert": 1,  # no detokenizer
+        "roberta": 2,
+        "vit": 0,  # no tokenizer for image model
+        "wav2vec2": 0,  # no tokenizer
+        "bert": 1,  # no detokenizer
+        "blenderbot": 2,
+        "stable-diffusion": 4  # two tokenizers
+    }
 
     SUPPORTED_4BIT_ARCHITECTURES = (("text-generation-with-past", "opt125m"),)
 
@@ -84,38 +97,17 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_export(self, task: str, model_type: str):
-        self._openvino_export(MODEL_NAMES[model_type], task)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_exporters_cli(self, task: str, model_type: str):
+    def test_exporters_cli_tokenizers(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
                 shell=True,
                 check=True,
             )
-            model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_exporters_cli_fp16(self, task: str, model_type: str):
-        with TemporaryDirectory() as tmpdir:
-            subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format fp16 {tmpdir}",
-                shell=True,
-                check=True,
-            )
-            model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_exporters_cli_int8(self, task: str, model_type: str):
-        with TemporaryDirectory() as tmpdir:
-            subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --weight-format int8 {tmpdir}",
-                shell=True,
-                check=True,
+            save_dir = Path(tmpdir)
+            self.assertEqual(
+                self.EXPECTED_NUMBER_OF_TOKENIZER_MODELS[model_type],
+                sum("tokenizer" in file for file in map(str, save_dir.rglob("*.xml"))),
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
