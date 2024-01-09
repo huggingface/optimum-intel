@@ -21,11 +21,10 @@ from typing import Dict, Optional, Union
 import openvino
 from huggingface_hub import hf_hub_download
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from transformers import PretrainedConfig
+from transformers import PretrainedConfig, GenerationConfig
 from transformers.file_utils import add_start_docstrings
 
 from ...exporters.openvino import main_export
-from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_DECODER_NAME,
@@ -75,13 +74,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.encoder_model = encoder
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
-
-        if is_transformers_version("<=", "4.25.1"):
-            self.generation_config = None
-        else:
-            from transformers import GenerationConfig
-
-            self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
+        self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """

@@ -36,15 +36,10 @@ from transformers.generation.logits_process import WhisperTimeStampLogitsProcess
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from transformers.models.whisper.tokenization_whisper import TASK_IDS, TO_LANGUAGE_CODE
 
-from ..utils.import_utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 from .utils import _print_compiled_model_properties
+from transformers.generation import GenerationMixin
 
-
-if is_transformers_version("<", "4.25.0"):
-    from transformers.generation_utils import GenerationMixin
-else:
-    from transformers.generation import GenerationMixin
 
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
