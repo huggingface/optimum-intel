@@ -480,7 +480,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        "marian",
+        # "marian", # TODO : enable it back with openvino 2023.3.0
         # "mistral",
         "mpt",
         "opt",
@@ -767,7 +767,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         "blenderbot-small",
         # "longt5",
         "m2m_100",
-        "marian",
+        # "marian", # TODO : enable it back with openvino 2023.3.0
         "mbart",
         "mt5",
         "pegasus",
