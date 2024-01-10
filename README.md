@@ -6,6 +6,8 @@
 
 🤗 Optimum Intel is the interface between the 🤗 Transformers and Diffusers libraries and the different tools and libraries provided by Intel to accelerate end-to-end pipelines on Intel architectures.
 
+[Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/#introduction) is an open-source library which provides optimizations for both eager mode and graph mode, however, compared to eager mode, graph mode in PyTorch* normally yields better performance from optimization techniques, such as operation fusion.
+
 Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) is an open-source library enabling the usage of the most popular compression techniques such as quantization, pruning and knowledge distillation. It supports automatic accuracy-driven tuning strategies in order for users to easily generate quantized model. The users can easily apply static, dynamic and aware-training quantization approaches while giving an expected accuracy criteria. It also supports different weight pruning techniques enabling the creation of pruned model giving a predefined sparsity target.
 
 [OpenVINO](https://docs.openvino.ai/latest/index.html) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators ([see](https://docs.openvino.ai/latest/openvino_docs_OV_UG_supported_plugins_Supported_Devices.html) the full list of supported devices). It is supplied with a set of tools to optimize your models with compression techniques such as quantization, pruning and knowledge distillation. Optimum Intel provides a simple interface to optimize your Transformers and Diffusers models, convert them to the OpenVINO Intermediate Representation (IR) format and run inference using OpenVINO Runtime.
@@ -17,6 +19,7 @@ To install the latest release of 🤗 Optimum Intel with the corresponding requi
 
 | Accelerator                                                                                                      | Installation                                                         |
 |:-----------------------------------------------------------------------------------------------------------------|:---------------------------------------------------------------------|
+| [Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/#introduction)                 | `pip install --upgrade-strategy eager "optimum[ipex]"`               |
 | [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `pip install --upgrade-strategy eager "optimum[neural-compressor]"`  |
 | [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `pip install --upgrade-strategy eager "optimum[openvino,nncf]"`      |
 
@@ -37,9 +40,29 @@ or to install from source including dependencies:
 python -m pip install "optimum-intel[extras]"@git+https://github.com/huggingface/optimum-intel.git
 ```
 
-where `extras` can be one or more of `neural-compressor`, `openvino`, `nncf`.
+where `extras` can be one or more of `ipex`, `neural-compressor`, `openvino`, `nncf`.
 
 # Quick tour
+
+## Intel Extension for PyTorch
+To load a model and run generation with IPEX graph mode, you can just replace your `AutoModelForXxx` class with the corresponding `IPEXModelForXxx` class.
+```diff
+import torch
+from transformers import AutoTokenizer, pipeline
+- from transformers import AutoModelForCausalLM
++ from optimum.intel.ipex.modeling_decoder import IPEXModelForCausalLM
+
+
+model_id = "gpt2"
+- model = AutoModelForCausalLM.from_pretrained(model_id)
++ model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=torch.bfloat16)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+text_generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
+
+print(text_generator("This is an example input"))
+```
+
+For now, we only support text-generation tasks.
 
 ## Neural Compressor
 
