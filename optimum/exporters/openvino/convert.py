@@ -19,6 +19,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from transformers import T5Tokenizer, T5TokenizerFast
 from transformers.utils import is_tf_available, is_torch_available
 
 from openvino.runtime import PartialShape, save_model
@@ -486,3 +487,50 @@ def export_models(
 
     outputs = list(map(list, zip(*outputs)))
     return outputs
+
+
+OV_TOKENIZER_FILE_NAME = "openvino_tokenizer{}.xml"
+OV_DETOKENIZER_FILE_NAME = "openvino_detokenizer{}.xml"
+UNSUPPORTED_TOKENZIER_CLASSES = (
+    T5Tokenizer,
+    T5TokenizerFast,
+)
+
+
+def export_tokenizer(
+    tokenizer,
+    output_path: Union[str, Path],
+    suffix: Optional[str] = "",
+):
+    from openvino.runtime.exceptions import OVTypeError
+
+
+    if isinstance(tokenizer, UNSUPPORTED_TOKENZIER_CLASSES):
+        logger.info("OpenVINO Tokenizer for this model is not supported.")
+        return
+
+    try:
+        from openvino_tokenizers import convert_tokenizer
+    except ModuleNotFoundError:
+        logger.info("Run `pip install openvino-tokenizers` to get OpenVINO tokenizer/detokenizer models.")
+
+    if not isinstance(output_path, Path):
+        output_path = Path(output_path)
+
+    try:
+        converted = convert_tokenizer(tokenizer, with_detokenizer=True)
+    except NotImplementedError:
+        logger.info("Detokenizer is not supported, convert tokenizer only.")
+        converted = convert_tokenizer(tokenizer, with_detokenizer=False)
+    except OVTypeError:
+        logger.info("OpenVINO Tokenizer for this model is not supported.")
+        return
+    except Exception as exception:
+        logger.warning(f"OpenVINO Tokenizer for this model is not supported. Exception: {exception}")
+        return
+
+    if not isinstance(converted, tuple):
+        converted = (converted,)
+
+    for model, file_name in zip(converted, (OV_TOKENIZER_FILE_NAME, OV_DETOKENIZER_FILE_NAME)):
+        save_model(model, output_path / file_name.format(suffix))
