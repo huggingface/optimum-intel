@@ -133,7 +133,10 @@ def _print_compiled_model_properties(compiled_model):
     skip_keys = {"SUPPORTED_METRICS", "SUPPORTED_CONFIG_KEYS", supported_properties}
     keys = set(compiled_model.get_property(supported_properties)) - skip_keys
     for k in keys:
-        value = compiled_model.get_property(k)
+        try:
+            value = compiled_model.get_property(k)
+        except Exception:
+            logger.error(f"[error] Get property of '{k}' failed")
         if k == properties.device.properties():
             for device_key in value.keys():
                 logger.info(f"  {device_key}:")
