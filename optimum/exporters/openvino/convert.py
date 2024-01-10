@@ -144,6 +144,10 @@ def export(
     if "diffusers" in str(model.__class__) and not is_diffusers_available():
         raise ImportError("The pip package `diffusers` is required to export stable diffusion models to ONNX.")
 
+    if stateful:
+        # This will be checked anyway after the model conversion, but checking it earlier will save time for a user if not suitable version is used
+        stateful = ensure_stateful_is_available()
+
     if is_torch_available() and isinstance(model, nn.Module):
         return export_pytorch(
             model,
@@ -497,9 +501,6 @@ def export_models(
     Returns:
         list of input_names and output_names from ONNX configuration
     """
-    if stateful:
-        # This will be checked anyway after the model conversion, but checking it earlier will save time for a user if not suitable version is used
-        stateful = ensure_stateful_is_available()
     outputs = []
 
     if output_names is not None and len(output_names) != len(models_and_onnx_configs):

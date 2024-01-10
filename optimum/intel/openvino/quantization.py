@@ -38,6 +38,7 @@ from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
 from ...exporters.openvino import export, export_pytorch_via_onnx
+from ...exporters.openvino.stateful import ensure_export_task_support_stateful
 from ..utils.constant import _TASK_ALIASES
 from .configuration import OVConfig
 from .modeling_base import OVBaseModel
@@ -417,6 +418,8 @@ class OVQuantizer(OptimumQuantizer):
             onnx_config = onnx_config_class(
                 model.config, use_past=model.config.use_cache, use_past_in_inputs=model.config.use_cache
             )
+            if model.config.use_cache:
+                task = "text-generation-with-past"
         else:
             onnx_config = onnx_config_class(model.config)
 
@@ -425,7 +428,10 @@ class OVQuantizer(OptimumQuantizer):
         export_fn = export if not quantization_config.save_onnx_model else export_pytorch_via_onnx
         opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = max(opset, MIN_ONNX_QDQ_OPSET)
-        _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset)
+        kwargs = {}
+        if not quantization_config.save_onnx_model:
+            kwargs = {"stateful": ensure_export_task_support_stateful(task)}
+        _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset, **kwargs)
         if is_onnx:
             # Load and save the compressed model
             model = core.read_model(onnx_path)

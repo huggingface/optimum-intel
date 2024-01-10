@@ -20,6 +20,7 @@ from transformers import PretrainedConfig
 
 import openvino as ov
 from openvino.runtime import opset13
+from optimum.exporters import TasksManager
 from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version
 from optimum.utils.normalized_config import NormalizedConfigManager
 
@@ -195,6 +196,12 @@ def ensure_stateful_is_available(warn=True):
             )
         return False
     return True
+
+
+def ensure_export_task_support_stateful(task: str):
+    synonyms_for_task = TasksManager.synonyms_for_task(task)
+    synonyms_for_task.add(task)
+    return "text-generation-with-past" in synonyms_for_task
 
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):

@@ -28,6 +28,7 @@ from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_prepro
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version, is_transformers_version
 from .convert import export_models
+from .stateful import ensure_export_task_support_stateful
 
 
 if is_optimum_version(">=", "1.16.0"):
@@ -282,7 +283,7 @@ def main_export(
 
     synonyms_for_task = TasksManager.synonyms_for_task(task)
     synonyms_for_task.add(task)
-    if stateful and "text-generation-with-past" not in synonyms_for_task:
+    if stateful and not ensure_export_task_support_stateful(task):
         stateful = False
 
     preprocessors = maybe_load_preprocessors(
