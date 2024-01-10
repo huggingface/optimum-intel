@@ -21,24 +21,18 @@ from typing import Optional, Tuple, Union
 
 import torch
 from huggingface_hub import hf_hub_download
-from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
+from transformers import AutoConfig, AutoModelForCausalLM, GenerationConfig, PretrainedConfig, PreTrainedModel
+from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
 from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import is_torch_version, is_transformers_version
+from ..utils.import_utils import is_torch_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
-
-
-if is_transformers_version("<", "4.25.0"):
-    from transformers.generation_utils import GenerationMixin
-else:
-    from transformers.generation import GenerationMixin
 
 
 logger = logging.getLogger(__name__)
@@ -112,12 +106,14 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
 
-        if is_transformers_version("<=", "4.25.1"):
-            self.generation_config = None
+        if isinstance(model, torch.jit.ScriptModule):
+            self.input_names = {
+                inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
+            }
         else:
-            from transformers import GenerationConfig
+            self.input_names = set()
 
-            self.generation_config = GenerationConfig.from_model_config(config)
+        self.generation_config = GenerationConfig.from_model_config(config)
 
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -267,6 +263,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         position_ids: Optional[torch.FloatTensor] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
+        # 1. Prepare model inputs
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
 
@@ -274,6 +271,15 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
             "input_ids": input_ids,
             "attention_mask": attention_mask,
         }
+
+        if "position_ids" in self.input_names and position_ids is None:
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values:
+                position_ids = position_ids[:, -1].unsqueeze(-1)
+
+        if "position_ids" in self.input_names or not self.input_names:
+            inputs["position_ids"] = position_ids
 
         model_type = self.config.model_type.replace("_", "-")
 
@@ -308,17 +314,17 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
 
             inputs["past_key_values"] = past_key_values
 
-        if position_ids is not None and model_type in MODEL_TYPES_REQUIRING_POSITION_IDS:
-            inputs["position_ids"] = position_ids
-
+        # 2. Model forward
         outputs = self.model(**inputs)
 
+        # 3. Process model outputs
         if isinstance(outputs, (list, tuple)):
             logits = outputs[0]
             past_key_values = outputs[1] if self.use_cache else None
         else:
             logits = outputs["logits"]
             past_key_values = outputs["past_key_values"] if self.use_cache else None
+
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
 
@@ -428,5 +434,6 @@ class TSModelForCausalLM(BaseModelForCausalLM):
             force_download=force_download,
             cache_dir=cache_dir,
             local_files_only=local_files_only,
+            model_dtype=torch_dtype,
             **kwargs,
         )
