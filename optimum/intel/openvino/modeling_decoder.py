@@ -126,9 +126,9 @@ class OVBaseDecoderModel(OVModel):
 
         self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
-        stateful = kwargs.pop("stateful", None)  # None means taking a model "as-is"
         model_has_sinks = model_has_state(self.model)
         self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs) or model_has_sinks
+        stateful = kwargs.pop("stateful", self.use_cache)  # stateful model True only if model converted with past
         self.stateful = model_has_sinks
         self.main_input_name = "input_ids"
         self.num_pkv = 2
@@ -143,7 +143,15 @@ class OVBaseDecoderModel(OVModel):
             self.model = self._reshape(self.model, -1, -1)
 
         if self.stateful or stateful:
-            ensure_stateful_is_available()
+            is_stateful_supported = ensure_stateful_is_available()
+            stateful = False if not is_stateful_supported else stateful
+            if model_has_sinks and not is_stateful_supported:
+                raise ValueError(
+                    "Loaded stateful model, while OpenVINO runtime version does not support stateful model inference. "
+                    "Please update OpenVINO version >= 2023.3.0 "
+                    "or export the original model once again with `stateful=False` when calling the `from_pretrained` method."
+                    "To export your model, simply set `export=True`."
+                )
 
         def raise_error(model_prop, user_prop, name):
             raise ValueError(
@@ -158,14 +166,21 @@ class OVBaseDecoderModel(OVModel):
             raise_error(self.stateful, stateful, "stateful")
 
         if not self.stateful and stateful:
-            # We can transform stateless model to stateful
-            self._make_stateful()
-
-        if enable_compilation:
-            self.compile()
+            if self.use_cache:
+                # We can transform stateless model to stateful
+                self._make_stateful()
+            else:
+                raise ValueError(
+                    "Making stateful model is applicable only for model converted with use_cache=True, please load model with stateful=False "
+                    "or export the original model once again with use_cache=True when calling the `from_pretrained` method."
+                    "To export your model, simply set `export=True`."
+                )
 
         if use_cache ^ self.use_cache:
             raise_error(self.use_cache, use_cache, "use_cache")
+
+        if enable_compilation:
+            self.compile()
 
     def update_pkv_precision(self, force_fp32=False):
         if not self.use_cache or self.stateful:
@@ -251,6 +266,7 @@ class OVBaseDecoderModel(OVModel):
         compression_option = None
         if load_in_8bit is not None:
             compression_option = "int8" if load_in_8bit else "fp32"
+        stateful = kwargs.get("stateful", True)
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -263,6 +279,7 @@ class OVBaseDecoderModel(OVModel):
             force_download=force_download,
             trust_remote_code=trust_remote_code,
             compression_option=compression_option,
+            stateful=stateful,
         )
 
         config.is_decoder = True
@@ -345,7 +362,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
-
+        print(self.stateful)
         if self.use_cache and past_key_values is not None:
             input_ids = input_ids[:, -1:]
 

@@ -682,8 +682,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # explicit stateful model specified during loading
         loaded_stateful_model = OVModelForCausalLM.from_pretrained(model_id, stateful=True)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
-        self.assertTrue(loaded_model.stateful)
-        self.assertTrue(loaded_model.use_cache)
+        self.assertTrue(loaded_stateful_model.stateful)
+        self.assertTrue(loaded_stateful_model.use_cache)
         loaded_stateful_model_outputs = loaded_stateful_model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, loaded_stateful_model_outputs.logits))
         self.assertTrue("past_key_values" in loaded_stateful_model_outputs)

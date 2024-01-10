@@ -93,9 +93,12 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
-        "--stateful",
+        "--no-stateful",
         action="store_true",
-        help="Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs",
+        help=(
+            "Disable stateful converted models, stateless models will be generated instead. Stateful models are produced by default when this key is not used. "
+            "In stateful models all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs.",
+        ),
     )
 
 
@@ -144,6 +147,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             pad_token_id=self.args.pad_token_id,
             compression_option=self.args.weight_format,
             compression_ratio=self.args.ratio,
-            stateful=self.args.stateful,
+            stateful=not self.args.no_stateful,
             # **input_shapes,
         )

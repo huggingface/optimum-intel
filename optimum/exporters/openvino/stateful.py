@@ -189,9 +189,11 @@ def ensure_stateful_is_available():
     Check openvino version and raise error if it does not support stateful models
     """
     if is_openvino_version("<", "2023.3"):
-        raise ValueError(
+        log.warn(
             f"Could not create or use stateful model when using old version of openvino=={_openvino_version}. Install openvino>=2023.3.0."
         )
+        return False
+    return True
 
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
@@ -205,7 +207,6 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
         ov_model (`ov.Model`):
             openvino model
     """
-    ensure_stateful_is_available()
 
     key_value_input_names = [
         key.get_any_name() for key in ov_model.inputs if any("key_values" in key_name for key_name in key.get_names())

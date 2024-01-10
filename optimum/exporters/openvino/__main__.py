@@ -65,7 +65,7 @@ def main_export(
     fn_get_submodels: Optional[Callable] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
-    stateful: Optional[bool] = None,
+    stateful: Optional[bool] = True,
     **kwargs_shapes,
 ):
     """
@@ -279,6 +279,11 @@ def main_export(
         else:
             possible_synonyms = ""
         logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
+
+    synonyms_for_task = TasksManager.synonyms_for_task(task)
+    synonyms_for_task.add(task)
+    if stateful and "text-generation-with-past" not in synonyms_for_task:
+        stateful = False
 
     preprocessors = maybe_load_preprocessors(
         model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
