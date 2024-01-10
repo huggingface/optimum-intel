@@ -97,20 +97,20 @@ class OVCLIExportTestCase(unittest.TestCase):
                 compression_ratio=compression_ratio,
             )
 
-    # @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    # def test_export(self, task: str, model_type: str):
-    #     self._openvino_export(MODEL_NAMES[model_type], task)
-    #
-    # @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    # def test_exporters_cli(self, task: str, model_type: str):
-    #     with TemporaryDirectory() as tmpdir:
-    #         subprocess.run(
-    #             f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
-    #             shell=True,
-    #             check=True,
-    #         )
-    #         model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-    #         eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_export(self, task: str, model_type: str):
+        self._openvino_export(MODEL_NAMES[model_type], task)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_exporters_cli(self, task: str, model_type: str):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
 
     @parameterized.expand(
         arch
@@ -130,55 +130,55 @@ class OVCLIExportTestCase(unittest.TestCase):
                 sum("tokenizer" in file for file in map(str, save_dir.rglob("*.xml"))),
             )
 
-    # @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    # def test_exporters_cli_fp16(self, task: str, model_type: str):
-    #     with TemporaryDirectory() as tmpdir:
-    #         subprocess.run(
-    #             f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format fp16 {tmpdir}",
-    #             shell=True,
-    #             check=True,
-    #         )
-    #         model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-    #         eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
-    #
-    # @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    # def test_exporters_cli_int8(self, task: str, model_type: str):
-    #     with TemporaryDirectory() as tmpdir:
-    #         subprocess.run(
-    #             f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --weight-format int8 {tmpdir}",
-    #             shell=True,
-    #             check=True,
-    #         )
-    #         model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-    #         model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
-    #
-    #         if task.startswith("text2text-generation"):
-    #             models = [model.encoder, model.decoder]
-    #             if task.endswith("with-past"):
-    #                 models.append(model.decoder_with_past)
-    #         elif task.startswith("stable-diffusion"):
-    #             models = [model.unet, model.vae_encoder, model.vae_decoder]
-    #             models.append(model.text_encoder if task == "stable-diffusion" else model.text_encoder_2)
-    #         else:
-    #             models = [model]
-    #
-    #         expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
-    #         for i, model in enumerate(models):
-    #             _, num_int8, _ = get_num_quantized_nodes(model)
-    #             self.assertEqual(expected_int8[i], num_int8)
-    #
-    # @parameterized.expand(TEST_4BIT_CONFIGURATONS)
-    # def test_exporters_cli_int4(self, task: str, model_type: str, option: str):
-    #     with TemporaryDirectory() as tmpdir:
-    #         subprocess.run(
-    #             f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --weight-format {option} {tmpdir}",
-    #             shell=True,
-    #             check=True,
-    #         )
-    #         model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-    #         model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
-    #
-    #         expected_int8, expected_int4 = _ARCHITECTURES_TO_EXPECTED_INT4_INT8[model_type]
-    #         _, num_int8, num_int4 = get_num_quantized_nodes(model)
-    #         self.assertEqual(expected_int8, num_int8)
-    #         self.assertEqual(expected_int4, num_int4)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_exporters_cli_fp16(self, task: str, model_type: str):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format fp16 {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_exporters_cli_int8(self, task: str, model_type: str):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --weight-format int8 {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+
+            if task.startswith("text2text-generation"):
+                models = [model.encoder, model.decoder]
+                if task.endswith("with-past"):
+                    models.append(model.decoder_with_past)
+            elif task.startswith("stable-diffusion"):
+                models = [model.unet, model.vae_encoder, model.vae_decoder]
+                models.append(model.text_encoder if task == "stable-diffusion" else model.text_encoder_2)
+            else:
+                models = [model]
+
+            expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
+            for i, model in enumerate(models):
+                _, num_int8, _ = get_num_quantized_nodes(model)
+                self.assertEqual(expected_int8[i], num_int8)
+
+    @parameterized.expand(TEST_4BIT_CONFIGURATONS)
+    def test_exporters_cli_int4(self, task: str, model_type: str, option: str):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --weight-format {option} {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
+            model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+
+            expected_int8, expected_int4 = _ARCHITECTURES_TO_EXPECTED_INT4_INT8[model_type]
+            _, num_int8, num_int4 = get_num_quantized_nodes(model)
+            self.assertEqual(expected_int8, num_int8)
+            self.assertEqual(expected_int4, num_int4)
