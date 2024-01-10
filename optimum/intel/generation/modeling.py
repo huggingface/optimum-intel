@@ -102,6 +102,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
         self.use_cache = use_cache
+        ## TO do: add XPU support
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
@@ -282,7 +283,6 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
             inputs["position_ids"] = position_ids
 
         model_type = self.config.model_type.replace("_", "-")
-
         if self.use_cache:
             if past_key_values is None:
                 nb_pkv = 2
