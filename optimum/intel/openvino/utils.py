@@ -135,13 +135,13 @@ def _print_compiled_model_properties(compiled_model):
     for k in keys:
         try:
             value = compiled_model.get_property(k)
+            if k == properties.device.properties():
+                for device_key in value.keys():
+                    logger.info(f"  {device_key}:")
+                    for k2, value2 in value.get(device_key).items():
+                        if k2 not in skip_keys:
+                            logger.info(f"    {k2}: {value2}")
+            else:
+                logger.info(f"  {k}: {value}")
         except Exception:
             logger.error(f"[error] Get property of '{k}' failed")
-        if k == properties.device.properties():
-            for device_key in value.keys():
-                logger.info(f"  {device_key}:")
-                for k2, value2 in value.get(device_key).items():
-                    if k2 not in skip_keys:
-                        logger.info(f"    {k2}: {value2}")
-        else:
-            logger.info(f"  {k}: {value}")
