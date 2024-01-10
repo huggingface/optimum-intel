@@ -221,7 +221,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             model_id = MODEL_NAMES[model_name]
-            transformers_model = model_cls.from_pretrained(model_id, export=True)
+            transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=False)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -278,7 +278,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
-        model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True)
+        model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=False)
 
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]

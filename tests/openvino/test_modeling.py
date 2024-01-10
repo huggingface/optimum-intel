@@ -496,6 +496,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(ov_model.use_cache)
+        if self.IS_SUPPORT_STATEFUL:
+            self.assertTrue(ov_model.stateful)
+        else:
+            self.assertFalse(ov_model.stateful)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer(
@@ -509,6 +514,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        self.assertTrue("past_key_values" in ov_outputs)
+        self.assertIsInstance(ov_outputs.past_key_values, tuple)
+        if self.IS_SUPPORT_STATEFUL:
+            self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         # Compare tensor outputs
@@ -564,8 +573,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES["gpt2"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-
-        model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=False)
         outputs_model_with_pkv = model_with_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
@@ -576,6 +584,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
+        if self.IS_SUPPORT_STATEFUL:
+            model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
+            outputs_model_stateful = model_stateful.generate(
+                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+            self.assertTrue(torch.equal(outputs_model_without_pkv, outputs_model_stateful))
 
         del model_with_pkv
         del model_without_pkv
@@ -611,106 +625,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         outs_without_attn_mask_step2 = model_with_cache(input_ids=input_ids, past_key_values=past_key_values)
         self.assertTrue(torch.allclose(outs_step2.logits, outs_without_attn_mask_step2.logits))
         del model_with_cache
-        gc.collect()
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
-    def test_stateful(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        set_seed(SEED)
-        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, stateful=True)
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
-        self.assertTrue(ov_model.stateful)
-        self.assertTrue(ov_model.use_cache)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer(
-            "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
-        )
-        position_ids = None
-        input_shape = tokens["input_ids"].shape
-        if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
-            position_ids = torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
-        ov_outputs = ov_model(**tokens, position_ids=position_ids)
-
-        self.assertTrue("logits" in ov_outputs)
-        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
-        self.assertTrue("past_key_values" in ov_outputs)
-        self.assertIsInstance(ov_outputs.past_key_values, tuple)
-        self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
-        with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
-        # Compare tensor outputs
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
-        next_token = torch.argmax(ov_outputs.logits[..., -1:, :], dim=2)
-        attention_mask = torch.ones((input_shape[0], input_shape[1] + 1), dtype=torch.long)
-        if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
-            position_ids = position_ids[:, -1:] + 1
-        pkv = ov_outputs.past_key_values
-        ov_outputs = ov_model(
-            input_ids=next_token, position_ids=position_ids, attention_mask=attention_mask, past_key_values=pkv
-        )
-        self.assertTrue("logits" in ov_outputs)
-        self.assertIsInstance(ov_outputs.logits, torch.Tensor)
-        self.assertTrue("past_key_values" in ov_outputs)
-        self.assertIsInstance(ov_outputs.past_key_values, tuple)
-        self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
-        with torch.no_grad():
-            transformers_outputs = transformers_model(
-                input_ids=next_token,
-                attention_mask=attention_mask,
-                past_key_values=transformers_outputs.past_key_values,
-            )
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
-
-        del transformers_model
-        del ov_model
-        gc.collect()
-
-    @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
-    def test_stateful_on_converted_model(self):
-        model_id = "vuiseng9/ov-gpt2-fp32-kv-cache"
-        # reference without state
-        loaded_model = OVModelForCausalLM.from_pretrained(model_id, stateful=False)
-        self.assertIsInstance(loaded_model.config, PretrainedConfig)
-        self.assertFalse(loaded_model.stateful)
-        self.assertTrue(loaded_model.use_cache)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-        loaded_model_outputs = loaded_model(**tokens)
-
-        # explicit stateful model specified during loading
-        loaded_stateful_model = OVModelForCausalLM.from_pretrained(model_id, stateful=True)
-        self.assertIsInstance(loaded_model.config, PretrainedConfig)
-        self.assertTrue(loaded_stateful_model.stateful)
-        self.assertTrue(loaded_stateful_model.use_cache)
-        loaded_stateful_model_outputs = loaded_stateful_model(**tokens)
-        self.assertTrue(torch.equal(loaded_model_outputs.logits, loaded_stateful_model_outputs.logits))
-        self.assertTrue("past_key_values" in loaded_stateful_model_outputs)
-        self.assertIsInstance(loaded_stateful_model_outputs.past_key_values, tuple)
-        self.assertTrue(
-            len(loaded_stateful_model_outputs.past_key_values) == 1
-            and len(loaded_stateful_model_outputs.past_key_values[0]) == 0
-        )
-
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            loaded_stateful_model.save_pretrained(tmpdirname)
-            folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(OV_XML_FILE_NAME in folder_contents)
-            self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            # implicit load stateful model from disk
-            model = OVModelForCausalLM.from_pretrained(tmpdirname)
-            self.assertTrue(model.stateful)
-            self.assertTrue(model.use_cache)
-
-        outputs = model(**tokens)
-        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
-        self.assertTrue("past_key_values" in outputs)
-        self.assertIsInstance(outputs.past_key_values, tuple)
-        self.assertTrue(len(outputs.past_key_values) == 1 and len(outputs.past_key_values[0]) == 0)
-        del loaded_model
-        del loaded_stateful_model
-        del model
         gc.collect()
 
 

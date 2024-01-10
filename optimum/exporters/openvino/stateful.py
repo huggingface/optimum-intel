@@ -184,14 +184,15 @@ def make_stateful(
         build_state_initializer(ov_model, batch_dim)
 
 
-def ensure_stateful_is_available():
+def ensure_stateful_is_available(warn=True):
     """
     Check openvino version and raise error if it does not support stateful models
     """
     if is_openvino_version("<", "2023.3"):
-        log.warn(
-            f"Could not create or use stateful model when using old version of openvino=={_openvino_version}. Install openvino>=2023.3.0."
-        )
+        if warn:
+            log.warn(
+                f"Could not create or use stateful model when using old version of openvino=={_openvino_version}. Install openvino>=2023.3.0."
+            )
         return False
     return True
 
@@ -217,6 +218,8 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     not_kv_inputs = [
         input for input in ov_model.inputs if not any(name in key_value_input_names for name in input.get_names())
     ]
+    if not key_value_input_names or not key_value_output_names:
+        return
 
     # By default, batch is the 0-th but chatglm uses 1-st dimension as batch
     # TODO: Deduce from a model via ordinal reshape (?) and topology
