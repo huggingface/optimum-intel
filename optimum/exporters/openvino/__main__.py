@@ -72,6 +72,9 @@ def tokenizer_export(
     except OVTypeError:
         logger.info("OpenVINO Tokenizer for this model is not supported.")
         return
+    except Exception as exception:
+        logger.warning(f"OpenVINO Tokenizer for this model is not supported. Exception: {exception}")
+        return
 
     if not isinstance(converted, tuple):
         converted = (converted,)
