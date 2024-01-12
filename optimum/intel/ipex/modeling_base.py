@@ -20,6 +20,7 @@ from transformers.utils import WEIGHTS_NAME
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 
+from ..generation.modeling import jit_trace
 from ..utils.import_utils import is_torch_version
 from ..utils.modeling_utils import patch_decoder_attention_mask
 from . import generation_tasks
@@ -30,7 +31,6 @@ SUPPORT_MODEL_LIST_FOR_CAUSAL_LM = {
 }
 
 SUPPORT_TASK_LIST = {"text-generation": SUPPORT_MODEL_LIST_FOR_CAUSAL_LM}
-from ..generation.modeling import jit_trace
 
 
 logger = logging.getLogger(__name__)
