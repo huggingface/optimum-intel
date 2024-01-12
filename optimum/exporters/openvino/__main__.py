@@ -309,13 +309,18 @@ def main_export(
             and getattr(model.config, "pad_token_id", None) is None
             and task in ["text-classification"]
         )
+
+        tokenizer = next(
+            (preprocessor for preprocessor in preprocessors if isinstance(preprocessor, PreTrainedTokenizerBase)),
+            None
+        )
+
         if needs_pad_token_id:
             if pad_token_id is not None:
                 model.config.pad_token_id = pad_token_id
-            else:
+            elif tokenizer is not None:
                 try:
-                    tok = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
-                    model.config.pad_token_id = tok.pad_token_id
+                    model.config.pad_token_id = tokenizer.pad_token_id
                 except Exception:
                     raise ValueError(
                         "Could not infer the pad token id, which is needed in this case, please provide it with the --pad_token_id argument"
@@ -327,15 +332,14 @@ def main_export(
             generation_config.save_pretrained(output)
         maybe_save_preprocessors(model_name_or_path, output)
 
-        for preprocessor in preprocessors:
-            if isinstance(preprocessor, PreTrainedTokenizerBase):
-                try:
-                    export_tokenizer(preprocessor, output)
-                except Exception as exception:
-                    logger.warning(
-                        "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
-                        f"models won't be generated. Exception: {exception}"
-                    )
+        if tokenizer is not None:
+            try:
+                export_tokenizer(tokenizer, output)
+            except Exception as exception:
+                logger.warning(
+                    "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
+                    f"models won't be generated. Exception: {exception}"
+                )
 
         if model.config.is_encoder_decoder and task.startswith("text-generation"):
             raise ValueError(
