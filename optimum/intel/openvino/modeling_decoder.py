@@ -352,7 +352,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
-        print(self.stateful)
         if self.use_cache and past_key_values is not None:
             input_ids = input_ids[:, -1:]
 

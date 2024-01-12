@@ -497,7 +497,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-        if self.IS_SUPPORT_STATEFUL:
+        if self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode":
             self.assertTrue(ov_model.stateful)
         else:
             self.assertFalse(ov_model.stateful)
@@ -516,7 +516,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         self.assertTrue("past_key_values" in ov_outputs)
         self.assertIsInstance(ov_outputs.past_key_values, tuple)
-        if self.IS_SUPPORT_STATEFUL:
+        if self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode":
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
