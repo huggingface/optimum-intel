@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoConfig, PreTrainedTokenizerBase
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import __main__ as optimum_main
@@ -28,6 +28,7 @@ from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_prepro
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version, is_transformers_version
 from .convert import export_models, export_tokenizer
+
 
 if is_optimum_version(">=", "1.16.0"):
     from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
@@ -311,8 +312,7 @@ def main_export(
         )
 
         tokenizer = next(
-            (preprocessor for preprocessor in preprocessors if isinstance(preprocessor, PreTrainedTokenizerBase)),
-            None
+            (preprocessor for preprocessor in preprocessors if isinstance(preprocessor, PreTrainedTokenizerBase)), None
         )
 
         if needs_pad_token_id:

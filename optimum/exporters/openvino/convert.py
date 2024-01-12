@@ -504,7 +504,6 @@ def export_tokenizer(
 ):
     from openvino.runtime.exceptions import OVTypeError
 
-
     if isinstance(tokenizer, UNSUPPORTED_TOKENZIER_CLASSES):
         logger.info("OpenVINO Tokenizer for this model is not supported.")
         return
