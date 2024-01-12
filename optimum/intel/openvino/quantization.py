@@ -302,7 +302,7 @@ class OVQuantizer(OptimumQuantizer):
 
             def __call__(self, *args, **kwargs):
                 data_cache.append(*args)
-                return self.request(*args, *kwargs)
+                return self.request(*args, **kwargs)
 
             def infer(self, inputs: Any = None, share_inputs: bool = False):
                 data_cache.append(inputs)
