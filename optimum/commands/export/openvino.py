@@ -89,7 +89,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         default=0.8,
         help=(
             "Compression ratio between primary and backup precision. In the case of INT4, NNCF evaluates layer sensitivity and keeps the most impactful layers in INT8"
-            "precision (by default 20% in INT8). This helps to achieve better accuracy after weight quantization."
+            "precision (by default 20%% in INT8). This helps to achieve better accuracy after weight compression."
         ),
     )
 
