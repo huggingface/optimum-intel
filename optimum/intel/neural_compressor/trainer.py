@@ -45,7 +45,6 @@ from transformers.data.data_collator import DataCollator
 from transformers.debug_utils import DebugOption, DebugUnderflowOverflow
 from transformers.modeling_utils import PreTrainedModel, get_parameter_dtype, unwrap_model
 from transformers.models.auto.modeling_auto import MODEL_FOR_CAUSAL_LM_MAPPING_NAMES
-from transformers.pytorch_utils import is_torch_less_than_1_11
 from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer import TRAINER_STATE_NAME
 from transformers.trainer_callback import TrainerCallback, TrainerState
@@ -436,7 +435,7 @@ class INCTrainer(Trainer):
                 if version.parse(accelerate_version) > version.parse("0.23.0"):
                     sampler_kinds.append(SeedableRandomSampler)
                 is_random_sampler = isinstance(sampler, tuple(sampler_kinds))
-                if is_torch_less_than_1_11 or not is_random_sampler:
+                if not is_random_sampler:
                     # We just need to begin an iteration to create the randomization of the sampler.
                     for _ in train_dataloader:
                         break
