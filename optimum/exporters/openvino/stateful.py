@@ -206,7 +206,7 @@ def ensure_export_task_support_stateful(task: str):
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     """
-    Apply stateful transformation to model to hiding key values inputs inside model.
+    Apply stateful transformation to model to hide key values inputs inside model.
     Select transformation parameters based on model architecture
 
     Parameters:

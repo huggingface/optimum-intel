@@ -22,7 +22,7 @@ def patch_model_with_bettertransformer(model):
         log.warn(
             "integration Scaled Dot Product Attention optimization supported only with torch > 2.0."
             "Usage model with stateful=True may be non-effective if model does not contain torch.functional.scaled_dot_product_attention"
-            "It is recommended to upgrade PyTorch version for using stateful model or use stateful=Flase"
+            "It is recommended to upgrade PyTorch version for using stateful model or use stateful=False"
         )
     # model already has required SDPA implementation
     if getattr(model, "_supports_sdpa", False) and getattr(model.config, "_attn_implementation", "eager") == "sdpa":
