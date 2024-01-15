@@ -127,7 +127,7 @@ def main_export(
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
         stateful (`bool`, defaults to `True`):
-            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
+            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
         **kwargs_shapes (`Dict`):
             Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
 

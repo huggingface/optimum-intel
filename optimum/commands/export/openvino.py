@@ -98,9 +98,9 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=(
             "Disable stateful converted models, stateless models will be generated instead. Stateful models are produced by default when this key is not used. "
             "In stateful models all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. "
-            "If --no-stateful option is used, it may result in sub-optimal inference performance. "
+            "If --disable-stateful option is used, it may result in sub-optimal inference performance. "
             "Use it when you intentionally want to use a stateless model, for example, to be compatible with existing "
-            "OpenVINO native inference code that expects kv-cache inputs and outputs in the model.",
+            "OpenVINO native inference code that expects kv-cache inputs and outputs in the model."
         ),
     )
 
@@ -150,6 +150,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             pad_token_id=self.args.pad_token_id,
             compression_option=self.args.weight_format,
             compression_ratio=self.args.ratio,
-            stateful=not self.args.no_stateful,
+            stateful=not self.args.disable_stateful,
             # **input_shapes,
         )
