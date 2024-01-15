@@ -283,7 +283,9 @@ def main_export(
 
     synonyms_for_task = TasksManager.synonyms_for_task(task)
     synonyms_for_task.add(task)
-    if stateful and not ensure_export_task_support_stateful(task):
+
+    task_support_stateful = ensure_export_task_support_stateful(task)
+    if stateful and not task_support_stateful:
         stateful = False
 
     preprocessors = maybe_load_preprocessors(

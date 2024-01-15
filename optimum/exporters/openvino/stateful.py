@@ -192,7 +192,8 @@ def ensure_stateful_is_available(warn=True):
     if is_openvino_version("<", "2023.3"):
         if warn:
             log.warn(
-                f"Could not create or use stateful model when using old version of openvino=={_openvino_version}. Install openvino>=2023.3.0."
+                f"Could not create or use stateful model when using old version of openvino=={_openvino_version}. It may result in sub-optimal inference performance."
+                "Install openvino>=2023.3.0."
             )
         return False
     return True

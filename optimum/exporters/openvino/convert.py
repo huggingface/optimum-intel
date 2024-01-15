@@ -309,7 +309,7 @@ def export_pytorch(
             `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
-        stateful (`Optional[bool]`, defaults to `True`):
+        stateful (`Optional[bool]`, defaults to `False`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
 
     Returns:
@@ -413,7 +413,8 @@ def export_pytorch(
                 # cannot raise because stateful is enabled by default and it would break backward compatibility for models that couldn't convert to OV directly
                 # TODO: Implement stateful for ONNX path as well, not doing it right now because of lack of validation
                 logger.warn(
-                    "[ WARNING ] Making stateful models is not supported when exporting to ONNX as an intermediate step. A stateless model will be exported instead. It may result in sub-optimal inference performance."
+                    "[ WARNING ] Making stateful models is not supported when exporting to ONNX as an intermediate step. "
+                    "A stateless model will be exported instead. It may result in sub-optimal inference performance."
                     "Provide a model that can be converted to OpenVINO without fallback to ONNX conversion path."
                 )
             return export_pytorch_via_onnx(
