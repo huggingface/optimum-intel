@@ -66,7 +66,7 @@ def main_export(
     fn_get_submodels: Optional[Callable] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
-    stateful: Optional[bool] = True,
+    stateful: bool = True,
     **kwargs_shapes,
 ):
     """
@@ -126,7 +126,7 @@ def main_export(
             `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point, `f32` - means no compression.
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
-        stateful (`Optional[bool]`, defaults to `True`):
+        stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs
         **kwargs_shapes (`Dict`):
             Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
@@ -280,9 +280,6 @@ def main_export(
         else:
             possible_synonyms = ""
         logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
-
-    synonyms_for_task = TasksManager.synonyms_for_task(task)
-    synonyms_for_task.add(task)
 
     task_support_stateful = ensure_export_task_support_stateful(task)
     if stateful and not task_support_stateful:

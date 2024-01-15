@@ -45,22 +45,6 @@ def model_has_input_output_name(ov_model: ov.Model, name: str):
     return name in sum([list(t.get_names()) for t in ov_model.inputs + ov_model.outputs], [])
 
 
-def model_has_input(ov_model: ov.Model, name: str):
-    """
-    Helper function for checking that model has specified input name
-
-    Parameters:
-      ov_model (ov.Model):
-          opennvino model
-      name (str):
-          name of input
-
-    Returns:
-      True if input with requested name exists else False
-    """
-    return name in sum([list(t.get_names()) for t in ov_model.inputs], [])
-
-
 def fuse_cache_reorder(
     ov_model: ov.Model, not_kv_inputs: List[str], key_value_input_names: List[str], gather_dim: int
 ):
@@ -200,9 +184,8 @@ def ensure_stateful_is_available(warn=True):
 
 
 def ensure_export_task_support_stateful(task: str):
-    synonyms_for_task = TasksManager.synonyms_for_task(task)
-    synonyms_for_task.add(task)
-    return "text-generation-with-past" in synonyms_for_task
+    task = TasksManager.map_from_synonym(task)
+    return task == "text-generation-with-past"
 
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):

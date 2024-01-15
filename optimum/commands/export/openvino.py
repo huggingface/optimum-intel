@@ -93,7 +93,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
-        "--no-stateful",
+        "--disable-stateful",
         action="store_true",
         help=(
             "Disable stateful converted models, stateless models will be generated instead. Stateful models are produced by default when this key is not used. "

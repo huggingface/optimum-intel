@@ -300,12 +300,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertTrue(model.stateful)
         self.assertTrue(model.use_cache)
 
-        models = [model]
-
-        expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
-        for i, model in enumerate(models):
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int8[i], num_int8)
+        expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type][0]
+        _, num_int8, _ = get_num_quantized_nodes(model)
+        self.assertEqual(expected_ov_int8, num_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type):
