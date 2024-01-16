@@ -82,6 +82,7 @@ class IPEXModel(OptimizedModel):
     ):
         if is_torch_version("<", "2.1.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
+
         task = cls.export_feature
         model_kwargs = {
             "revision": revision,
@@ -147,6 +148,7 @@ class IPEXModel(OptimizedModel):
         cache_dir: Optional[str] = None,
         file_name: Optional[str] = WEIGHTS_NAME,
         local_files_only: bool = False,
+        subfolder: str = "",
         use_cache: bool = True,
         **kwargs,
     ):
@@ -164,6 +166,7 @@ class IPEXModel(OptimizedModel):
                 cache_dir=cache_dir,
                 force_download=force_download,
                 local_files_only=local_files_only,
+                subfolder=subfolder,
             )
             model_save_dir = Path(model_cache_path).parent
 
@@ -174,19 +177,16 @@ class IPEXModel(OptimizedModel):
             model_class = _get_model_class(config, cls.auto_model_class._model_mapping)
             model = model_class.from_pretrained(model_save_dir)
 
-        return cls(
-            model,
-            config=config,
-            model_save_dir=model_save_dir,
-            use_cache=use_cache,
-            **kwargs,
-        )
+        return cls(model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
 
-    def _save_pretrained(self, save_directory: Union[str, Path], file_name: Optional[str] = None, **kwargs):
-        if getattr(self.config, "torchscript", False):
-            torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        output_path = os.path.join(save_directory, WEIGHTS_NAME)
+
+        if isinstance(self.model, torch.nn.Module):
+            state_dict = self.model.state_dict()
+            torch.save(state_dict, output_path)
         else:
-            torch.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
+            torch.jit.save(self.model, output_path)
 
     def forward(self, *args, **kwargs):
         return self.model(*args, **kwargs)
