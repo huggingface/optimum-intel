@@ -26,7 +26,9 @@ from optimum.modeling_base import OptimizedModel
 from ..generation.modeling import BaseModelForCausalLM, jit_trace
 from ..utils.import_utils import is_torch_version
 from ..utils.modeling_utils import patch_decoder_attention_mask
-from .utils import generation_tasks
+
+
+# from .utils import generation_tasks
 
 
 SUPPORT_MODEL_LIST_FOR_CAUSAL_LM = {
@@ -88,12 +90,9 @@ class IPEXModel(OptimizedModel):
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
-            "use_cache": use_cache,
             "torch_dtype": torch_dtype,
             "device": "cpu",
         }
-        if task not in generation_tasks:
-            model_kwargs.pop("use_cache")
         model_type = None
         support_ipex_transformers = False
         if task in SUPPORT_TASK_LIST.keys():
