@@ -450,11 +450,11 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
 
     def test_inference(self):
         model_id = "hf-internal-testing/tiny-stable-diffusion-xl-pipe"
-        pipeline = self.MODEL_CLASS.from_pretrained(model_id)
+        pipeline = self.MODEL_CLASS.from_pretrained(model_id, ov_config=F32_CONFIG)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             pipeline.save_pretrained(tmp_dir)
-            pipeline = self.MODEL_CLASS.from_pretrained(tmp_dir)
+            pipeline = self.MODEL_CLASS.from_pretrained(tmp_dir, ov_config=F32_CONFIG)
 
         batch_size, height, width = 1, 128, 128
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
