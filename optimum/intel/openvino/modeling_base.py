@@ -315,6 +315,7 @@ class OVBaseModel(OptimizedModel):
         force_download: bool = False,
         cache_dir: Optional[str] = None,
         local_files_only: bool = False,
+        stateful: bool = False,
         **kwargs,
     ):
         save_dir = TemporaryDirectory()
@@ -326,6 +327,7 @@ class OVBaseModel(OptimizedModel):
             config=onnx_config,
             opset=onnx_config.DEFAULT_ONNX_OPSET,
             output=save_dir_path / OV_XML_FILE_NAME,
+            stateful=stateful,
         )
 
         return cls._from_pretrained(
