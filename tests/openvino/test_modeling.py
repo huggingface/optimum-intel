@@ -493,6 +493,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "pegasus",
     )
     GENERATION_LENGTH = 100
+    IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -500,6 +501,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(ov_model.use_cache)
+        self.assertEqual(ov_model.stateful, self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode")
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer(
@@ -513,6 +516,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        self.assertTrue("past_key_values" in ov_outputs)
+        self.assertIsInstance(ov_outputs.past_key_values, tuple)
+        if self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode":
+            self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         # Compare tensor outputs
@@ -568,8 +575,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES["gpt2"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-
-        model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=False)
         outputs_model_with_pkv = model_with_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
@@ -580,6 +586,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
+        if self.IS_SUPPORT_STATEFUL:
+            model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
+            outputs_model_stateful = model_stateful.generate(
+                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+            self.assertTrue(torch.equal(outputs_model_without_pkv, outputs_model_stateful))
 
         del model_with_pkv
         del model_without_pkv
@@ -606,7 +618,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         attention_mask = tokens.pop("attention_mask")
         outs_without_attn_mask = model_with_cache(**tokens)
         self.assertTrue(torch.allclose(outs.logits, outs_without_attn_mask.logits))
-        input_ids = torch.argmax(outs.logits, dim=2)
+        input_ids = torch.argmax(outs.logits[:, -1:, :], dim=2)
         past_key_values = outs.past_key_values
         attention_mask = torch.ones((input_ids.shape[0], tokens.input_ids.shape[1] + 1), dtype=torch.long)
         outs_step2 = model_with_cache(

@@ -32,6 +32,8 @@ from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version
+from .model_patcher import patch_model_with_bettertransformer
+from .stateful import ensure_stateful_is_available, patch_stateful
 from .utils import (
     OV_XML_FILE_NAME,
     clear_class_registry,
@@ -102,6 +104,7 @@ def export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
+    stateful: bool = True,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -125,6 +128,8 @@ def export(
             Compression ratio between primary and backup precision (only relevant to INT4).
         input_shapes (`Optional[Dict]`, defaults to `None`):
             If specified, allows to use specific shapes for the example input provided to the exporter.
+        stateful (`bool`, defaults to `True`):
+            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
 
     Returns:
         `Tuple[List[str], List[str]]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -139,6 +144,10 @@ def export(
     if "diffusers" in str(model.__class__) and not is_diffusers_available():
         raise ImportError("The pip package `diffusers` is required to export stable diffusion models to ONNX.")
 
+    if stateful:
+        # This will be checked anyway after the model conversion, but checking it earlier will save time for a user if not suitable version is used
+        stateful = ensure_stateful_is_available()
+
     if is_torch_available() and isinstance(model, nn.Module):
         return export_pytorch(
             model,
@@ -150,6 +159,7 @@ def export(
             compression_option=compression_option,
             compression_ratio=compression_ratio,
             model_kwargs=model_kwargs,
+            stateful=stateful,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -160,7 +170,9 @@ def export(
             raise RuntimeError("`tf2onnx` does not support export on CUDA device.")
         if input_shapes is not None:
             logger.info("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
-        return export_tensorflow(model, config, opset, output)
+        return export_tensorflow(
+            model, config, opset, output, compression_option=compression_option, compression_ratio=compression_ratio
+        )
 
     else:
         raise RuntimeError(
@@ -271,6 +283,7 @@ def export_pytorch(
     model_kwargs: Optional[Dict[str, Any]] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
+    stateful: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -291,6 +304,13 @@ def export_pytorch(
             If specified, allows to use specific shapes for the example input provided to the exporter.
         model_kwargs (optional[Dict[str, Any]], defaults to `None`):
             Additional kwargs for model export
+        compression_option (`Optional[str]`, defaults to `None`):
+            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
+            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
+        compression_ratio (`Optional[float]`, defaults to `None`):
+            Compression ratio between primary and backup precision (only relevant to INT4).
+        stateful (`bool`, defaults to `False`):
+            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
 
     Returns:
         `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -301,6 +321,15 @@ def export_pytorch(
 
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
+
+    if stateful:
+        # Trigger bettertransformer together with stateful model because OpenVINO HW-dependent transformations expect
+        # both of them are applied to demonstrate the best performance.
+        # TODO: Consider applying bettertransformer regardless of stateful flag -- requires additional validation.
+        model = patch_model_with_bettertransformer(model)
+        # TODO: Consider unpatching model after export is done in the end of this function.
+        #       Now it is left as-is because the model is not expected to be used after call export_pytorch, and
+        #       this function is one of the _internal_ steps in a bigger model conversion pipeline.
 
     with torch.no_grad():
         model.config.torchscript = False
@@ -380,6 +409,14 @@ def export_pytorch(
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
             if patch_model_forward:
                 model.forward = orig_forward
+            if stateful:
+                # cannot raise because stateful is enabled by default and it would break backward compatibility for models that couldn't convert to OV directly
+                # TODO: Implement stateful for ONNX path as well, not doing it right now because of lack of validation
+                logger.warn(
+                    "[ WARNING ] Making stateful models is not supported when exporting to ONNX as an intermediate step. "
+                    "A stateless model will be exported instead. It may result in sub-optimal inference performance."
+                    "Provide a model that can be converted to OpenVINO without fallback to ONNX conversion path."
+                )
             return export_pytorch_via_onnx(
                 model,
                 config,
@@ -411,6 +448,10 @@ def export_pytorch(
             inp_tensor.get_node().set_partial_shape(static_shape)
             inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
         ov_model.validate_nodes_and_infer_types()
+
+        if stateful:
+            patch_stateful(model.config, ov_model)
+
         _save_model(ov_model, output, compression_option=compression_option, compression_ratio=compression_ratio)
         clear_class_registry()
         del model
@@ -430,6 +471,7 @@ def export_models(
     model_kwargs: Optional[Dict[str, Any]] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[int] = None,
+    stateful: bool = True,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -451,6 +493,8 @@ def export_models(
             Compression ratio between primary and backup precision (only relevant to INT4).
         model_kwargs (Optional[Dict[str, Any]], optional):
             Additional kwargs for model export.
+        stateful (`bool`, defaults to `True`)
+            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
 
     Raises:
         ValueError: if custom names set not equal of number of models
@@ -481,6 +525,7 @@ def export_models(
                 model_kwargs=model_kwargs,
                 compression_option=compression_option,
                 compression_ratio=compression_ratio,
+                stateful=stateful,
             )
         )
 

@@ -92,6 +92,17 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "precision (by default 20%% in INT8). This helps to achieve better accuracy after weight compression."
         ),
     )
+    optional_group.add_argument(
+        "--disable-stateful",
+        action="store_true",
+        help=(
+            "Disable stateful converted models, stateless models will be generated instead. Stateful models are produced by default when this key is not used. "
+            "In stateful models all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. "
+            "If --disable-stateful option is used, it may result in sub-optimal inference performance. "
+            "Use it when you intentionally want to use a stateless model, for example, to be compatible with existing "
+            "OpenVINO native inference code that expects kv-cache inputs and outputs in the model."
+        ),
+    )
 
 
 class OVExportCommand(BaseOptimumCLICommand):
@@ -138,6 +149,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             trust_remote_code=self.args.trust_remote_code,
             pad_token_id=self.args.pad_token_id,
             compression_option=self.args.weight_format,
-            compression_ratio=self.args.ratio
+            compression_ratio=self.args.ratio,
+            stateful=not self.args.disable_stateful,
             # **input_shapes,
         )

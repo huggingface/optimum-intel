@@ -28,6 +28,7 @@ from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_prepro
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version, is_transformers_version
 from .convert import export_models
+from .stateful import ensure_export_task_support_stateful
 
 
 if is_optimum_version(">=", "1.16.0"):
@@ -65,6 +66,7 @@ def main_export(
     fn_get_submodels: Optional[Callable] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
+    stateful: bool = True,
     **kwargs_shapes,
 ):
     """
@@ -124,6 +126,8 @@ def main_export(
             `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point, `f32` - means no compression.
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
+        stateful (`bool`, defaults to `True`):
+            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
         **kwargs_shapes (`Dict`):
             Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
 
@@ -277,6 +281,9 @@ def main_export(
             possible_synonyms = ""
         logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
 
+    task_support_stateful = ensure_export_task_support_stateful(task)
+    stateful = stateful and task_support_stateful
+
     preprocessors = maybe_load_preprocessors(
         model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
@@ -373,6 +380,7 @@ def main_export(
         device=device,
         compression_option=compression_option,
         compression_ratio=compression_ratio,
+        stateful=stateful,
         model_kwargs=model_kwargs,
     )
 

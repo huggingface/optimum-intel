@@ -17,8 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.8, 3.9]
+        python-version: [3.8, 3.11]
         os: [ubuntu-latest]
+        openvino: ["openvino", "openvino-nightly"]
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -33,12 +34,9 @@ jobs:
         # install PyTorch CPU version to avoid installing CUDA packages on GitHub runner without GPU
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         pip install .[openvino,nncf,tests,diffusers]
+    - name: Install openvino-nightly (optional)
+      run: pip uninstall -y openvino && pip install ${{ matrix.openvino }}
+      if: matrix.openvino == 'openvino-nightly'
     - name: Test with Pytest
       run: |
         pytest tests/openvino/ --ignore test_modeling_basic
-    - name: Test openvino-nightly import
-      run: |
-        pip uninstall -y openvino
-        pip install openvino-nightly
-        python -c "from optimum.intel import OVModelForCausalLM; OVModelForCausalLM.from_pretrained('hf-internal-testing/tiny-random-gpt2', export=True, compile=False)"
-
