@@ -554,7 +554,7 @@ class OVModelForImageClassification(OVModel):
             model = TimmForImageClassification.from_pretrained(model_id, **kwargs)
             onnx_config = TimmOnnxConfig(model.config)
 
-            return cls._to_load(model=model, config=config, onnx_config=onnx_config)
+            return cls._to_load(model=model, config=config, onnx_config=onnx_config, stateful=False, **kwargs)
         else:
             return super().from_pretrained(
                 model_id=model_id,

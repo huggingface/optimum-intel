@@ -51,6 +51,7 @@ from optimum.intel import (
 
 
 from optimum.intel.openvino.configuration import INT8_WEIGHT_COMPRESSION_CONFIG
+from optimum.intel.utils.import_utils import is_openvino_version
 from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
 
 _TASK_TO_DATASET = {
@@ -166,6 +167,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl"),
     )
 
+    IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_automodel_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
         task = model_cls.export_feature
@@ -218,7 +221,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             model_id = MODEL_NAMES[model_name]
-            transformers_model = model_cls.from_pretrained(model_id, export=True)
+            transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=False)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -239,9 +242,43 @@ class OVWeightCompressionTest(unittest.TestCase):
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS)
+    @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
+    def test_ovmodel_4bit_weight_compression_stateful(self, model_cls, model_name, expected_int8, expected_int4):
+        task = model_cls.export_feature
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_id = MODEL_NAMES[model_name]
+            transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=True)
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
+            quantizer.quantize(
+                save_directory=tmp_dir,
+                weights_only=True,
+                quantization_config=OVConfig(compression={"type": "int4_sym_g128", "ratio": 0.8}),
+            )
+            model = model_cls.from_pretrained(tmp_dir)
+            self.assertTrue(model.stateful)
+            self.assertTrue(model.use_cache)
+
+            _, num_int8, num_int4 = get_num_quantized_nodes(model)
+            self.assertEqual(expected_int8, num_int8)
+            self.assertEqual(expected_int4, num_int4)
+
+            tokens = tokenizer("This is a sample input", return_tensors="pt")
+            outputs = model(**tokens)
+
+            self.assertTrue("logits" in outputs)
+            self.assertTrue("past_key_values" in outputs)
+            self.assertIsInstance(outputs.past_key_values, tuple)
+            self.assertTrue(len(outputs.past_key_values) == 1 and len(outputs.past_key_values[0]) == 0)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
-        model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True)
+        model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=False)
 
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
@@ -255,6 +292,17 @@ class OVWeightCompressionTest(unittest.TestCase):
         for i, model in enumerate(models):
             _, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int8[i], num_int8)
+
+    @parameterized.expand((OVModelForCausalLM, "gpt2"))
+    @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
+    def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
+        model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=True)
+        self.assertTrue(model.stateful)
+        self.assertTrue(model.use_cache)
+
+        expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type][0]
+        _, num_int8, _ = get_num_quantized_nodes(model)
+        self.assertEqual(expected_ov_int8, num_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type):
