@@ -124,12 +124,12 @@ class OVModel(OVBaseModel):
         self.auto_model_class.register(AutoConfig, self.__class__)
         self.device = torch.device("cpu")
 
-    def to(self, device: str):
+    def to(self, device: Union["torch.device", str]):
         """
         Use the specified `device` for inference. For example: "cpu" or "gpu". `device` can
         be in upper or lower case. To speed up first inference, call `.compile()` after `.to()`.
         """
-        self._device = device.upper()
+        self._device = str(device).upper()
         self.request = None
         return self
 

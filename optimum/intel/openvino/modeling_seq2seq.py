@@ -299,8 +299,8 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         except AttributeError:
             pass
 
-    def to(self, device: str):
-        self._device = device.upper()
+    def to(self, device: Union["torch.device", str]):
+        self._device = str(device).upper()
         self.encoder._device = self._device
         self.decoder._device = self._device
         if self.use_cache:
@@ -750,12 +750,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq):
     auto_model_class = WhisperForConditionalGeneration
 
     @classmethod
-    def _from_pretrained(
-        cls,
-        model_id: Union[str, Path],
-        config: "PretrainedConfig",
-        **kwargs,
-    ):
+    def _from_pretrained(cls, model_id: Union[str, Path], config: "PretrainedConfig",  **kwargs):
         return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
 
     # Adapted from transformers.models.whisper.modeling_whisper

@@ -329,8 +329,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             **kwargs,
         )
 
-    def to(self, device: str):
-        self._device = device.upper()
+    def to(self, device: Union["torch.device", str]):
+        self._device = str(device).upper()
         self.clear_requests()
         return self
 
