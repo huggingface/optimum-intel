@@ -19,9 +19,9 @@ To install the latest release of 🤗 Optimum Intel with the corresponding requi
 
 | Accelerator                                                                                                      | Installation                                                         |
 |:-----------------------------------------------------------------------------------------------------------------|:---------------------------------------------------------------------|
-| [Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/#introduction)                 | `pip install --upgrade-strategy eager "optimum[ipex]"`               |
 | [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `pip install --upgrade-strategy eager "optimum[neural-compressor]"`  |
 | [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `pip install --upgrade-strategy eager "optimum[openvino,nncf]"`      |
+| [Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/#introduction)                 | `pip install --upgrade-strategy eager "optimum[ipex]"`               |
 
 The `--upgrade-strategy eager` option is needed to ensure `optimum-intel` is upgraded to the latest version.
 
@@ -43,26 +43,6 @@ python -m pip install "optimum-intel[extras]"@git+https://github.com/huggingface
 where `extras` can be one or more of `ipex`, `neural-compressor`, `openvino`, `nncf`.
 
 # Quick tour
-
-## Intel Extension for PyTorch
-To load a model and run generation with IPEX graph mode, you can just replace your `AutoModelForXxx` class with the corresponding `IPEXModelForXxx` class.
-```diff
-import torch
-from transformers import AutoTokenizer, pipeline
-- from transformers import AutoModelForCausalLM
-+ from optimum.intel.ipex.modeling_decoder import IPEXModelForCausalLM
-
-
-model_id = "gpt2"
-- model = AutoModelForCausalLM.from_pretrained(model_id)
-+ model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=torch.bfloat16)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-text_generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
-
-print(text_generator("This is an example input"))
-```
-
-For now, we only support text-generation tasks.
 
 ## Neural Compressor
 
@@ -220,6 +200,28 @@ Quantization aware training (QAT) is applied in order to simulate the effects of
 ```
 
 You can find more examples in the [documentation](https://huggingface.co/docs/optimum/intel/index).
+
+
+## Intel Extension for PyTorch
+
+To load a model and run generation with IPEX graph mode, you can just replace your `AutoModelForXxx` class with the corresponding `IPEXModelForXxx` class.
+
+```diff
+import torch
+from transformers import AutoTokenizer, pipeline
+- from transformers import AutoModelForCausalLM
++ from optimum.intel.ipex import IPEXModelForCausalLM
+
+
+model_id = "gpt2"
+- model = AutoModelForCausalLM.from_pretrained(model_id)
++ model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=torch.bfloat16)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+text_generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
+results = text_generator("This is an example input")
+```
+
+For now, we only support text-generation tasks.
 
 
 ## Running the examples

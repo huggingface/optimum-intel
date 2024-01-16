@@ -190,6 +190,8 @@ class OptimizationTest(INCTestMixin):
                 is_static=True,
                 load_onnx_model=False,
                 num_samples=num_samples,
+                load_inc_model=False,
+                load_ipex_model=True,
             )
 
     def test_weight_only_quantization(self):
