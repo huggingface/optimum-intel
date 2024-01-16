@@ -750,7 +750,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq):
     auto_model_class = WhisperForConditionalGeneration
 
     @classmethod
-    def _from_pretrained(cls, model_id: Union[str, Path], config: "PretrainedConfig",  **kwargs):
+    def _from_pretrained(cls, model_id: Union[str, Path], config: "PretrainedConfig", **kwargs):
         return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
 
     # Adapted from transformers.models.whisper.modeling_whisper
