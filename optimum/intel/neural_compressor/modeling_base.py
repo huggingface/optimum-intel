@@ -24,6 +24,7 @@ from neural_compressor.utils.pytorch import load
 from transformers import (
     AutoConfig,
     AutoModel,
+    AutoModelForCausalLM,
     AutoModelForMaskedLM,
     AutoModelForMultipleChoice,
     AutoModelForQuestionAnswering,
@@ -37,7 +38,6 @@ from transformers import (
 )
 from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
-from transformers.utils import is_ipex_available
 from transformers.utils.generic import ContextManagers
 
 from ...modeling_base import OptimizedModel
@@ -84,18 +84,12 @@ class INCModel(OptimizedModel):
         )
 
         if getattr(self.config, "backend", None) == "ipex":
-            if not is_ipex_available():
-                raise ImportError(
-                    "Intel PyTorch Extensions was not found, please make sure you've installed the package or run `pip install intel-extension-for-pytorch`"
-                )
-            # Need import intel_extension_for_pytorch for ipex model
-            import intel_extension_for_pytorch as ipex
-
-            # Just to avoid to change by ruff.
-            logger.info("intel_extension_for_pytorch version is " + ipex.__version__)
+            raise NotImplementedError(
+                "`INCModel` does not supported the loading of model resulting from IPEX, please use `IPEXModel` to load your model instead instead"
+            )
 
         # Registers the INCModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
-        # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
+        # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863NotImplementedError
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         if hasattr(self.auto_model_class, "register"):
             self.auto_model_class.register(AutoConfig, self.__class__)
@@ -149,13 +143,6 @@ class INCModel(OptimizedModel):
                 f"Please check if torch quantization the model was obtained with is compatible with {_torch_version}."
             )
 
-        if getattr(config, "backend", None) == "ipex" or getattr(config, "torchscript", False):
-            # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.
-            # load(model_cache_path)
-            model = torch.jit.load(model_cache_path)
-            model = torch.jit.freeze(model.eval())
-            return cls(model, config=config, model_save_dir=model_save_dir, inc_config=inc_config, **kwargs)
-
         model_class = _get_model_class(config, cls.auto_model_class._model_mapping)
         # Load the state dictionary of the model to verify whether the model to get the quantization config
         state_dict = torch.load(model_cache_path, map_location="cpu")
@@ -182,13 +169,10 @@ class INCModel(OptimizedModel):
     def _save_pretrained(self, save_directory: Union[str, Path]):
         output_path = os.path.join(save_directory, WEIGHTS_NAME)
 
-        if isinstance(self.model, torch.nn.Module):
-            state_dict = self.model.state_dict()
-            if self._q_config:
-                state_dict["best_configure"] = self._q_config
-            torch.save(state_dict, output_path)
-        else:
-            torch.jit.save(self.model, output_path)
+        state_dict = self.model.state_dict()
+        if self._q_config:
+            state_dict["best_configure"] = self._q_config
+        torch.save(state_dict, output_path)
 
         if self.inc_config:
             self.inc_config.save_pretrained(save_directory)
@@ -258,3 +242,8 @@ class INCModelForVision2Seq(INCModel):
 class INCModelForXLNetLM(INCModel):
     auto_model_class = XLNetLMHeadModel
     export_feature = "fill-mask"
+
+
+class INCModelForCausalLM(INCModel):
+    auto_model_class = AutoModelForCausalLM
+    export_feature = "text-generation"
