@@ -282,8 +282,7 @@ def main_export(
         logger.info(f"Automatic task detection to {task}{possible_synonyms}.")
 
     task_support_stateful = ensure_export_task_support_stateful(task)
-    if stateful and not task_support_stateful:
-        stateful = False
+    stateful = stateful and task_support_stateful
 
     preprocessors = maybe_load_preprocessors(
         model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
