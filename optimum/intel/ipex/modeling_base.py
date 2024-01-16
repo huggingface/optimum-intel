@@ -134,13 +134,7 @@ class IPEXModel(OptimizedModel):
             except Exception as e:
                 logger.warning(f"failed to use PyTorch jit mode due to: {e}.")
 
-        return cls(
-            model,
-            config=config,
-            use_cache=use_cache,
-            model_dtype=torch_dtype,
-            **kwargs,
-        )
+        return cls(model, config=config, use_cache=use_cache, model_dtype=torch_dtype, **kwargs)
 
     @classmethod
     def _from_pretrained(
