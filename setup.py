@@ -33,7 +33,7 @@ TESTS_REQUIRE = [
     "rjieba",
     "timm",
     "invisible-watermark>=0.2.0",
-    "intel-extension-for-transformers",
+    "intel-extension-for-transformers>=1.3",
     "peft",
 ]
 
