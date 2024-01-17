@@ -717,11 +717,10 @@ def main():
     if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic", "weight_only"}:
         model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
         quantizer = INCQuantizer.from_pretrained(model)
-        if optim_args.quantization_approach != "dynamic":
+        if optim_args.quantization_approach in ["static", "weight_only"]:
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
             train_dataset = train_dataset.select(range(num_calibration_samples))
-            if optim_args.quantization_approach == "static":
-                quantization_config.calibration_sampling_size = num_calibration_samples
+            quantization_config.calibration_sampling_size = num_calibration_samples
 
         quantizer.quantize(
             quantization_config=quantization_config,
