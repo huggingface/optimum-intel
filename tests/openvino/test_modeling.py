@@ -129,9 +129,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(manual_openvino_cache_dir.is_dir())
         self.assertGreaterEqual(len(list(manual_openvino_cache_dir.glob("*.blob"))), 1)
         if is_openvino_version("<", "2023.3"):
-            self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
+            self.assertEqual(loaded_model.compiled_model.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
         else:
-            self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
+            self.assertEqual(loaded_model.compiled_model.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
 
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
@@ -748,7 +748,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     @parameterized.expand(TIMM_MODELS)
     def test_compare_to_timm(self, model_id):
         ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
-        self.assertEqual(ov_model.request.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
+        self.assertEqual(ov_model.compiled_model.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         timm_model = timm.create_model(model_id, pretrained=True)
         preprocessor = TimmImageProcessor.from_pretrained(model_id)
@@ -886,20 +886,21 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
 
-        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=True, ov_config=F32_CONFIG)
         _ = model_with_pkv.generate(**tokens)  # warmup
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=False)
+        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=False, ov_config=F32_CONFIG)
         _ = model_without_pkv.generate(**tokens)  # warmup
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
-
+        print(outputs_model_with_pkv)
+        print(outputs_model_without_pkv)    
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
@@ -1201,20 +1202,19 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
 
-        model_with_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=True, ov_config=F32_CONFIG)
         _ = model_with_pkv.generate(**inputs)  # warmup
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=False)
+        model_without_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=False, ov_config=F32_CONFIG)
         _ = model_without_pkv.generate(**inputs)  # warmup
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
                 **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
-
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)

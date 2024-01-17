@@ -135,21 +135,13 @@ class OVBaseDecoderModel(OVModel):
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
-        self._original_model = self.model.clone()  # keep original model for serialization
-        self._pkv_precision = Type.f32
-        self.next_beam_idx = None
-        self.update_pkv_precision()
-        if self.is_dynamic:
-            self.model = self._reshape(self.model, -1, -1)
         is_stateful_supported = ensure_stateful_is_available(warn=False)
-
         if self.use_cache and not self.stateful:
             logger.warn(
                 "Provided model does not contain state. It may lead to sub-optimal performance."
                 "Please reexport model with updated OpenVINO version >= 2023.3.0 calling the `from_pretrained` method with original model "
                 "and `export=True` parameter"
             )
-
         if self.stateful:
             if stateful is None:
                 stateful = is_stateful_supported
@@ -176,7 +168,13 @@ class OVBaseDecoderModel(OVModel):
         if use_cache ^ self.use_cache:
             raise_error(self.use_cache, use_cache, "use_cache")
 
-        if enable_compilation:
+    def init_ov_model(self, compile=True):
+        self._pkv_precision = Type.f32
+        self.update_pkv_precision(force_fp32=False)
+        if self.is_dynamic:
+            self.model = self._reshape(self.model, -1, -1)
+        self._original_model = self.model.clone()  # keep original model for serialization
+        if compile:
             self.compile()
 
     def update_pkv_precision(self, force_fp32=False):
@@ -282,9 +280,10 @@ class OVBaseDecoderModel(OVModel):
         config.is_decoder = True
         config.is_encoder_decoder = False
         config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(
+        model_instance = cls._from_pretrained(
             model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=False, stateful=None, **kwargs
         )
+        return model_instance
 
     def _reshape(
         self,
@@ -322,14 +321,18 @@ class OVBaseDecoderModel(OVModel):
         return self
 
     def compile(self):
-        if self.request is None:
+        if self.compiled_model is None:
             super().compile()
-            self.request = self.request.create_infer_request()
 
     def _make_stateful(self):
         patch_stateful(self.config, self.model)
         self.stateful = True
 
+    def create_infer_request(self):
+        if self.compiled_model is None:
+            self.compile()
+        if self.request is None:
+            self.request = self.compiled_model.create_infer_request()
 
 @add_start_docstrings(
     """
@@ -359,6 +362,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
+        self.create_infer_request()
+
         if self.use_cache and past_key_values is not None:
             input_ids = input_ids[:, -1:]
 
@@ -556,8 +561,17 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         else:
             init_cls = cls
 
-        return init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
+        model_instance = init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
+        model_instance.init_ov_model(compile=kwargs.get("compile", True))
+        model_instance.request = None
+        return model_instance
 
+    def clone(self):
+        model_instance = self.__class__(model=self.model, config=self.config, compile=False)
+        model_instance.compiled_model = self.compiled_model
+        model_instance._pkv_precision = self._pkv_precision
+        model_instance.request = None
+        return model_instance
 
 class OVBloomForCausalLM(OVModelForCausalLM):
     # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM.prepare_inputs_for_generation
