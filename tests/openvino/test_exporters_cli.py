@@ -41,6 +41,13 @@ from optimum.intel import (  # noqa
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
 
+try:
+
+    OV_TOKENIZERS_NOT_AVAILABLE = False
+except Exception:
+    OV_TOKENIZERS_NOT_AVAILABLE = True
+
+
 class OVCLIExportTestCase(unittest.TestCase):
     """
     Integration tests ensuring supported models are correctly exported.
@@ -117,18 +124,22 @@ class OVCLIExportTestCase(unittest.TestCase):
         for arch in SUPPORTED_ARCHITECTURES
         if not arch[0].endswith("-with-past") and not arch[1].endswith("-refiner")
     )
+    @unittest.skipIf(OV_TOKENIZERS_NOT_AVAILABLE, reason="OpenVINO Tokenizers not available")
     def test_exporters_cli_tokenizers(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
-            subprocess.run(
+            output = subprocess.check_output(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
                 shell=True,
-                check=True,
-            )
+                stderr=subprocess.STDOUT,
+            ).decode()
             save_dir = Path(tmpdir)
-            self.assertEqual(
-                self.EXPECTED_NUMBER_OF_TOKENIZER_MODELS[model_type],
-                sum("tokenizer" in file for file in map(str, save_dir.rglob("*.xml"))),
-            )
+            number_of_tokenizers = sum("tokenizer" in file for file in map(str, save_dir.rglob("*.xml")))
+            self.assertEqual(self.EXPECTED_NUMBER_OF_TOKENIZER_MODELS[model_type], number_of_tokenizers)
+
+            if number_of_tokenizers == 1:
+                self.assertFalse("Detokenizer is not supported, convert tokenizer only." in output)
+            elif number_of_tokenizers == 0:
+                self.assertFalse("OpenVINO Tokenizer export for" in output and "is not supported." in output)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):

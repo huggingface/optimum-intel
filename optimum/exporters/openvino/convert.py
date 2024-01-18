@@ -510,7 +510,9 @@ def export_tokenizer(
     try:
         from openvino_tokenizers import convert_tokenizer
     except ModuleNotFoundError:
-        logger.info("Run `pip install openvino-tokenizers` to get OpenVINO tokenizer/detokenizer models.")
+        logger.info(
+            "Run `pip install openvino-tokenizers[transformers]` to get OpenVINO tokenizer/detokenizer models."
+        )
 
     if not isinstance(output, Path):
         output = Path(output)
@@ -521,10 +523,12 @@ def export_tokenizer(
         logger.warning("Detokenizer is not supported, convert tokenizer only.")
         converted = convert_tokenizer(tokenizer, with_detokenizer=False)
     except OVTypeError:
-        logger.warning(f"OpenVINO Tokenizer for {type(tokenizer).__name__} is not supported.")
+        logger.warning(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
         return
     except Exception as exception:
-        logger.warning(f"OpenVINO Tokenizer {type(tokenizer).__name__} is not supported. Exception: {exception}")
+        logger.warning(
+            f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported. Exception: {exception}"
+        )
         return
 
     if not isinstance(converted, tuple):
