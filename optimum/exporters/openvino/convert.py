@@ -31,7 +31,7 @@ from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflo
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
 
-from ...intel.utils.import_utils import _transformers_version, is_nncf_available, is_optimum_version
+from ...intel.utils.import_utils import _torch_version, _transformers_version, is_nncf_available, is_optimum_version, is_transformers_version
 from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_stateful_is_available, patch_stateful
 from .utils import (
@@ -323,13 +323,13 @@ def export_pytorch(
     output = Path(output)
 
     if stateful:
-        if _transformers_version < "4.36" or torch.__version__ < "2.1.1":
+        if is_transformers_version("<", "4.36") or  is_torch_version("<", "2.1.1"):
             COLOR_RED = "\033[1;31m"
             COLOR_RESET = "\033[0m"
             logger.warning(
                 COLOR_RED
                 + "[WARNING] For good performance with stateful models, transformers>=4.36.2 and PyTorch>=2.1.1 are required. "
-                f"This Python environment has Transformers {_transformers_version} and PyTorch {torch.__version__}. "
+                f"This Python environment has Transformers {_transformers_version} and PyTorch {_torch_version}. "
                 "Consider upgrading PyTorch and Transformers, for example by running "
                 "`pip install --upgrade --upgrade-strategy eager optimum[openvino,nncf]`, and export the model again"
                 + COLOR_RESET
