@@ -106,10 +106,10 @@ class OVBaseDecoderModel(OVModel):
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         **kwargs,
     ):
-        if not dynamic_shapes:
-            raise ValueError(
-                "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
-            )
+        # if not dynamic_shapes:
+        #     raise ValueError(
+        #         "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
+        #     )
 
         enable_compilation = kwargs.get("compile", True)
         kwargs["compile"] = False  # avoid extra compilation in the base class
@@ -318,7 +318,8 @@ class OVBaseDecoderModel(OVModel):
         return model
 
     def reshape(self, batch_size: int, sequence_length: int):
-        logger.warning("Static shapes are not supported for causal language model.")
+        #logger.warning("Static shapes are not supported for causal language model.")
+        self.model = self._reshape(self.model, batch_size, sequence_length)
         return self
 
     def compile(self):
