@@ -23,6 +23,7 @@ from transformers import T5Tokenizer, T5TokenizerFast
 from transformers.utils import is_tf_available, is_torch_available
 
 from openvino.runtime import PartialShape, save_model
+from openvino.runtime.exceptions import OVTypeError
 from openvino.runtime.utils.types import get_element_type
 from openvino.tools.ovc import convert_model
 from optimum.exporters.onnx.base import OnnxConfig
@@ -489,9 +490,7 @@ def export_models(
     return outputs
 
 
-OV_TOKENIZER_FILE_NAME = "openvino_tokenizer{}.xml"
-OV_DETOKENIZER_FILE_NAME = "openvino_detokenizer{}.xml"
-UNSUPPORTED_TOKENZIER_CLASSES = (
+UNSUPPORTED_TOKENIZER_CLASSES = (
     T5Tokenizer,
     T5TokenizerFast,
 )
@@ -499,13 +498,13 @@ UNSUPPORTED_TOKENZIER_CLASSES = (
 
 def export_tokenizer(
     tokenizer,
-    output_path: Union[str, Path],
+    output: Union[str, Path],
     suffix: Optional[str] = "",
 ):
-    from openvino.runtime.exceptions import OVTypeError
+    from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME  # avoid circular imports
 
-    if isinstance(tokenizer, UNSUPPORTED_TOKENZIER_CLASSES):
-        logger.info("OpenVINO Tokenizer for this model is not supported.")
+    if isinstance(tokenizer, UNSUPPORTED_TOKENIZER_CLASSES):
+        logger.info(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
         return
 
     try:
@@ -513,23 +512,23 @@ def export_tokenizer(
     except ModuleNotFoundError:
         logger.info("Run `pip install openvino-tokenizers` to get OpenVINO tokenizer/detokenizer models.")
 
-    if not isinstance(output_path, Path):
-        output_path = Path(output_path)
+    if not isinstance(output, Path):
+        output = Path(output)
 
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)
     except NotImplementedError:
-        logger.info("Detokenizer is not supported, convert tokenizer only.")
+        logger.warning("Detokenizer is not supported, convert tokenizer only.")
         converted = convert_tokenizer(tokenizer, with_detokenizer=False)
     except OVTypeError:
-        logger.info("OpenVINO Tokenizer for this model is not supported.")
+        logger.warning(f"OpenVINO Tokenizer for {type(tokenizer).__name__} is not supported.")
         return
     except Exception as exception:
-        logger.warning(f"OpenVINO Tokenizer for this model is not supported. Exception: {exception}")
+        logger.warning(f"OpenVINO Tokenizer {type(tokenizer).__name__} is not supported. Exception: {exception}")
         return
 
     if not isinstance(converted, tuple):
         converted = (converted,)
 
-    for model, file_name in zip(converted, (OV_TOKENIZER_FILE_NAME, OV_DETOKENIZER_FILE_NAME)):
-        save_model(model, output_path / file_name.format(suffix))
+    for model, file_name in zip(converted, (OV_TOKENIZER_NAME, OV_DETOKENIZER_NAME)):
+        save_model(model, output / file_name.format(suffix))
