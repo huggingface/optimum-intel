@@ -31,7 +31,14 @@ from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflo
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
 
-from ...intel.utils.import_utils import _torch_version, _transformers_version, is_nncf_available, is_optimum_version, is_transformers_version
+from ...intel.utils.import_utils import (
+    _torch_version,
+    _transformers_version,
+    is_nncf_available,
+    is_optimum_version,
+    is_torch_version,
+    is_transformers_version,
+)
 from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_stateful_is_available, patch_stateful
 from .utils import (
@@ -323,7 +330,7 @@ def export_pytorch(
     output = Path(output)
 
     if stateful:
-        if is_transformers_version("<", "4.36") or  is_torch_version("<", "2.1.1"):
+        if is_transformers_version("<", "4.36") or is_torch_version("<", "2.1.1"):
             COLOR_RED = "\033[1;31m"
             COLOR_RESET = "\033[0m"
             logger.warning(
