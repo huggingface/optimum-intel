@@ -886,21 +886,25 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
 
-        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=True, ov_config=F32_CONFIG)
+        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(
+            model_id, export=True, use_cache=True, ov_config=F32_CONFIG
+        )
         _ = model_with_pkv.generate(**tokens)  # warmup
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=False, ov_config=F32_CONFIG)
+        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(
+            model_id, export=True, use_cache=False, ov_config=F32_CONFIG
+        )
         _ = model_without_pkv.generate(**tokens)  # warmup
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
         print(outputs_model_with_pkv)
-        print(outputs_model_without_pkv)    
+        print(outputs_model_without_pkv)
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
@@ -1202,14 +1206,18 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
 
-        model_with_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=True, ov_config=F32_CONFIG)
+        model_with_pkv = OVModelForPix2Struct.from_pretrained(
+            model_id, export=True, use_cache=True, ov_config=F32_CONFIG
+        )
         _ = model_with_pkv.generate(**inputs)  # warmup
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=False, ov_config=F32_CONFIG)
+        model_without_pkv = OVModelForPix2Struct.from_pretrained(
+            model_id, export=True, use_cache=False, ov_config=F32_CONFIG
+        )
         _ = model_without_pkv.generate(**inputs)  # warmup
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(

@@ -111,7 +111,6 @@ class OVBaseDecoderModel(OVModel):
                 "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
             )
 
-        enable_compilation = kwargs.get("compile", True)
         kwargs["compile"] = False  # avoid extra compilation in the base class
 
         super().__init__(
@@ -333,6 +332,7 @@ class OVBaseDecoderModel(OVModel):
             self.compile()
         if self.request is None:
             self.request = self.compiled_model.create_infer_request()
+
 
 @add_start_docstrings(
     """
@@ -572,6 +572,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         model_instance._pkv_precision = self._pkv_precision
         model_instance.request = None
         return model_instance
+
 
 class OVBloomForCausalLM(OVModelForCausalLM):
     # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM.prepare_inputs_for_generation
