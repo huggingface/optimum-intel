@@ -56,6 +56,9 @@ from optimum.intel.openvino.trainer import OVTrainer
 from optimum.intel.openvino.utils import OV_XML_FILE_NAME
 
 
+F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
+
+
 def initialize_movement_sparsifier_parameters_by_sparsity(
     movement_controller: MovementSparsityController,
     sparsity: float = 0.95,
@@ -250,7 +253,7 @@ class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
 
     def get_ov_model(self, model_id=None) -> OVModel:
         model_id = model_id or self.output_dir
-        return self.ovmodel_cls.from_pretrained(model_id)
+        return self.ovmodel_cls.from_pretrained(model_id, ov_config=F32_CONFIG)
 
     def get_nncf_config_with_overflow_fix_override(
         self, nncf_compression_config: Union[List[Dict], Dict, None], value: str = "enable"
@@ -628,7 +631,7 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
         # image models, e.g. swin, may require a determined image size
         model_id = model_id or self.output_dir
         size = (self.feature_extractor.size["height"], self.feature_extractor.size["width"])
-        ovmodel = self.ovmodel_cls.from_pretrained(model_id, compile=False)
+        ovmodel = self.ovmodel_cls.from_pretrained(model_id, compile=False, ov_config=F32_CONFIG)
         # dynamic batch size for tiny-swin does not work in OpenVINO 2023.0
         batch_size = 1 if self.is_swin else -1
         ovmodel.reshape(batch_size, 3, *size)

@@ -70,12 +70,17 @@ _openvino_available = importlib.util.find_spec("openvino") is not None
 _openvino_version = "N/A"
 if _openvino_available:
     try:
-        _openvino_version = importlib_metadata.version("openvino")
-    except importlib_metadata.PackageNotFoundError:
-        try:
-            _openvino_version = importlib_metadata.version("openvino-nightly")
-        except importlib_metadata.PackageNotFoundError:
-            _openvino_available = False
+        from openvino.runtime import get_version
+
+        version = get_version()
+        # avoid invalid format
+        if "-" in version:
+            major_version, dev_info = version.split("-", 1)
+            commit_id = dev_info.split("-")[0]
+            version = f"{major_version}-{commit_id}"
+        _openvino_version = version
+    except ImportError:
+        _openvino_available = False
 
 
 _nncf_available = importlib.util.find_spec("nncf") is not None

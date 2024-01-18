@@ -193,3 +193,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             _, num_int8, num_int4 = get_num_quantized_nodes(model)
             self.assertEqual(expected_int8, num_int8)
             self.assertEqual(expected_int4, num_int4)
+
+    def test_exporters_cli_help(self):
+        subprocess.run(
+            "optimum-cli export openvino --help",
+            shell=True,
+            check=True,
+        )
