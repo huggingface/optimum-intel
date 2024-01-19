@@ -52,8 +52,8 @@ def gen_thread(prompt, results, i):
         "do_sample": True,
         "top_p": 1.0,
         "top_k": 50,
-        "num_beams" :5,
-        "repetition_penalty": 1.1
+        "num_beams": 5,
+        "repetition_penalty": 1.1,
     }
     start = datetime.now()
     model_exec = model.clone()
