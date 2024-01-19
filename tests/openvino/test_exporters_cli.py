@@ -42,6 +42,7 @@ from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
 
 try:
+    import openvino_tokenizers
     OV_TOKENIZERS_NOT_AVAILABLE = False
 except Exception:
     OV_TOKENIZERS_NOT_AVAILABLE = True
