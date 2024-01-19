@@ -305,7 +305,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             pass
 
     def to(self, device: str):
-        self._device = device.upper()
+        self._device = str(device).upper()
         self.encoder._device = self._device
         self.decoder._device = self._device
         if self.use_cache:
