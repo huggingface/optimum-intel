@@ -50,19 +50,19 @@ optimum-cli export openvino --model local_path --task text-generation-with-past 
 Once the model is exported, you can load the OpenVINO model using :
 
 ```python
-from optimum.intel import AutoModelForCausalLM
+from optimum.intel import OVModelForCausalLM
 
-model_id = "helenai/gpt2-ov"
-model = AutoModelForCausalLM.from_pretrained(model_id)
+model_id = "ov_model"
+model = OVModelForCausalLM.from_pretrained(model_id)
 ```
 
 You can also load your PyTorch checkpoint and convert it to the OpenVINO format on-the-fly, by setting `export=True` when loading your model.
 
 ```python
-from optimum.intel import AutoModelForCausalLM
+from optimum.intel import OVModelForCausalLM
 
 model_id = "gpt2"
-model = AutoModelForCausalLM.from_pretrained(model_id, export=True)
+model = OVModelForCausalLM.from_pretrained(model_id, export=True)
 model.save_pretrained("ov_model")
 ```
 

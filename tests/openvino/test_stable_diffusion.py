@@ -55,7 +55,7 @@ from optimum.onnxruntime import (
 from optimum.utils.import_utils import _diffusers_version
 
 
-F32_CONFIG = {"CACHE_DIR": "", "INFERENCE_PRECISION_HINT": "f32"}
+F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
 
 
 def _generate_inputs(batch_size=1):
@@ -173,7 +173,7 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_diffusers_pipeline(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True)
+        pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         height, width, batch_size = 128, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         inputs["prompt"] = "A painting of a squirrel eating a burger"
@@ -304,7 +304,7 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_diffusers_pipeline(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True)
+        pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         batch_size, num_images, height, width = 1, 1, 64, 64
         latents = pipeline.prepare_latents(
             batch_size * num_images,
