@@ -92,6 +92,15 @@ if _nncf_available:
         _nncf_available = False
 
 
+_openvino_tokenizers_available = importlib.util.find_spec("openvino_tokenizers") is not None
+_openvino_tokenizers_version = "N/A"
+if _openvino_tokenizers_available:
+    try:
+        _openvino_tokenizers_version = importlib_metadata.version("openvino_tokenizers")
+    except importlib_metadata.PackageNotFoundError:
+        _openvino_tokenizers_available = False
+
+
 _diffusers_available = importlib.util.find_spec("diffusers") is not None
 _diffusers_version = "N/A"
 if _diffusers_available:
@@ -133,6 +142,10 @@ def is_ipex_available():
 
 def is_openvino_available():
     return _openvino_available
+
+
+def is_openvino_tokenizers_available():
+    return _openvino_tokenizers_available
 
 
 def is_nncf_available():

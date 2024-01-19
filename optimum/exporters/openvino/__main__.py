@@ -27,7 +27,6 @@ from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version, is_transformers_version
-
 from .convert import export_models, export_tokenizer
 from .stateful import ensure_export_task_support_stateful
 
