@@ -88,7 +88,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         **kwargs,
     ):
         self._internal_dict = config
-        self._device = device.upper()
+        self._device = str(device).upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {}
         self._model_save_dir = (
