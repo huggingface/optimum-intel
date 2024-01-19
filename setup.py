@@ -13,8 +13,8 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
+    "transformers[sentencepiece] @ git+https://github.com/huggingface/transformers.git",
     "optimum>=1.14.0",
-    "transformers>=4.20.0",
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
