@@ -126,7 +126,7 @@ There are also alternative compression options for a different performance-accur
 | `int4_asym_g64`                     | INT4 *asymmetrically* quantized weights of most of the Linear layers with group size 64. The rest of the Linear layers is quantized to INT8.    |
 
 
-`--ratio` CLI parameter controls the ratio between 4-bit and 8-bit quantized layers and can also chage performance-accuracy trade-off for the optimized model. It is valid only for INT4 quantization options.
+`--ratio` CLI parameter controls the ratio between 4-bit and 8-bit quantized layers and can also change performance-accuracy trade-off for the optimized model. It is valid only for INT4 quantization options.
 
 
 To apply quantization on both weights and activations, you can use the `OVQuantizer`, more information in the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov#optimization).
