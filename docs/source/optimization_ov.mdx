@@ -72,7 +72,7 @@ from optimum.intel import OVModelForCausalLM
 model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
 ```
 
-> **NOTE: ** `load_in_8bit` is enabled by default for the models larger than 1 billion parameters.
+> **NOTE:** `load_in_8bit` is enabled by default for the models larger than 1 billion parameters.
 
 For the 4-bit weight quantization we recommend using the NNCF API like below:
 ```python

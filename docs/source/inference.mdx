@@ -112,10 +112,11 @@ from optimum.intel import OVModelForCausalLM
 model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
 ```
 
-> **NOTE: ** `load_in_8bit` is enabled by default for the models larger than 1 billion parameters.
+> **NOTE:** `load_in_8bit` is enabled by default for the models larger than 1 billion parameters.
 
 There are also alternative compression options foe a different performance-accuracy trade-off:
-| Option                                 | Description                          |
+
+| Option                                 | Description                        |
 |--------------------------------------|--------------------------------------|
 | `fp16`                               | Float16 weights.   |
 | `int8`                               | INT8 weights.      |
@@ -123,6 +124,7 @@ There are also alternative compression options foe a different performance-accur
 | `int4_asym_g128`                     | INT4 *asymmetrically* quantized weights of most of the Linear layers with group size 128. The rest of the Linear layers is quantized to INT8.    |
 | `int4_sym_g64`                      | INT4 *symmetrically* quantized weights of most of the Linear layers with group size 64. The rest of the Linear layers is quantized to INT8.   |
 | `int4_asym_g64`                     | INT4 *asymmetrically* quantized weights of most of the Linear layers with group size 64. The rest of the Linear layers is quantized to INT8.    |
+
 
 `--ratio` CLI parameter controls the ratio between 4-bit and 8-bit quantized layers and can also chage performance-accuracy trade-off for the optimized model. It is valid only for INT4 quantization options.
 
