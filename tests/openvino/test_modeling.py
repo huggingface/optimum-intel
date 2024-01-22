@@ -593,8 +593,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     def test_auto_device_loading(self):
+        OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         for device in ("AUTO", "AUTO:CPU"):
-            OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
             model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
             model.half()
             self.assertEqual(model._device, device)

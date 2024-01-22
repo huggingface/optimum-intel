@@ -266,11 +266,11 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.device = torch.device("cpu")
         self.decoder_with_past = None
         enable_compilation = kwargs.get("compile", True)
-        self.encoder = OVEncoder(self.encoder_model, self._device, parent_model=self)
-        self.decoder = OVDecoder(self.decoder_model, self._device, parent_model=self)
+        self.encoder = OVEncoder(self.encoder_model, parent_model=self)
+        self.decoder = OVDecoder(self.decoder_model, parent_model=self)
 
         if self.use_cache:
-            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, self._device, parent_model=self)
+            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, parent_model=self)
         if enable_compilation:
             self.compile()
 
@@ -412,10 +412,10 @@ class OVEncoder:
             The OpenVINO inference request associated to the encoder.
     """
 
-    def __init__(self, model: openvino.runtime.Model, device: str, parent_model: OVModelForSeq2SeqLM):
+    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
-        self._device = device
         self.parent_model = parent_model
+        self._device = self.parent_model._device
         self.device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.main_input_name = self.parent_model.main_input_name or "input_ids"
@@ -477,10 +477,10 @@ class OVDecoder:
             The device type used by this process.
     """
 
-    def __init__(self, model: openvino.runtime.Model, device: str, parent_model: OVModelForSeq2SeqLM):
+    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
-        self._device = device
         self.parent_model = parent_model
+        self._device = self.parent_model._device
         self.device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
