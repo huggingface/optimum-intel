@@ -62,6 +62,36 @@ tokenizer.save_pretrained(save_dir)
 
 The `quantize()` method applies post-training static quantization and export the resulting quantized model to the OpenVINO Intermediate Representation (IR). The resulting graph is represented with two files: an XML file describing the network topology and a binary file describing the weights. The resulting model can be run on any target Intel device.
 
+## LLM weight-only quantization
+
+You can optimize the performance of text-generation LLMs by quantizing weights to various precisions that provides different performance-accuracy trade-off.
+
+```python
+from optimum.intel import OVModelForCausalLM
+
+model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
+```
+
+> **NOTE: ** `load_in_8bit` is enabled by default for the models larger than 1 billion parameters.
+
+For the 4-bit weight quantization we recommend using the NNCF API like below:
+```python
+from optimum.intel import OVModelForCausalLM
+import nncf
+
+model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=False)
+model.model = nncf.compress_weights(
+        model.model,
+        mode=nncf.CompressWeightsMode.INT4_SYM,
+        ratio=0.8,
+        group_size=128,
+    )
+model.save_pretrained("compressed_model")
+```
+
+For more details, please refer to the corresponding NNCF [documentation](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/CompressWeights.md).
+
+
 ## Training-time optimization
 
 Apart from optimizing a model after training like post-training quantization above, `optimum.openvino` also provides optimization methods during training, namely Quantization-Aware Training (QAT) and Joint Pruning, Quantization and Distillation (JPQD).
