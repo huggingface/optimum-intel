@@ -600,10 +600,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_print_model_properties(self):
         # test setting OPENVINO_LOG_LEVEL to 3, which calls _print_compiled_model_properties
-        openvino_log_level = os.environ.get("OPENVINO_LOG_LEVEL", "")
+        openvino_log_level = os.environ.get("OPENVINO_LOG_LEVEL", None)
         os.environ["OPENVINO_LOG_LEVEL"] = "3"
         model = OVModelForSequenceClassification.from_pretrained(MODEL_NAMES["bert"], export=True)
-        os.environ["OPENVINO_LOG_LEVEL"] = openvino_log_level
+        if openvino_log_level is not None:
+            os.environ["OPENVINO_LOG_LEVEL"] = openvino_log_level
         # test calling function directly
         _print_compiled_model_properties(model.request)
 
