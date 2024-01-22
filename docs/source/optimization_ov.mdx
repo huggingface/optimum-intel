@@ -64,7 +64,7 @@ The `quantize()` method applies post-training static quantization and export the
 
 ##  Weight-only quantization
 
-You can optimize the performance of text-generation LLMs by quantizing weights to various precisions that provide different performance-accuracy trade-off.
+You can optimize the performance of text-generation LLMs by quantizing weights to various precisions that provide different performance-accuracy trade-offs.
 
 ```python
 from optimum.intel import OVModelForCausalLM
@@ -72,7 +72,7 @@ from optimum.intel import OVModelForCausalLM
 model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
 ```
 
-> **NOTE:** `load_in_8bit` is enabled by default for the models larger than 1 billion parameters.
+> **NOTE:** `load_in_8bit` is enabled by default for models larger than 1 billion parameters.
 
 For the 4-bit weight quantization we recommend using the NNCF API like below:
 ```python

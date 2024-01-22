@@ -102,7 +102,7 @@ You can also apply 8-bit or 4-bit weight quantization when exporting your model 
 optimum-cli export openvino --model gpt2 --weight-format int8 ov_model
 ```
 
-This will results in the exported model linear and embedding layers to be quantized to INT8 or INT4, the activations will be kept in floating point precision.
+This will result in the exported model linear and embedding layers to be quantized to INT8 or INT4, the activations will be kept in floating point precision.
 
 This can also be done when loading your model by setting the `load_in_8bit` argument when calling the `from_pretrained()` method.
 
@@ -122,7 +122,7 @@ There are also alternative compression options for a different performance-accur
 | `int8`                                                              | INT8 weights      |
 | `int4_sym_g128`, `int4_asym_g128`, `int4_sym_g64`, `int4_asym_g64`* | INT4 weights      |
 
-*`sym` and `asym` stand for symmetric and asymmetric quantization respectively, `g128` means the group size `128`. 
+*`sym` and `asym` stand for symmetric and asymmetric quantization, `g128` and `g64` means the group size `128` and `64` respectively. 
 
 `--ratio` CLI parameter controls the ratio between 4-bit and 8-bit quantized layers and can also change performance-accuracy trade-off for the optimized model. It is valid only for INT4 quantization options.
 
@@ -273,7 +273,7 @@ prompt = "sailing ship in storm by Rembrandt"
 images = pipeline(prompt).images
 ```
 
-To load your PyTorch model and convert it to OpenVINO on-the-fly, you can set `export=True`.
+To load your PyTorch model and convert it to OpenVINO on the fly, you can set `export=True`.
 
 ```python
 model_id = "runwayml/stable-diffusion-v1-5"
