@@ -94,7 +94,7 @@ model.save_pretrained(save_directory)
 tokenizer.save_pretrained(save_directory)
 ```
 
-### Weight only quantization
+### Weight-only quantization
 
 You can also apply 8-bit or 4-bit weight quantization when exporting your model with the CLI:
 
@@ -102,7 +102,7 @@ You can also apply 8-bit or 4-bit weight quantization when exporting your model 
 optimum-cli export openvino --model gpt2 --weight-format int8 ov_model
 ```
 
-This will result in the exported model linear and embedding layers to be quantized to INT8 or INT4, the activations will be kept in floating point precision.
+This will result in the exported model linear and embedding layers to be quantized to INT8 or INT4, the activations will be kept in floating point precision. This type of optimization allows reducing the footprint and latency of LLMs.
 
 This can also be done when loading your model by setting the `load_in_8bit` argument when calling the `from_pretrained()` method.
 
