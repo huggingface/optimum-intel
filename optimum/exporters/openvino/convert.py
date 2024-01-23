@@ -555,9 +555,10 @@ def export_tokenizer(
     try:
         from openvino_tokenizers import convert_tokenizer
     except ModuleNotFoundError:
-        logger.info(
-            "Run `pip install openvino-tokenizers[transformers]` to get OpenVINO tokenizer/detokenizer models."
-        )
+        # avoid this message before tokenizers are part of the openvino dependencies
+        # logger.info(
+        #     "Run `pip install openvino-tokenizers[transformers]` to get OpenVINO tokenizer/detokenizer models."
+        # )
         return
 
     if not isinstance(output, Path):
