@@ -206,4 +206,6 @@ class IPEXModelForCausalLM(IPEXModel, BaseModelForCausalLM):
         **kwargs,
     ):
         IPEXModel.__init__(self, model, config)
-        BaseModelForCausalLM.__init__(self, model, config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
+        BaseModelForCausalLM.__init__(
+            self, model, config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs
+        )
