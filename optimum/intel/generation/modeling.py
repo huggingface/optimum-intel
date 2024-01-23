@@ -109,8 +109,15 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self.input_names = {
             inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
         }
-        # TODO : compare use_cache and self.use_cache
         self.use_cache = "past_key_values" in self.input_names
+
+        if use_cache ^ self.use_cache:
+            raise ValueError(
+                f"`use_cache` was set to `{use_cache}` but the loaded model only supports `use_cache={self.use_cache}`. "
+                f"Please load your current model with `use_cache={self.use_cache}` or export the original model "
+                f"once again with `use_cache={use_cache}` when calling the `from_pretrained` method. "
+                "To export your model, simply set `export=True`."
+            )
         self.generation_config = GenerationConfig.from_model_config(config)
 
         # Avoid warnings when creating a transformers pipeline

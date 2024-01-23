@@ -45,7 +45,7 @@ class IPEXModel(OptimizedModel):
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         **kwargs,
     ):
-        super().__init__(model, config)
+        OptimizedModel.__init__(self, model=model, config=config)
         # To do: add XPU support
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.model.to(self._device)
@@ -206,4 +206,4 @@ class IPEXModelForCausalLM(IPEXModel, BaseModelForCausalLM):
         **kwargs,
     ):
         IPEXModel.__init__(self, model, config)
-        BaseModelForCausalLM.__init__(self, model, config, model_save_dir, use_cache, **kwargs)
+        BaseModelForCausalLM.__init__(self, model, config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
