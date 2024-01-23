@@ -558,6 +558,7 @@ def export_tokenizer(
         logger.info(
             "Run `pip install openvino-tokenizers[transformers]` to get OpenVINO tokenizer/detokenizer models."
         )
+        return
 
     if not isinstance(output, Path):
         output = Path(output)
