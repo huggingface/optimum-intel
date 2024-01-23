@@ -17,7 +17,6 @@ from transformers import (
     GenerationMixin,
     PretrainedConfig,
 )
-from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
@@ -44,7 +43,6 @@ class IPEXModel(OptimizedModel):
         model,
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        use_cache: bool = True,
         **kwargs,
     ):
         super().__init__(model, config)
@@ -72,7 +70,7 @@ class IPEXModel(OptimizedModel):
         local_files_only: bool = False,
         use_cache: bool = True,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
-        **kwargs,
+        trust_remote_code: bool = False,
     ):
         if is_torch_version("<", "2.1.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
@@ -86,7 +84,7 @@ class IPEXModel(OptimizedModel):
             "local_files_only": local_files_only,
             "force_download": force_download,
             "torch_dtype": torch_dtype,
-            "device": "cpu",
+            "trust_remote_code": trust_remote_code,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
@@ -102,14 +100,12 @@ class IPEXModel(OptimizedModel):
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
-            use_cache=use_cache,
             use_auth_token=use_auth_token,
             revision=revision,
             force_download=force_download,
             cache_dir=cache_dir,
             local_files_only=local_files_only,
-            model_dtype=torch_dtype,
-            **kwargs,
+            use_cache=use_cache,
         )
 
     @classmethod
@@ -124,7 +120,6 @@ class IPEXModel(OptimizedModel):
         file_name: Optional[str] = WEIGHTS_NAME,
         local_files_only: bool = False,
         subfolder: str = "",
-        use_cache: bool = True,
         **kwargs,
     ):
         # Load the model from local directory
@@ -145,23 +140,13 @@ class IPEXModel(OptimizedModel):
             )
             model_save_dir = Path(model_cache_path).parent
 
-        if getattr(config, "torchscript", False):
-            model = torch.jit.load(model_cache_path)
-            torch.jit.freeze(model.eval())
-        else:
-            model_class = _get_model_class(config, cls.auto_model_class._model_mapping)
-            model = model_class.from_pretrained(model_save_dir)
-
-        return cls(model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
+        model = torch.jit.load(model_cache_path)
+        torch.jit.freeze(model.eval())
+        return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         output_path = os.path.join(save_directory, WEIGHTS_NAME)
-
-        if isinstance(self.model, torch.nn.Module):
-            state_dict = self.model.state_dict()
-            torch.save(state_dict, output_path)
-        else:
-            torch.jit.save(self.model, output_path)
+        torch.jit.save(self.model, output_path)
 
     def forward(self, *args, **kwargs):
         return self.model(*args, **kwargs)

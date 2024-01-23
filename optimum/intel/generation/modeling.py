@@ -66,6 +66,7 @@ def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = Fals
 
 def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     model_inputs = prepare_jit_inputs(model, task, use_cache)
+    model.config.return_dict = False
     # check if the model_inputs is correct.
     model(**model_inputs)
 
@@ -101,19 +102,15 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         super(BaseModelForCausalLM, self).__init__(model=model, config=config)
         self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
-        self.use_cache = use_cache
         ## TO do: add XPU support
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
-
-        if isinstance(model, torch.jit.ScriptModule):
-            self.input_names = {
-                inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
-            }
-        else:
-            self.input_names = set()
-
+        self.input_names = {
+            inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
+        }
+        # TODO : compare use_cache and self.use_cache
+        self.use_cache = "past_key_values" in self.input_names
         self.generation_config = GenerationConfig.from_model_config(config)
 
         # Avoid warnings when creating a transformers pipeline

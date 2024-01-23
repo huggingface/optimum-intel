@@ -121,9 +121,6 @@ class IPEXModelForSequenceClassificationTest(unittest.TestCase):
 
 
 class IPEXModelForCausalLMTest(unittest.TestCase):
-    GENERATION_LENGTH = 100
-    SPEEDUP_CACHE = 1.1
-
     SUPPORTED_ARCHITECTURES = (
         "bart",
         "gpt_bigcode",
@@ -142,6 +139,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "pegasus",
     )
     GENERATION_LENGTH = 100
+    SPEEDUP_CACHE = 1.1
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
