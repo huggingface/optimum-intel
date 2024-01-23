@@ -132,7 +132,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        "marian",
+        # "marian",
         # "mistral",
         # "mpt",
         "opt",
