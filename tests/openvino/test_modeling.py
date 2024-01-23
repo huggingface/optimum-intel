@@ -73,6 +73,7 @@ from optimum.intel import (
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
+from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.utils.import_utils import is_openvino_version
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
@@ -596,6 +597,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model_with_pkv
         del model_without_pkv
         gc.collect()
+
+    def test_print_model_properties(self):
+        # test setting OPENVINO_LOG_LEVEL to 3, which calls _print_compiled_model_properties
+        openvino_log_level = os.environ.get("OPENVINO_LOG_LEVEL", None)
+        os.environ["OPENVINO_LOG_LEVEL"] = "3"
+        model = OVModelForSequenceClassification.from_pretrained(MODEL_NAMES["bert"], export=True)
+        if openvino_log_level is not None:
+            os.environ["OPENVINO_LOG_LEVEL"] = openvino_log_level
+        # test calling function directly
+        _print_compiled_model_properties(model.request)
 
     def test_auto_device_loading(self):
         model_id = MODEL_NAMES["gpt2"]
