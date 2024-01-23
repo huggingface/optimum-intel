@@ -17,9 +17,53 @@ import time
 import unittest
 
 import torch
-from transformers import AutoTokenizer
+from parameterized import parameterized
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    PretrainedConfig,
+    pipeline,
+    set_seed,
+)
 
-from optimum.intel import IPEXModelForCausalLM
+from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
+from optimum.intel import IPEXModelForCausalLM, IPEXModelForSequenceClassification
+
+
+SEED = 42
+
+MODEL_NAMES = {
+    "albert": "hf-internal-testing/tiny-random-albert",
+    "bert": "hf-internal-testing/tiny-random-bert",
+    "bart": "hf-internal-testing/tiny-random-bart",
+    "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
+    "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",
+    "bloom": "hf-internal-testing/tiny-random-BloomModel",
+    "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
+    "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
+    "distilbert": "hf-internal-testing/tiny-random-distilbert",
+    "electra": "hf-internal-testing/tiny-random-electra",
+    "flaubert": "hf-internal-testing/tiny-random-flaubert",
+    "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
+    "gpt2": "hf-internal-testing/tiny-random-gpt2",
+    "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
+    "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
+    "gptj": "hf-internal-testing/tiny-random-GPTJModel",
+    "ibert": "hf-internal-testing/tiny-random-ibert",
+    "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "opt": "hf-internal-testing/tiny-random-OPTModel",
+    "marian": "sshleifer/tiny-marian-en-de",
+    "mbart": "hf-internal-testing/tiny-random-mbart",
+    "mistral": "echarlaix/tiny-random-mistral",
+    "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
+    "mt5": "stas/mt5-tiny-random",
+    "roberta": "hf-internal-testing/tiny-random-roberta",
+    "roformer": "hf-internal-testing/tiny-random-roformer",
+    "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
+    "t5": "hf-internal-testing/tiny-random-t5",
+    "xlm": "hf-internal-testing/tiny-random-xlm",
+}
 
 
 class Timer(object):
@@ -31,9 +75,110 @@ class Timer(object):
         self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
-class INCModelingTest(unittest.TestCase):
+class IPEXModelForSequenceClassificationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = (
+        "albert",
+        "bert",
+        "convbert",
+        "distilbert",
+        "electra",
+        "flaubert",
+        "ibert",
+        "roberta",
+        "roformer",
+        "squeezebert",
+        "xlm",
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ipex_model = IPEXModelForSequenceClassification.from_pretrained(model_id, export=True)
+        self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt")
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        outputs = ipex_model(**tokens)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(torch.Tensor(outputs["logits"]), transformers_outputs.logits, atol=1e-4))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = IPEXModelForSequenceClassification.from_pretrained(model_id, export=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
+        text = "This restaurant is awesome"
+        outputs = pipe(text)
+
+        self.assertEqual(pipe.device, model.device)
+        self.assertGreaterEqual(outputs[0]["score"], 0.0)
+        self.assertIsInstance(outputs[0]["label"], str)
+
+
+class IPEXModelForCausalLMTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1
+
+    SUPPORTED_ARCHITECTURES = (
+        "bart",
+        "gpt_bigcode",
+        "blenderbot",
+        "blenderbot-small",
+        "bloom",
+        "codegen",
+        "gpt2",
+        "gpt_neo",
+        "gpt_neox",
+        "llama",
+        "marian",
+        "mistral",
+        "mpt",
+        "opt",
+        "pegasus",
+    )
+    GENERATION_LENGTH = 100
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
+        self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        self.assertTrue(ipex_model.use_cache)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer(
+            "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
+        )
+        position_ids = None
+        if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
+            input_shape = tokens["input_ids"].shape
+            position_ids = torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
+        outputs = ipex_model(**tokens, position_ids=position_ids)
+
+        self.assertIsInstance(outputs.logits, torch.Tensor)
+        self.assertIsInstance(outputs.past_key_values, tuple)
+
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(outputs["logits"], transformers_outputs.logits, atol=1e-4))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
+        model.to("cpu")
+        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+        outputs = pipe("This is a sample", max_length=10)
+        self.assertEqual(pipe.device, model.device)
+        self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
