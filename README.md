@@ -202,28 +202,6 @@ Quantization aware training (QAT) is applied in order to simulate the effects of
 You can find more examples in the [documentation](https://huggingface.co/docs/optimum/intel/index).
 
 
-## Intel Extension for PyTorch
-
-To load a model and run generation with IPEX graph mode, you can just replace your `AutoModelForXxx` class with the corresponding `IPEXModelForXxx` class.
-
-```diff
-import torch
-from transformers import AutoTokenizer, pipeline
-- from transformers import AutoModelForCausalLM
-+ from optimum.intel.ipex import IPEXModelForCausalLM
-
-
-model_id = "gpt2"
-- model = AutoModelForCausalLM.from_pretrained(model_id)
-+ model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, torch_dtype=torch.bfloat16)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-text_generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
-results = text_generator("This is an example input")
-```
-
-For now, we only support text-generation tasks.
-
-
 ## Running the examples
 
 Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory to see how 🤗 Optimum Intel can be used to optimize models and accelerate inference.
