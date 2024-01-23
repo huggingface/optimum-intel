@@ -28,15 +28,8 @@ from ..utils.import_utils import is_torch_version
 from ..utils.modeling_utils import patch_decoder_attention_mask
 
 
-# from .utils import generation_tasks
-
-
-SUPPORT_MODEL_LIST_FOR_CAUSAL_LM = {
-    #  "llama": LlamaForCausalLM
-}
-
-SUPPORT_TASK_LIST = {"text-generation": SUPPORT_MODEL_LIST_FOR_CAUSAL_LM}
-
+# SUPPORT_MODEL_LIST_FOR_CAUSAL_LM = {"llama": LlamaForCausalLM}
+# SUPPORT_TASK_LIST = {"text-generation": SUPPORT_MODEL_LIST_FOR_CAUSAL_LM}
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +47,11 @@ class IPEXModel(OptimizedModel):
         use_cache: bool = True,
         **kwargs,
     ):
-        OptimizedModel.__init__(self, model=model, config=config)
+        super().__init__(model, config)
         # To do: add XPU support
-        self._device = torch.device("cpu")
+        self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.model.to(self._device)
+        self.model_save_dir = model_save_dir
 
         # Registers the IPEXModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
@@ -94,48 +88,29 @@ class IPEXModel(OptimizedModel):
             "torch_dtype": torch_dtype,
             "device": "cpu",
         }
-        model_type = None
-        support_ipex_transformers = False
-        if task in SUPPORT_TASK_LIST.keys():
-            for name in SUPPORT_TASK_LIST[task].keys():
-                if name in model_id:
-                    support_ipex_transformers = True
-                    model_type = name
-                    break
 
-        if support_ipex_transformers and task in SUPPORT_TASK_LIST and model_type in SUPPORT_TASK_LIST[task]:
-            # model = SUPPORT_TASK_LIST[task][model_type].from_pretrained(model_id, **model_kwargs)
-            pass
-        else:
-            model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-            model = patch_decoder_attention_mask(model)
-
+        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+        model = patch_decoder_attention_mask(model)
         model = ipex.optimize(model, dtype=torch_dtype, level="O1", auto_kernel_selection=True)
+        traced_model = jit_trace(model, task, use_cache)
 
-        if kwargs.pop("jit", True):
-            try:
-                traced_model = cls.apply_jit_optimize(model, task, use_cache, support_ipex_transformers)
-                save_dir = TemporaryDirectory()
-                save_dir_path = Path(save_dir.name)
-                torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
-                config.torchscript = True
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
+        torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
+        config.torchscript = True
 
-                return cls._from_pretrained(
-                    model_id=save_dir_path,
-                    config=config,
-                    use_cache=use_cache,
-                    use_auth_token=use_auth_token,
-                    revision=revision,
-                    force_download=force_download,
-                    cache_dir=cache_dir,
-                    local_files_only=local_files_only,
-                    model_dtype=torch_dtype,
-                    **kwargs,
-                )
-            except Exception as e:
-                logger.warning(f"failed to use PyTorch jit mode due to: {e}.")
-
-        return cls(model, config=config, use_cache=use_cache, model_dtype=torch_dtype, **kwargs)
+        return cls._from_pretrained(
+            model_id=save_dir_path,
+            config=config,
+            use_cache=use_cache,
+            use_auth_token=use_auth_token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            model_dtype=torch_dtype,
+            **kwargs,
+        )
 
     @classmethod
     def _from_pretrained(
@@ -214,10 +189,6 @@ class IPEXModel(OptimizedModel):
             )
         return self.model.generate(*args, **kwargs)
 
-    @classmethod
-    def apply_jit_optimize(cls, model, task, use_cache, support_ipex_transformers=False):
-        return jit_trace(model, task, use_cache)
-
 
 class IPEXModelForSequenceClassification(IPEXModel):
     auto_model_class = AutoModelForSequenceClassification
@@ -251,13 +222,3 @@ class IPEXModelForCausalLM(IPEXModel, BaseModelForCausalLM):
     ):
         IPEXModel.__init__(self, model, config)
         BaseModelForCausalLM.__init__(self, model, config, model_save_dir, use_cache, **kwargs)
-
-    @classmethod
-    def apply_jit_optimize(cls, model, task, use_cache, support_ipex_transformers):
-        if not support_ipex_transformers:
-            return jit_trace(model, task, use_cache)
-        else:
-            # from intel_extension_for_pytorch.transformers.optimize import get_dummy_input
-            # dummy_jit_inputs = get_dummy_input(task, model) # From ipex
-            # model = torch.jit.trace(model, example_input_kwargs=dummy_jit_inputs)
-            return model
