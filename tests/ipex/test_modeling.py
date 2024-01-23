@@ -136,7 +136,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "mistral",
         "mpt",
         "opt",
-        "pegasus",
     )
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.1

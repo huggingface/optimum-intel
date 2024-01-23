@@ -118,6 +118,8 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
                 f"once again with `use_cache={use_cache}` when calling the `from_pretrained` method. "
                 "To export your model, simply set `export=True`."
             )
+        config.is_decoder = True
+        config.is_encoder_decoder = False
         self.generation_config = GenerationConfig.from_model_config(config)
 
         # Avoid warnings when creating a transformers pipeline
