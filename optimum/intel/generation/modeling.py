@@ -255,6 +255,37 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self.model.to(self._device)
         return self
 
+    def create_pkv_for_generation(self, input_ids):
+        model_type = self.config.model_type.replace("_", "-")
+        nb_pkv = 2
+        num_layers = self.normalized_config.num_layers
+        d_k = self.normalized_config.hidden_size // self.normalized_config.num_attention_heads
+        batch_size = input_ids.shape[0]
+
+        if model_type in {"mistral", "llama"}:
+            num_attention_heads = self.normalized_config.num_key_value_heads
+        else:
+            num_attention_heads = self.normalized_config.num_attention_heads
+
+        if model_type == "bloom":
+            shape_key = (batch_size * num_attention_heads, d_k, 0)
+            shape_value = (batch_size * num_attention_heads, 0, d_k)
+            key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)
+            value = torch.empty(size=shape_value, dtype=self.model_dtype, device=self._device)
+            past_key_values = tuple(
+                tuple(key if idx % 2 == 0 else value for idx in range(nb_pkv)) for _ in range(num_layers)
+            )
+        elif model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS:
+            shape = (batch_size, 0, d_k * 2)
+            pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
+            past_key_values = tuple(pkv for _ in range(num_layers))
+        else:
+            shape = (batch_size, num_attention_heads, 0, d_k)
+            pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
+            past_key_values = tuple(tuple(pkv for _ in range(nb_pkv)) for _ in range(num_layers))
+
+        return past_key_values
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -281,36 +312,9 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         if "position_ids" in self.input_names or not self.input_names:
             inputs["position_ids"] = position_ids
 
-        model_type = self.config.model_type.replace("_", "-")
-
         if self.use_cache:
             if past_key_values is None:
-                nb_pkv = 2
-                num_layers = self.normalized_config.num_layers
-                d_k = self.normalized_config.hidden_size // self.normalized_config.num_attention_heads
-                batch_size = input_ids.shape[0]
-
-                if model_type in {"mistral", "llama"}:
-                    num_attention_heads = self.normalized_config.num_key_value_heads
-                else:
-                    num_attention_heads = self.normalized_config.num_attention_heads
-
-                if model_type == "bloom":
-                    shape_key = (batch_size * num_attention_heads, d_k, 0)
-                    shape_value = (batch_size * num_attention_heads, 0, d_k)
-                    key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)
-                    value = torch.empty(size=shape_value, dtype=self.model_dtype, device=self._device)
-                    past_key_values = tuple(
-                        tuple(key if idx % 2 == 0 else value for idx in range(nb_pkv)) for _ in range(num_layers)
-                    )
-                elif model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS:
-                    shape = (batch_size, 0, d_k * 2)
-                    pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
-                    past_key_values = tuple(pkv for _ in range(num_layers))
-                else:
-                    shape = (batch_size, num_attention_heads, 0, d_k)
-                    pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
-                    past_key_values = tuple(tuple(pkv for _ in range(nb_pkv)) for _ in range(num_layers))
+                past_key_values = self.create_pkv_for_generation(input_ids)
 
             inputs["past_key_values"] = past_key_values
 

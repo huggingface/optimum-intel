@@ -293,7 +293,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             _, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int8[i], num_int8)
 
-    @parameterized.expand((OVModelForCausalLM, "gpt2"))
+    @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=True)

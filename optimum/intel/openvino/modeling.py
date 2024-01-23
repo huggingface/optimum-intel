@@ -129,9 +129,8 @@ class OVModel(OVBaseModel):
         Use the specified `device` for inference. For example: "cpu" or "gpu". `device` can
         be in upper or lower case. To speed up first inference, call `.compile()` after `.to()`.
         """
-        self._device = device.upper()
         self.compiled_model = None
-        self.request = None
+        self._device = str(device).upper()
         return self
 
     def forward(self, *args, **kwargs):

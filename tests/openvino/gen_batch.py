@@ -7,12 +7,11 @@ from optimum.intel import OVModelForCausalLM
 
 
 set_seed(10)
-model_path = "/home/devuser/openvino.genai/llm_bench/python/llama-2-7b-chat-hf-stateful/pytorch/dldt/compressed_weights/OV_FP16-INT8/"
-# model_path = "/home/devuser/openvino.genai/llm_bench/python/llama-2-7b-chat-hf/pytorch/dldt/compressed_weights/OV_FP16-INT8/"
+model_path = "/model"
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 tokenizer.pad_token = "[PAD]"
 tokenizer.padding_side = "left"
-
+NUM_THREADS = 3
 prompt1 = [" The weather is "]
 prompt2 = [" Openvino is a ", " What the the relativity theory "]
 prompt3 = [
@@ -21,6 +20,7 @@ prompt3 = [
     " the water in the ocean is much hotter than before  ",
 ]
 prompts = [prompt1, prompt2, prompt3]
+
 OV_CONFIG = {"PERFORMANCE_HINT": "LATENCY", "CACHE_DIR": "", "NUM_STREAMS": "1"}
 model = OVModelForCausalLM.from_pretrained(
     model_path,
@@ -28,8 +28,6 @@ model = OVModelForCausalLM.from_pretrained(
     ov_config=OV_CONFIG,
     compile=True,
 )
-
-NUM_THREADS = 3
 
 threads = [None] * NUM_THREADS
 results = [None] * NUM_THREADS
@@ -61,8 +59,8 @@ def gen_thread(prompt, results, i):
     print("cloning model duration", (end - start).total_seconds() * 1000000, "us")
     outputs = model_exec.generate(**generate_kwargs)
     num_tok = 0
-    for i in range(len(prompt)):
-        num_tok += outputs[i].numel() - inputs.get("input_ids")[i].numel()
+    for x in range(len(prompt)):
+        num_tok += outputs[x].numel() - inputs.get("input_ids")[x].numel()
     results[i] = outputs, num_tok
 
 

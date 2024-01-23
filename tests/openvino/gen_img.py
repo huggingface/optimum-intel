@@ -6,16 +6,12 @@ from diffusers import DDIMScheduler
 from optimum.intel.openvino import OVStableDiffusionPipeline
 
 
-MODEL_PATH = "/home/devuser/model_server/demos/python_demos/stable_diffusion/model"
+MODEL_PATH = "/model"
 OV_CONFIG = {"PERFORMANCE_HINT": "LATENCY", "NUM_STREAMS": "1"}
 
 
 pipe = OVStableDiffusionPipeline.from_pretrained(MODEL_PATH, device="CPU", ov_config=OV_CONFIG)
 pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
-
-
-# set_seed(10)
-
 
 prompt1 = [" Zebras in space "]
 prompt2 = [" The statue of liberty in New York", " Big Ben in London "]
