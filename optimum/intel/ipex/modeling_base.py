@@ -435,6 +435,7 @@ class IPEXBloomForCausalLM(IPEXModelForCausalLM):
         )
         return self._convert_to_bloom_cache(reordered_past)
 
+    @staticmethod
     def _convert_to_standard_cache(
         past_key_value: Tuple[Tuple["torch.Tensor", "torch.Tensor"]], batch_size: int
     ) -> Tuple[Tuple["torch.Tensor", "torch.Tensor"]]:
@@ -454,6 +455,7 @@ class IPEXBloomForCausalLM(IPEXModelForCausalLM):
             for layer_past in past_key_value
         )
 
+    @staticmethod
     def _convert_to_bloom_cache(
         past_key_value: Tuple[Tuple["torch.Tensor", "torch.Tensor"]]
     ) -> Tuple[Tuple["torch.Tensor", "torch.Tensor"]]:
