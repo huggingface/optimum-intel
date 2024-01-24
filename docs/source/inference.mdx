@@ -94,15 +94,15 @@ model.save_pretrained(save_directory)
 tokenizer.save_pretrained(save_directory)
 ```
 
-### Weight only quantization
+### Weight-only quantization
 
-You can also apply INT8 quantization on your models weights when exporting your model with the CLI:
+You can also apply 8-bit or 4-bit weight quantization when exporting your model with the CLI:
 
 ```bash
-optimum-cli export openvino --model gpt2 --int8 ov_model
+optimum-cli export openvino --model gpt2 --weight-format int8 ov_model
 ```
 
-This will results in the exported model linear and embedding layers to be quantized to INT8, the activations will be kept in floating point precision.
+This will result in the exported model linear and embedding layers to be quantized to INT8 or INT4, the activations will be kept in floating point precision. This type of optimization allows reducing the footprint and latency of LLMs.
 
 This can also be done when loading your model by setting the `load_in_8bit` argument when calling the `from_pretrained()` method.
 
@@ -111,6 +111,21 @@ from optimum.intel import OVModelForCausalLM
 
 model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
 ```
+
+> **NOTE:** `load_in_8bit` is enabled by default for the models larger than 1 billion parameters.
+
+There are also alternative compression options for a different performance-accuracy trade-off:
+
+| Option                                                              | Description       |
+|---------------------------------------------------------------------|-------------------|
+| `fp16`                                                              | Float16 weights   |
+| `int8`                                                              | INT8 weights      |
+| `int4_sym_g128`, `int4_asym_g128`, `int4_sym_g64`, `int4_asym_g64`* | INT4 weights      |
+
+*`sym` and `asym` stand for symmetric and asymmetric quantization, `g128` and `g64` means the group size `128` and `64` respectively. 
+
+`--ratio` CLI parameter controls the ratio between 4-bit and 8-bit quantized layers and can also change performance-accuracy trade-off for the optimized model. It is valid only for INT4 quantization options.
+
 
 To apply quantization on both weights and activations, you can use the `OVQuantizer`, more information in the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov#optimization).
 
@@ -257,7 +272,7 @@ prompt = "sailing ship in storm by Rembrandt"
 images = pipeline(prompt).images
 ```
 
-To load your PyTorch model and convert it to OpenVINO on-the-fly, you can set `export=True`.
+To load your PyTorch model and convert it to OpenVINO on the fly, you can set `export=True`.
 
 ```python
 model_id = "runwayml/stable-diffusion-v1-5"
