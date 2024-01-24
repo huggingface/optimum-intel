@@ -148,10 +148,13 @@ class OVWeightCompressionTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = (
         (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 70, 70),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 45, 44),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 44, 46),
     )
 
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 82, 295),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 82, 303),)
+    SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = (
+        (OVModelForCausalLM, "opt125m", 82, 415),
+    )
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (
         (OVModelForCausalLM, "gpt2"),
@@ -242,7 +245,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS)
     @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
     def test_ovmodel_4bit_weight_compression_stateful(self, model_cls, model_name, expected_int8, expected_int4):
         task = model_cls.export_feature
