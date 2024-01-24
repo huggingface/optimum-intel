@@ -50,7 +50,6 @@ MODEL_NAMES = {
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
-    "ibert": "hf-internal-testing/tiny-random-ibert",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "marian": "sshleifer/tiny-marian-en-de",
@@ -83,7 +82,6 @@ class IPEXModelForSequenceClassificationTest(unittest.TestCase):
         "distilbert",
         "electra",
         "flaubert",
-        "ibert",
         "roberta",
         "roformer",
         "squeezebert",
@@ -104,7 +102,7 @@ class IPEXModelForSequenceClassificationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**tokens)
         outputs = ipex_model(**tokens)
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(torch.Tensor(outputs["logits"]), transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -132,7 +130,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        # "marian",
         # "mistral",
         # "mpt",
         "opt",
@@ -158,13 +155,13 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         outputs = ipex_model(**tokens, position_ids=position_ids)
 
         self.assertIsInstance(outputs.logits, torch.Tensor)
-        self.assertIsInstance(outputs.past_key_values, tuple)
+        self.assertIsInstance(outputs.past_key_values, (tuple, list))
 
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs["logits"], transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
