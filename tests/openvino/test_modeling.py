@@ -73,6 +73,7 @@ from optimum.intel import (
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
+from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.utils.import_utils import is_openvino_version
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
@@ -90,7 +91,7 @@ TENSOR_ALIAS_TO_TYPE = {
 
 SEED = 42
 
-F32_CONFIG = {"CACHE_DIR": "", "INFERENCE_PRECISION_HINT": "f32"}
+F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
 
 
 class Timer(object):
@@ -116,11 +117,6 @@ class OVModelIntegrationTest(unittest.TestCase):
         loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         loaded_model_outputs = loaded_model(**tokens)
-
-        # Test that model caching is automatically enabled
-        openvino_cache_dir = loaded_model.model_save_dir / "model_cache"
-        self.assertTrue(openvino_cache_dir.is_dir())
-        self.assertGreaterEqual(len(list(openvino_cache_dir.glob("*.blob"))), 1)
 
         # Test specifying ov_config with throughput hint and manual cache dir
         manual_openvino_cache_dir = loaded_model.model_save_dir / "manual_model_cache"
@@ -597,12 +593,26 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model_without_pkv
         gc.collect()
 
+    def test_print_model_properties(self):
+        # test setting OPENVINO_LOG_LEVEL to 3, which calls _print_compiled_model_properties
+        openvino_log_level = os.environ.get("OPENVINO_LOG_LEVEL", None)
+        os.environ["OPENVINO_LOG_LEVEL"] = "3"
+        model = OVModelForSequenceClassification.from_pretrained(MODEL_NAMES["bert"], export=True)
+        if openvino_log_level is not None:
+            os.environ["OPENVINO_LOG_LEVEL"] = openvino_log_level
+        # test calling function directly
+        _print_compiled_model_properties(model.request)
+
     def test_auto_device_loading(self):
-        model_id = MODEL_NAMES["gpt2"]
+        OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         for device in ("AUTO", "AUTO:CPU"):
-            model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, device=device)
+            model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
             model.half()
             self.assertEqual(model._device, device)
+            if device == "AUTO:CPU":
+                model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
+                message = "Model should not be loaded from cache without explicitly setting CACHE_DIR"
+                self.assertFalse(model.request.get_property("LOADED_FROM_CACHE"), message)
             del model
             gc.collect()
 
