@@ -88,7 +88,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         **kwargs,
     ):
         self._internal_dict = config
-        self._device = str(device).upper()
+        self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {}
         self._model_save_dir = (
@@ -330,8 +330,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         )
 
     def to(self, device: str):
-        self._device = device.upper()
-        self.clear_requests()
+        if isinstance(device, str):
+            self._device = device.upper()
+            self.clear_requests()
+        else:
+            logger.warning(f"device must be of type {str} but got {type(device)} instead")
+
         return self
 
     @property
