@@ -100,12 +100,12 @@ TENSOR_ALIAS_TO_TYPE = {
 SEED = 42
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
-    "bert": (68,),
-    "roberta": (70,),
+    "bert": (70,),
+    "roberta": (68,),
     "albert": (84,),
     "vit": (62,),
     "blenderbot": (70,),
-    "gpt2": (44,),
+    "gpt2": (46,),
     "wav2vec2": (30,),
     "distilbert": (66,),
     "t5": (64, 104, 84),
