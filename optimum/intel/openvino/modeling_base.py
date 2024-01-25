@@ -348,8 +348,12 @@ class OVBaseModel(OptimizedModel):
         if self.compiled_model is None:
             logger.info(f"Compiling the model to {self._device} ...")
             ov_config = {**self.ov_config}
-            if "CACHE_DIR" not in self.ov_config.keys() and not str(self.model_save_dir).startswith(gettempdir()):
-                # Set default CACHE_DIR only if it is not set, and if the model is not in a temporary directory
+            if (
+                "CACHE_DIR" not in self.ov_config.keys()
+                and not str(self.model_save_dir).startswith(gettempdir())
+                and self._device.lower() == "gpu"
+            ):
+                # Set default CACHE_DIR only if it is not set, if the model is not in a temporary directory, and device is GPU
                 cache_dir = Path(self.model_save_dir).joinpath("model_cache")
                 ov_config["CACHE_DIR"] = str(cache_dir)
                 logger.info(f"Setting OpenVINO CACHE_DIR to {str(cache_dir)}")

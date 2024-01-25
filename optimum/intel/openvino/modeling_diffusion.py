@@ -537,11 +537,16 @@ class OVModelPart:
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
         config_path = self._model_dir / model_name / self.CONFIG_NAME
         self.config = self.parent_model._dict_from_json_file(config_path) if config_path.is_file() else {}
-        if "CACHE_DIR" not in self.ov_config.keys() and not str(self._model_dir).startswith(gettempdir()):
-            self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
     def _compile(self):
         if self.compiled_model is None:
+            if (
+                "CACHE_DIR" not in self.ov_config.keys()
+                and not str(self._model_dir).startswith(gettempdir())
+                and self.device.lower() == "gpu"
+            ):
+                self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
+
             logger.info(f"Compiling the {self._model_name} to {self.device} ...")
             self.compiled_model = core.compile_model(self.model, self.device, self.ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html

@@ -266,34 +266,11 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.device = torch.device("cpu")
         self.decoder_with_past = None
         enable_compilation = kwargs.get("compile", True)
-        encoder_cache_dir = Path(self.model_save_dir).joinpath("encoder_cache")
-        ov_encoder_config = {**self.ov_config}
-
-        if "CACHE_DIR" not in ov_encoder_config.keys() and not str(self.model_save_dir).startswith(gettempdir()):
-            ov_encoder_config["CACHE_DIR"] = str(encoder_cache_dir)
-
-        self.encoder = OVEncoder(
-            self.encoder_model, self._device, ov_encoder_config, main_input_name=self.main_input_name
-        )
-
-        decoder_cache_dir = Path(self.model_save_dir).joinpath("decoder_cache")
-        ov_decoder_config = {**self.ov_config}
-
-        if "CACHE_DIR" not in ov_decoder_config.keys() and not str(self.model_save_dir).startswith(gettempdir()):
-            ov_decoder_config["CACHE_DIR"] = str(decoder_cache_dir)
-
-        self.decoder = OVDecoder(self.decoder_model, self._device, ov_decoder_config)
+        self.encoder = OVEncoder(self.encoder_model, parent_model=self)
+        self.decoder = OVDecoder(self.decoder_model, parent_model=self)
 
         if self.use_cache:
-            decoder_past_cache_dir = Path(self.model_save_dir).joinpath("decoder_past_cache")
-            ov_decoder_past_config = {**self.ov_config}
-
-            if "CACHE_DIR" not in ov_decoder_past_config.keys() and not str(self.model_save_dir).startswith(
-                gettempdir()
-            ):
-                ov_decoder_past_config["CACHE_DIR"] = str(decoder_past_cache_dir)
-
-            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, self._device, ov_decoder_past_config)
+            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, parent_model=self)
         if enable_compilation:
             self.compile()
 
@@ -435,14 +412,15 @@ class OVEncoder:
             The OpenVINO inference request associated to the encoder.
     """
 
-    def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict, main_input_name="input_ids"):
+    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
-        self._device = device
+        self.parent_model = parent_model
+        self._device = self.parent_model._device
         self.device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
-        self.main_input_name = main_input_name
-        self.ov_config = ov_config
+        self.main_input_name = self.parent_model.main_input_name or "input_ids"
         self.compiled_model = None
+        self.request = None
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
@@ -472,13 +450,22 @@ class OVEncoder:
         return self.forward(*args, **kwargs)
 
     def _compile(self):
+        ov_config = {**self.parent_model.ov_config}
+        if (
+            "CACHE_DIR" not in ov_config.keys()
+            and not str(self.parent_model.model_save_dir).startswith(gettempdir())
+            and self._device.lower() == "gpu"
+        ):
+            cache_dir = Path(self.parent_model.model_save_dir).joinpath("model_cache")
+            ov_config["CACHE_DIR"] = str(cache_dir)
+
         if self.compiled_model is None:
             logger.info(f"Compiling the encoder to {self._device} ...")
-            self.compiled_model = core.compile_model(self.model, self._device, self.ov_config)
+            self.compiled_model = core.compile_model(self.model, self._device, ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(self.request)
+                _print_compiled_model_properties(self.compiled_model)
 
 
 class OVDecoder:
@@ -492,9 +479,10 @@ class OVDecoder:
             The device type used by this process.
     """
 
-    def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict):
+    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
-        self._device = device
+        self.parent_model = parent_model
+        self._device = self.parent_model._device
         self.device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
@@ -509,7 +497,7 @@ class OVDecoder:
             self.use_past = False
             self.num_pkv = 4
 
-        self.ov_config = ov_config
+        self.request = None
         self.compiled_model = None
 
     @add_start_docstrings_to_model_forward(DECODER_INPUTS_DOCSTRING)
@@ -576,9 +564,18 @@ class OVDecoder:
         return self.forward(*args, **kwargs)
 
     def _compile(self):
+        ov_config = {**self.parent_model.ov_config}
+        if (
+            "CACHE_DIR" not in ov_config.keys()
+            and not str(self.parent_model.model_save_dir).startswith(gettempdir())
+            and self._device.lower() == "gpu"
+        ):
+            cache_dir = Path(self.parent_model.model_save_dir).joinpath("model_cache")
+            ov_config["CACHE_DIR"] = str(cache_dir)
+
         if self.compiled_model is None:
             logger.info(f"Compiling the decoder to {self._device} ...")
-            self.compiled_model = core.compile_model(self.model, self._device, self.ov_config)
+            self.compiled_model = core.compile_model(self.model, self._device, ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
