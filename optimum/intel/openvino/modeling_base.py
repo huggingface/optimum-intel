@@ -17,7 +17,6 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
 from typing import Dict, Optional, Union
-
 import openvino
 from huggingface_hub import hf_hub_download
 from openvino import Core, convert_model
@@ -69,12 +68,10 @@ class OVBaseModel(OptimizedModel):
         self.ov_config = ov_config if ov_config is not None else {"PERFORMANCE_HINT": "LATENCY"}
         self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
-
         if self.is_dynamic:
             height = -1 if self.export_feature == "image-classification" else None
             width = -1 if self.export_feature == "image-classification" else None
             model = self._reshape(model, -1, -1, height, width)
-
         input_names = {}
         for idx, key in enumerate(model.inputs):
             names = tuple(key.get_names())
@@ -86,14 +83,12 @@ class OVBaseModel(OptimizedModel):
             names = tuple(key.get_names())
             output_names[next((name for name in names if "/" not in name), names[0])] = idx
         self.output_names = output_names
-
         self.model = model
         self.request = None
         self.async_exec = False
         self.compiled_model = None
         if enable_compilation:
             self.compile()
-
         if is_transformers_version("<=", "4.25.1"):
             self.generation_config = None
         else:
@@ -422,7 +417,7 @@ class OVBaseModel(OptimizedModel):
     
     def clone(self):
         self.compile()
-        model_cloned = self.__class__(self.model, config=self.config, compile=False)
+        model_cloned = self.__class__(self.model, config=self.config, compile=False, dynamic_shapes=False)
         model_cloned.compiled_model = self.compiled_model
         model_cloned.async_exec = True
         model_cloned._device = self._device
