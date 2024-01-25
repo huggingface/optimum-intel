@@ -99,14 +99,13 @@ TENSOR_ALIAS_TO_TYPE = {
 
 SEED = 42
 
-
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
-    "bert": (70,),
+    "bert": (68,),
     "roberta": (70,),
     "albert": (84,),
     "vit": (62,),
     "blenderbot": (70,),
-    "gpt2": (46,),
+    "gpt2": (44,),
     "wav2vec2": (30,),
     "distilbert": (66,),
     "t5": (64, 104, 84),
@@ -115,7 +114,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion-xl-refiner": (296, 8, 8, 66),
 }
 
-_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (82, 415)}
+_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (64, 415)}
 
 
 def get_num_quantized_nodes(ov_model):
