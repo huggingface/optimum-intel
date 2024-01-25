@@ -15,7 +15,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Optional, Union
-
+import time
 import numpy as np
 import openvino
 import torch
@@ -180,6 +180,7 @@ class OVModelForSequenceClassification(OVModel):
         **kwargs,
     ):
         self.compile()
+        self.create_infer_request()
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
@@ -197,13 +198,15 @@ class OVModelForSequenceClassification(OVModel):
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
-        infer_request = self.compiled_model.create_infer_request()
-        infer_request.start_async(inputs)
-        infer_request.wait()
+        if self.async_exec:
+            self.request.start_async(inputs)
+            self.request.wait()
+        else:
+            self.request.infer(inputs)
         logits = (
-            torch.from_numpy(infer_request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else infer_request.get_tensor("logits").data
+            else self.request.get_tensor("logits").data
         )
         return SequenceClassifierOutput(logits=logits)
 
@@ -252,6 +255,7 @@ class OVModelForQuestionAnswering(OVModel):
         **kwargs,
     ):
         self.compile()
+        self.create_infer_request()
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
@@ -269,18 +273,21 @@ class OVModelForQuestionAnswering(OVModel):
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
-        infer_request = self.compiled_model.create_infer_request()
-        infer_request.start_async(inputs)
-        infer_request.wait()
+        if self.async_exec:
+            self.request.start_async(inputs)
+            self.request.wait()
+        else:
+            self.request.infer(inputs)
+
         start_logits = (
-            torch.from_numpy(infer_request.get_tensor("start_logits").data).to(self.device)
+            torch.from_numpy(self.request.get_tensor("start_logits").data).to(self.device)
             if not np_inputs
-            else infer_request.get_tensor("start_logits").data
+            else self.request.get_tensor("start_logits").data
         )
         end_logits = (
-            torch.from_numpy(infer_request.get_tensor("end_logits").data).to(self.device)
+            torch.from_numpy(self.request.get_tensor("end_logits").data).to(self.device)
             if not np_inputs
-            else infer_request.get_tensor("end_logits").data
+            else self.request.get_tensor("end_logits").data
         )
         return QuestionAnsweringModelOutput(start_logits=start_logits, end_logits=end_logits)
 
@@ -328,6 +335,7 @@ class OVModelForTokenClassification(OVModel):
         **kwargs,
     ):
         self.compile()
+        self.create_infer_request()
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
@@ -345,13 +353,15 @@ class OVModelForTokenClassification(OVModel):
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
-        infer_request = self.compiled_model.create_infer_request()
-        infer_request.start_async(inputs)
-        infer_request.wait()
+        if self.async_exec == True:
+            self.request.start_async(inputs)
+            self.request.wait()
+        else:
+            self.request.infer(inputs)
         logits = (
-            torch.from_numpy(infer_request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else infer_request.get_tensor("logits").data
+            else self.request.get_tensor("logits").data
         )
         return TokenClassifierOutput(logits=logits)
 
@@ -399,6 +409,7 @@ class OVModelForFeatureExtraction(OVModel):
         **kwargs,
     ):
         self.compile()
+        self.create_infer_request()
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
@@ -416,13 +427,15 @@ class OVModelForFeatureExtraction(OVModel):
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
-        infer_request = self.compiled_model.create_infer_request()
-        infer_request.start_async(inputs)
-        infer_request.wait()
+        if self.async_exec == True:
+            self.request.start_async(inputs)
+            self.request.wait()
+        else:
+            self.request.infer(inputs)
         last_hidden_state = (
-            torch.from_numpy(infer_request.get_tensor("last_hidden_state").data).to(self.device)
+            torch.from_numpy(self.request.get_tensor("last_hidden_state").data).to(self.device)
             if not np_inputs
-            else infer_request.get_tensor("last_hidden_state").data
+            else self.request.get_tensor("last_hidden_state").data
         )
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
@@ -471,6 +484,7 @@ class OVModelForMaskedLM(OVModel):
         **kwargs,
     ):
         self.compile()
+        self.create_infer_request()
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
@@ -488,13 +502,15 @@ class OVModelForMaskedLM(OVModel):
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
-        infer_request = self.compiled_model.create_infer_request()
-        infer_request.start_async(inputs)
-        infer_request.wait()
+        if self.async_exec == True:
+            self.request.start_async(inputs)
+            self.request.wait()
+        else:
+            self.request.infer(inputs)
         logits = (
-            torch.from_numpy(infer_request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else infer_request.get_tensor("logits").data
+            else self.request.get_tensor("logits").data
         )
         return MaskedLMOutput(logits=logits)
 
@@ -611,6 +627,7 @@ class OVModelForImageClassification(OVModel):
         **kwargs,
     ):
         self.compile()
+        self.create_infer_request()
 
         np_inputs = isinstance(pixel_values, np.ndarray)
         if not np_inputs:
@@ -621,13 +638,15 @@ class OVModelForImageClassification(OVModel):
         }
 
         # Run inference
-        infer_request = self.compiled_model.create_infer_request()
-        infer_request.start_async(inputs)
-        infer_request.wait()
+        if self.async_exec == True:
+            self.request.start_async(inputs)
+            self.request.wait()
+        else:
+            self.request.infer(inputs)
         logits = (
-            torch.from_numpy(infer_request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else infer_request.get_tensor("logits").data
+            else self.request.get_tensor("logits").data
         )
         return ImageClassifierOutput(logits=logits)
 
@@ -677,6 +696,7 @@ class OVModelForAudioClassification(OVModel):
         **kwargs,
     ):
         self.compile()
+        self.create_infer_request()
 
         np_inputs = isinstance(input_values, np.ndarray)
         if not np_inputs:
@@ -692,13 +712,15 @@ class OVModelForAudioClassification(OVModel):
             inputs["attention_mask"] = attention_mask
 
         # Run inference
-        infer_request = self.compiled_model.create_infer_request()
-        infer_request.start_async(inputs)
-        infer_request.wait()
+        if self.async_exec == True:
+            self.request.start_async(inputs)
+            self.request.wait()
+        else:
+            self.request.infer(inputs)
         logits = (
-            torch.from_numpy(infer_request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else infer_request.get_tensor("logits").data
+            else self.request.get_tensor("logits").data
         )
         return SequenceClassifierOutput(logits=logits)
 
@@ -756,6 +778,8 @@ class OVModelForCTC(OVModel):
         attention_mask: Optional[Union[torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ):
+        self.compile()
+        self.create_infer_request()
         np_inputs = isinstance(input_values, np.ndarray)
         if not np_inputs:
             input_values = np.array(input_values)
@@ -770,13 +794,15 @@ class OVModelForCTC(OVModel):
             inputs["attention_mask"] = attention_mask
 
         # Run inference
-        infer_request = self.compiled_model.create_infer_request()
-        infer_request.start_async(inputs)
-        infer_request.wait()
+        if self.async_exec == True:
+            self.request.start_async(inputs)
+            self.request.wait()
+        else:
+            self.request.infer(inputs)
         logits = (
-            torch.from_numpy(infer_request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else infer_request.get_tensor("logits").data
+            else self.request.get_tensor("logits").data
         )
         return CausalLMOutput(logits=logits)
 

@@ -89,6 +89,7 @@ class OVBaseModel(OptimizedModel):
 
         self.model = model
         self.request = None
+        self.async_exec = False
         self.compiled_model = None
         if enable_compilation:
             self.compile()
@@ -356,7 +357,11 @@ class OVBaseModel(OptimizedModel):
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(self.request)
+                _print_compiled_model_properties(self.compiled_model)
+
+    def create_infer_request(self):
+        if self.request is None:
+            self.request = self.compiled_model.create_infer_request()
 
     def _reshape(
         self,
@@ -394,6 +399,7 @@ class OVBaseModel(OptimizedModel):
         """
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
+        self.compiled_model = None
         self.request = None
         return self
 
@@ -409,6 +415,14 @@ class OVBaseModel(OptimizedModel):
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
+    
+    def clone(self):
+        self.compile()
+        model_cloned = self.__class__(self.model, config=self.config, compile=False)
+        model_cloned.compiled_model = self.compiled_model
+        model_cloned.async_exec = True
+        model_cloned._device = self._device
+        return model_cloned
 
     def can_generate(self) -> bool:
         """
