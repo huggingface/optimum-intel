@@ -114,7 +114,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion-xl-refiner": (296, 8, 8, 66),
 }
 
-_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (64, 415)}
+_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (64, 477)}
 
 
 def get_num_quantized_nodes(ov_model):
