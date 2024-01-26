@@ -102,24 +102,19 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         super(BaseModelForCausalLM, self).__init__(model=model, config=config)
         self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
-        ## TO do: add XPU support
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
-        self.input_names = {
-            inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
-        }
-        self.use_cache = "past_key_values" in self.input_names
 
-        if use_cache ^ self.use_cache:
-            raise ValueError(
-                f"`use_cache` was set to `{use_cache}` but the loaded model only supports `use_cache={self.use_cache}`. "
-                f"Please load your current model with `use_cache={self.use_cache}` or export the original model "
-                f"once again with `use_cache={use_cache}` when calling the `from_pretrained` method. "
-                "To export your model, simply set `export=True`."
-            )
-        config.is_decoder = True
-        config.is_encoder_decoder = False
+        logger.warning(
+            f"The class `{self.__class__}` has been depreciated and will be removed in optimum-intel v1.14, please use IPEXModel instead"
+        )
+        if isinstance(model, torch.jit.ScriptModule):
+            self.input_names = {
+                inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
+            }
+        else:
+            self.input_names = set()
         self.generation_config = GenerationConfig.from_model_config(config)
 
         # Avoid warnings when creating a transformers pipeline

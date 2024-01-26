@@ -1,3 +1,18 @@
+#  Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
+
 import logging
 import os
 from pathlib import Path
@@ -18,7 +33,6 @@ from transformers import (
     GenerationMixin,
     PretrainedConfig,
 )
-from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
 from transformers.utils import WEIGHTS_NAME
 
@@ -30,9 +44,6 @@ from ..generation.modeling import jit_trace
 from ..utils.import_utils import is_torch_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
 
-
-# SUPPORT_MODEL_LIST_FOR_CAUSAL_LM = {"llama": LlamaForCausalLM}
-# SUPPORT_TASK_LIST = {"text-generation": SUPPORT_MODEL_LIST_FOR_CAUSAL_LM}
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +177,8 @@ class IPEXModel(OptimizedModel):
         torch.jit.save(self.model, output_path)
 
     def forward(self, *args, **kwargs):
-        return ModelOutput(logits=self.model(*args, **kwargs)[0])
+        outputs = self.model(*args, **kwargs)
+        return ModelOutput(logits=outputs["logits"] if isinstance(outputs, dict) else outputs[0])
 
     def eval(self):
         self.model.eval()
@@ -420,7 +432,7 @@ class IPEXBloomForCausalLM(IPEXModelForCausalLM):
     # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
     @staticmethod
     def _reorder_cache(past: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor) -> Tuple[Tuple[torch.Tensor]]:
-        standardized_past = self._convert_to_standard_cache(past, batch_size=len(beam_idx))
+        standardized_past = IPEXModelForCausalLM._convert_to_standard_cache(past, batch_size=len(beam_idx))
 
         # Get a copy of `beam_idx` on all the devices where we need those indices.
         device_to_beam_idx = {
@@ -433,7 +445,7 @@ class IPEXBloomForCausalLM(IPEXModelForCausalLM):
             )
             for layer_past in standardized_past
         )
-        return self._convert_to_bloom_cache(reordered_past)
+        return IPEXModelForCausalLM._convert_to_bloom_cache(reordered_past)
 
     @staticmethod
     def _convert_to_standard_cache(

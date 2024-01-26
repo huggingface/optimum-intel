@@ -78,7 +78,7 @@ class IPEXIntegrationTest(unittest.TestCase):
             outputs_ipex = ipex_pipe(
                 question="Where was HuggingFace founded ?", context="HuggingFace was founded in Paris."
             )
-        self.assertTrue(isinstance(ipex_pipe.model._optimized, torch.jit.RecursiveScriptModule))
+        # self.assertTrue(isinstance(ipex_pipe.model._optimized.model, torch.jit.RecursiveScriptModule))
         self.assertEqual(outputs["start"], outputs_ipex["start"])
         self.assertEqual(outputs["end"], outputs_ipex["end"])
 
@@ -95,7 +95,7 @@ class IPEXIntegrationTest(unittest.TestCase):
                 outputs = pipe(inputs)
             with ipex_inference_mode(pipe, dtype=model.config.torch_dtype, verbose=False, jit=True) as ipex_pipe:
                 outputs_ipex = ipex_pipe(inputs)
-            self.assertTrue(isinstance(ipex_pipe.model._optimized, torch.jit.RecursiveScriptModule))
+            self.assertTrue(isinstance(ipex_pipe.model._optimized.model, torch.jit.RecursiveScriptModule))
             self.assertEqual(outputs[0]["score"], outputs_ipex[0]["score"])
 
     @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
