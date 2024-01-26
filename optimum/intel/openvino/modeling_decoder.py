@@ -134,6 +134,7 @@ class OVBaseDecoderModel(OVModel):
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
+        self.next_beam_idx = None
         is_stateful_supported = ensure_stateful_is_available(warn=False)
         if self.use_cache and not self.stateful:
             logger.warn(
