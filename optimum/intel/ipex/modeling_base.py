@@ -172,7 +172,7 @@ class IPEXModel(OptimizedModel):
 
     def forward(self, *args, **kwargs):
         outputs = self.model(*args, **kwargs)
-        return ModelOutput(logits=outputs["logits"] if isinstance(outputs, dict) else outputs[0])
+        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
     def eval(self):
         self.model.eval()
