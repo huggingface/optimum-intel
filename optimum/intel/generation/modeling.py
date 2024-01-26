@@ -259,7 +259,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self.model.to(self._device)
         return self
 
-    def _prepare_past_key_values(self, input_ids):
+    def create_pkv_for_generation(self, input_ids):
         model_type = self.config.model_type.replace("_", "-")
         nb_pkv = 2
         num_layers = self.normalized_config.num_layers
@@ -318,7 +318,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
 
         if self.use_cache:
             if past_key_values is None:
-                past_key_values = self._prepare_past_key_values(input_ids)
+                past_key_values = self.create_pkv_for_generation(input_ids)
 
             inputs["past_key_values"] = past_key_values
 
