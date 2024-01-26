@@ -130,7 +130,7 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ipex_model = IPEXModelForQuestionAnswering.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        ipex_model = IPEXModelForQuestionAnswering.from_pretrained(model_id, export=True)
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
         transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
