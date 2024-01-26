@@ -27,6 +27,7 @@ from transformers import (
     AutoModel,
     AutoModelForCausalLM,
     AutoModelForMaskedLM,
+    AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     GenerationConfig,
@@ -171,7 +172,7 @@ class IPEXModel(OptimizedModel):
 
     def forward(self, *args, **kwargs):
         outputs = self.model(*args, **kwargs)
-        return ModelOutput(logits=outputs["logits"] if isinstance(outputs, dict) else outputs[0])
+        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
     def eval(self):
         self.model.eval()
@@ -203,6 +204,17 @@ class IPEXModelForMaskedLM(IPEXModel):
 class IPEXModelForTokenClassification(IPEXModel):
     auto_model_class = AutoModelForTokenClassification
     export_feature = "token-classification"
+
+
+class IPEXModelForQuestionAnswering(IPEXModel):
+    auto_model_class = AutoModelForQuestionAnswering
+    export_feature = "question-answering"
+
+    def forward(self, *args, **kwargs):
+        outputs = self.model(*args, **kwargs)
+        start_logits = outputs["start_logits"] if isinstance(outputs, dict) else outputs[0]
+        end_logits = outputs["end_logits"] if isinstance(outputs, dict) else outputs[1]
+        return ModelOutput(start_logits=start_logits, end_logits=end_logits)
 
 
 class IPEXModelForCausalLM(IPEXModel, GenerationMixin):

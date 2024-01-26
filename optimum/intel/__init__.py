@@ -47,6 +47,7 @@ else:
         "IPEXModelForSequenceClassification",
         "IPEXModelForMaskedLM",
         "IPEXModelForTokenClassification",
+        "IPEXModelForQuestionAnswering",
     ]
 
 
@@ -160,6 +161,7 @@ if TYPE_CHECKING:
         from .ipex import (
             IPEXModelForCausalLM,
             IPEXModelForMaskedLM,
+            IPEXModelForQuestionAnswering,
             IPEXModelForSequenceClassification,
             IPEXModelForTokenClassification,
             inference_mode,
