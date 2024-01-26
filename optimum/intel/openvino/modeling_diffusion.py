@@ -512,6 +512,24 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
     def _save_config(self, save_directory):
         self.save_config(save_directory)
 
+    def clone(self):
+        self.compile()
+        pipe_cloned = self.__class__(
+            self.unet.model,
+            self._internal_dict,
+            scheduler=self.scheduler,
+            vae_decoder=self.vae_decoder.model,
+            vae_encoder=self.vae_encoder.model,
+            text_encoder=self.text_encoder.model,
+#            text_encoder_2=self.text_encoder_2.clone(),
+            tokenizer=self.tokenizer,
+            tokenizer_2=self.tokenizer_2,
+            feature_extractor=self.feature_extractor)
+        pipe_cloned.unet = self.unet.clone()
+        pipe_cloned.text_encoder = self.text_encoder.clone()
+        pipe_cloned.vae_decoder = self.vae_decoder.clone()
+        pipe_cloned.vae_encoder = self.vae_encoder.clone()
+        return pipe_cloned
 
 class OVModelPart:
     CONFIG_NAME = "config.json"
@@ -533,6 +551,7 @@ class OVModelPart:
         }
         self.ov_config = ov_config or {**self.parent_model.ov_config}
         self.compiled_model = None
+        self.request = None
         self._model_name = model_name
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
         config_path = self._model_dir / model_name / self.CONFIG_NAME
@@ -554,6 +573,16 @@ class OVModelPart:
                 logger.info(f"{self.device} SUPPORTED_PROPERTIES:")
                 _print_compiled_model_properties(self.compiled_model)
 
+    def create_infer_request(self):
+        if self.request is None:
+            self.request = self.compiled_model.create_infer_request()
+
+    def clone(self):
+        model_cloned = self.__class__(self.model, self.parent_model, ov_config=self.ov_config)
+        model_cloned.model = self.model
+        model_cloned.compiled_model = self.compiled_model
+        return model_cloned
+
     @property
     def device(self):
         return self.parent_model._device
@@ -571,16 +600,16 @@ class OVModelTextEncoder(OVModelPart):
 
     def __call__(self, input_ids: np.ndarray):
         self._compile()
+        self.create_infer_request()
 
         inputs = {
             "input_ids": input_ids,
         }
-        infer_request = self.compiled_model.create_infer_request()
-        infer_request.start_async(inputs, share_inputs=True)
-        infer_request.wait()
-        outputs = [infer_request.get_tensor(output).data for output in infer_request.results]
+        self.request.start_async(inputs, share_inputs=True)
+        self.request.wait()
+        outputs = [self.request.get_tensor(output).data for output in self.request.results]
         return outputs
-
+    
 
 class OVModelUnet(OVModelPart):
     def __init__(
@@ -598,6 +627,7 @@ class OVModelUnet(OVModelPart):
         timestep_cond: Optional[np.ndarray] = None,
     ):
         self._compile()
+        self.create_infer_request()
 
         inputs = {
             "sample": sample,
@@ -612,10 +642,9 @@ class OVModelUnet(OVModelPart):
         if timestep_cond is not None:
             inputs["timestep_cond"] = timestep_cond
 
-        infer_request = self.compiled_model.create_infer_request()
-        infer_request.start_async(inputs, share_inputs=True)
-        infer_request.wait()
-        outputs = [infer_request.get_tensor(output).data for output in infer_request.results]
+        self.request.start_async(inputs, share_inputs=True)
+        self.request.request.wait()
+        outputs = [self.request.get_tensor(output).data for output in self.results]
         return outputs
 
 
@@ -627,14 +656,14 @@ class OVModelVaeDecoder(OVModelPart):
 
     def __call__(self, latent_sample: np.ndarray):
         self._compile()
+        self.create_infer_request()
 
         inputs = {
             "latent_sample": latent_sample,
         }
-        infer_request = self.compiled_model.create_infer_request()
-        infer_request.start_async(inputs, share_inputs=True)
-        infer_request.wait()
-        outputs = [infer_request.results[output].data for output in infer_request.results]
+        self.request.start_async(inputs, share_inputs=True)
+        self.request.wait()
+        outputs = [self.request.results[output].data for output in self.request.results]
         return outputs
 
     def _compile(self):
