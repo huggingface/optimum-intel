@@ -14,6 +14,7 @@
 
 import numpy as np
 import torch
+import threading
 
 
 MODEL_NAMES = {
@@ -132,3 +133,24 @@ def get_num_quantized_nodes(ov_model):
             if "4" in elem.get_output_element_type(i).get_type_name():
                 num_int4 += 1
     return num_fake_quantize, num_int8, num_int4
+
+
+### Multithreading
+
+class OVThread(threading.Thread):
+    def __init__(self, target, args):
+        super().__init__()
+        self.target = target
+        self.args = args
+
+    def run(self):
+        self.exception = None
+        try:
+            self.target(*self.args)
+        except Exception as e:
+            self.exception = e
+
+    def join(self):
+        super().join()
+        if self.exception:
+            raise self.exception

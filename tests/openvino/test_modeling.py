@@ -26,6 +26,7 @@ import torch
 from datasets import load_dataset
 from evaluate import evaluator
 from parameterized import parameterized
+import threading
 from PIL import Image
 from transformers import (
     AutoFeatureExtractor,
@@ -50,7 +51,7 @@ from transformers import (
     set_seed,
 )
 from transformers.onnx.utils import get_preprocessor
-from utils_tests import MODEL_NAMES
+from utils_tests import MODEL_NAMES, OVThread
 
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel import (
@@ -253,7 +254,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        inputs = "This is a sample input"
+        inputs = "This is sample input."
         tokens = tokenizer(inputs, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
@@ -264,6 +265,51 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
             # Compare tensor outputs
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs_list = ["This was a masterpiece. Not completely faithful to the books, but enthralling from beginning to end. Might be my favorite of the three.",
+                       "This was a tragedy. Completely different story than presented in the books. Weak writing, a lot of plot wholes, trivial characters. Might be the worst thing I've seen",
+                       "This was a masterpiece. Not completely faithful to the books, but enthralling from beginning to end. Might be my favorite of the three.",
+                       "This was a tragedy. Completely different story than presented in the books. Weak writing, a lot of plot wholes, trivial characters. Might be the worst thing I've seen",]
+        tokens_list = []
+        for inputs in inputs_list:
+            tokens_list.append(tokenizer(inputs, return_tensors="pt"))
+        
+        transformers_outputs_list = []
+        for tokens in tokens_list:
+            with torch.no_grad():
+                transformers_outputs_list.append(transformers_model(**tokens))
+
+        def run_ov_model(inputs, transformers_outputs):
+            for input_type in ["pt", "np"]:
+                tokens = tokenizer(inputs, return_tensors=input_type)
+                ov_outputs = ov_model(**tokens)
+                self.assertIn("logits", ov_outputs)
+                self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+                # Compare tensor outputs
+                close_enough = torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4)
+                #print(f"[{threading.get_ident()}] OV model logits: {ov_outputs.logits} Torch model logits: {transformers_outputs.logits} Close enough: {close_enough}")
+                self.assertTrue(close_enough)
+        
+        NUM_THREADS=4
+        threads = []
+        for i in range(NUM_THREADS):
+            threads.append(OVThread(target=run_ov_model, args=[inputs_list[i], transformers_outputs_list[i]]))
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        
         del transformers_model
         del ov_model
         gc.collect()
@@ -520,6 +566,50 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**tokens)
         # Compare tensor outputs
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(ov_model.use_cache)
+        self.assertEqual(ov_model.stateful, self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode")
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs_list = ["This is a sample", "The sky is blue", "The money comes from", "Some other random sample"]
+        tokens_list = [tokenizer(inputs, return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None) for inputs in inputs_list]
+
+        def run_ov_model(tokens):
+            position_ids = None
+            if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
+                input_shape = tokens["input_ids"].shape
+                position_ids = torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
+            ov_outputs = ov_model(**tokens, position_ids=position_ids)
+
+            self.assertTrue("logits" in ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+            self.assertTrue("past_key_values" in ov_outputs)
+            self.assertIsInstance(ov_outputs.past_key_values, tuple)
+            if self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode":
+                self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+        NUM_THREADS=4
+        threads = []
+        for i in range(NUM_THREADS):
+            threads.append(OVThread(target=run_ov_model, args=[tokens_list[i]]))
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
         del transformers_model
         del ov_model
         gc.collect()
