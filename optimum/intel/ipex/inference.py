@@ -31,8 +31,22 @@ from .modeling_base import (
     IPEXModelForMaskedLM,
     IPEXModelForSequenceClassification,
     IPEXModelForTokenClassification,
+    IPEXBloomForCausalLM,
+    IPEXMPTForCausalLM,
+    IPEXOPTForCausalLM,
+    IPEXGPTBigCodeForCausalLM,
 )
+
+
 from .utils import _HEAD_TO_AUTOMODELS
+
+
+_MODEL_TYPE_TO_AUTOMODELS = {
+    "bloom": IPEXBloomForCausalLM,
+    "mpt": IPEXMPTForCausalLM,
+    "opt": IPEXOPTForCausalLM,
+    "big_code": IPEXGPTBigCodeForCausalLM,
+}
 
 
 logger = logging.getLogger(__name__)
@@ -131,7 +145,14 @@ class inference_mode:
                         )
                         if task in _HEAD_TO_AUTOMODELS:
                             model = jit_trace(model, task, use_cache)
-                            model = eval(_HEAD_TO_AUTOMODELS[task])(model, self._original.config, use_cache=use_cache)
+                            model_type = getattr(self._original.config, "model_type", "").replace("_", "-")
+
+                            if task == "text-generation" and model_type in _MODEL_TYPE_TO_AUTOMODELS.keys():
+                                auto_model_class = _MODEL_TYPE_TO_AUTOMODELS[task]
+                            else:
+                                auto_model_class = eval(_HEAD_TO_AUTOMODELS[task])
+
+                            model = auto_model_class(model, self._original.config, use_cache=use_cache)
 
                     # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
                     with torch.cpu.amp.autocast(enabled=self._dtype == torch.bfloat16):

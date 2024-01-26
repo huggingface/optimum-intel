@@ -158,17 +158,10 @@ class IPEXModel(OptimizedModel):
 
         model = torch.jit.load(model_cache_path)
         torch.jit.freeze(model.eval())
-
+        model_type = config.model_type.replace("_", "-")
         init_cls = cls
-        if cls is IPEXModelForCausalLM:
-            if config.model_type == "bloom":
-                init_cls = IPEXBloomForCausalLM
-            elif config.model_type == "mpt":
-                init_cls = IPEXMPTForCausalLM
-            elif config.model_type == "opt":
-                init_cls = IPEXOPTForCausalLM
-            elif config.model_type == "gpt_bigcode":
-                init_cls = IPEXGPTBigCodeForCausalLM
+        if cls.export_feature == "text-generation" and model_type in _MODEL_TYPE_TO_AUTOMODELS:
+            init_cls = _MODEL_TYPE_TO_AUTOMODELS[model_type]
 
         return init_cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
 
@@ -535,3 +528,11 @@ class IPEXMPTForCausalLM(IPEXModelForCausalLM):
             "position_ids": None,
             "attention_mask": attention_mask,
         }
+
+
+_MODEL_TYPE_TO_AUTOMODELS = {
+    "bloom": IPEXBloomForCausalLM,
+    "mpt": IPEXMPTForCausalLM,
+    "opt": IPEXOPTForCausalLM,
+    "big-code": IPEXGPTBigCodeForCausalLM,
+}

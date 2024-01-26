@@ -28,7 +28,7 @@ from transformers import (
 )
 
 from optimum.intel import inference_mode as ipex_inference_mode
-from optimum.intel.generation.modeling import TSModelForCausalLM
+from optimum.intel.ipex.modeling_base import IPEXModel
 
 
 MODEL_NAMES = {
@@ -112,6 +112,6 @@ class IPEXIntegrationTest(unittest.TestCase):
             text_generator, dtype=model.config.torch_dtype, verbose=False, jit=True
         ) as ipex_text_generator:
             output_ipex = ipex_text_generator(inputs)
-        self.assertTrue(isinstance(ipex_text_generator.model._optimized, TSModelForCausalLM))
+        self.assertTrue(isinstance(ipex_text_generator.model._optimized, IPEXModel))
         self.assertTrue(isinstance(ipex_text_generator.model._optimized.model, torch.jit.RecursiveScriptModule))
         self.assertEqual(output[0]["generated_text"], output_ipex[0]["generated_text"])
