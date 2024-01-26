@@ -78,7 +78,7 @@ class IPEXIntegrationTest(unittest.TestCase):
             outputs_ipex = ipex_pipe(
                 question="Where was HuggingFace founded ?", context="HuggingFace was founded in Paris."
             )
-        # self.assertTrue(isinstance(ipex_pipe.model._optimized.model, torch.jit.RecursiveScriptModule))
+        self.assertTrue(isinstance(ipex_pipe.model._optimized.model, torch.jit.RecursiveScriptModule))
         self.assertEqual(outputs["start"], outputs_ipex["start"])
         self.assertEqual(outputs["end"], outputs_ipex["end"])
 

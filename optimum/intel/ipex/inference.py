@@ -35,6 +35,7 @@ from .modeling_base import (
     IPEXMPTForCausalLM,
     IPEXOPTForCausalLM,
     IPEXGPTBigCodeForCausalLM,
+    IPEXModelForQuestionAnswering,
 )
 
 

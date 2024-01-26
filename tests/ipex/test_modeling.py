@@ -20,6 +20,7 @@ import torch
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
+    AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoTokenizer,
     PretrainedConfig,
@@ -28,7 +29,7 @@ from transformers import (
 )
 
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
-from optimum.intel import IPEXModelForCausalLM, IPEXModelForSequenceClassification
+from optimum.intel import IPEXModelForCausalLM, IPEXModelForQuestionAnswering, IPEXModelForSequenceClassification
 
 
 SEED = 42
@@ -116,6 +117,46 @@ class IPEXModelForSequenceClassificationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertIsInstance(outputs[0]["label"], str)
+
+
+class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = (
+        "bert",
+        "distilbert",
+        "roberta",
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ipex_model = IPEXModelForQuestionAnswering.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt")
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        outputs = ipex_model(**tokens)
+        self.assertIn("start_logits", outputs)
+        self.assertIn("end_logits", outputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(outputs.start_logits, transformers_outputs.start_logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.end_logits, transformers_outputs.end_logits, atol=1e-4))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = IPEXModelForQuestionAnswering.from_pretrained(model_id, export=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
+        question = "What's my name?"
+        context = "My Name is Sasha and I live in Lyon."
+        outputs = pipe(question, context)
+        self.assertEqual(pipe.device, model.device)
+        self.assertGreaterEqual(outputs["score"], 0.0)
+        self.assertIsInstance(outputs["answer"], str)
 
 
 class IPEXModelForCausalLMTest(unittest.TestCase):
