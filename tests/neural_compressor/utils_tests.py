@@ -39,6 +39,14 @@ from optimum.intel import (
     INCSeq2SeqTrainer,
     INCStableDiffusionPipeline,
 )
+
+from optimum.intel.ipex import (
+    IPEXModelForCausalLM,
+    IPEXModelForSequenceClassification,
+    IPEXModelForMaskedLM,
+    IPEXModelForTokenClassification,
+)
+
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.constant import ONNX_WEIGHTS_NAME
 from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
@@ -94,6 +102,7 @@ class INCTestMixin(unittest.TestCase):
         load_inc_model=True,
         num_samples=None,
         file_name=None,
+        load_ipex_model=False,
     ):
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         file_name = ONNX_WEIGHTS_NAME if task != "text-generation" else "decoder_model.onnx"
@@ -111,8 +120,11 @@ class INCTestMixin(unittest.TestCase):
         with torch.no_grad():
             model_outputs = q_model(**tokens)
             outputs = model_outputs["logits"] if isinstance(model_outputs, dict) else model_outputs[0]
-            if load_inc_model:
-                inc_model = eval(_HEAD_TO_AUTOMODELS[task]).from_pretrained(save_directory)
+            auto_class = _HEAD_TO_AUTOMODELS[task]
+            if load_ipex_model:
+                auto_class = auto_class.replace("INC", "IPEX")
+            if load_inc_model or load_ipex_model:
+                inc_model = eval(auto_class).from_pretrained(save_directory)
                 inc_model_outputs = inc_model(**tokens)
                 self.assertTrue(torch.allclose(inc_model_outputs["logits"], outputs, atol=1e-2))
                 # self.assertEqual(inc_config.save_onnx_model, load_onnx_model)

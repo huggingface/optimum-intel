@@ -66,6 +66,7 @@ def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = Fals
 
 def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     model_inputs = prepare_jit_inputs(model, task, use_cache)
+    model.config.return_dict = False
     # check if the model_inputs is correct.
     model(**model_inputs)
 
@@ -106,6 +107,9 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
 
+        logger.warning(
+            f"The class `{self.__class__}` has been depreciated and will be removed in optimum-intel v1.14, please use IPEXModel instead"
+        )
         if isinstance(model, torch.jit.ScriptModule):
             self.input_names = {
                 inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
