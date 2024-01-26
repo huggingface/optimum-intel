@@ -102,6 +102,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         super(BaseModelForCausalLM, self).__init__(model=model, config=config)
         self.model_save_dir = model_save_dir
         self.preprocessors = kwargs.get("preprocessors", [])
+        self.use_cache = use_cache
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
@@ -115,6 +116,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
             }
         else:
             self.input_names = set()
+
         self.generation_config = GenerationConfig.from_model_config(config)
 
         # Avoid warnings when creating a transformers pipeline
