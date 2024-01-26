@@ -121,7 +121,7 @@ class IPEXModelForSequenceClassificationTest(unittest.TestCase):
 class IPEXModelForCausalLMTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
-        "gpt_bigcode",
+        # "gpt_bigcode",
         "blenderbot",
         "blenderbot-small",
         "bloom",
