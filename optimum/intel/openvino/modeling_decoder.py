@@ -408,10 +408,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         else:
             # past_key_values are not used explicitly, instead they are handled inside the model
             if past_key_values is None:
-                # Need a marker to differentiate the first generate iteration from the others in
-                # the first condition at the function beginning above.
-                # It should be something that is not None and it should be True when converted to Boolean.
-                past_key_values = ((),)
                 # This is the first iteration in a sequence, reset all states
                 self.request.reset_state()
                 # Set initial value for the next beam_idx input that will be used at the current iteration
@@ -451,6 +447,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
         logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        if self.stateful:
+            # Need a marker to differentiate the first generate iteration from the others in
+            # the first condition at the function beginning above.
+            # It should be something that is not None and it should be True when converted to Boolean.
+            past_key_values = ((),)
 
         if not self.stateful:
             if self.use_cache:
