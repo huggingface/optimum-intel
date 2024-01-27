@@ -81,7 +81,8 @@ class InferRequestWrapper:
     def __init__(self, request, data_cache=None):
         self.request = request
         if data_cache is None:
-            self.data_cache = []
+            data_cache = []
+        self.data_cache = data_cache
 
     def __call__(self, *args, **kwargs):
         self.data_cache.append(*args)
