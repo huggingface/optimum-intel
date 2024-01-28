@@ -24,7 +24,7 @@ import torch
 import transformers
 from accelerate.data_loader import DataLoaderStateMixin
 from datasets import Dataset, load_dataset
-from nncf import NNCFConfig, compress_weights
+from nncf import NNCFConfig
 from nncf.torch import create_compressed_model, register_default_init_args, register_module
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
@@ -34,11 +34,13 @@ from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 
+from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
 from ...exporters.openvino import export, export_pytorch_via_onnx
-from ...exporters.openvino.stateful import ensure_export_task_support_stateful
+from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
+from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
 from .configuration import OVConfig
 from .modeling_base import OVBaseModel
@@ -348,9 +350,7 @@ class OVQuantizer(OptimumQuantizer):
             self.model.model,
             quantization_dataset,
             model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
-            fast_bias_correction=True
-            if not kwargs.get("fast_bias_correction")
-            else kwargs.get("fast_bias_correction"),
+            fast_bias_correction=True if not kwargs.get("fast_bias_correction") else kwargs.get("fast_bias_correction"),
             **kwargs,
         )
         self.model.model = quantized_model
@@ -392,13 +392,44 @@ class OVQuantizer(OptimumQuantizer):
             if file_name is None and quantization_config.save_onnx_model
             else Path(ov_file_name).with_suffix(".onnx")
         )
-        if weights_only:
-            if getattr(self.model.config, "tie_word_embeddings", True):
-                # to fix problem with shared embedding weights in nncf compress_weights()
-                self.model.tie_weights()
-            compressed_model = compress_weights(self.model)
-            self.model = compressed_model
+
+        task = self.task
+        model = self.model
+        self.model.config.save_pretrained(save_directory)
+        if task.startswith("text-generation"):
+            onnx_config = onnx_config_class(
+                model.config, use_past=model.config.use_cache, use_past_in_inputs=model.config.use_cache
+            )
+            if model.config.use_cache:
+                task = "text-generation-with-past"
         else:
+            onnx_config = onnx_config_class(model.config)
+
+        stateful = ensure_stateful_is_available() and ensure_export_task_support_stateful(task)
+
+        if weights_only:
+            from torch.utils._pytree import tree_map
+
+            if stateful:
+                # patch model before weight compression
+                model = patch_model_with_bettertransformer(model)
+
+            dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+            device = self.model.device
+            dummy_inputs = tree_map(
+                lambda value: value.to(device) if isinstance(value, torch.Tensor) else value, dummy_inputs
+            )
+            check_dummy_inputs_are_allowed(model, dummy_inputs)
+
+            nncf.compress_weights(self.model, dataset=nncf.Dataset([dummy_inputs]))
+        else:
+            if stateful:
+                logger.warn(
+                    "Quantization algorithm does not support optimized stateful models. "
+                    "The original model without optimization will be quantized and export."
+                )
+                stateful = False
+
             calibration_dataloader = self._get_calibration_dataloader(
                 calibration_dataset=calibration_dataset,
                 batch_size=batch_size,
@@ -415,18 +446,6 @@ class OVQuantizer(OptimumQuantizer):
             )
             compressed_model = controller.strip(do_copy=False)
 
-        task = self.task
-        model = self.model
-        self.model.config.save_pretrained(save_directory)
-        if task.startswith("text-generation"):
-            onnx_config = onnx_config_class(
-                model.config, use_past=model.config.use_cache, use_past_in_inputs=model.config.use_cache
-            )
-            if model.config.use_cache:
-                task = "text-generation-with-past"
-        else:
-            onnx_config = onnx_config_class(model.config)
-
         model_path = save_directory / (onnx_file_name if quantization_config.save_onnx_model else ov_file_name)
         onnx_path = save_directory / onnx_file_name
         export_fn = export if not quantization_config.save_onnx_model else export_pytorch_via_onnx
@@ -434,7 +453,7 @@ class OVQuantizer(OptimumQuantizer):
         opset = max(opset, MIN_ONNX_QDQ_OPSET)
         kwargs = {}
         if not quantization_config.save_onnx_model:
-            kwargs = {"stateful": ensure_export_task_support_stateful(task)}
+            kwargs = {"stateful": stateful}
         _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset, **kwargs)
         if is_onnx:
             # Load and save the compressed model

@@ -152,9 +152,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     )
 
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 64, 365),)
-    SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = (
-        (OVModelForCausalLM, "opt125m", 64, 477),
-    )
+    SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 64, 477),)
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (
         (OVModelForCausalLM, "gpt2"),
@@ -174,6 +172,11 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_automodel_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
+        import nncf
+
+        if nncf.__version__ == "2.8.0":
+            self.skipTest("https://github.com/openvinotoolkit/nncf/issues/2432")
+
         task = model_cls.export_feature
 
         with tempfile.TemporaryDirectory() as tmp_dir:
