@@ -350,7 +350,9 @@ class OVQuantizer(OptimumQuantizer):
             self.model.model,
             quantization_dataset,
             model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
-            fast_bias_correction=True if not kwargs.get("fast_bias_correction") else kwargs.get("fast_bias_correction"),
+            fast_bias_correction=(
+                True if not kwargs.get("fast_bias_correction") else kwargs.get("fast_bias_correction")
+            ),
             **kwargs,
         )
         self.model.model = quantized_model
