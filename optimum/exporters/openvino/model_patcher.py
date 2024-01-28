@@ -15,10 +15,10 @@
 import logging as log
 
 from optimum.intel.utils.import_utils import (
-    is_torch_version,
-    is_transformers_version,
     _torch_version,
     _transformers_version,
+    is_torch_version,
+    is_transformers_version,
 )
 
 

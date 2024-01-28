@@ -417,13 +417,13 @@ class OVQuantizer(OptimumQuantizer):
                 model = patch_model_with_bettertransformer(model)
 
             dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-            device = self.model.device
+            device = model.device
             dummy_inputs = tree_map(
                 lambda value: value.to(device) if isinstance(value, torch.Tensor) else value, dummy_inputs
             )
             check_dummy_inputs_are_allowed(model, dummy_inputs)
 
-            nncf.compress_weights(self.model, dataset=nncf.Dataset([dummy_inputs]))
+            nncf.compress_weights(model, dataset=nncf.Dataset([dummy_inputs]))
         else:
             if stateful:
                 logger.warn(
@@ -443,10 +443,10 @@ class OVQuantizer(OptimumQuantizer):
             quantization_config.add_input_info(model_inputs)
             nncf_config = NNCFConfig.from_dict(quantization_config.__dict__)
             nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
-            controller, compressed_model = create_compressed_model(
-                self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
+            controller, model = create_compressed_model(
+                model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
             )
-            compressed_model = controller.strip(do_copy=False)
+            model = controller.strip(do_copy=False)
 
         model_path = save_directory / (onnx_file_name if quantization_config.save_onnx_model else ov_file_name)
         onnx_path = save_directory / onnx_file_name
