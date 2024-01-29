@@ -25,7 +25,9 @@ from huggingface_hub import hf_hub_download
 from transformers import (
     AutoConfig,
     AutoModel,
+    AutoModelForAudioClassification,
     AutoModelForCausalLM,
+    AutoModelForImageClassification,
     AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
@@ -196,14 +198,24 @@ class IPEXModelForSequenceClassification(IPEXModel):
     export_feature = "text-classification"
 
 
+class IPEXModelForTokenClassification(IPEXModel):
+    auto_model_class = AutoModelForTokenClassification
+    export_feature = "token-classification"
+
+
 class IPEXModelForMaskedLM(IPEXModel):
     auto_model_class = AutoModelForMaskedLM
     export_feature = "fill-mask"
 
 
-class IPEXModelForTokenClassification(IPEXModel):
-    auto_model_class = AutoModelForTokenClassification
-    export_feature = "token-classification"
+class IPEXModelForImageClassification(IPEXModel):
+    auto_model_class = AutoModelForImageClassification
+    export_feature = "image-classification"
+
+
+class IPEXModelForAudioClassification(IPEXModel):
+    auto_model_class = AutoModelForAudioClassification
+    export_feature = "audio-classification"
 
 
 class IPEXModelForQuestionAnswering(IPEXModel):

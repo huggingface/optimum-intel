@@ -30,7 +30,10 @@ from transformers import (
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel import (
     IPEXModel,
+    IPEXModelForAudioClassification,
     IPEXModelForCausalLM,
+    IPEXModelForImageClassification,
+    IPEXModelForMaskedLM,
     IPEXModelForQuestionAnswering,
     IPEXModelForSequenceClassification,
     IPEXModelForTokenClassification,
@@ -110,7 +113,9 @@ class IPEXModelTest(unittest.TestCase):
             transformers_outputs = transformers_model(**tokens)
         outputs = ipex_model(**tokens)
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        for output_name in {"logits", "last_hidden_state"}:
+            if output_name in transformers_outputs:
+                self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-4))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -119,7 +124,7 @@ class IPEXModelTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline(self.IPEX_MODEL_CLASS.export_feature, model=model, tokenizer=tokenizer)
         text = "This restaurant is awesome"
-        outputs = pipe(text)
+        _ = pipe(text)
 
         self.assertEqual(pipe.device, model.device)
 
@@ -132,44 +137,8 @@ class IPEXModelForTokenClassificationTest(IPEXModelTest):
     IPEX_MODEL_CLASS = IPEXModelForSequenceClassification
 
 
-class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = (
-        "bert",
-        "distilbert",
-        "roberta",
-    )
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_compare_to_transformers(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        set_seed(SEED)
-        ipex_model = IPEXModelForQuestionAnswering.from_pretrained(model_id, export=True)
-        self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        inputs = "This is a sample input"
-        tokens = tokenizer(inputs, return_tensors="pt")
-        with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
-        outputs = ipex_model(**tokens)
-        self.assertIn("start_logits", outputs)
-        self.assertIn("end_logits", outputs)
-        # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.start_logits, transformers_outputs.start_logits, atol=1e-4))
-        self.assertTrue(torch.allclose(outputs.end_logits, transformers_outputs.end_logits, atol=1e-4))
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_pipeline(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        model = IPEXModelForQuestionAnswering.from_pretrained(model_id, export=True)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
-        question = "What's my name?"
-        context = "My Name is Sasha and I live in Lyon."
-        outputs = pipe(question, context)
-        self.assertEqual(pipe.device, model.device)
-        self.assertGreaterEqual(outputs["score"], 0.0)
-        self.assertIsInstance(outputs["answer"], str)
+class IPEXModelForMaskedLMTest(IPEXModelTest):
+    IPEX_MODEL_CLASS = IPEXModelForMaskedLM
 
 
 class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
