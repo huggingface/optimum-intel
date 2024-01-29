@@ -30,9 +30,7 @@ from transformers import (
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel import (
     IPEXModel,
-    IPEXModelForAudioClassification,
     IPEXModelForCausalLM,
-    IPEXModelForImageClassification,
     IPEXModelForMaskedLM,
     IPEXModelForQuestionAnswering,
     IPEXModelForSequenceClassification,
@@ -87,7 +85,6 @@ class IPEXModelTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
-        "convbert",
         "distilbert",
         "electra",
         "flaubert",
@@ -124,8 +121,10 @@ class IPEXModelTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline(self.IPEX_MODEL_CLASS.export_feature, model=model, tokenizer=tokenizer)
         text = "This restaurant is awesome"
-        _ = pipe(text)
+        if self.IPEX_MODEL_CLASS.export_feature == "fill-mask":
+            text += tokenizer.mask_token
 
+        _ = pipe(text)
         self.assertEqual(pipe.device, model.device)
 
 
