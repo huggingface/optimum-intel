@@ -35,6 +35,7 @@ from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
+from .quantization import WeightQuantizationConfig, compress_weights
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -244,6 +245,8 @@ class OVBaseDecoderModel(OVModel):
         use_cache: bool = True,
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
+        load_in_4bit: Optional[bool] = None,
+        quantization_config: Optional[Union[WeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         if config.model_type.replace("_", "-") not in _SUPPORTED_ARCHITECTURES:
@@ -261,7 +264,7 @@ class OVBaseDecoderModel(OVModel):
                 task = task + "-with-past"
 
         compression_option = None
-        if load_in_8bit is not None:
+        if load_in_8bit is not None and not load_in_4bit:
             compression_option = "int8" if load_in_8bit else "fp32"
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
         main_export(
@@ -283,7 +286,7 @@ class OVBaseDecoderModel(OVModel):
         config.is_encoder_decoder = False
         config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
-            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=False, stateful=None, **kwargs
+            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=False, stateful=None, load_in_4bit=load_in_4bit, quantization_config=quantization_config, **kwargs
         )
 
     def _reshape(
@@ -526,6 +529,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
+        load_in_4bit: bool = False,
+        quantization_config: Union[WeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         model_path = Path(model_id)
@@ -544,6 +549,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
 
         model = cls.load_model(model_cache_path, load_in_8bit=load_in_8bit)
+        
+        if load_in_4bit:
+            model = compress_weights(model, config, quantization_config)
 
         model_type = config.model_type.replace("_", "-")
         if model_type == "bloom":

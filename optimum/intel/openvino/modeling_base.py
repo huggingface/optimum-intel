@@ -186,11 +186,13 @@ class OVBaseModel(OptimizedModel):
             force_download (`bool`, defaults to `False`):
                 Whether or not to force the (re-)download of the model weights and configuration files, overriding the
                 cached versions if they exist.
-            file_name(`str`, *optional*):
+            file_name (`str`, *optional*):
                 The file name of the model to load. Overwrites the default file name and allows one to load the model
                 with a different name.
-            local_files_only(`bool`, *optional*, defaults to `False`):
+            local_files_only (`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
+            load_in_8bit (`bool`, *optional*, defaults to `False`):
+                Whether or not to apply 8-bit weight quantization.
         """
 
         model_path = Path(model_id)
