@@ -4,6 +4,7 @@ from optimum.intel.ipex.modeling_base import (
     IPEXModelForQuestionAnswering,
     IPEXModelForSequenceClassification,
     IPEXModelForTokenClassification,
+    IPEXModel,
 )
 
 from .inference import inference_mode

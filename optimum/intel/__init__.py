@@ -48,6 +48,7 @@ else:
         "IPEXModelForMaskedLM",
         "IPEXModelForTokenClassification",
         "IPEXModelForQuestionAnswering",
+        "IPEXModel",
     ]
 
 
@@ -164,6 +165,7 @@ if TYPE_CHECKING:
             IPEXModelForQuestionAnswering,
             IPEXModelForSequenceClassification,
             IPEXModelForTokenClassification,
+            IPEXModel,
             inference_mode,
         )
 
