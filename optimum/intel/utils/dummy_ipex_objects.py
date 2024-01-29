@@ -88,17 +88,6 @@ class IPEXModelForQuestionAnswering(metaclass=DummyObject):
         requires_backends(cls, ["ipex"])
 
 
-class IPEXModelForMaskedLM(metaclass=DummyObject):
-    _backends = ["ipex"]
-
-    def __init__(self, *args, **kwargs):
-        requires_backends(self, ["ipex"])
-
-    @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        requires_backends(cls, ["ipex"])
-
-
 class IPEXModelForImageClassification(metaclass=DummyObject):
     _backends = ["ipex"]
 
