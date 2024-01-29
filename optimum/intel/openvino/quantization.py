@@ -77,6 +77,44 @@ class OVDataLoader(PTInitializingDataLoader):
         return batch_size
 
 
+class InferRequestWrapper:
+    def __init__(self, request, data_cache=None):
+        self.request = request
+        if data_cache is None:
+            data_cache = []
+        self.data_cache = data_cache
+
+    def __call__(self, *args, **kwargs):
+        self.data_cache.append(*args)
+        return self.request(*args, **kwargs)
+
+    def infer(self, inputs: Any = None, share_inputs: bool = False):
+        self.data_cache.append(inputs)
+        return self.request.infer(inputs, share_inputs)
+
+    def start_async(
+        self,
+        inputs: Any = None,
+        userdata: Any = None,
+        share_inputs: bool = False,
+        *,
+        shared_memory: Any = None,
+    ):
+        self.data_cache.append(inputs)
+        self.request.infer(inputs, share_inputs, share_outputs=True)
+
+    def wait(self):
+        pass
+
+    def get_tensor(self, name: str):
+        return Tensor(self.request.results[name])
+
+    def __getattr__(self, attr):
+        if attr in self.__dict__:
+            return getattr(self, attr)
+        return getattr(self.request, attr)
+
+
 class OVQuantizer(OptimumQuantizer):
     """
     Handle the NNCF quantization process.
@@ -297,41 +335,7 @@ class OVQuantizer(OptimumQuantizer):
         subset_size = kwargs.get("subset_size", 300)
         data_cache = []
 
-        class InferRequestWrapper:
-            def __init__(self, request):
-                self.request = request
-
-            def __call__(self, *args, **kwargs):
-                data_cache.append(*args)
-                return self.request(*args, **kwargs)
-
-            def infer(self, inputs: Any = None, share_inputs: bool = False):
-                data_cache.append(inputs)
-                return self.request.infer(inputs, share_inputs)
-
-            def start_async(
-                self,
-                inputs: Any = None,
-                userdata: Any = None,
-                share_inputs: bool = False,
-                *,
-                shared_memory: Any = None,
-            ):
-                data_cache.append(inputs)
-                self.request.infer(inputs, share_inputs, share_outputs=True)
-
-            def wait(self):
-                pass
-
-            def get_tensor(self, name: str):
-                return Tensor(self.request.results[name])
-
-            def __getattr__(self, attr):
-                if attr in self.__dict__:
-                    return getattr(self, attr)
-                return getattr(self.request, attr)
-
-        self.model.request = InferRequestWrapper(self.model.request)
+        self.model.request = InferRequestWrapper(self.model.request, data_cache)
         for _, data in enumerate(calibration_dataloader):
             self.model.generate(**data, max_new_tokens=1)
             if len(data_cache) >= subset_size:
