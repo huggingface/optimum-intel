@@ -282,12 +282,16 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             pass
 
     def to(self, device: str):
-        self._device = str(device).upper()
-        self.encoder._device = self._device
-        self.decoder._device = self._device
-        if self.use_cache:
-            self.decoder_with_past._device = self._device
-        self.clear_requests()
+        if isinstance(device, str):
+            self._device = device.upper()
+            self.encoder._device = self._device
+            self.decoder._device = self._device
+            if self.use_cache:
+                self.decoder_with_past._device = self._device
+            self.clear_requests()
+        else:
+            logger.warning(f"device must be of type {str} but got {type(device)} instead")
+
         return self
 
     @add_start_docstrings_to_model_forward(

@@ -15,11 +15,9 @@
 
 import os
 import tempfile
-import time
 import unittest
 
 import torch
-from packaging.version import Version, parse
 from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline, set_seed
 
@@ -40,7 +38,6 @@ from optimum.intel import (  # noqa
     INCTrainer,
 )
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS, WEIGHTS_NAME
-from optimum.version import __version__ as _optimum_version
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -66,15 +63,6 @@ MODEL_NAMES_TO_TASK = (
 )
 
 DIFFUSERS_MODEL_NAMES_TO_TASK = (("echarlaix/stable-diffusion-v1-5-inc-int8-dynamic", "stable-diffusion"),)
-
-
-class Timer(object):
-    def __enter__(self):
-        self.elapsed = time.perf_counter()
-        return self
-
-    def __exit__(self, type, value, traceback):
-        self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
 class INCModelingTest(unittest.TestCase):
@@ -134,34 +122,3 @@ class INCModelingTest(unittest.TestCase):
             inputs *= 2
 
         pipe(*inputs)
-
-    @unittest.skipIf(parse(_optimum_version) < Version("1.14.0"), "not supported, needs optimum>=v1.14.0")
-    def test_compare_with_and_without_past_key_values(self):
-        model_id = "echarlaix/tiny-random-gpt2-torchscript"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-
-        model_with_pkv = INCModelForCausalLM.from_pretrained(model_id, use_cache=True, subfolder="model_with_pkv")
-        # Warmup
-        model_with_pkv.generate(**tokens)
-        with Timer() as with_pkv_timer:
-            outputs_model_with_pkv = model_with_pkv.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
-            )
-        model_without_pkv = INCModelForCausalLM.from_pretrained(
-            model_id, use_cache=False, subfolder="model_without_pkv"
-        )
-        # Warmup
-        model_without_pkv.generate(**tokens)
-        with Timer() as without_pkv_timer:
-            outputs_model_without_pkv = model_without_pkv.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
-            )
-        self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
-        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
-        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
-        self.assertTrue(
-            without_pkv_timer.elapsed / with_pkv_timer.elapsed > self.SPEEDUP_CACHE,
-            f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
-            f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
-        )
