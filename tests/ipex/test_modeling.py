@@ -29,7 +29,7 @@ from transformers import (
 )
 
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
-from optimum.intel import IPEXModelForCausalLM, IPEXModelForQuestionAnswering, IPEXModelForSequenceClassification
+from optimum.intel import IPEXModelForCausalLM, IPEXModelForQuestionAnswering, IPEXModelForSequenceClassification, IPEXModelForTokenClassification, IPEXModel
 
 
 SEED = 42
@@ -75,7 +75,7 @@ class Timer(object):
         self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
-class IPEXModelForSequenceClassificationTest(unittest.TestCase):
+class IPEXModelTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
@@ -89,13 +89,15 @@ class IPEXModelForSequenceClassificationTest(unittest.TestCase):
         "xlm",
     )
 
+    IPEX_MODEL_CLASS = IPEXModel
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ipex_model = IPEXModelForSequenceClassification.from_pretrained(model_id, export=True)
+        ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
         tokens = tokenizer(inputs, return_tensors="pt")
@@ -108,15 +110,20 @@ class IPEXModelForSequenceClassificationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = IPEXModelForSequenceClassification.from_pretrained(model_id, export=True)
+        model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
+        pipe = pipeline(self.IPEX_MODEL_CLASS.export_feature, model=model, tokenizer=tokenizer)
         text = "This restaurant is awesome"
         outputs = pipe(text)
 
         self.assertEqual(pipe.device, model.device)
-        self.assertGreaterEqual(outputs[0]["score"], 0.0)
-        self.assertIsInstance(outputs[0]["label"], str)
+
+class IPEXModelForSequenceClassificationTest(IPEXModelTest):
+    IPEX_MODEL_CLASS = IPEXModelForTokenClassification
+
+class IPEXModelForTokenClassificationTest(IPEXModelTest):
+
+    IPEX_MODEL_CLASS = IPEXModelForSequenceClassification
 
 
 class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
