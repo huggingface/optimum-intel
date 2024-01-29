@@ -21,7 +21,6 @@ from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForQuestionAnswering,
-    AutoModelForSequenceClassification,
     AutoTokenizer,
     PretrainedConfig,
     pipeline,
@@ -29,7 +28,13 @@ from transformers import (
 )
 
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
-from optimum.intel import IPEXModelForCausalLM, IPEXModelForQuestionAnswering, IPEXModelForSequenceClassification, IPEXModelForTokenClassification, IPEXModel
+from optimum.intel import (
+    IPEXModel,
+    IPEXModelForCausalLM,
+    IPEXModelForQuestionAnswering,
+    IPEXModelForSequenceClassification,
+    IPEXModelForTokenClassification,
+)
 
 
 SEED = 42
@@ -118,11 +123,12 @@ class IPEXModelTest(unittest.TestCase):
 
         self.assertEqual(pipe.device, model.device)
 
+
 class IPEXModelForSequenceClassificationTest(IPEXModelTest):
     IPEX_MODEL_CLASS = IPEXModelForTokenClassification
 
-class IPEXModelForTokenClassificationTest(IPEXModelTest):
 
+class IPEXModelForTokenClassificationTest(IPEXModelTest):
     IPEX_MODEL_CLASS = IPEXModelForSequenceClassification
 
 

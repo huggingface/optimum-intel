@@ -160,12 +160,12 @@ if TYPE_CHECKING:
         from .utils.dummy_ipex_objects import *
     else:
         from .ipex import (
+            IPEXModel,
             IPEXModelForCausalLM,
             IPEXModelForMaskedLM,
             IPEXModelForQuestionAnswering,
             IPEXModelForSequenceClassification,
             IPEXModelForTokenClassification,
-            IPEXModel,
             inference_mode,
         )
 

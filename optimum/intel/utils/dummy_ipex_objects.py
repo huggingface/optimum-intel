@@ -76,6 +76,7 @@ class IPEXModelForQuestionAnswering(metaclass=DummyObject):
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["ipex"])
 
+
 class IPEXModel(metaclass=DummyObject):
     _backends = ["ipex"]
 
@@ -85,4 +86,3 @@ class IPEXModel(metaclass=DummyObject):
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["ipex"])
-
