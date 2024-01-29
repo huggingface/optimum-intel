@@ -66,8 +66,7 @@ def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = Fals
 
 def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     model_inputs = prepare_jit_inputs(model, task, use_cache)
-    model.config.return_dict = "text-generation" not in task
-
+    model.config.return_dict = task not in {"text-generation", "audio-classification"}
     # check if the model_inputs is correct.
     model(**model_inputs)
 
