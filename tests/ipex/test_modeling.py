@@ -36,6 +36,7 @@ from optimum.intel import (
     IPEXModelForTokenClassification,
 )
 
+
 SEED = 42
 
 MODEL_NAMES = {
