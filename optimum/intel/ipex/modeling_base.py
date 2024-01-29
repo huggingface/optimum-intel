@@ -25,7 +25,9 @@ from huggingface_hub import hf_hub_download
 from transformers import (
     AutoConfig,
     AutoModel,
+    AutoModelForAudioClassification,
     AutoModelForCausalLM,
+    AutoModelForImageClassification,
     AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
@@ -68,6 +70,9 @@ class IPEXModel(OptimizedModel):
         self.model.to(self._device)
         self.model_save_dir = model_save_dir
 
+        self.input_names = {
+            inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
+        }
         # Registers the IPEXModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -170,8 +175,22 @@ class IPEXModel(OptimizedModel):
         output_path = os.path.join(save_directory, WEIGHTS_NAME)
         torch.jit.save(self.model, output_path)
 
-    def forward(self, *args, **kwargs):
-        outputs = self.model(*args, **kwargs)
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: torch.Tensor = None,
+        **kwargs,
+    ):
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        if "token_type_ids" in self.input_names:
+            inputs["token_type_ids"] = token_type_ids
+
+        outputs = self.model(**inputs)
         return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
     def eval(self):
@@ -196,14 +215,52 @@ class IPEXModelForSequenceClassification(IPEXModel):
     export_feature = "text-classification"
 
 
+class IPEXModelForTokenClassification(IPEXModel):
+    auto_model_class = AutoModelForTokenClassification
+    export_feature = "token-classification"
+
+
 class IPEXModelForMaskedLM(IPEXModel):
     auto_model_class = AutoModelForMaskedLM
     export_feature = "fill-mask"
 
 
-class IPEXModelForTokenClassification(IPEXModel):
-    auto_model_class = AutoModelForTokenClassification
-    export_feature = "token-classification"
+class IPEXModelForImageClassification(IPEXModel):
+    auto_model_class = AutoModelForImageClassification
+    export_feature = "image-classification"
+
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        **kwargs,
+    ):
+        inputs = {
+            "pixel_values": pixel_values,
+        }
+
+        outputs = self.model(**inputs)
+        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
+
+
+class IPEXModelForAudioClassification(IPEXModel):
+    auto_model_class = AutoModelForAudioClassification
+    export_feature = "audio-classification"
+
+    def forward(
+        self,
+        input_values: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        **kwargs,
+    ):
+        inputs = {
+            "input_values": input_values,
+        }
+
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+
+        outputs = self.model(**inputs)
+        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
 
 class IPEXModelForQuestionAnswering(IPEXModel):
@@ -233,9 +290,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
-        self.input_names = {
-            inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
-        }
         self.use_cache = "past_key_values" in self.input_names
 
         if use_cache ^ self.use_cache:

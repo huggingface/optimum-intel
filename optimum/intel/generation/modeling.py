@@ -66,13 +66,11 @@ def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = Fals
 
 def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     model_inputs = prepare_jit_inputs(model, task, use_cache)
-    model.config.return_dict = False
+    model.config.return_dict = task not in {"text-generation", "audio-classification"}
     # check if the model_inputs is correct.
     model(**model_inputs)
 
     torch._C._jit_set_texpr_fuser_enabled(False)
-    if "past_key_values" in model_inputs.keys():
-        model.config.return_dict = False
     if is_torch_version(">=", "2.1.0"):
         traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs, strict=False)
     else:

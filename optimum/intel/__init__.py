@@ -48,8 +48,10 @@ else:
         "IPEXModelForMaskedLM",
         "IPEXModelForTokenClassification",
         "IPEXModelForQuestionAnswering",
+        "IPEXModelForImageClassification",
+        "IPEXModelForAudioClassification",
+        "IPEXModel",
     ]
-
 
 try:
     if not (is_openvino_available() and is_nncf_available()):
@@ -159,7 +161,10 @@ if TYPE_CHECKING:
         from .utils.dummy_ipex_objects import *
     else:
         from .ipex import (
+            IPEXModel,
+            IPEXModelForAudioClassification,
             IPEXModelForCausalLM,
+            IPEXModelForImageClassification,
             IPEXModelForMaskedLM,
             IPEXModelForQuestionAnswering,
             IPEXModelForSequenceClassification,
