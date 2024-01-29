@@ -154,3 +154,14 @@ class OVThread(threading.Thread):
         super().join()
         if self.exception:
             raise self.exception
+        
+# Each set of args is run in a separate thread.
+# Amount of such sets define how many threads are spawned.
+def run_on_multiple_threads(target, args_list):
+    threads = []
+    for args in args_list:
+            threads.append(OVThread(target=target, args=args))
+    for thread in threads:
+            thread.start()
+    for thread in threads:
+        thread.join()
