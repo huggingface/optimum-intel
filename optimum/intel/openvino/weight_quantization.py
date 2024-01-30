@@ -13,14 +13,12 @@
 #  limitations under the License.
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, Optional, Union, List
+from typing import Any, Dict, Optional, Union
 
-import openvino
 import nncf
-
-from transformers import PretrainedConfig, AutoTokenizer
+from transformers import AutoTokenizer, PretrainedConfig
 from transformers.utils.quantization_config import QuantizationConfigMixin
+
 
 @dataclass
 class WeightQuantizationConfig(QuantizationConfigMixin):
@@ -54,7 +52,7 @@ class WeightQuantizationConfig(QuantizationConfigMixin):
             preserve the accuracy of the model, the more sensitive layers receives a higher precision.
         ignored_scope (`nncf.IgnoredScope`, *optional*):
             An ignored scope that defined the list of model control flow graph nodes to be ignored during quantization.
-        
+
     """
 
     def __init__(
@@ -78,7 +76,7 @@ class WeightQuantizationConfig(QuantizationConfigMixin):
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
         self.post_init()
-        
+
     def post_init(self):
         r"""
         Safety checker that arguments are correct
@@ -93,6 +91,7 @@ class WeightQuantizationConfig(QuantizationConfigMixin):
                     f"""You have entered a string value for dataset. You can only choose between
                     ['wikitext2','c4','c4-new','ptb','ptb-new'], but we found {self.dataset}"""
                 )
+
 
 def _check_default_4bit_configs(config: PretrainedConfig):
     DEFAULT_4BIT_CONFIGS = {
@@ -113,16 +112,19 @@ def _check_default_4bit_configs(config: PretrainedConfig):
         "qwen-7b-chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.6},
     }
     return DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
-                    
+
+
 def compress_decoder_weights(model, quantization_config: Union[WeightQuantizationConfig, Dict] = None):
-    quantization_config = quantization_config if quantization_config is not None else _check_default_4bit_configs(config)
+    quantization_config = (
+        quantization_config if quantization_config is not None else _check_default_4bit_configs(config)
+    )
     ov_model = model.model
 
     if quantization_config is not None:
         config = quantization_config
         if isinstance(quantization_config, Dict):
             config = WeightQuantizationConfig.from_dict(quantization_config)
-        
+
         dataset = config.dataset
         if config.dataset is not None and isinstance(config.dataset, str):
             tokenizer = config.tokenizer
@@ -130,12 +132,22 @@ def compress_decoder_weights(model, quantization_config: Union[WeightQuantizatio
                 tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
             elif isinstance(tokenizer, str):
                 tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-            
+
             from optimum.gptq.data import get_dataset, prepare_dataset
+
             dataset = get_dataset(config.dataset, tokenizer)
             dataset = prepare_dataset(dataset)
             dataset = nncf.Dataset(dataset, lambda x: model.prepare_forward_inputs(**x))
-            
-        model.model = nncf.compress_weights(ov_model, mode=config.mode, ratio=config.ratio, group_size=config.group_size, all_layers=config.all_layers, sensitivity_metric=config.sensitivity_metric, ignored_scope=config.ignored_scope, dataset=dataset)
-    else: # Data-free weight-only quantization to asymmetric INT4 
+
+        model.model = nncf.compress_weights(
+            ov_model,
+            mode=config.mode,
+            ratio=config.ratio,
+            group_size=config.group_size,
+            all_layers=config.all_layers,
+            sensitivity_metric=config.sensitivity_metric,
+            ignored_scope=config.ignored_scope,
+            dataset=dataset,
+        )
+    else:  # Data-free weight-only quantization to asymmetric INT4
         model.model = nncf.compress_weights(ov_model, mode=nncf.CompressWeightsMode.INT4_ASYM)

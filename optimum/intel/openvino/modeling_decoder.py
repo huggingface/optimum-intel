@@ -286,7 +286,14 @@ class OVBaseDecoderModel(OVModel):
         config.is_encoder_decoder = False
         config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
-            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=False, stateful=None, load_in_4bit=load_in_4bit, quantization_config=quantization_config, **kwargs
+            model_id=save_dir_path,
+            config=config,
+            use_cache=use_cache,
+            load_in_8bit=False,
+            stateful=None,
+            load_in_4bit=load_in_4bit,
+            quantization_config=quantization_config,
+            **kwargs,
         )
 
     def _reshape(
@@ -353,7 +360,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             checkpoint="gpt2",
         )
     )
-    
     def prepare_forward_inputs(
         self,
         input_ids: torch.LongTensor,
@@ -445,10 +451,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             inputs["beam_idx"] = (
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
             )
-            
+
         return inputs
-        
-    
+
     def forward(
         self,
         input_ids: torch.LongTensor,
@@ -458,9 +463,15 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
-        
-        inputs = self.prepare_forward_inputs(input_ids=input_ids, attention_mask=attention_mask, past_key_values=past_key_values, position_ids=position_ids, **kwargs)
-        
+
+        inputs = self.prepare_forward_inputs(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+            **kwargs,
+        )
+
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
@@ -578,11 +589,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = cls
 
         causal_model = init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
-        
+
         if load_in_4bit:
             compress_decoder_weights(causal_model, quantization_config)
         return causal_model
-        
+
 
 class OVBloomForCausalLM(OVModelForCausalLM):
     # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM.prepare_inputs_for_generation
