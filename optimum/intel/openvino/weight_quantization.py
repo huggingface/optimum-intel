@@ -22,8 +22,6 @@ import nncf
 from transformers import PretrainedConfig, AutoTokenizer
 from transformers.utils.quantization_config import QuantizationConfigMixin
 
-from .data import get_calibration_dataloader
-
 @dataclass
 class WeightQuantizationConfig(QuantizationConfigMixin):
     """
@@ -95,13 +93,6 @@ class WeightQuantizationConfig(QuantizationConfigMixin):
                     f"""You have entered a string value for dataset. You can only choose between
                     ['wikitext2','c4','c4-new','ptb','ptb-new'], but we found {self.dataset}"""
                 )
-                    
-def _prepare_nncf_dataset(dataset_name: str, tokenizer: Any = None):
-    from optimum.gptq.data import get_dataset, prepare_dataset
-    
-    dataset = get_dataset(dataset_name, tokenizer)
-    dataset = prepare_dataset(dataset)
-    return nncf.Dataset(dataset, lambda x: x)
 
 def _check_default_4bit_configs(config: PretrainedConfig):
     DEFAULT_4BIT_CONFIGS = {
@@ -139,8 +130,12 @@ def compress_decoder_weights(model, quantization_config: Union[WeightQuantizatio
                 tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
             elif isinstance(tokenizer, str):
                 tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-            dataset = _prepare_nncf_dataset(config.dataset, tokenizer)
             
-        return nncf.compress_weights(ov_model, mode=config.mode, ratio=config.ratio, group_size=config.group_size, all_layers=config.all_layers, sensitivity_metric=config.sensitivity_metric, ignored_scope=config.ignored_scope, dataset=dataset)
+            from optimum.gptq.data import get_dataset, prepare_dataset
+            dataset = get_dataset(config.dataset, tokenizer)
+            dataset = prepare_dataset(dataset)
+            dataset = nncf.Dataset(dataset, lambda x: model.prepare_forward_inputs(**x))
+            
+        model.model = nncf.compress_weights(ov_model, mode=config.mode, ratio=config.ratio, group_size=config.group_size, all_layers=config.all_layers, sensitivity_metric=config.sensitivity_metric, ignored_scope=config.ignored_scope, dataset=dataset)
     else: # Data-free weight-only quantization to asymmetric INT4 
-        return nncf.compress_weights(ov_model, mode=nncf.CompressWeightsMode.INT4_ASYM)
+        model.model = nncf.compress_weights(ov_model, mode=nncf.CompressWeightsMode.INT4_ASYM)

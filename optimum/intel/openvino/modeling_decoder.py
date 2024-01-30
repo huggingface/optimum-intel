@@ -353,15 +353,15 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             checkpoint="gpt2",
         )
     )
-    def forward(
+    
+    def prepare_forward_inputs(
         self,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
-    ) -> CausalLMOutputWithPast:
-        self.compile()
+    ) -> Dict:
         if self.use_cache and past_key_values is not None:
             input_ids = input_ids[:, -1:]
 
@@ -445,7 +445,22 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             inputs["beam_idx"] = (
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
             )
-
+            
+        return inputs
+        
+    
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ) -> CausalLMOutputWithPast:
+        self.compile()
+        
+        inputs = self.prepare_forward_inputs(input_ids=input_ids, attention_mask=attention_mask, past_key_values=past_key_values, position_ids=position_ids, **kwargs)
+        
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
@@ -565,7 +580,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         causal_model = init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
         
         if load_in_4bit:
-            causal_model = compress_decoder_weights(causal_model, config, quantization_config)
+            compress_decoder_weights(causal_model, quantization_config)
         return causal_model
         
 

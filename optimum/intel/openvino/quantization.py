@@ -33,13 +33,12 @@ from openvino.runtime import Core, Tensor
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
-from transformers import QuantizationConfigMixin
+from transformers.utils.quantization_config import QuantizationConfigMixin
 
 
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
 
-from .data import get_calibration_dataloader, OVDataLoader, get_calibration_dataset
 from ...exporters.openvino import export, export_pytorch_via_onnx
 from ...exporters.openvino.stateful import ensure_export_task_support_stateful
 from ..utils.constant import _TASK_ALIASES
@@ -52,6 +51,7 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
 )
+from .weight_quantization import compress_decoder_weights
 
 
 COMPRESSION_OPTIONS = {
@@ -66,6 +66,18 @@ register_module(ignored_algorithms=[])(Conv1D)
 
 core = Core()
 logger = logging.getLogger(__name__)
+
+
+class OVDataLoader(PTInitializingDataLoader):
+    def get_inputs(self, dataloader_output) -> Tuple[Tuple, Dict]:
+        return (), dataloader_output
+
+    @property
+    def batch_size(self):
+        batch_size = self._data_loader.batch_size
+        if batch_size is None and isinstance(self._data_loader, DataLoaderStateMixin):
+            batch_size = self._data_loader.total_batch_size
+        return batch_size
 
 
 class OVQuantizer(OptimumQuantizer):
@@ -94,6 +106,7 @@ class OVQuantizer(OptimumQuantizer):
             )
         self.task = task or feature
         self.seed = seed
+        self.input_names = None
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
         self._export_input_names = [
@@ -110,6 +123,7 @@ class OVQuantizer(OptimumQuantizer):
         calibration_dataset: Dataset = None,
         save_directory: Union[str, Path] = None,
         quantization_config: QuantizationConfigMixin = None,
+        ov_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
@@ -125,7 +139,7 @@ class OVQuantizer(OptimumQuantizer):
                 The dataset to use for the calibration step.
             save_directory (`Union[str, Path]`):
                 The directory where the quantized model should be saved.
-            quantization_config (`QuantizationConfigMixin`, *optional*):
+            quantization_config (`OVConfig`, *optional*):
                 The configuration containing the parameters related to quantization.
             file_name (`str`, *optional*):
                 The model file name to use when saving the model. Overwrites the default file name `"model.onnx"`.
@@ -200,13 +214,12 @@ class OVQuantizer(OptimumQuantizer):
             self._quantize_torchmodel(
                 calibration_dataset,
                 save_directory,
-                quantization_config,
+                ov_config,
                 file_name,
                 batch_size,
                 data_collator,
                 remove_unused_columns,
                 weights_only,
-                **kwargs
             )
         else:
             raise TypeError(f"Unsupported model type: {type(self.model)}")
@@ -237,13 +250,11 @@ class OVQuantizer(OptimumQuantizer):
             self.model.save_pretrained(save_directory)
             return
 
-        calibration_dataloader = get_calibration_dataloader(
+        calibration_dataloader = self._get_calibration_dataloader(
             calibration_dataset=calibration_dataset,
             batch_size=batch_size,
             remove_unused_columns=remove_unused_columns,
-            signature_columns=self._signature_columns,
             data_collator=data_collator,
-            seed=self._seed
         )
 
         quantization_dataset = nncf.Dataset(calibration_dataloader, lambda x: x)
@@ -265,25 +276,22 @@ class OVQuantizer(OptimumQuantizer):
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         weights_only: bool = False,
-        quantization_config: OVConfig = None,
+        quantization_config: QuantizationConfigMixin = None,
         **kwargs,
     ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
 
         if weights_only:
-            options = self._get_compression_options(quantization_config)
-            self.model.model = nncf.compress_weights(self.model.model, **options)
+            compress_decoder_weights(self.model, quantization_config)
             self.model.save_pretrained(save_directory)
             return
 
-        calibration_dataloader = get_calibration_dataloader(
+        calibration_dataloader = self._get_calibration_dataloader(
             calibration_dataset=calibration_dataset,
             batch_size=batch_size,
             remove_unused_columns=remove_unused_columns,
-            signature_columns=self._signature_columns,
             data_collator=data_collator,
-            seed=self._seed
         )
 
         # Prefeth past_key_values
@@ -351,13 +359,12 @@ class OVQuantizer(OptimumQuantizer):
         self,
         calibration_dataset: Dataset,
         save_directory: Union[str, Path],
-        quantization_config: OVConfig = None,
+        ov_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         weights_only: bool = False,
-       **kwargs
     ):
         self._set_task()
         save_directory = Path(save_directory)
@@ -373,16 +380,15 @@ class OVQuantizer(OptimumQuantizer):
             task=self.task,
             model_type=model_type,
         )
-        save_onnx_model = kwargs.get("save_onnx_model", False)
 
-        if quantization_config is None:
+        if ov_config is None:
             logger.info(
                 "No configuration describing the quantization process was provided, a default OVConfig will be generated."
             )
-            quantization_config = OVConfig()
+            ov_config = OVConfig()
         onnx_file_name = (
             ONNX_WEIGHTS_NAME
-            if file_name is None and kwargs.get("save_onnx_model", False)
+            if file_name is None and ov_config.save_onnx_model
             else Path(ov_file_name).with_suffix(".onnx")
         )
         if weights_only:
@@ -392,18 +398,16 @@ class OVQuantizer(OptimumQuantizer):
             compressed_model = compress_weights(self.model)
             self.model = compressed_model
         else:
-            calibration_dataloader = get_calibration_dataloader(
+            calibration_dataloader = self._get_calibration_dataloader(
                 calibration_dataset=calibration_dataset,
                 batch_size=batch_size,
                 remove_unused_columns=remove_unused_columns,
-                signature_columns=self._signature_columns,
                 data_collator=data_collator,
-                seed=self._seed
             )
 
             model_inputs = next(iter(calibration_dataloader))
-            quantization_config.add_input_info(model_inputs)
-            nncf_config = NNCFConfig.from_dict(quantization_config.__dict__)
+            ov_config.add_input_info(model_inputs)
+            nncf_config = NNCFConfig.from_dict(ov_config.__dict__)
             nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
             controller, compressed_model = create_compressed_model(
                 self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
@@ -422,13 +426,13 @@ class OVQuantizer(OptimumQuantizer):
         else:
             onnx_config = onnx_config_class(model.config)
 
-        model_path = save_directory / (onnx_file_name if save_onnx_model else ov_file_name)
+        model_path = save_directory / (onnx_file_name if ov_config.save_onnx_model else ov_file_name)
         onnx_path = save_directory / onnx_file_name
-        export_fn = export if not save_onnx_model else export_pytorch_via_onnx
+        export_fn = export if not ov_config.save_onnx_model else export_pytorch_via_onnx
         opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = max(opset, MIN_ONNX_QDQ_OPSET)
         kwargs = {}
-        if not save_onnx_model:
+        if not ov_config.save_onnx_model:
             kwargs = {"stateful": ensure_export_task_support_stateful(task)}
         _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset, **kwargs)
         if is_onnx:
@@ -437,14 +441,14 @@ class OVQuantizer(OptimumQuantizer):
             # Model required second saving for appling weights compression transformations
             self._save_pretrained(model, output_path)
             # if onnx conversion happens as fallback for pytorch conversion, remove onnx model
-            if not save_onnx_model:
+            if not ov_config.save_onnx_model:
                 os.remove(onnx_path)
                 try:
                     os.remove(f"{onnx_path}_data")
                 except FileNotFoundError:
                     pass
 
-        quantization_config.save_pretrained(save_directory)
+        ov_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
@@ -502,8 +506,44 @@ class OVQuantizer(OptimumQuantizer):
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
-        return get_calibration_dataset(dataset_name, num_samples=num_samples, dataset_config_name=dataset_config_name, dataset_split=dataset_split, preprocess_function=preprocess_function, preprocess_batch=preprocess_batch, use_auth_token=use_auth_token, cache_dir=cache_dir, seed=self.seed)
+        calibration_dataset = load_dataset(
+            dataset_name,
+            name=dataset_config_name,
+            split=dataset_split,
+            use_auth_token=use_auth_token,
+            cache_dir=cache_dir,
+        )
 
-    
+        if num_samples is not None:
+            num_samples = min(num_samples, len(calibration_dataset))
+            calibration_dataset = calibration_dataset.shuffle(seed=self.seed).select(range(num_samples))
+
+        if preprocess_function is not None:
+            calibration_dataset = calibration_dataset.map(preprocess_function, batched=preprocess_batch)
+
+        return calibration_dataset
+
+    def _get_calibration_dataloader(
+        self,
+        calibration_dataset: Dataset,
+        batch_size: int,
+        remove_unused_columns: bool,
+        data_collator: Optional[DataCollator] = None,
+    ) -> OVDataLoader:
+        data_collator = data_collator if data_collator is not None else default_data_collator
+        if remove_unused_columns:
+            calibration_dataset = self._remove_unused_columns(calibration_dataset)
+        self.input_names = calibration_dataset.column_names
+        generator = torch.Generator()
+        generator.manual_seed(self.seed)
+        sampler = RandomSampler(calibration_dataset, generator=generator)
+        calibration_dataloader = DataLoader(
+            calibration_dataset, batch_size=batch_size, sampler=sampler, collate_fn=data_collator, drop_last=False
+        )
+        return OVDataLoader(calibration_dataloader)
+
+    def _remove_unused_columns(self, dataset: Dataset):
+        ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
+        return dataset.remove_columns(ignored_columns)
 
     
