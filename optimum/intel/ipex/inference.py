@@ -36,18 +36,11 @@ from .modeling_base import (
     IPEXOPTForCausalLM,
     IPEXGPTBigCodeForCausalLM,
     IPEXModelForQuestionAnswering,
+    _MODEL_TYPE_TO_AUTOMODELS,
 )
 
 
 from .utils import _HEAD_TO_AUTOMODELS
-
-
-_MODEL_TYPE_TO_AUTOMODELS = {
-    "bloom": IPEXBloomForCausalLM,
-    "mpt": IPEXMPTForCausalLM,
-    "opt": IPEXOPTForCausalLM,
-    "big_code": IPEXGPTBigCodeForCausalLM,
-}
 
 
 logger = logging.getLogger(__name__)
@@ -149,7 +142,7 @@ class inference_mode:
                             model_type = getattr(self._original.config, "model_type", "").replace("_", "-")
 
                             if task == "text-generation" and model_type in _MODEL_TYPE_TO_AUTOMODELS.keys():
-                                auto_model_class = _MODEL_TYPE_TO_AUTOMODELS[task]
+                                auto_model_class = _MODEL_TYPE_TO_AUTOMODELS[model_type]
                             else:
                                 auto_model_class = eval(_HEAD_TO_AUTOMODELS[task])
 

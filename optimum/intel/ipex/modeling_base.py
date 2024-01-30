@@ -600,5 +600,5 @@ _MODEL_TYPE_TO_AUTOMODELS = {
     "bloom": IPEXBloomForCausalLM,
     "mpt": IPEXMPTForCausalLM,
     "opt": IPEXOPTForCausalLM,
-    "big-code": IPEXGPTBigCodeForCausalLM,
+    "gpt-bigcode": IPEXGPTBigCodeForCausalLM,
 }
