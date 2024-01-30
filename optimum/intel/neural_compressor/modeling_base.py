@@ -83,11 +83,6 @@ class INCModel(OptimizedModel):
             "cuda:0" if torch.cuda.is_available() else "cpu"
         )
 
-        if getattr(self.config, "backend", None) == "ipex":
-            raise NotImplementedError(
-                "`INCModel` does not supported the loading of model resulting from IPEX, please use `IPEXModel` to load your model instead instead"
-            )
-
         # Registers the INCModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -146,6 +141,12 @@ class INCModel(OptimizedModel):
         model_class = _get_model_class(config, cls.auto_model_class._model_mapping)
         # Load the state dictionary of the model to verify whether the model to get the quantization config
         state_dict = torch.load(model_cache_path, map_location="cpu")
+
+        if isinstance(state_dict, torch.jit.ScriptModule):
+            raise RuntimeError(
+                f"`{cls.__name__}` does not support the loading TorchScript model, to load your model please use {cls.__name__.replace('INC', 'IPEX')}` instead."
+            )
+
         q_config = state_dict.get("best_configure", None)
 
         if q_config is None:
