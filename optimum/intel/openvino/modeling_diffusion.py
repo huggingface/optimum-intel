@@ -547,7 +547,7 @@ class OVModelPart:
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
                 and not str(self._model_dir).startswith(gettempdir())
-                and self.device.lower() == "gpu"
+                and self.device.lower().split(":")[0] == "gpu"
             ):
                 self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
