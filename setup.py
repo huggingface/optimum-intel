@@ -45,7 +45,7 @@ EXTRAS_REQUIRE = {
         "transformers>=4.34.0",
     ],
     "openvino": [
-        "openvino>=2023.2",
+        "openvino>=2023.3",
         "onnx",
         "onnxruntime",
         "transformers>=4.36.0",
