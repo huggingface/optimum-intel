@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import importlib.util
+import logging
 import operator as op
 import sys
 from collections import OrderedDict
@@ -26,6 +27,8 @@ if sys.version_info < (3, 8):
 else:
     import importlib.metadata as importlib_metadata
 
+
+logger = logging.getLogger(__name__)
 
 STR_OPERATION_TO_FUNC = {">": op.gt, ">=": op.ge, "==": op.eq, "!=": op.ne, "<=": op.le, "<": op.lt}
 
@@ -75,13 +78,38 @@ if _openvino_available:
         version = get_version()
         # avoid invalid format
         if "-" in version:
-            major_version, dev_info = version.split("-", 1)
+            ov_major_version, dev_info = version.split("-", 1)
             commit_id = dev_info.split("-")[0]
-            version = f"{major_version}-{commit_id}"
+            version = f"{ov_major_version}-{commit_id}"
         _openvino_version = version
     except ImportError:
         _openvino_available = False
 
+_openvino_tokenizers_available = importlib.util.find_spec("openvino_tokenizers") is not None and _openvino_available
+_openvino_tokenizers_version = "N/A"
+if _openvino_tokenizers_available:
+    try:
+        _openvino_tokenizers_version = importlib_metadata.version("openvino_tokenizers")
+    except importlib_metadata.PackageNotFoundError:
+        _openvino_tokenizers_available = False
+
+if _openvino_tokenizers_available and _openvino_tokenizers_version != "N/A":
+    _compatible_openvino_version = next(
+        (
+            requirement.split("==")[-1]
+            for requirement in importlib_metadata.requires("openvino-tokenizers")
+            if requirement.startswith("openvino==")
+        ),
+        "",
+    )
+    _openvino_tokenizers_available = _compatible_openvino_version == ov_major_version
+    if not _openvino_tokenizers_available:
+        logger.warning(
+            "OpenVINO Tokenizer version is not compatible with OpenVINO version. "
+            f"Installed OpenVINO version: {ov_major_version},"
+            f"OpenVINO Tokenizers requires {_compatible_openvino_version}. "
+            f"OpenVINO Tokenizers models will not be added during export."
+        )
 
 _nncf_available = importlib.util.find_spec("nncf") is not None
 _nncf_version = "N/A"
@@ -90,16 +118,6 @@ if _nncf_available:
         _nncf_version = importlib_metadata.version("nncf")
     except importlib_metadata.PackageNotFoundError:
         _nncf_available = False
-
-
-_openvino_tokenizers_available = importlib.util.find_spec("openvino_tokenizers") is not None
-_openvino_tokenizers_version = "N/A"
-if _openvino_tokenizers_available:
-    try:
-        _openvino_tokenizers_version = importlib_metadata.version("openvino_tokenizers")
-    except importlib_metadata.PackageNotFoundError:
-        _openvino_tokenizers_available = False
-
 
 _diffusers_available = importlib.util.find_spec("diffusers") is not None
 _diffusers_version = "N/A"

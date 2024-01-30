@@ -26,7 +26,12 @@ from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
-from ...intel.utils.import_utils import is_nncf_available, is_optimum_version, is_transformers_version
+from ...intel.utils.import_utils import (
+    is_nncf_available,
+    is_openvino_tokenizers_available,
+    is_optimum_version,
+    is_transformers_version,
+)
 from .convert import export_models, export_tokenizer
 from .stateful import ensure_export_task_support_stateful
 
@@ -339,7 +344,7 @@ def main_export(
             generation_config.save_pretrained(output)
         maybe_save_preprocessors(model_name_or_path, output)
 
-        if tokenizer is not None:
+        if tokenizer is not None and is_openvino_tokenizers_available():
             try:
                 export_tokenizer(tokenizer, output)
             except Exception as exception:
@@ -375,12 +380,12 @@ def main_export(
             feature_extractor.save_pretrained(output.joinpath("feature_extractor"))
 
         tokenizer = getattr(model, "tokenizer", None)
-        if tokenizer is not None:
+        if tokenizer is not None and is_openvino_tokenizers_available():
             tokenizer.save_pretrained(output.joinpath("tokenizer"))
             export_tokenizer(tokenizer, output)
 
         tokenizer_2 = getattr(model, "tokenizer_2", None)
-        if tokenizer_2 is not None:
+        if tokenizer_2 is not None and is_openvino_tokenizers_available():
             tokenizer_2.save_pretrained(output.joinpath("tokenizer_2"))
             export_tokenizer(tokenizer, output, suffix="_2")
 
