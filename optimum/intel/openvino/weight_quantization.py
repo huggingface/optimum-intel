@@ -21,7 +21,7 @@ from transformers.utils.quantization_config import QuantizationConfigMixin
 
 
 @dataclass
-class WeightQuantizationConfig(QuantizationConfigMixin):
+class OVWeightQuantizationConfig(QuantizationConfigMixin):
     """
     This is a wrapper class about all possible attributes and features that you can play with a model that has been
     loaded using `optimum-intel` api for quantization with NNCF.
@@ -114,7 +114,7 @@ def _check_default_4bit_configs(config: PretrainedConfig):
     return DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
 
 
-def compress_decoder_weights(model, quantization_config: Union[WeightQuantizationConfig, Dict] = None):
+def compress_decoder_weights(model, quantization_config: Union[OVWeightQuantizationConfig, Dict] = None):
     quantization_config = (
         quantization_config if quantization_config is not None else _check_default_4bit_configs(model.config)
     )
@@ -122,8 +122,8 @@ def compress_decoder_weights(model, quantization_config: Union[WeightQuantizatio
 
     if quantization_config is not None:
         config = quantization_config
-        if isinstance(quantization_config, Dict):
-            config = WeightQuantizationConfig.from_dict(quantization_config)
+        if isinstance(config, Dict):
+            config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
         dataset = config.dataset
         if config.dataset is not None and isinstance(config.dataset, str):

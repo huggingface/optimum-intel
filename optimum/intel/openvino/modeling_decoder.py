@@ -35,7 +35,7 @@ from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
-from .weight_quantization import WeightQuantizationConfig, compress_decoder_weights
+from .weight_quantization import OVWeightQuantizationConfig, compress_decoder_weights
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -246,7 +246,7 @@ class OVBaseDecoderModel(OVModel):
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
         load_in_4bit: Optional[bool] = None,
-        quantization_config: Optional[Union[WeightQuantizationConfig, Dict]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         if config.model_type.replace("_", "-") not in _SUPPORTED_ARCHITECTURES:
@@ -556,7 +556,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         local_files_only: bool = False,
         load_in_8bit: bool = False,
         load_in_4bit: bool = False,
-        quantization_config: Union[WeightQuantizationConfig, Dict] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         model_path = Path(model_id)

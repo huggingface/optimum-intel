@@ -278,11 +278,21 @@ class OVQuantizer(OptimumQuantizer):
         quantization_config: QuantizationConfigMixin = None,
         **kwargs,
     ):
+        if self.model.stateful and not weights_only:
+            raise Exception("Full quantizaiton for stateful OVModelForCausalLM is currently broken. Possbile options:\n"
+                            "1. Quantize AutoModelForCausalLM\n"
+                            "2. Use weight only quantization\n"
+                            "3. Use stateful=False to export stateless model")
+        
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
 
         if weights_only:
-            compress_decoder_weights(self.model, quantization_config)
+            if quantization_config is None: 
+                # Use default 8-bit compression
+                self.model.model = nncf.compress_weights(self.model.model)
+            else:
+                compress_decoder_weights(self.model, quantization_config)
             self.model.save_pretrained(save_directory)
             return
 

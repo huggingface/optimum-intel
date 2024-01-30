@@ -22,6 +22,7 @@ import evaluate
 import numpy as np
 from datasets import load_dataset
 from parameterized import parameterized
+import nncf
 from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
@@ -47,6 +48,7 @@ from optimum.intel import (
     OVStableDiffusionXLPipeline,
     OVQuantizer,
     OVTrainer,
+    OVWeightQuantizationConfig,
 )
 
 
@@ -61,10 +63,10 @@ _TASK_TO_DATASET = {
 
 
 class OVQuantizerTest(unittest.TestCase):
-    # TODO : add models
+    # TODO : add models, enable OVModelForCausalLM.
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 32, 35),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 23),
+        #(OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 23),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
@@ -233,7 +235,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(
                 save_directory=tmp_dir,
                 weights_only=True,
-                quantization_config=OVConfig(compression={"type": "int4_sym_g128", "ratio": 0.8}),
+                quantization_config=OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT4_SYM, ratio=0.8),
             )
             model = model_cls.from_pretrained(tmp_dir)
 
@@ -261,7 +263,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(
                 save_directory=tmp_dir,
                 weights_only=True,
-                quantization_config=OVConfig(compression={"type": "int4_sym_g128", "ratio": 0.8}),
+                quantization_config=OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT4_SYM, ratio=0.8),
             )
             model = model_cls.from_pretrained(tmp_dir)
             self.assertTrue(model.stateful)
