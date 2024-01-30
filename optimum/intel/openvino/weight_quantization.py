@@ -22,6 +22,8 @@ import nncf
 from transformers import PretrainedConfig, AutoTokenizer
 from transformers.utils.quantization_config import QuantizationConfigMixin
 
+from .data import get_calibration_dataloader
+
 @dataclass
 class WeightQuantizationConfig(QuantizationConfigMixin):
     """
@@ -121,8 +123,9 @@ def _check_default_4bit_configs(config: PretrainedConfig):
     }
     return DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
                     
-def compress_weights(model: openvino.runtime.Model, model_config: PretrainedConfig, quantization_config: Union[WeightQuantizationConfig, Dict] = None):
+def compress_decoder_weights(model, quantization_config: Union[WeightQuantizationConfig, Dict] = None):
     quantization_config = quantization_config if quantization_config is not None else _check_default_4bit_configs(config)
+    ov_model = model.model
 
     if quantization_config is not None:
         config = quantization_config
@@ -133,11 +136,11 @@ def compress_weights(model: openvino.runtime.Model, model_config: PretrainedConf
         if config.dataset is not None and isinstance(config.dataset, str):
             tokenizer = config.tokenizer
             if tokenizer is None:
-                tokenizer = AutoTokenizer.from_pretrained(model_config.name_or_path)
+                tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
             elif isinstance(tokenizer, str):
                 tokenizer = AutoTokenizer.from_pretrained(tokenizer)
             dataset = _prepare_nncf_dataset(config.dataset, tokenizer)
             
-        return nncf.compress_weights(model, mode=config.mode, ratio=config.ratio, group_size=config.group_size, all_layers=config.all_layers, sensitivity_metric=config.sensitivity_metric, ignored_scope=config.ignored_scope, dataset=dataset)
+        return nncf.compress_weights(ov_model, mode=config.mode, ratio=config.ratio, group_size=config.group_size, all_layers=config.all_layers, sensitivity_metric=config.sensitivity_metric, ignored_scope=config.ignored_scope, dataset=dataset)
     else: # Data-free weight-only quantization to asymmetric INT4 
-        return nncf.compress_weights(model, mode=nncf.CompressWeightsMode.INT4_ASYM)
+        return nncf.compress_weights(ov_model, mode=nncf.CompressWeightsMode.INT4_ASYM)

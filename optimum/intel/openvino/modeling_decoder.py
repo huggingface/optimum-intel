@@ -35,7 +35,7 @@ from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
-from .weight_quantization import WeightQuantizationConfig, compress_weights
+from .weight_quantization import WeightQuantizationConfig, compress_decoder_weights
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -549,9 +549,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
 
         model = cls.load_model(model_cache_path, load_in_8bit=load_in_8bit)
-        
-        if load_in_4bit:
-            model = compress_weights(model, config, quantization_config)
 
         model_type = config.model_type.replace("_", "-")
         if model_type == "bloom":
@@ -565,8 +562,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         else:
             init_cls = cls
 
-        return init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
-
+        causal_model = init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
+        
+        if load_in_4bit:
+            causal_model = compress_decoder_weights(causal_model, config, quantization_config)
+        return causal_model
+        
 
 class OVBloomForCausalLM(OVModelForCausalLM):
     # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM.prepare_inputs_for_generation
