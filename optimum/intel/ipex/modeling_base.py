@@ -67,7 +67,7 @@ class IPEXModel(OptimizedModel):
         OptimizedModel.__init__(self, model=model, config=config)
         # To do: add XPU support
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self._dtype = self.config.torch_dtype
+        self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model.to(self._device)
         self.model_save_dir = model_save_dir
 
