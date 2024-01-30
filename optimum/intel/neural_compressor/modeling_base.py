@@ -144,7 +144,7 @@ class INCModel(OptimizedModel):
 
         if isinstance(state_dict, torch.jit.ScriptModule):
             raise RuntimeError(
-                f"`{cls.__name__}` does not support the loading TorchScript model, to load your model please use {cls.__name__.replace('INC', 'IPEX')}` instead."
+                f"`{cls.__name__}` does not support the loading of TorchScript models, to load your model please use `{cls.__name__.replace('INC', 'IPEX')}` instead."
             )
 
         q_config = state_dict.get("best_configure", None)
