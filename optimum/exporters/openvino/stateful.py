@@ -22,7 +22,6 @@ import openvino as ov
 from openvino.runtime import opset13
 from optimum.exporters import TasksManager
 from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version
-from optimum.utils.normalized_config import NormalizedConfigManager
 
 
 def model_has_state(ov_model: ov.Model):
@@ -217,9 +216,7 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     batch_dim = 1 if config.model_type == "chatglm" else 0
 
     fuse_cache_reorder(ov_model, not_kv_inputs, key_value_input_names, batch_dim)
-
-    normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
-    num_attention_heads = normalized_config.num_attention_heads if config.model_type == "bloom" else 1
+    num_attention_heads = config.num_attention_heads if config.model_type == "bloom" else 1
     make_stateful(
         ov_model, not_kv_inputs, key_value_input_names, key_value_output_names, batch_dim, num_attention_heads, None
     )
