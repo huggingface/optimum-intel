@@ -30,6 +30,7 @@ if is_nncf_available():
 
     from .configuration import OVConfig
     from .quantization import OVQuantizer
+    from .weight_quantization import WeightQuantizationConfig
     from .trainer import OVTrainer
     from .training_args import OVTrainingArguments
 
