@@ -27,6 +27,8 @@ from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
+from optimum.utils.normalized_config import NormalizedConfigManager
+
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import is_transformers_version
@@ -317,6 +319,13 @@ class OVBaseDecoderModel(OVModel):
     def reshape(self, batch_size: int, sequence_length: int):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
+
+    @property
+    def normalized_config(self):
+        logger.warning(
+            "access to normalized_config attribute is deprecated and will be removed in future versions, please use config"
+        )
+        return NormalizedConfigManager.get_normalized_config_class(self.config.model_type)(self.config)
 
     def compile(self):
         if self.request is None:
