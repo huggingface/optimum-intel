@@ -36,18 +36,11 @@ from .modeling_base import (
     IPEXOPTForCausalLM,
     IPEXGPTBigCodeForCausalLM,
     IPEXModelForQuestionAnswering,
+    _MODEL_TYPE_TO_AUTOMODELS,
 )
 
 
 from .utils import _HEAD_TO_AUTOMODELS
-
-
-_MODEL_TYPE_TO_AUTOMODELS = {
-    "bloom": IPEXBloomForCausalLM,
-    "mpt": IPEXMPTForCausalLM,
-    "opt": IPEXOPTForCausalLM,
-    "big_code": IPEXGPTBigCodeForCausalLM,
-}
 
 
 logger = logging.getLogger(__name__)
