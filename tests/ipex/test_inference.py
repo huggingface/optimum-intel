@@ -44,7 +44,6 @@ MODEL_NAMES = {
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
-
 }
 
 _CLASSIFICATION_TASK_TO_AUTOMODELS = {
