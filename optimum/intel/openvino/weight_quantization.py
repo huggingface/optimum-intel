@@ -116,7 +116,7 @@ def _check_default_4bit_configs(config: PretrainedConfig):
 
 def compress_decoder_weights(model, quantization_config: Union[WeightQuantizationConfig, Dict] = None):
     quantization_config = (
-        quantization_config if quantization_config is not None else _check_default_4bit_configs(config)
+        quantization_config if quantization_config is not None else _check_default_4bit_configs(model.config)
     )
     ov_model = model.model
 
