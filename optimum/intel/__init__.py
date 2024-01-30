@@ -63,7 +63,9 @@ except OptionalDependencyNotAvailable:
         "OVWeightQuantizationConfig",
     ]
 else:
-    _import_structure["openvino"].extend(["OVConfig", "OVQuantizer", "OVTrainer", "OVTrainingArguments", "OVWeightQuantizationConfig"])
+    _import_structure["openvino"].extend(
+        ["OVConfig", "OVQuantizer", "OVTrainer", "OVTrainingArguments", "OVWeightQuantizationConfig"]
+    )
 
 try:
     if not (is_openvino_available() and is_diffusers_available()):
@@ -172,7 +174,13 @@ if TYPE_CHECKING:
         if not (is_openvino_available() and is_nncf_available()):
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
-        from .utils.dummy_openvino_and_nncf_objects import OVConfig, OVQuantizer, OVTrainer, OVTrainingArguments, OVWeightQuantizationConfig
+        from .utils.dummy_openvino_and_nncf_objects import (
+            OVConfig,
+            OVQuantizer,
+            OVTrainer,
+            OVTrainingArguments,
+            OVWeightQuantizationConfig,
+        )
     else:
         from .openvino import OVConfig, OVQuantizer, OVTrainer, OVTrainingArguments, OVWeightQuantizationConfig
 
