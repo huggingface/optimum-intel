@@ -43,6 +43,8 @@ from transformers import (
     set_seed,
 )
 from utils_tests import SEED, INCTestMixin, _generate_dataset
+from optimum.intel.utils.import_utils import is_torch_version
+
 
 from optimum.intel import (
     INCConfig,
@@ -163,6 +165,7 @@ class OptimizationTest(INCTestMixin):
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    @unittest.skipIf(is_torch_version(">=", "2.2.0"), "compatibility issue with torch 2.2.0 and IPEX latest version")
     def test_ipex_static_quantization_with_smoothquant(self, task, model_name, expected_quantized_matmuls):
         recipes = {"smooth_quant": True, "smooth_quant_args": {"alpha": 0.5}}
         num_samples = 10
