@@ -18,6 +18,7 @@
 import os
 import tempfile
 
+import unittest
 import evaluate
 import numpy as np
 import torch
