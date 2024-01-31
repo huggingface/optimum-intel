@@ -63,7 +63,7 @@ class IPEXModel(OptimizedModel):
         model,
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        initial_warmup: bool = True,
+        warmup: bool = True,
         **kwargs,
     ):
         OptimizedModel.__init__(self, model=model, config=config)
@@ -81,7 +81,7 @@ class IPEXModel(OptimizedModel):
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         if hasattr(self.auto_model_class, "register"):
             self.auto_model_class.register(AutoConfig, self.__class__)
-        if initial_warmup:
+        if warmup:
             self._init_warmup()
 
     @classmethod
@@ -310,10 +310,11 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
+        warmup: bool = True,
         **kwargs,
     ):
         # Perform the initial warmup at the end of __init__
-        super().__init__(model, config, model_save_dir=model_save_dir, initial_warmup=False)
+        super().__init__(model, config, model_save_dir=model_save_dir, warmup=False)
 
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", self.dtype)
@@ -329,7 +330,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         config.is_decoder = True
         config.is_encoder_decoder = False
         self.generation_config = GenerationConfig.from_model_config(config)
-        self._init_warmup()
+        if warmup:
+            self._init_warmup()
 
     def _prepare_past_key_values(self, input_ids):
         model_type = self.config.model_type.replace("_", "-")
