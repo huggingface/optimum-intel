@@ -15,7 +15,6 @@
 
 import logging
 import os
-from functools import wraps
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
@@ -290,7 +289,8 @@ class IPEXModelForQuestionAnswering(IPEXModel):
     auto_model_class = AutoModelForQuestionAnswering
     export_feature = "question-answering"
 
-    def forward(self,
+    def forward(
+        self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         token_type_ids: torch.Tensor = None,
