@@ -227,7 +227,7 @@ class IPEXModel(OptimizedModel):
     def _init_warmup(self):
         # warmup, the first 2 forwards of an IPEX model include some preprocessing steps and
         # the results of the compute are unpredictable
-        use_cache = getattr(self, "use_cache", getattr(self.config, "use_cache", False))
+        use_cache = "past_key_values" in self.input_names
         dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
         for _ in range(2):
             self(**dummy_inputs)
