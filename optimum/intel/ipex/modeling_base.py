@@ -36,10 +36,10 @@ from transformers import (
     GenerationMixin,
     PretrainedConfig,
 )
-from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
-from transformers.utils import WEIGHTS_NAME
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
+from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
 from transformers.models.auto.auto_factory import _get_model_class as get_model_class
+from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
@@ -301,14 +301,16 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         config.is_encoder_decoder = False
         self.generation_config = GenerationConfig.from_model_config(config)
         try:
-            self.model_cls = get_class_from_dynamic_module(self.config.auto_map['AutoModelForCausalLM'], model_save_dir)
+            self.model_cls = get_class_from_dynamic_module(
+                self.config.auto_map["AutoModelForCausalLM"], model_save_dir
+            )
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
         self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
         self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)
-        if hasattr(self.model_cls, '_convert_to_standard_cache'):
+        if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
-        if hasattr(self.model_cls, '_convert_to_bloom_cache'):
+        if hasattr(self.model_cls, "_convert_to_bloom_cache"):
             self._convert_to_bloom_cache = self.model_cls._convert_to_bloom_cache
 
     def _prepare_past_key_values(self, input_ids):
