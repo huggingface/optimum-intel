@@ -290,9 +290,21 @@ class IPEXModelForQuestionAnswering(IPEXModel):
     auto_model_class = AutoModelForQuestionAnswering
     export_feature = "question-answering"
 
-    @wraps(IPEXModel.forward)
-    def forward(self, *args, **kwargs):
-        outputs = super().forward(*args, **kwargs)
+    def forward(self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: torch.Tensor = None,
+        **kwargs,
+    ):
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        if "token_type_ids" in self.input_names:
+            inputs["token_type_ids"] = token_type_ids
+
+        outputs = self._call_model(**inputs)
         start_logits = outputs["start_logits"] if isinstance(outputs, dict) else outputs[0]
         end_logits = outputs["end_logits"] if isinstance(outputs, dict) else outputs[1]
         return ModelOutput(start_logits=start_logits, end_logits=end_logits)
