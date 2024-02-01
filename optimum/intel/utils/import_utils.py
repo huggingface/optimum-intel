@@ -119,6 +119,16 @@ if _timm_available:
         _timm_available = False
 
 
+_datasets_available = importlib.util.find_spec("datasets") is not None
+_datasets_version = "N/A"
+
+if _datasets_available:
+    try:
+        _datasets_version = importlib_metadata.version("datasets")
+    except importlib_metadata.PackageNotFoundError:
+        _datasets_available = False
+
+
 def is_transformers_available():
     return _transformers_available
 
@@ -149,6 +159,10 @@ def is_safetensors_available():
 
 def is_timm_available():
     return _timm_available
+
+
+def is_datasets_available():
+    return _datasets_available
 
 
 # This function was copied from: https://github.com/huggingface/accelerate/blob/874c4967d94badd24f893064cc3bef45f57cadf7/src/accelerate/utils/versions.py#L319
@@ -265,6 +279,11 @@ OPENVINO_IMPORT_ERROR = """
 NEURAL_COMPRESSOR_IMPORT_ERROR = """
 {0} requires the neural-compressor library but it was not found in your environment. You can install it with pip:
 `pip install neural-compressor`. Please note that you may need to restart your runtime after installation.
+"""
+
+DATASETS_IMPORT_ERROR = """
+{0} requires the datasets library but it was not found in your environment. You can install it with pip:
+`pip install datasets`. Please note that you may need to restart your runtime after installation.
 """
 
 BACKENDS_MAPPING = OrderedDict(
