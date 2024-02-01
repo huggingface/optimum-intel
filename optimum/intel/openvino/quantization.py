@@ -52,7 +52,10 @@ from .utils import (
 
 
 if is_datasets_available():
-    from datasets import Dataset
+    try:
+        from datasets import Dataset
+    except ImportError:
+        pass
 
 COMPRESSION_OPTIONS = {
     "int8": {"mode": nncf.CompressWeightsMode.INT8},
