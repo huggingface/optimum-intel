@@ -183,7 +183,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
-            "hf-internal-testing/tiny-random-gpt2",
+            "hf-internal-testing/tiny-random-OPTForCausalLM",
             dict(
                 mode=nncf.CompressWeightsMode.INT4_SYM,
                 group_size=-1,
@@ -195,7 +195,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
-            "hf-internal-testing/tiny-random-gpt2",
+            "hf-internal-testing/tiny-random-OPTForCausalLM",
             dict(
                 mode=nncf.CompressWeightsMode.INT4_SYM,
                 group_size=-1,
