@@ -303,7 +303,7 @@ class OVBaseDecoderModel(OVModel):
         shapes = {}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
-            shapes[inputs][0] = -1
+            shapes[inputs][0] = batch_size
             input_name = inputs.get_any_name()
             if input_name.startswith("past_key_values"):
                 if len(inputs.partial_shape) == 3 and input_name.endswith("value"):
@@ -313,7 +313,7 @@ class OVBaseDecoderModel(OVModel):
             elif input_name.startswith("beam_idx"):
                 shapes[inputs][0] = -1
             else:
-                shapes[inputs][1] = -1
+                shapes[inputs][1] = sequence_length
         model.reshape(shapes)
         return model
 
