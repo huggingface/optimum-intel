@@ -181,8 +181,31 @@ class OVWeightCompressionTest(unittest.TestCase):
             dict(mode=nncf.CompressWeightsMode.INT4_ASYM, group_size=-1, ratio=0.8, all_layers=True),
             22,
         ),
-        # TODO: uncomment after fix
-        # (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", dict(mode=nncf.CompressWeightsMode.INT4_SYM, group_size=-1, ratio=0.8, sensitivity_metric=nncf.SensitivityMetric.MEAN_ACTIVATION_MAGNITUDE, dataset="ptb"), 16),
+        (
+            OVModelForCausalLM,
+            "hf-internal-testing/tiny-random-gpt2",
+            dict(
+                mode=nncf.CompressWeightsMode.INT4_SYM,
+                group_size=-1,
+                ratio=0.8,
+                sensitivity_metric=nncf.SensitivityMetric.MEAN_ACTIVATION_MAGNITUDE,
+                dataset="ptb",
+            ),
+            16,
+        ),
+        (
+            OVModelForCausalLM,
+            "hf-internal-testing/tiny-random-gpt2",
+            dict(
+                mode=nncf.CompressWeightsMode.INT4_SYM,
+                group_size=-1,
+                ratio=0.8,
+                sensitivity_metric=nncf.SensitivityMetric.MEAN_ACTIVATION_MAGNITUDE,
+                dataset="ptb",
+                awq=True,
+            ),
+            16,
+        ),
     )
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (

@@ -96,6 +96,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
                     ['wikitext2','c4','c4-new','ptb','ptb-new'], but we found {self.dataset}"""
                 )
 
+
 DEFAULT_4BIT_CONFIGS = {
     "dolly-v2-3b": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 32, "ratio": 0.5},
     "gpt-j-6b": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64},
@@ -113,6 +114,7 @@ DEFAULT_4BIT_CONFIGS = {
     "chatglm2-6b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.72},
     "qwen-7b-chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.6},
 }
+
 
 def _check_default_4bit_configs(config: PretrainedConfig):
     return DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
@@ -150,7 +152,7 @@ def compress_decoder_weights(model, quantization_config: Union[OVWeightQuantizat
             group_size=config.group_size,
             all_layers=config.all_layers,
             sensitivity_metric=config.sensitivity_metric,
-            awq = config.awq,
+            awq=config.awq,
             ignored_scope=config.ignored_scope,
             dataset=dataset,
         )
