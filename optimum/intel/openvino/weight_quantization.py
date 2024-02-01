@@ -45,11 +45,13 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         ratio (`float`, *optional*, defaults to 1.0):
             The ratio between baseline and backup precisions (e.g. 0.9 means 90% of layers quantized to INT4_ASYM
             and the rest to INT8_ASYM).
-        all_layers (`bool`, *optional*, defaults to False):
+        all_layers (`bool`, *optional*):
             Defines how many layers are compressed to 4-bits while the rest are kept in 8-bit presicion.
         sensitivity_metric (`nncf.SensitivityMetric`, *optional*):
             The sensitivity metric for assigning quantization precision to layers. In order to
             preserve the accuracy of the model, the more sensitive layers receives a higher precision.
+        awq (`bool`, *optional*):
+            Enables AWQ method to unify weight ranges and improve overall model accuracy.
         ignored_scope (`nncf.IgnoredScope`, *optional*):
             An ignored scope that defined the list of model control flow graph nodes to be ignored during quantization.
 
@@ -62,9 +64,10 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         dataset: Optional[Union[nncf.Dataset, str]] = None,
         ratio: Optional[float] = None,
         group_size: Optional[int] = None,
-        ignored_scope: Optional[nncf.IgnoredScope] = None,
         all_layers: Optional[bool] = None,
         sensitivity_metric: Optional[nncf.SensitivityMetric] = None,
+        awq: Optional[bool] = None,
+        ignored_scope: Optional[nncf.IgnoredScope] = None,
         **kwargs,
     ):
         self.mode = mode
@@ -75,6 +78,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         self.ignored_scope = ignored_scope
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
+        self.awq = awq
         self.post_init()
 
     def post_init(self):
@@ -92,25 +96,25 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
                     ['wikitext2','c4','c4-new','ptb','ptb-new'], but we found {self.dataset}"""
                 )
 
+DEFAULT_4BIT_CONFIGS = {
+    "dolly-v2-3b": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 32, "ratio": 0.5},
+    "gpt-j-6b": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64},
+    "opt-6.7b": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64, "ratio": 0.8},
+    "bloomz-7b1": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 32, "ratio": 0.6},
+    "red-pajama-incite-7b-instruct": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 128},
+    "zephyr-7b-beta": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.6},
+    "llama-2-7b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.6},
+    "llama-2-7b-chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.8},
+    "llama-2-13b-chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.8},
+    "stablelm-3b-4e1t": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.8},
+    "stablelm-epoch-3b-preview": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.8},
+    "stable-zephyr-3b-dpo": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64, "ratio": 0.8},
+    "rocket-3b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.8},
+    "chatglm2-6b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.72},
+    "qwen-7b-chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.6},
+}
 
 def _check_default_4bit_configs(config: PretrainedConfig):
-    DEFAULT_4BIT_CONFIGS = {
-        "dolly-v2-3b": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 32, "ratio": 0.5},
-        "gpt-j-6b": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64},
-        "opt-6.7b": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64, "ratio": 0.8},
-        "bloomz-7b1": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 32, "ratio": 0.6},
-        "red-pajama-incite-7b-instruct": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 128},
-        "zephyr-7b-beta": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.6},
-        "llama-2-7b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.6},
-        "llama-2-7b-chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.8},
-        "llama-2-13b-chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.8},
-        "stablelm-3b-4e1t": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.8},
-        "stablelm-epoch-3b-preview": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.8},
-        "stable-zephyr-3b-dpo": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64, "ratio": 0.8},
-        "rocket-3b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.8},
-        "chatglm2-6b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.72},
-        "qwen-7b-chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.6},
-    }
     return DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
 
 
@@ -146,6 +150,7 @@ def compress_decoder_weights(model, quantization_config: Union[OVWeightQuantizat
             group_size=config.group_size,
             all_layers=config.all_layers,
             sensitivity_metric=config.sensitivity_metric,
+            awq = config.awq,
             ignored_scope=config.ignored_scope,
             dataset=dataset,
         )
