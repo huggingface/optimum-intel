@@ -264,8 +264,8 @@ class OVBaseDecoderModel(OVModel):
                 task = task + "-with-past"
 
         compression_option = None
-        if load_in_8bit is not None and not load_in_4bit:
-            compression_option = "int8" if load_in_8bit else "fp32"
+        if load_in_8bit is not None or load_in_4bit is not None:
+            compression_option = "fp32"
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
         main_export(
             model_name_or_path=model_id,
@@ -574,7 +574,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
-        model = cls.load_model(model_cache_path, load_in_8bit=load_in_8bit)
+        model = cls.load_model(model_cache_path, load_in_8bit=False if load_in_4bit else load_in_8bit)
 
         model_type = config.model_type.replace("_", "-")
         if model_type == "bloom":

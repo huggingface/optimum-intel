@@ -141,7 +141,7 @@ def compress_decoder_weights(model, quantization_config: Union[OVWeightQuantizat
 
             from optimum.gptq.data import get_dataset, prepare_dataset
 
-            dataset = get_dataset(config.dataset, tokenizer)
+            dataset = get_dataset(config.dataset, tokenizer, seqlen=32)
             dataset = prepare_dataset(dataset)
             dataset = nncf.Dataset(dataset, lambda x: model.prepare_forward_inputs(**x))
 
