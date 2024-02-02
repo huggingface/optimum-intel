@@ -155,7 +155,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     )
 
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 64, 365),)
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS = ((OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 16, 136),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS = (
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 16, 136),
+    )
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = (
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 44, 46),
     )
@@ -353,18 +355,20 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             _, num_int4, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int4, num_int4)
-            
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS)
-    def test_ovmodel_4bit_auto_compression_with_custom_dataset(self, model_cls, model_id, expected_int8, expected_int4):
+    def test_ovmodel_4bit_auto_compression_with_custom_dataset(
+        self, model_cls, model_id, expected_int8, expected_int4
+    ):
         task = model_cls.export_feature
-        
+
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        
+
         dataset_name, dataset_config_name, column = _TASK_TO_DATASET[task]
         dataset = load_dataset(dataset_name, dataset_config_name, split="test")
-        
+
         def transform_fn(data, tokenizer):
             tokenized_text = tokenizer(data[column], return_tensors="np")
             input_ids = tokenized_text["input_ids"]
@@ -377,7 +381,14 @@ class OVWeightCompressionTest(unittest.TestCase):
             return inputs
 
         quantization_dataset = nncf.Dataset(dataset, partial(transform_fn, tokenizer=tokenizer))
-        model = model_cls.from_pretrained(model_id, export=True, load_in_4bit=True, quantization_config=OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT4_SYM, group_size=-1, ratio=0.8, dataset=quantization_dataset))
+        model = model_cls.from_pretrained(
+            model_id,
+            export=True,
+            load_in_4bit=True,
+            quantization_config=OVWeightQuantizationConfig(
+                mode=nncf.CompressWeightsMode.INT4_SYM, group_size=-1, ratio=0.8, dataset=quantization_dataset
+            ),
+        )
 
         _, num_int8, num_int4 = get_num_quantized_nodes(model)
         self.assertEqual(expected_int8, num_int8)
