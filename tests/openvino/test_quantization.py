@@ -174,11 +174,6 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_automodel_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
-        import nncf
-
-        if nncf.__version__ == "2.8.0":
-            self.skipTest("https://github.com/openvinotoolkit/nncf/issues/2432")
-
         task = model_cls.export_feature
 
         with tempfile.TemporaryDirectory() as tmp_dir:

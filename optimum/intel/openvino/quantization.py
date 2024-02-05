@@ -30,6 +30,7 @@ from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_obj
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, Tensor
+from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
@@ -350,9 +351,7 @@ class OVQuantizer(OptimumQuantizer):
             self.model.model,
             quantization_dataset,
             model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
-            fast_bias_correction=(
-                True if not kwargs.get("fast_bias_correction") else kwargs.get("fast_bias_correction")
-            ),
+            fast_bias_correction=kwargs.get("fast_bias_correction", True),
             **kwargs,
         )
         self.model.model = quantized_model
@@ -410,8 +409,6 @@ class OVQuantizer(OptimumQuantizer):
         stateful = ensure_stateful_is_available() and ensure_export_task_support_stateful(task)
 
         if weights_only:
-            from torch.utils._pytree import tree_map
-
             if stateful:
                 # patch model before weight compression
                 model = patch_model_with_bettertransformer(model)
