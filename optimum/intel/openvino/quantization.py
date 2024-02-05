@@ -278,14 +278,6 @@ class OVQuantizer(OptimumQuantizer):
         quantization_config: QuantizationConfigMixin = None,
         **kwargs,
     ):
-        if self.model.stateful and not weights_only:
-            raise Exception(
-                "Full quantizaiton for stateful OVModelForCausalLM is currently broken. Possbile options:\n"
-                "1. Quantize AutoModelForCausalLM\n"
-                "2. Use weight only quantization\n"
-                "3. Use stateful=False to export stateless model"
-            )
-
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
 
