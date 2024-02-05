@@ -289,7 +289,7 @@ class OVBaseDecoderModel(OVModel):
             model_id=save_dir_path,
             config=config,
             use_cache=use_cache,
-            load_in_8bit=False,
+            load_in_8bit=load_in_8bit,
             stateful=None,
             load_in_4bit=load_in_4bit,
             quantization_config=quantization_config,
@@ -360,7 +360,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             checkpoint="gpt2",
         )
     )
-    def prepare_forward_inputs(
+    def prepare_inputs(
         self,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor] = None,

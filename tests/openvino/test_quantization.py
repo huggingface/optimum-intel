@@ -303,13 +303,12 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
-    def test_ovmodel_8bit_weight_compression_stateful(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
+    def test_ovmodel_8bit_weight_compression_stateful(self, model_cls, model_id, expected_pt_int8, expected_ov_int8):
         task = model_cls.export_feature
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            model_id = MODEL_NAMES[model_name]
             transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=True)
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 

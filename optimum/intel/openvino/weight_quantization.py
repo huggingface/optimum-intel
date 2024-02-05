@@ -143,7 +143,7 @@ def compress_decoder_weights(model, quantization_config: Union[OVWeightQuantizat
 
             dataset = get_dataset(config.dataset, tokenizer, seqlen=32)
             dataset = prepare_dataset(dataset)
-            dataset = nncf.Dataset(dataset, lambda x: model.prepare_forward_inputs(**x))
+            dataset = nncf.Dataset(dataset, lambda x: model.prepare_inputs(**x))
 
         model.model = nncf.compress_weights(
             ov_model,
