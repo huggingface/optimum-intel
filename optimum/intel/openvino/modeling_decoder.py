@@ -580,6 +580,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
+        if load_in_8bit and load_in_4bit:
+            raise ValueError("Either load_in_8bit or load_in_4bit should be set to True.")
         model = cls.load_model(model_cache_path, load_in_8bit=False if load_in_4bit else load_in_8bit)
 
         model_type = config.model_type.replace("_", "-")
