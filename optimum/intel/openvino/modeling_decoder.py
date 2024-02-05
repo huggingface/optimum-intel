@@ -470,7 +470,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     ) -> CausalLMOutputWithPast:
         self.compile()
 
-        inputs = self.prepare_forward_inputs(
+        inputs = self.prepare_inputs(
             input_ids=input_ids,
             attention_mask=attention_mask,
             past_key_values=past_key_values,
