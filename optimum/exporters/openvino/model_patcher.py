@@ -23,6 +23,10 @@ from optimum.intel.utils.import_utils import (
 
 
 def patch_model_with_bettertransformer(model):
+    # check that the model has not yet been pathced
+    if hasattr(model, "use_bettertransformer") and model.use_bettertransformer is True:
+        return model
+
     if is_transformers_version("<", "4.36") or is_torch_version("<", "2.1.1"):
         COLOR_RED = "\033[1;31m"
         COLOR_RESET = "\033[0m"
