@@ -40,17 +40,22 @@ from optimum.intel import (
     INCStableDiffusionPipeline,
 )
 
-from optimum.intel.ipex import (
-    IPEXModelForCausalLM,
-    IPEXModelForSequenceClassification,
-    IPEXModelForMaskedLM,
-    IPEXModelForTokenClassification,
-)
+
+from optimum.intel.utils.import_utils import is_torch_version
 
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.constant import ONNX_WEIGHTS_NAME
 from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
 from optimum.pipelines import ORT_SUPPORTED_TASKS
+
+if is_torch_version("<", "2.2.0"):
+    from optimum.intel.ipex import (
+        IPEXModelForCausalLM,
+        IPEXModelForSequenceClassification,
+        IPEXModelForMaskedLM,
+        IPEXModelForTokenClassification,
+    )
+
 
 SEED = 1009
 _TASK_TO_DATASET = {

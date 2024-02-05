@@ -27,7 +27,7 @@ from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from optimum.utils import NormalizedConfigManager
+from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
@@ -133,7 +133,6 @@ class OVBaseDecoderModel(OVModel):
         self.stateful = model_has_sinks
         self.main_input_name = "input_ids"
         self.num_pkv = 2
-        self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
@@ -331,6 +330,13 @@ class OVBaseDecoderModel(OVModel):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
 
+    @property
+    def normalized_config(self):
+        logger.warning(
+            "access to normalized_config attribute is deprecated and will be removed in future versions, please use config"
+        )
+        return NormalizedConfigManager.get_normalized_config_class(self.config.model_type)(self.config)
+
     def compile(self):
         if self.request is None:
             super().compile()
@@ -373,7 +379,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         batch_size = input_ids.shape[0]
         if self.config.model_type == "bloom":
-            batch_size *= self.normalized_config.num_attention_heads
+            batch_size *= self.config.num_attention_heads
 
         inputs = {}
         past_len = 0
@@ -627,8 +633,8 @@ class OVBloomForCausalLM(OVModelForCausalLM):
         if self.stateful:
             beam_idx = np.array(beam_idx)
             batch_size = beam_idx.shape[0]
-            indices = np.array(range(batch_size * self.normalized_config.num_attention_heads))
-            indices = indices.reshape([batch_size, self.normalized_config.num_attention_heads])
+            indices = np.array(range(batch_size * self.config.num_attention_heads))
+            indices = indices.reshape([batch_size, self.config.num_attention_heads])
             self.next_beam_idx = np.take(indices, beam_idx, 0).flatten()
             return past_key_values
         else:
