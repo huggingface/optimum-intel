@@ -84,7 +84,7 @@ class OVConfig(BaseConfig):
         compression: Union[List[Dict], Dict, None] = None,
         input_info: Optional[List] = None,
         save_onnx_model: bool = False,
-        quantization_config: Optional[QuantizationConfigMixin] = None,
+        weight_quantization_config: Optional[QuantizationConfigMixin] = None,
         **kwargs,
     ):
         super().__init__()
@@ -93,7 +93,7 @@ class OVConfig(BaseConfig):
         self.save_onnx_model = save_onnx_model
         self._enable_standard_onnx_export_option()
         self.optimum_version = kwargs.pop("optimum_version", None)
-        self.quantization_config = quantization_config
+        self.weight_quantization_config = weight_quantization_config
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
         self.input_info = [

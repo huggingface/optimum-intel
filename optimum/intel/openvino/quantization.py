@@ -318,7 +318,7 @@ class OVQuantizer(OptimumQuantizer):
         save_directory.mkdir(parents=True, exist_ok=True)
 
         if weights_only:
-            quantization_config = None if ov_config is None else ov_config.quantization_config
+            quantization_config = None if ov_config is None else ov_config.weight_quantization_config
             if quantization_config is None:
                 # Use default 8-bit compression
                 self.model.model = nncf.compress_weights(self.model.model)
