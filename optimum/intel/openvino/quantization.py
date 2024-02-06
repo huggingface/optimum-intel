@@ -33,7 +33,6 @@ from openvino.runtime import Core, Tensor
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
-from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
@@ -159,7 +158,6 @@ class OVQuantizer(OptimumQuantizer):
         self,
         calibration_dataset: Dataset = None,
         save_directory: Union[str, Path] = None,
-        quantization_config: QuantizationConfigMixin = None,
         ov_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 1,
@@ -234,7 +232,7 @@ class OVQuantizer(OptimumQuantizer):
                 data_collator,
                 remove_unused_columns,
                 weights_only,
-                quantization_config,
+                ov_config,
                 **kwargs,
             )
         elif isinstance(self.model, OVBaseModel):
@@ -313,13 +311,14 @@ class OVQuantizer(OptimumQuantizer):
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         weights_only: bool = False,
-        quantization_config: QuantizationConfigMixin = None,
+        ov_config: OVConfig = None,
         **kwargs,
     ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
 
         if weights_only:
+            quantization_config = None if ov_config is None else ov_config.quantization_config
             if quantization_config is None:
                 # Use default 8-bit compression
                 self.model.model = nncf.compress_weights(self.model.model)
