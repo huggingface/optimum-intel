@@ -286,10 +286,15 @@ class OVWeightCompressionTest(unittest.TestCase):
                 tokenizer.pad_token = tokenizer.eos_token
 
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
+            ov_config = OVConfig(
+                weight_quantization_config=OVWeightQuantizationConfig(
+                    mode=nncf.CompressWeightsMode.INT4_SYM, ratio=0.8
+                )
+            )
             quantizer.quantize(
                 save_directory=tmp_dir,
                 weights_only=True,
-                quantization_config=OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT4_SYM, ratio=0.8),
+                ov_config=ov_config,
             )
             model = model_cls.from_pretrained(tmp_dir)
 
