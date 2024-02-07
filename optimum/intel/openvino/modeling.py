@@ -401,6 +401,7 @@ class OVModelForFeatureExtraction(OVModel):
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
+        self._raise_if_incompatible_inputs(inputs)
         # Run inference
         outputs = self.request(inputs)
         last_hidden_state = (
@@ -471,6 +472,7 @@ class OVModelForMaskedLM(OVModel):
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
+        self._raise_if_incompatible_inputs(inputs)
         # Run inference
         outputs = self.request(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
@@ -598,6 +600,7 @@ class OVModelForImageClassification(OVModel):
             "pixel_values": pixel_values,
         }
 
+        self._raise_if_incompatible_inputs(inputs)
         # Run inference
         outputs = self.request(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
@@ -663,6 +666,7 @@ class OVModelForAudioClassification(OVModel):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
+        self._raise_if_incompatible_inputs(inputs)
         # Run inference
         outputs = self.request(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
@@ -735,6 +739,7 @@ class OVModelForCTC(OVModel):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
+        self._raise_if_incompatible_inputs(inputs)
         # Run inference
         outputs = self.request(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
@@ -816,6 +821,7 @@ class OVModelForAudioXVector(OVModel):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
+        self._raise_if_incompatible_inputs(inputs)
         # Run inference
         outputs = self.request(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
@@ -893,6 +899,7 @@ class OVModelForAudioFrameClassification(OVModel):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
+        self._raise_if_incompatible_inputs(inputs)
         # Run inference
         outputs = self.request(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]

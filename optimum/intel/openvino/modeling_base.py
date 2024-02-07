@@ -419,3 +419,18 @@ class OVBaseModel(OptimizedModel):
         if isinstance(self, GenerationMixin):
             return True
         return False
+
+    def _raise_if_incompatible_inputs(self, inputs: Dict):
+        expected_inputs_names = set(self.input_names.keys())
+        inputs_names = set(inputs.keys())
+
+        if expected_inputs_names != inputs_names:
+            raise ValueError(
+                f"Got unexpected inputs: expecting the following inputs {expected_inputs_names} but got {inputs_names}."
+            )
+
+        for input_name in inputs:
+            if inputs[input_name] is None:
+                raise ValueError(
+                    f"Got unexpected inputs: expecting the following inputs {expected_inputs_names} but got `{input_name}` set to {inputs[input_name]}."
+                )
