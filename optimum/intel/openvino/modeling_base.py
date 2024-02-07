@@ -227,7 +227,7 @@ class OVBaseModel(OptimizedModel):
             model_cache_path = model_path / file_name
         else:
             file_name = Path(file_name)
-            if file_name.suffix != "onnx":
+            if file_name.suffix != ".onnx":
                 model_file_names = [file_name.with_suffix(".bin"), file_name]
             else:
                 model_file_names = [file_name]
