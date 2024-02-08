@@ -346,7 +346,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             for i, model in enumerate(models):
                 _, num_int8, _ = get_num_quantized_nodes(model)
                 self.assertEqual(expected_ov_int8[i], num_int8)
-            model.save_pretrained(tmp_dir)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
     def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
