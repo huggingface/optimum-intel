@@ -103,6 +103,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "OpenVINO native inference code that expects kv-cache inputs and outputs in the model."
         ),
     )
+    optional_group.add_argument(
+        "--convert-tokenizer",
+        action="store_true",
+        help="Add converted tokenizer and detokenizer with OpenVINO Tokenizers",
+    )
 
 
 class OVExportCommand(BaseOptimumCLICommand):
@@ -151,5 +156,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             compression_option=self.args.weight_format,
             compression_ratio=self.args.ratio,
             stateful=not self.args.disable_stateful,
+            convert_tokenizer=self.args.convert_tokenizer,
             # **input_shapes,
         )
