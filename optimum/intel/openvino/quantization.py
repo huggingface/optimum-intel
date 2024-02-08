@@ -43,6 +43,7 @@ from ...exporters.openvino import export, export_pytorch_via_onnx
 from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
 from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
+from ..utils.modeling_utils import get_model_device
 from .configuration import OVConfig
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel
@@ -414,7 +415,7 @@ class OVQuantizer(OptimumQuantizer):
                 model = patch_model_with_bettertransformer(model)
 
             dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-            device = model.device
+            device = get_model_device(model)
             dummy_inputs = tree_map(
                 lambda value: value.to(device) if isinstance(value, torch.Tensor) else value, dummy_inputs
             )
