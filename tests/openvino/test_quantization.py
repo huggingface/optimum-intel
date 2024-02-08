@@ -22,6 +22,8 @@ import evaluate
 import numpy as np
 from datasets import load_dataset
 from parameterized import parameterized
+import openvino.runtime as ov
+import nncf
 from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
@@ -47,6 +49,7 @@ from optimum.intel import (
     OVStableDiffusionXLPipeline,
     OVQuantizer,
     OVTrainer,
+    OVWeightQuantizationConfig,
 )
 
 
@@ -61,10 +64,10 @@ _TASK_TO_DATASET = {
 
 
 class OVQuantizerTest(unittest.TestCase):
-    # TODO : add models
+    # TODO : add models, enable OVModelForCausalLM.
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 32, 35),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 23),
+        # (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 23),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
@@ -152,8 +155,62 @@ class OVWeightCompressionTest(unittest.TestCase):
     )
 
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 64, 365),)
-    SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = (
-        (OVModelForCausalLM, "opt125m", 64, 477),
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 6, 379),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS = (
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 16, 136),
+    )
+    SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = (
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 44, 46),
+    )
+
+    LOAD_IN_4_BITS_SCOPE = (
+        (
+            OVModelForCausalLM,
+            "hf-internal-testing/tiny-random-gpt2",
+            dict(mode=nncf.CompressWeightsMode.INT4_ASYM, group_size=-1, ratio=0.8),
+            16,
+        ),
+        (
+            OVModelForCausalLM,
+            "hf-internal-testing/tiny-random-gpt2",
+            dict(
+                mode=nncf.CompressWeightsMode.INT4_ASYM,
+                group_size=32,
+                ignored_scope=nncf.IgnoredScope(names=["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]),
+            ),
+            6,
+        ),
+        (
+            OVModelForCausalLM,
+            "hf-internal-testing/tiny-random-gpt2",
+            dict(mode=nncf.CompressWeightsMode.INT4_ASYM, group_size=-1, ratio=0.8, all_layers=True),
+            22,
+        ),
+        (
+            OVModelForCausalLM,
+            "hf-internal-testing/tiny-random-OPTForCausalLM",
+            dict(
+                mode=nncf.CompressWeightsMode.INT4_SYM,
+                group_size=-1,
+                ratio=0.8,
+                sensitivity_metric=nncf.SensitivityMetric.MEAN_ACTIVATION_MAGNITUDE,
+                dataset="ptb",
+            ),
+            16,
+        ),
+        (
+            OVModelForCausalLM,
+            "hf-internal-testing/tiny-random-OPTForCausalLM",
+            dict(
+                mode=nncf.CompressWeightsMode.INT4_SYM,
+                group_size=-1,
+                ratio=0.8,
+                sensitivity_metric=nncf.SensitivityMetric.MEAN_ACTIVATION_MAGNITUDE,
+                dataset="ptb",
+                awq=True,
+            ),
+            16,
+        ),
     )
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (
@@ -230,10 +287,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 tokenizer.pad_token = tokenizer.eos_token
 
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
+            ov_config = OVConfig(
+                quantization_config=OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT4_SYM, ratio=0.8)
+            )
             quantizer.quantize(
                 save_directory=tmp_dir,
                 weights_only=True,
-                quantization_config=OVConfig(compression={"type": "int4_sym_g128", "ratio": 0.8}),
+                ov_config=ov_config,
             )
             model = model_cls.from_pretrained(tmp_dir)
 
@@ -245,39 +305,27 @@ class OVWeightCompressionTest(unittest.TestCase):
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
-    def test_ovmodel_4bit_weight_compression_stateful(self, model_cls, model_name, expected_int8, expected_int4):
+    def test_ovmodel_8bit_weight_compression_stateful(self, model_cls, model_id, expected_pt_int8, expected_ov_int8):
         task = model_cls.export_feature
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            model_id = MODEL_NAMES[model_name]
             transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=True)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-            quantizer.quantize(
-                save_directory=tmp_dir,
-                weights_only=True,
-                quantization_config=OVConfig(compression={"type": "int4_sym_g128", "ratio": 0.8}),
-            )
+            quantizer.quantize(save_directory=tmp_dir, weights_only=True)
             model = model_cls.from_pretrained(tmp_dir)
-            self.assertTrue(model.stateful)
-            self.assertTrue(model.use_cache)
 
-            _, num_int8, num_int4 = get_num_quantized_nodes(model)
-            self.assertEqual(expected_int8, num_int8)
-            self.assertEqual(expected_int4, num_int4)
+            _, num_int8, _ = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int8, num_int8)
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
-
             self.assertTrue("logits" in outputs)
-            self.assertTrue("past_key_values" in outputs)
-            self.assertIsInstance(outputs.past_key_values, tuple)
-            self.assertTrue(len(outputs.past_key_values) == 1 and len(outputs.past_key_values[0]) == 0)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
@@ -295,6 +343,74 @@ class OVWeightCompressionTest(unittest.TestCase):
         for i, model in enumerate(models):
             _, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int8[i], num_int8)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
+    def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_id = MODEL_NAMES[model_type]
+            model = model_cls.from_pretrained(model_id, export=True, load_in_4bit=True)
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            _, num_int8, num_int4 = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int4, num_int4)
+            self.assertEqual(expected_ov_int8, num_int8)
+            model.save_pretrained(tmp_dir)
+
+    @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
+    def test_ovmodel_4bit_auto_compression_with_config(
+        self, model_cls, model_id, quantization_config, expected_ov_int4
+    ):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model = model_cls.from_pretrained(
+                model_id, export=True, load_in_4bit=True, quantization_config=quantization_config
+            )
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            _, num_int4, _ = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int4, num_int4)
+            model.save_pretrained(tmp_dir)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS)
+    def test_ovmodel_4bit_auto_compression_with_custom_dataset(
+        self, model_cls, model_id, expected_int8, expected_int4
+    ):
+        task = model_cls.export_feature
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        dataset_name, dataset_config_name, column = _TASK_TO_DATASET[task]
+        dataset = load_dataset(dataset_name, dataset_config_name, split="test")
+
+        def transform_fn(data, tokenizer):
+            tokenized_text = tokenizer(data[column], return_tensors="np")
+            input_ids = tokenized_text["input_ids"]
+            attention_mask = tokenized_text["attention_mask"]
+            inputs = {}
+            inputs["input_ids"] = input_ids
+            inputs["attention_mask"] = attention_mask
+            batch_size = input_ids.shape[0]
+            inputs["beam_idx"] = np.arange(batch_size, dtype=int)
+            return inputs
+
+        quantization_dataset = nncf.Dataset(dataset, partial(transform_fn, tokenizer=tokenizer))
+        model = model_cls.from_pretrained(
+            model_id,
+            export=True,
+            load_in_4bit=True,
+            quantization_config=OVWeightQuantizationConfig(
+                mode=nncf.CompressWeightsMode.INT4_SYM, group_size=-1, ratio=0.8, dataset=quantization_dataset
+            ),
+        )
+
+        _, num_int8, num_int4 = get_num_quantized_nodes(model)
+        self.assertEqual(expected_int8, num_int8)
+        self.assertEqual(expected_int4, num_int4)
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")

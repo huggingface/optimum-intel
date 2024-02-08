@@ -49,6 +49,7 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
 )
+from .weight_quantization import OVWeightQuantizationConfig, compress_decoder_weights
 
 
 COMPRESSION_OPTIONS = {
@@ -157,7 +158,7 @@ class OVQuantizer(OptimumQuantizer):
         self,
         calibration_dataset: Dataset = None,
         save_directory: Union[str, Path] = None,
-        quantization_config: OVConfig = None,
+        ov_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
@@ -222,6 +223,12 @@ class OVQuantizer(OptimumQuantizer):
                     "`calibration_dataset` is needed to compute the activations range during the calibration step and was not provided. "
                     "In case you only want to apply quantization on the weights, please set `weights_only=True`."
                 )
+        quantization_config = kwargs.pop("quantization_config", None)
+        if quantization_config is not None:
+            logger.warning(
+                "The argument `quantization_config` is deprecated, and will be removed in optimum-intel v1.6.0, please use `ov_config` instead"
+            )
+        ov_config = ov_config or quantization_config
 
         if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
             self._quantize_ovcausallm(
@@ -231,7 +238,7 @@ class OVQuantizer(OptimumQuantizer):
                 data_collator,
                 remove_unused_columns,
                 weights_only,
-                quantization_config,
+                ov_config,
                 **kwargs,
             )
         elif isinstance(self.model, OVBaseModel):
@@ -248,7 +255,7 @@ class OVQuantizer(OptimumQuantizer):
             self._quantize_torchmodel(
                 calibration_dataset,
                 save_directory,
-                quantization_config,
+                ov_config,
                 file_name,
                 batch_size,
                 data_collator,
@@ -310,15 +317,21 @@ class OVQuantizer(OptimumQuantizer):
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         weights_only: bool = False,
-        quantization_config: OVConfig = None,
+        ov_config: OVConfig = None,
         **kwargs,
     ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
 
         if weights_only:
-            options = self._get_compression_options(quantization_config)
-            self.model.model = nncf.compress_weights(self.model.model, **options)
+            quantization_config = None if ov_config is None else ov_config.quantization_config
+            if quantization_config is None:
+                # Use default 8-bit compression
+                quantization_config = OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT8_SYM)
+                self.model.model = nncf.compress_weights(self.model.model)
+            else:
+                compress_decoder_weights(self.model, quantization_config)
+
             self.model.save_pretrained(save_directory)
             return
 
@@ -360,7 +373,7 @@ class OVQuantizer(OptimumQuantizer):
         self,
         calibration_dataset: Dataset,
         save_directory: Union[str, Path],
-        quantization_config: OVConfig = None,
+        ov_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
@@ -382,14 +395,14 @@ class OVQuantizer(OptimumQuantizer):
             model_type=model_type,
         )
 
-        if quantization_config is None:
+        if ov_config is None:
             logger.info(
                 "No configuration describing the quantization process was provided, a default OVConfig will be generated."
             )
-            quantization_config = OVConfig()
+            ov_config = OVConfig()
         onnx_file_name = (
             ONNX_WEIGHTS_NAME
-            if file_name is None and quantization_config.save_onnx_model
+            if file_name is None and ov_config.save_onnx_model
             else Path(ov_file_name).with_suffix(".onnx")
         )
         if weights_only:
@@ -407,8 +420,8 @@ class OVQuantizer(OptimumQuantizer):
             )
 
             model_inputs = next(iter(calibration_dataloader))
-            quantization_config.add_input_info(model_inputs)
-            nncf_config = NNCFConfig.from_dict(quantization_config.__dict__)
+            ov_config.add_input_info(model_inputs)
+            nncf_config = NNCFConfig.from_dict(ov_config.__dict__)
             nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
             controller, compressed_model = create_compressed_model(
                 self.model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
@@ -427,13 +440,13 @@ class OVQuantizer(OptimumQuantizer):
         else:
             onnx_config = onnx_config_class(model.config)
 
-        model_path = save_directory / (onnx_file_name if quantization_config.save_onnx_model else ov_file_name)
+        model_path = save_directory / (onnx_file_name if ov_config.save_onnx_model else ov_file_name)
         onnx_path = save_directory / onnx_file_name
-        export_fn = export if not quantization_config.save_onnx_model else export_pytorch_via_onnx
+        export_fn = export if not ov_config.save_onnx_model else export_pytorch_via_onnx
         opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = max(opset, MIN_ONNX_QDQ_OPSET)
         kwargs = {}
-        if not quantization_config.save_onnx_model:
+        if not ov_config.save_onnx_model:
             kwargs = {"stateful": ensure_export_task_support_stateful(task)}
         _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset, **kwargs)
         if is_onnx:
@@ -442,14 +455,14 @@ class OVQuantizer(OptimumQuantizer):
             # Model required second saving for appling weights compression transformations
             self._save_pretrained(model, output_path)
             # if onnx conversion happens as fallback for pytorch conversion, remove onnx model
-            if not quantization_config.save_onnx_model:
+            if not ov_config.save_onnx_model:
                 os.remove(onnx_path)
                 try:
                     os.remove(f"{onnx_path}_data")
                 except FileNotFoundError:
                     pass
 
-        quantization_config.save_pretrained(save_directory)
+        ov_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):

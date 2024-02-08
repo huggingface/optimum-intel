@@ -15,8 +15,11 @@
 from typing import Dict, List, Optional, Union
 
 import torch
+from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
+
+from .weight_quantization import OVWeightQuantizationConfig
 
 
 DEFAULT_QUANTIZATION_CONFIG = {
@@ -83,6 +86,7 @@ class OVConfig(BaseConfig):
         compression: Union[List[Dict], Dict, None] = None,
         input_info: Optional[List] = None,
         save_onnx_model: bool = False,
+        quantization_config: Optional[QuantizationConfigMixin] = None,
         **kwargs,
     ):
         super().__init__()
@@ -91,6 +95,7 @@ class OVConfig(BaseConfig):
         self.save_onnx_model = save_onnx_model
         self._enable_standard_onnx_export_option()
         self.optimum_version = kwargs.pop("optimum_version", None)
+        self.quantization_config = quantization_config
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
         self.input_info = [
@@ -101,6 +106,11 @@ class OVConfig(BaseConfig):
             }
             for name, value in model_inputs.items()
         ]
+
+    def save_pretrained(self, *args, **kwargs):
+        if self.quantization_config is None:
+            self.quantization_config = OVWeightQuantizationConfig()
+        super().save_pretrained(*args, **kwargs)
 
     def _enable_standard_onnx_export_option(self):
         # This method depends on self.save_onnx_model.

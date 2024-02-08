@@ -311,7 +311,7 @@ STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT = {
 UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT = deepcopy(STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT)
 UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT["params"]["enable_structured_masking"] = False
 
-
+# TODO: Uncomment failes tests after NNCF 2.8.1 patch release
 OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "distillation": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
