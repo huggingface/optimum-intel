@@ -19,9 +19,11 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from transformers import T5Tokenizer, T5TokenizerFast
 from transformers.utils import is_tf_available, is_torch_available
 
 from openvino.runtime import PartialShape, save_model
+from openvino.runtime.exceptions import OVTypeError
 from openvino.runtime.utils.types import get_element_type
 from openvino.tools.ovc import convert_model
 from optimum.exporters.onnx.base import OnnxConfig
@@ -536,3 +538,53 @@ def export_models(
 
     outputs = list(map(list, zip(*outputs)))
     return outputs
+
+
+UNSUPPORTED_TOKENIZER_CLASSES = (
+    T5Tokenizer,
+    T5TokenizerFast,
+)
+
+
+def export_tokenizer(
+    tokenizer,
+    output: Union[str, Path],
+    suffix: Optional[str] = "",
+):
+    from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME  # avoid circular imports
+
+    if isinstance(tokenizer, UNSUPPORTED_TOKENIZER_CLASSES):
+        logger.info(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
+        return
+
+    try:
+        from openvino_tokenizers import convert_tokenizer
+    except ModuleNotFoundError:
+        # avoid this message before tokenizers are part of the openvino dependencies
+        # logger.info(
+        #     "Run `pip install openvino-tokenizers[transformers]` to get OpenVINO tokenizer/detokenizer models."
+        # )
+        return
+
+    if not isinstance(output, Path):
+        output = Path(output)
+
+    try:
+        converted = convert_tokenizer(tokenizer, with_detokenizer=True)
+    except NotImplementedError:
+        logger.warning("Detokenizer is not supported, convert tokenizer only.")
+        converted = convert_tokenizer(tokenizer, with_detokenizer=False)
+    except OVTypeError:
+        logger.warning(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
+        return
+    except Exception as exception:
+        logger.warning(
+            f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported. Exception: {exception}"
+        )
+        return
+
+    if not isinstance(converted, tuple):
+        converted = (converted,)
+
+    for model, file_name in zip(converted, (OV_TOKENIZER_NAME, OV_DETOKENIZER_NAME)):
+        save_model(model, output / file_name.format(suffix))

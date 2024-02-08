@@ -31,6 +31,9 @@ OV_ENCODER_NAME = "openvino_encoder_model.xml"
 OV_DECODER_NAME = "openvino_decoder_model.xml"
 OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
 
+OV_TOKENIZER_NAME = "openvino_tokenizer{}.xml"
+OV_DETOKENIZER_NAME = "openvino_detokenizer{}.xml"
+
 ONNX_WEIGHTS_NAME = "model.onnx"
 ONNX_ENCODER_NAME = "encoder_model.onnx"
 ONNX_DECODER_NAME = "decoder_model.onnx"

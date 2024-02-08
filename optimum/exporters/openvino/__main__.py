@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig, PreTrainedTokenizerBase
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import __main__ as optimum_main
@@ -26,8 +26,13 @@ from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
-from ...intel.utils.import_utils import is_nncf_available, is_optimum_version, is_transformers_version
-from .convert import export_models
+from ...intel.utils.import_utils import (
+    is_nncf_available,
+    is_openvino_tokenizers_available,
+    is_optimum_version,
+    is_transformers_version,
+)
+from .convert import export_models, export_tokenizer
 from .stateful import ensure_export_task_support_stateful
 
 
@@ -41,7 +46,6 @@ else:
     ]
 
 OV_XML_FILE_NAME = "openvino_model.xml"
-
 _MAX_UNCOMPRESSED_SIZE = 1e9
 
 logger = logging.getLogger(__name__)
@@ -67,6 +71,7 @@ def main_export(
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
     stateful: bool = True,
+    convert_tokenizer: bool = False,
     **kwargs_shapes,
 ):
     """
@@ -318,13 +323,17 @@ def main_export(
             and getattr(model.config, "pad_token_id", None) is None
             and task in ["text-classification"]
         )
+
+        tokenizer = next(
+            (preprocessor for preprocessor in preprocessors if isinstance(preprocessor, PreTrainedTokenizerBase)), None
+        )
+
         if needs_pad_token_id:
             if pad_token_id is not None:
                 model.config.pad_token_id = pad_token_id
-            else:
+            elif tokenizer is not None:
                 try:
-                    tok = AutoTokenizer.from_pretrained(model_name_or_path)
-                    model.config.pad_token_id = tok.pad_token_id
+                    model.config.pad_token_id = tokenizer.pad_token_id
                 except Exception:
                     raise ValueError(
                         "Could not infer the pad token id, which is needed in this case, please provide it with the --pad_token_id argument"
@@ -335,6 +344,15 @@ def main_export(
         if generation_config is not None:
             generation_config.save_pretrained(output)
         maybe_save_preprocessors(model_name_or_path, output)
+
+        if convert_tokenizer and tokenizer is not None and is_openvino_tokenizers_available():
+            try:
+                export_tokenizer(tokenizer, output)
+            except Exception as exception:
+                logger.warning(
+                    "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
+                    f"models won't be generated. Exception: {exception}"
+                )
 
         if model.config.is_encoder_decoder and task.startswith("text-generation"):
             raise ValueError(
@@ -365,10 +383,14 @@ def main_export(
         tokenizer = getattr(model, "tokenizer", None)
         if tokenizer is not None:
             tokenizer.save_pretrained(output.joinpath("tokenizer"))
+            if convert_tokenizer and is_openvino_tokenizers_available():
+                export_tokenizer(tokenizer, output)
 
         tokenizer_2 = getattr(model, "tokenizer_2", None)
         if tokenizer_2 is not None:
             tokenizer_2.save_pretrained(output.joinpath("tokenizer_2"))
+            if convert_tokenizer and is_openvino_tokenizers_available():
+                export_tokenizer(tokenizer, output, suffix="_2")
 
         model.save_config(output)
 
