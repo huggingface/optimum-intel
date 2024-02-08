@@ -148,3 +148,24 @@ def patch_decoder_attention_mask(model: "PreTrainedModel"):
     elif model.config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
         model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
     return model
+
+
+def get_model_device(model: torch.nn.Module) -> torch.device:
+    """
+    Determines the device on which a PyTorch model is currently residing.
+
+    Args:
+        model: The PyTorch model to query.
+
+    Returns:
+        torch.device: The device where the model's parameters are located.
+
+    Raises:
+        StopIteration: If the model has no parameters.
+    """
+    try:
+        device = next(model.parameters()).device
+    except StopIteration:
+        # The model had no parameters at all, doesn't matter which device to choose
+        device = torch.device("cpu")
+    return device
