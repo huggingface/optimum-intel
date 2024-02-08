@@ -335,9 +335,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             models = [model.encoder, model.decoder, model.decoder_with_past]
         elif model.export_feature.startswith("stable-diffusion"):
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(
-                model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2
-            )
+            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
         else:
             models = [model]
 

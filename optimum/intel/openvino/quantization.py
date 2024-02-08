@@ -225,7 +225,9 @@ class OVQuantizer(OptimumQuantizer):
                 )
         quantization_config = kwargs.pop("quantization_config", None)
         if quantization_config is not None:
-            logger.warning("The argument `quantization_config` is deprecated, and will be removed in optimum-intel v1.6.0, please use `ov_config` instead")
+            logger.warning(
+                "The argument `quantization_config` is deprecated, and will be removed in optimum-intel v1.6.0, please use `ov_config` instead"
+            )
         ov_config = ov_config or quantization_config
 
         if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
