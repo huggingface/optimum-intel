@@ -381,14 +381,16 @@ def main_export(
             feature_extractor.save_pretrained(output.joinpath("feature_extractor"))
 
         tokenizer = getattr(model, "tokenizer", None)
-        if convert_tokenizer and tokenizer is not None and is_openvino_tokenizers_available():
+        if tokenizer is not None:
             tokenizer.save_pretrained(output.joinpath("tokenizer"))
-            export_tokenizer(tokenizer, output)
+            if convert_tokenizer and is_openvino_tokenizers_available():
+                export_tokenizer(tokenizer, output)
 
         tokenizer_2 = getattr(model, "tokenizer_2", None)
-        if convert_tokenizer and tokenizer_2 is not None and is_openvino_tokenizers_available():
+        if tokenizer_2 is not None:
             tokenizer_2.save_pretrained(output.joinpath("tokenizer_2"))
-            export_tokenizer(tokenizer, output, suffix="_2")
+            if convert_tokenizer and is_openvino_tokenizers_available():
+                export_tokenizer(tokenizer, output, suffix="_2")
 
         model.save_config(output)
 
