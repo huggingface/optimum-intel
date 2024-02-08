@@ -52,7 +52,7 @@ EXTRAS_REQUIRE = {
         "optimum>=1.16.1",
     ],
     "openvino-tokenizers": ["openvino-tokenizers[transformers]"],
-    "nncf": ["nncf>=2.7.0"],
+    "nncf": ["nncf @ git+https://github.com/openvinotoolkit/nncf.git"],
     "ipex": ["intel-extension-for-pytorch", "onnx"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,

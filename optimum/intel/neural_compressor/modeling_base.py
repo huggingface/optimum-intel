@@ -40,6 +40,8 @@ from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
 from transformers.utils.generic import ContextManagers
 
+from optimum.intel.generation import BaseModelForCausalLM
+
 from ...modeling_base import OptimizedModel
 from ..utils.import_utils import _torch_version, is_torch_version
 from .configuration import INCConfig
@@ -82,11 +84,6 @@ class INCModel(OptimizedModel):
         self._device = getattr(self.model, "device", None) or torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu"
         )
-
-        if getattr(self.config, "backend", None) == "ipex":
-            raise NotImplementedError(
-                "`INCModel` does not supported the loading of model resulting from IPEX, please use `IPEXModel` to load your model instead instead"
-            )
 
         # Registers the INCModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
@@ -143,11 +140,19 @@ class INCModel(OptimizedModel):
                 f"Please check if torch quantization the model was obtained with is compatible with {_torch_version}."
             )
 
+        if getattr(config, "backend", None) == "ipex" or getattr(config, "torchscript", False):
+            logger.warning(
+                f"Using `{cls.__name__}` to load a TorchScript model will be deprecated in v1.15.0, to load your model please use `{cls.__name__.replace('INC', 'IPEX')}` instead."
+            )
+            model = torch.jit.load(model_cache_path)
+            model = torch.jit.freeze(model.eval())
+            return cls(model, config=config, model_save_dir=model_save_dir, inc_config=inc_config, **kwargs)
+
         model_class = _get_model_class(config, cls.auto_model_class._model_mapping)
         # Load the state dictionary of the model to verify whether the model to get the quantization config
         state_dict = torch.load(model_cache_path, map_location="cpu")
-        q_config = state_dict.get("best_configure", None)
 
+        q_config = state_dict.get("best_configure", None)
         if q_config is None:
             model = model_class.from_pretrained(model_save_dir)
         else:
@@ -169,10 +174,13 @@ class INCModel(OptimizedModel):
     def _save_pretrained(self, save_directory: Union[str, Path]):
         output_path = os.path.join(save_directory, WEIGHTS_NAME)
 
-        state_dict = self.model.state_dict()
-        if self._q_config:
-            state_dict["best_configure"] = self._q_config
-        torch.save(state_dict, output_path)
+        if isinstance(self.model, torch.nn.Module):
+            state_dict = self.model.state_dict()
+            if self._q_config:
+                state_dict["best_configure"] = self._q_config
+            torch.save(state_dict, output_path)
+        else:
+            torch.jit.save(self.model, output_path)
 
         if self.inc_config:
             self.inc_config.save_pretrained(save_directory)
@@ -244,6 +252,29 @@ class INCModelForXLNetLM(INCModel):
     export_feature = "fill-mask"
 
 
-class INCModelForCausalLM(INCModel):
+class INCModelForCausalLM(INCModel, BaseModelForCausalLM):
     auto_model_class = AutoModelForCausalLM
     export_feature = "text-generation"
+    forward = BaseModelForCausalLM.forward
+    generate = BaseModelForCausalLM.generate
+    can_generate = BaseModelForCausalLM.can_generate
+
+    def __init__(
+        self,
+        model,
+        config: PretrainedConfig = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        q_config: Dict = None,
+        inc_config: Dict = None,
+        use_cache: bool = True,
+        **kwargs,
+    ):
+        super(INCModelForCausalLM, self).__init__(
+            model=model,
+            config=config,
+            model_save_dir=model_save_dir,
+            q_config=q_config,
+            inc_config=inc_config,
+            use_cache=use_cache,
+            **kwargs,
+        )

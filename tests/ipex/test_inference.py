@@ -33,15 +33,17 @@ from optimum.intel.ipex.modeling_base import IPEXModel
 
 MODEL_NAMES = {
     "bert": "hf-internal-testing/tiny-random-bert",
+    "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "roberta": "hf-internal-testing/tiny-random-roberta",
-    "bloom": "hf-internal-testing/tiny-random-bloom",
     "gptj": "hf-internal-testing/tiny-random-gptj",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "opt": "hf-internal-testing/tiny-random-OPTModel",
+    "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
 }
 
 _CLASSIFICATION_TASK_TO_AUTOMODELS = {
@@ -57,7 +59,16 @@ class IPEXIntegrationTest(unittest.TestCase):
         "roberta",
     )
 
-    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("gptj", "gpt2", "gpt_neo", "gpt_bigcode", "llama")
+    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
+        "bloom",
+        "gptj",
+        "gpt2",
+        "gpt_neo",
+        "gpt_bigcode",
+        "llama",
+        "opt",
+        "mpt",
+    )
 
     QA_SUPPORTED_ARCHITECTURES = (
         "bert",

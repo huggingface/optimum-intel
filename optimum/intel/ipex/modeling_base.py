@@ -25,7 +25,9 @@ from huggingface_hub import hf_hub_download
 from transformers import (
     AutoConfig,
     AutoModel,
+    AutoModelForAudioClassification,
     AutoModelForCausalLM,
+    AutoModelForImageClassification,
     AutoModelForMaskedLM,
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
@@ -34,14 +36,16 @@ from transformers import (
     GenerationMixin,
     PretrainedConfig,
 )
+from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
+from transformers.models.auto.auto_factory import _get_model_class as get_model_class
 from transformers.utils import WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
-from ..generation.modeling import jit_trace
+from ..generation.modeling import jit_trace, prepare_jit_inputs
 from ..utils.import_utils import is_torch_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
 
@@ -60,19 +64,26 @@ class IPEXModel(OptimizedModel):
         model,
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        warmup: bool = True,
         **kwargs,
     ):
         OptimizedModel.__init__(self, model=model, config=config)
         # To do: add XPU support
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model.to(self._device)
         self.model_save_dir = model_save_dir
 
+        self.input_names = {
+            inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
+        }
         # Registers the IPEXModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         if hasattr(self.auto_model_class, "register"):
             self.auto_model_class.register(AutoConfig, self.__class__)
+        if warmup:
+            self._init_warmup()
 
     @classmethod
     def _from_transformers(
@@ -159,19 +170,29 @@ class IPEXModel(OptimizedModel):
 
         model = torch.jit.load(model_cache_path)
         torch.jit.freeze(model.eval())
-        model_type = config.model_type.replace("_", "-")
-        init_cls = cls
-        if cls.export_feature == "text-generation" and model_type in _MODEL_TYPE_TO_AUTOMODELS:
-            init_cls = _MODEL_TYPE_TO_AUTOMODELS[model_type]
 
-        return init_cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
+        return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         output_path = os.path.join(save_directory, WEIGHTS_NAME)
         torch.jit.save(self.model, output_path)
 
-    def forward(self, *args, **kwargs):
-        outputs = self.model(*args, **kwargs)
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: torch.Tensor = None,
+        **kwargs,
+    ):
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        if "token_type_ids" in self.input_names:
+            inputs["token_type_ids"] = token_type_ids
+
+        outputs = self._call_model(**inputs)
         return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
     def eval(self):
@@ -182,6 +203,10 @@ class IPEXModel(OptimizedModel):
     def device(self) -> torch.device:
         return self._device
 
+    @property
+    def dtype(self) -> torch.dtype:
+        return self._dtype
+
     def to(self, device: Union[torch.device, str]):
         self._device = device if isinstance(device, torch.device) else torch.device(device)
         self.model.to(self._device)
@@ -190,15 +215,26 @@ class IPEXModel(OptimizedModel):
     def can_generate(self):
         return isinstance(self, GenerationMixin)
 
+    def _call_model(self, *args, **kwargs):
+        try:
+            with torch.autocast(self.device.type, self.dtype):
+                out = self.model(*args, **kwargs)
+        except RuntimeError:
+            out = self.model(*args, **kwargs)
+        return out
+
+    def _init_warmup(self):
+        # warmup, the first 2 forwards of an IPEX model include some preprocessing steps and
+        # the results of the compute are unpredictable
+        use_cache = "past_key_values" in self.input_names
+        dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
+        for _ in range(2):
+            self(**dummy_inputs)
+
 
 class IPEXModelForSequenceClassification(IPEXModel):
     auto_model_class = AutoModelForSequenceClassification
     export_feature = "text-classification"
-
-
-class IPEXModelForMaskedLM(IPEXModel):
-    auto_model_class = AutoModelForMaskedLM
-    export_feature = "fill-mask"
 
 
 class IPEXModelForTokenClassification(IPEXModel):
@@ -206,12 +242,69 @@ class IPEXModelForTokenClassification(IPEXModel):
     export_feature = "token-classification"
 
 
+class IPEXModelForMaskedLM(IPEXModel):
+    auto_model_class = AutoModelForMaskedLM
+    export_feature = "fill-mask"
+
+
+class IPEXModelForImageClassification(IPEXModel):
+    auto_model_class = AutoModelForImageClassification
+    export_feature = "image-classification"
+
+    def forward(
+        self,
+        pixel_values: torch.Tensor,
+        **kwargs,
+    ):
+        inputs = {
+            "pixel_values": pixel_values,
+        }
+
+        outputs = self._call_model(**inputs)
+        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
+
+
+class IPEXModelForAudioClassification(IPEXModel):
+    auto_model_class = AutoModelForAudioClassification
+    export_feature = "audio-classification"
+
+    def forward(
+        self,
+        input_values: torch.Tensor,
+        attention_mask: torch.Tensor = None,
+        **kwargs,
+    ):
+        inputs = {
+            "input_values": input_values,
+        }
+
+        if "attention_mask" in self.input_names:
+            inputs["attention_mask"] = attention_mask
+
+        outputs = self._call_model(**inputs)
+        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
+
+
 class IPEXModelForQuestionAnswering(IPEXModel):
     auto_model_class = AutoModelForQuestionAnswering
     export_feature = "question-answering"
 
-    def forward(self, *args, **kwargs):
-        outputs = self.model(*args, **kwargs)
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        token_type_ids: torch.Tensor = None,
+        **kwargs,
+    ):
+        inputs = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+        }
+
+        if "token_type_ids" in self.input_names:
+            inputs["token_type_ids"] = token_type_ids
+
+        outputs = self._call_model(**inputs)
         start_logits = outputs["start_logits"] if isinstance(outputs, dict) else outputs[0]
         end_logits = outputs["end_logits"] if isinstance(outputs, dict) else outputs[1]
         return ModelOutput(start_logits=start_logits, end_logits=end_logits)
@@ -227,15 +320,14 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         config: PretrainedConfig = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
+        warmup: bool = True,
         **kwargs,
     ):
-        super().__init__(model, config, model_save_dir=model_save_dir)
+        # Perform the initial warmup at the end of __init__
+        super().__init__(model, config, model_save_dir=model_save_dir, warmup=False)
 
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
-        self.model_dtype = kwargs.get("model_dtype", None)
-        self.input_names = {
-            inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
-        }
+        self.model_dtype = kwargs.get("model_dtype", self.dtype)
         self.use_cache = "past_key_values" in self.input_names
 
         if use_cache ^ self.use_cache:
@@ -248,6 +340,20 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         config.is_decoder = True
         config.is_encoder_decoder = False
         self.generation_config = GenerationConfig.from_model_config(config)
+        try:
+            self.model_cls = get_class_from_dynamic_module(
+                self.config.auto_map["AutoModelForCausalLM"], model_save_dir
+            )
+        except AttributeError:
+            self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
+        self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
+        self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)
+        if hasattr(self.model_cls, "_convert_to_standard_cache"):
+            self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
+        if hasattr(self.model_cls, "_convert_to_bloom_cache"):
+            self._convert_to_bloom_cache = self.model_cls._convert_to_bloom_cache
+        if warmup:
+            self._init_warmup()
 
     def _prepare_past_key_values(self, input_ids):
         model_type = self.config.model_type.replace("_", "-")
@@ -313,7 +419,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             inputs["past_key_values"] = past_key_values
 
         # 2. Model forward
-        outputs = self.model(**inputs)
+        outputs = self._call_model(**inputs)
 
         # 3. Process model outputs
         if isinstance(outputs, (list, tuple)):
@@ -324,227 +430,3 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             past_key_values = outputs["past_key_values"] if self.use_cache else None
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
-
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        if past_key_values is not None:
-            past_length = past_key_values[0][0].shape[2]
-            # Some generation methods already pass only the last input ID
-            if input_ids.shape[1] > past_length:
-                remove_prefix_length = past_length
-            else:
-                # Default to old behavior: keep only final ID
-                remove_prefix_length = input_ids.shape[1] - 1
-            input_ids = input_ids[:, remove_prefix_length:]
-
-        # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
-        attention_mask = kwargs.get("attention_mask", None)
-        use_cache = kwargs.get("use_cache", None)
-        position_ids = kwargs.get("position_ids", None)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": use_cache,
-            "position_ids": position_ids,
-            "attention_mask": attention_mask,
-        }
-
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
-    @staticmethod
-    def _reorder_cache(
-        past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
-    ) -> Tuple[Tuple[torch.Tensor]]:
-        return tuple(
-            tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
-            for layer_past in past_key_values
-        )
-
-
-class IPEXGPTBigCodeForCausalLM(IPEXModelForCausalLM):
-    # Adapted from transformers.models.gpt_bigcode.modeling_gpt_bigcode.GPTBigCodeForCausalLM.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
-        # Omit tokens covered by past_key_values
-        if past_key_values:
-            if self.config.multi_query:
-                past_length = past_key_values[0].shape[1]
-            else:
-                past_length = past_key_values[0].shape[2]
-
-            # Some generation methods already pass only the last input ID
-            if input_ids.shape[1] > past_length:
-                remove_prefix_length = past_length
-            else:
-                # Default to old behavior: keep only final ID
-                remove_prefix_length = input_ids.shape[1] - 1
-
-            input_ids = input_ids[:, remove_prefix_length:]
-
-        attention_mask = kwargs.get("attention_mask", None)
-        position_ids = kwargs.get("position_ids", None)
-
-        if attention_mask is not None and position_ids is None:
-            # create position_ids on the fly for batch generation
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-            if past_key_values:
-                position_ids = position_ids[:, -input_ids.shape[1] :]
-        else:
-            position_ids = None
-
-        model_inputs = {"input_ids": input_ids}
-        model_inputs.update(
-            {
-                "past_key_values": past_key_values,
-                "use_cache": kwargs.get("use_cache"),
-                "position_ids": position_ids,
-                "attention_mask": attention_mask,
-            }
-        )
-        return model_inputs
-
-
-class IPEXBloomForCausalLM(IPEXModelForCausalLM):
-    # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        if past_key_values is not None:
-            past_length = past_key_values[0][0].shape[2]
-            # Some generation methods already pass only the last input ID
-            if input_ids.shape[1] > past_length:
-                remove_prefix_length = past_length
-            else:
-                # Default to old behavior: keep only final ID
-                remove_prefix_length = input_ids.shape[1] - 1
-            input_ids = input_ids[:, remove_prefix_length:]
-
-        attention_mask = kwargs.get("attention_mask", None)
-        use_cache = kwargs.get("use_cache", None)
-
-        # only last token for input_ids if past is not None
-        if past_key_values:
-            # the cache may be in the stardard format (e.g. in contrastive search), convert to bloom's format if needed
-            if past_key_values[0][0].shape[0] == input_ids.shape[0]:
-                past_key_values = self._convert_to_bloom_cache(past_key_values)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": use_cache,
-            "position_ids": None,
-            "attention_mask": attention_mask,
-        }
-
-    # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
-    @staticmethod
-    def _reorder_cache(past: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor) -> Tuple[Tuple[torch.Tensor]]:
-        standardized_past = IPEXModelForCausalLM._convert_to_standard_cache(past, batch_size=len(beam_idx))
-
-        # Get a copy of `beam_idx` on all the devices where we need those indices.
-        device_to_beam_idx = {
-            past_state.device: beam_idx.to(past_state.device) for layer_past in past for past_state in layer_past
-        }
-        reordered_past = tuple(
-            (
-                layer_past[0].index_select(0, device_to_beam_idx[layer_past[0].device]),
-                layer_past[1].index_select(0, device_to_beam_idx[layer_past[0].device]),
-            )
-            for layer_past in standardized_past
-        )
-        return IPEXModelForCausalLM._convert_to_bloom_cache(reordered_past)
-
-    @staticmethod
-    def _convert_to_standard_cache(
-        past_key_value: Tuple[Tuple["torch.Tensor", "torch.Tensor"]], batch_size: int
-    ) -> Tuple[Tuple["torch.Tensor", "torch.Tensor"]]:
-        """
-        Standardizes the format of the cache so as to match most implementations, i.e. to tuple(tuple([batch_size,
-        num_heads, ...]))
-        """
-        batch_size_times_num_heads, head_dim, seq_length = past_key_value[0][0].shape
-        num_heads = batch_size_times_num_heads // batch_size
-        # key: [batch_size * num_heads, head_dim, seq_length] -> [batch_size, num_heads, head_dim, seq_length]
-        # value: [batch_size * num_heads, seq_length, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
-        return tuple(
-            (
-                layer_past[0].view(batch_size, num_heads, head_dim, seq_length),
-                layer_past[1].view(batch_size, num_heads, seq_length, head_dim),
-            )
-            for layer_past in past_key_value
-        )
-
-    @staticmethod
-    def _convert_to_bloom_cache(
-        past_key_value: Tuple[Tuple["torch.Tensor", "torch.Tensor"]]
-    ) -> Tuple[Tuple["torch.Tensor", "torch.Tensor"]]:
-        """
-        Converts the cache to the format expected by Bloom, i.e. to tuple(tuple([batch_size * num_heads, ...]))
-        """
-        batch_size, num_heads, head_dim, seq_length = past_key_value[0][0].shape
-        batch_size_times_num_heads = batch_size * num_heads
-        # key:  [batch_size, num_heads, head_dim, seq_length] -> [batch_size * num_heads, head_dim, seq_length]
-        # value: [batch_size, num_heads, seq_length, head_dim] -> [batch_size * num_heads, seq_length, head_dim]
-        return tuple(
-            (
-                layer_past[0].view(batch_size_times_num_heads, head_dim, seq_length),
-                layer_past[1].view(batch_size_times_num_heads, seq_length, head_dim),
-            )
-            for layer_past in past_key_value
-        )
-
-
-class IPEXOPTForCausalLM(IPEXModelForCausalLM):
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        if past_key_values is not None:
-            past_length = past_key_values[0][0].shape[2]
-            # Some generation methods already pass only the last input ID
-            if input_ids.shape[1] > past_length:
-                remove_prefix_length = past_length
-            else:
-                # Default to old behavior: keep only final ID
-                remove_prefix_length = input_ids.shape[1] - 1
-            input_ids = input_ids[:, remove_prefix_length:]
-
-        attention_mask = kwargs.get("attention_mask", None)
-        use_cache = kwargs.get("use_cache", None)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": use_cache,
-            "position_ids": None,
-            "attention_mask": attention_mask,
-        }
-
-
-class IPEXMPTForCausalLM(IPEXModelForCausalLM):
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        if past_key_values is not None:
-            past_length = past_key_values[0][0].shape[2]
-            # Some generation methods already pass only the last input ID
-            if input_ids.shape[1] > past_length:
-                remove_prefix_length = past_length
-            else:
-                # Default to old behavior: keep only final ID
-                remove_prefix_length = input_ids.shape[1] - 1
-            input_ids = input_ids[:, remove_prefix_length:]
-
-        attention_mask = kwargs.get("attention_mask", None)
-        use_cache = kwargs.get("use_cache", None)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": use_cache,
-            "position_ids": None,
-            "attention_mask": attention_mask,
-        }
-
-
-_MODEL_TYPE_TO_AUTOMODELS = {
-    "bloom": IPEXBloomForCausalLM,
-    "mpt": IPEXMPTForCausalLM,
-    "opt": IPEXOPTForCausalLM,
-    "big-code": IPEXGPTBigCodeForCausalLM,
-}

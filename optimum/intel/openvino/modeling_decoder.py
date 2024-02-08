@@ -27,7 +27,7 @@ from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from optimum.utils import NormalizedConfigManager
+from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
@@ -35,6 +35,7 @@ from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
+from .weight_quantization import OVWeightQuantizationConfig, compress_decoder_weights
 
 
 if is_transformers_version("<", "4.25.0"):
@@ -132,7 +133,6 @@ class OVBaseDecoderModel(OVModel):
         self.stateful = model_has_sinks
         self.main_input_name = "input_ids"
         self.num_pkv = 2
-        self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
@@ -244,6 +244,8 @@ class OVBaseDecoderModel(OVModel):
         use_cache: bool = True,
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
+        load_in_4bit: Optional[bool] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         if config.model_type.replace("_", "-") not in _SUPPORTED_ARCHITECTURES:
@@ -260,9 +262,10 @@ class OVBaseDecoderModel(OVModel):
             if use_cache:
                 task = task + "-with-past"
 
+        # If load_in_8bit is not specified then compression_option should be set to None and will be set by default in main_export depending on the model size
         compression_option = None
-        if load_in_8bit is not None:
-            compression_option = "int8" if load_in_8bit else "fp32"
+        if load_in_8bit is not None or load_in_4bit is not None:
+            compression_option = "fp32"
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
         main_export(
             model_name_or_path=model_id,
@@ -283,7 +286,14 @@ class OVBaseDecoderModel(OVModel):
         config.is_encoder_decoder = False
         config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
-            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=False, stateful=None, **kwargs
+            model_id=save_dir_path,
+            config=config,
+            use_cache=use_cache,
+            load_in_8bit=load_in_8bit,
+            stateful=None,
+            load_in_4bit=load_in_4bit,
+            quantization_config=quantization_config,
+            **kwargs,
         )
 
     def _reshape(
@@ -321,6 +331,13 @@ class OVBaseDecoderModel(OVModel):
         logger.warning("Static shapes are not supported for causal language model.")
         return self
 
+    @property
+    def normalized_config(self):
+        logger.warning(
+            "access to normalized_config attribute is deprecated and will be removed in future versions, please use config"
+        )
+        return NormalizedConfigManager.get_normalized_config_class(self.config.model_type)(self.config)
+
     def compile(self):
         if self.request is None:
             super().compile()
@@ -350,21 +367,20 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             checkpoint="gpt2",
         )
     )
-    def forward(
+    def prepare_inputs(
         self,
         input_ids: torch.LongTensor,
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
-    ) -> CausalLMOutputWithPast:
-        self.compile()
+    ) -> Dict:
         if self.use_cache and past_key_values is not None:
             input_ids = input_ids[:, -1:]
 
         batch_size = input_ids.shape[0]
         if self.config.model_type == "bloom":
-            batch_size *= self.normalized_config.num_attention_heads
+            batch_size *= self.config.num_attention_heads
 
         inputs = {}
         past_len = 0
@@ -442,6 +458,26 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             inputs["beam_idx"] = (
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
             )
+
+        return inputs
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ) -> CausalLMOutputWithPast:
+        self.compile()
+
+        inputs = self.prepare_inputs(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+            **kwargs,
+        )
 
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
@@ -526,6 +562,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
+        load_in_4bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         model_path = Path(model_id)
@@ -543,7 +581,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
-        model = cls.load_model(model_cache_path, load_in_8bit=load_in_8bit)
+        if load_in_8bit and load_in_4bit:
+            raise ValueError("Either load_in_8bit or load_in_4bit should be set to True.")
+        model = cls.load_model(model_cache_path, load_in_8bit=False if load_in_4bit else load_in_8bit)
 
         model_type = config.model_type.replace("_", "-")
         if model_type == "bloom":
@@ -557,7 +597,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         else:
             init_cls = cls
 
-        return init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
+        causal_model = init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
+
+        if load_in_4bit:
+            compress_decoder_weights(causal_model, quantization_config)
+        return causal_model
 
 
 class OVBloomForCausalLM(OVModelForCausalLM):
@@ -592,8 +636,8 @@ class OVBloomForCausalLM(OVModelForCausalLM):
         if self.stateful:
             beam_idx = np.array(beam_idx)
             batch_size = beam_idx.shape[0]
-            indices = np.array(range(batch_size * self.normalized_config.num_attention_heads))
-            indices = indices.reshape([batch_size, self.normalized_config.num_attention_heads])
+            indices = np.array(range(batch_size * self.config.num_attention_heads))
+            indices = indices.reshape([batch_size, self.config.num_attention_heads])
             self.next_beam_idx = np.take(indices, beam_idx, 0).flatten()
             return past_key_values
         else:

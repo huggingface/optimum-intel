@@ -164,6 +164,7 @@ class OVBaseModel(OptimizedModel):
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
+        load_in_4bit: bool = False,
         **kwargs,
     ):
         """
@@ -186,13 +187,18 @@ class OVBaseModel(OptimizedModel):
             force_download (`bool`, defaults to `False`):
                 Whether or not to force the (re-)download of the model weights and configuration files, overriding the
                 cached versions if they exist.
-            file_name(`str`, *optional*):
+            file_name (`str`, *optional*):
                 The file name of the model to load. Overwrites the default file name and allows one to load the model
                 with a different name.
-            local_files_only(`bool`, *optional*, defaults to `False`):
+            local_files_only (`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
+            load_in_8bit (`bool`, *optional*, defaults to `False`):
+                Whether or not to apply 8-bit weight quantization.
+            load_in_4bit (`bool`, *optional*, defaults to `False`):
+                Whether or not to apply 4-bit weight quantization.
         """
-
+        if load_in_4bit:
+            raise ValueError("load_in_4bit is available for OVModelForCausalLM only.")
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
@@ -227,7 +233,7 @@ class OVBaseModel(OptimizedModel):
             model_cache_path = model_path / file_name
         else:
             file_name = Path(file_name)
-            if file_name.suffix != "onnx":
+            if file_name.suffix != ".onnx":
                 model_file_names = [file_name.with_suffix(".bin"), file_name]
             else:
                 model_file_names = [file_name]
@@ -260,6 +266,7 @@ class OVBaseModel(OptimizedModel):
         task: Optional[str] = None,
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
+        load_in_4bit: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -283,9 +290,10 @@ class OVBaseModel(OptimizedModel):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
+        # If load_in_8bit is not specified then compression_option should be set to None and will be set by default in main_export depending on the model size
         compression_option = None
         if load_in_8bit is not None:
-            compression_option = "int8" if load_in_8bit else "fp32"
+            compression_option = "fp32"
 
         main_export(
             model_name_or_path=model_id,
@@ -302,7 +310,7 @@ class OVBaseModel(OptimizedModel):
         )
 
         config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(model_id=save_dir_path, config=config, load_in_8bit=False, **kwargs)
+        return cls._from_pretrained(model_id=save_dir_path, config=config, load_in_8bit=load_in_8bit, **kwargs)
 
     @classmethod
     def _to_load(

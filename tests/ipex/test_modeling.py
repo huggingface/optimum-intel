@@ -16,12 +16,15 @@
 import time
 import unittest
 
+import numpy as np
+import requests
 import torch
 from parameterized import parameterized
+from PIL import Image
 from transformers import (
+    AutoFeatureExtractor,
     AutoModelForCausalLM,
     AutoModelForQuestionAnswering,
-    AutoModelForSequenceClassification,
     AutoTokenizer,
     PretrainedConfig,
     pipeline,
@@ -29,13 +32,23 @@ from transformers import (
 )
 
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
-from optimum.intel import IPEXModelForCausalLM, IPEXModelForQuestionAnswering, IPEXModelForSequenceClassification
+from optimum.intel import (
+    IPEXModel,
+    IPEXModelForAudioClassification,
+    IPEXModelForCausalLM,
+    IPEXModelForImageClassification,
+    IPEXModelForMaskedLM,
+    IPEXModelForQuestionAnswering,
+    IPEXModelForSequenceClassification,
+    IPEXModelForTokenClassification,
+)
 
 
 SEED = 42
 
 MODEL_NAMES = {
     "albert": "hf-internal-testing/tiny-random-albert",
+    "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
     "bert": "hf-internal-testing/tiny-random-bert",
     "bart": "hf-internal-testing/tiny-random-bart",
     "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
@@ -43,6 +56,7 @@ MODEL_NAMES = {
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
+    "convnext": "hf-internal-testing/tiny-random-convnext",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "electra": "hf-internal-testing/tiny-random-electra",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
@@ -51,17 +65,25 @@ MODEL_NAMES = {
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
+    "levit": "hf-internal-testing/tiny-random-LevitModel",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "mistral": "echarlaix/tiny-random-mistral",
+    "mobilenet_v1": "google/mobilenet_v1_0.75_192",
+    "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
+    "mobilevit": "hf-internal-testing/tiny-random-mobilevit",
     "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
     "mt5": "stas/mt5-tiny-random",
+    "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "t5": "hf-internal-testing/tiny-random-t5",
+    "unispeech": "hf-internal-testing/tiny-random-unispeech",
+    "vit": "hf-internal-testing/tiny-random-vit",
+    "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
     "xlm": "hf-internal-testing/tiny-random-xlm",
 }
 
@@ -75,11 +97,10 @@ class Timer(object):
         self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
-class IPEXModelForSequenceClassificationTest(unittest.TestCase):
+class IPEXModelTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
-        "convbert",
         "distilbert",
         "electra",
         "flaubert",
@@ -89,13 +110,15 @@ class IPEXModelForSequenceClassificationTest(unittest.TestCase):
         "xlm",
     )
 
+    IPEX_MODEL_CLASS = IPEXModel
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ipex_model = IPEXModelForSequenceClassification.from_pretrained(model_id, export=True)
+        ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
         self.assertIsInstance(ipex_model.config, PretrainedConfig)
-        transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
         tokens = tokenizer(inputs, return_tensors="pt")
@@ -103,20 +126,34 @@ class IPEXModelForSequenceClassificationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**tokens)
         outputs = ipex_model(**tokens)
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        for output_name in {"logits", "last_hidden_state"}:
+            if output_name in transformers_outputs:
+                self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-4))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        model = IPEXModelForSequenceClassification.from_pretrained(model_id, export=True)
+        model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
+        pipe = pipeline(self.IPEX_MODEL_CLASS.export_feature, model=model, tokenizer=tokenizer)
         text = "This restaurant is awesome"
-        outputs = pipe(text)
+        if self.IPEX_MODEL_CLASS.export_feature == "fill-mask":
+            text += tokenizer.mask_token
 
+        _ = pipe(text)
         self.assertEqual(pipe.device, model.device)
-        self.assertGreaterEqual(outputs[0]["score"], 0.0)
-        self.assertIsInstance(outputs[0]["label"], str)
+
+
+class IPEXModelForSequenceClassificationTest(IPEXModelTest):
+    IPEX_MODEL_CLASS = IPEXModelForTokenClassification
+
+
+class IPEXModelForTokenClassificationTest(IPEXModelTest):
+    IPEX_MODEL_CLASS = IPEXModelForSequenceClassification
+
+
+class IPEXModelForMaskedLMTest(IPEXModelTest):
+    IPEX_MODEL_CLASS = IPEXModelForMaskedLM
 
 
 class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
@@ -245,3 +282,84 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
             f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
         )
+
+
+class IPEXModelForAudioClassificationTest(unittest.TestCase):
+    IPEX_MODEL_CLASS = IPEXModelForAudioClassification
+    SUPPORTED_ARCHITECTURES = (
+        "unispeech",
+        "wav2vec2",
+    )
+
+    def _generate_random_audio_data(self):
+        np.random.seed(10)
+        t = np.linspace(0, 5.0, int(5.0 * 22050), endpoint=False)
+        # generate pure sine wave at 220 Hz
+        audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
+        return audio_data
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
+        self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id)
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        inputs = preprocessor(self._generate_random_audio_data(), return_tensors="pt")
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        outputs = ipex_model(**inputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
+        outputs = pipe([np.random.random(16000)])
+        self.assertEqual(pipe.device, model.device)
+        self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
+
+
+class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = (
+        "beit",
+        # "levit",
+        "mobilenet_v1",
+        "mobilenet_v2",
+        "mobilevit",
+        "resnet",
+        "vit",
+    )
+    IPEX_MODEL_CLASS = IPEXModelForImageClassification
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
+        self.assertIsInstance(ipex_model.config, PretrainedConfig)
+        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(model_id)
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        image = Image.open(requests.get(url, stream=True).raw)
+        inputs = preprocessor(images=image, return_tensors="pt")
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        outputs = ipex_model(**inputs)
+        self.assertIn("logits", outputs)
+        # Compare tensor outputs
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
+        outputs = pipe("http://images.cocodataset.org/val2017/000000039769.jpg")
+        self.assertEqual(pipe.device, model.device)
+        self.assertGreaterEqual(outputs[0]["score"], 0.0)
+        self.assertTrue(isinstance(outputs[0]["label"], str))

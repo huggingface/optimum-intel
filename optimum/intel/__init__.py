@@ -48,8 +48,10 @@ else:
         "IPEXModelForMaskedLM",
         "IPEXModelForTokenClassification",
         "IPEXModelForQuestionAnswering",
+        "IPEXModelForImageClassification",
+        "IPEXModelForAudioClassification",
+        "IPEXModel",
     ]
-
 
 try:
     if not (is_openvino_available() and is_nncf_available()):
@@ -60,9 +62,12 @@ except OptionalDependencyNotAvailable:
         "OVQuantizer",
         "OVTrainer",
         "OVTrainingArguments",
+        "OVWeightQuantizationConfig",
     ]
 else:
-    _import_structure["openvino"].extend(["OVConfig", "OVQuantizer", "OVTrainer", "OVTrainingArguments"])
+    _import_structure["openvino"].extend(
+        ["OVConfig", "OVQuantizer", "OVTrainer", "OVTrainingArguments", "OVWeightQuantizationConfig"]
+    )
 
 try:
     if not (is_openvino_available() and is_diffusers_available()):
@@ -159,7 +164,10 @@ if TYPE_CHECKING:
         from .utils.dummy_ipex_objects import *
     else:
         from .ipex import (
+            IPEXModel,
+            IPEXModelForAudioClassification,
             IPEXModelForCausalLM,
+            IPEXModelForImageClassification,
             IPEXModelForMaskedLM,
             IPEXModelForQuestionAnswering,
             IPEXModelForSequenceClassification,
@@ -171,9 +179,15 @@ if TYPE_CHECKING:
         if not (is_openvino_available() and is_nncf_available()):
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
-        from .utils.dummy_openvino_and_nncf_objects import OVConfig, OVQuantizer, OVTrainer, OVTrainingArguments
+        from .utils.dummy_openvino_and_nncf_objects import (
+            OVConfig,
+            OVQuantizer,
+            OVTrainer,
+            OVTrainingArguments,
+            OVWeightQuantizationConfig,
+        )
     else:
-        from .openvino import OVConfig, OVQuantizer, OVTrainer, OVTrainingArguments
+        from .openvino import OVConfig, OVQuantizer, OVTrainer, OVTrainingArguments, OVWeightQuantizationConfig
 
     try:
         if not (is_openvino_available() and is_diffusers_available()):

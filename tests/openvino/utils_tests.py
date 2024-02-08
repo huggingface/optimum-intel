@@ -103,15 +103,15 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "bert": (70,),
     "roberta": (68,),
     "albert": (84,),
-    "vit": (62,),
+    "vit": (64,),
     "blenderbot": (70,),
     "gpt2": (46,),
-    "wav2vec2": (30,),
+    "wav2vec2": (34,),
     "distilbert": (66,),
     "t5": (64, 104, 84),
-    "stable-diffusion": (148, 8, 8, 64),
-    "stable-diffusion-xl": (296, 8, 8, 66),
-    "stable-diffusion-xl-refiner": (296, 8, 8, 66),
+    "stable-diffusion": (242, 34, 42, 64),
+    "stable-diffusion-xl": (366, 34, 42, 66),
+    "stable-diffusion-xl-refiner": (366, 34, 42, 66),
 }
 
 _ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (64, 477)}

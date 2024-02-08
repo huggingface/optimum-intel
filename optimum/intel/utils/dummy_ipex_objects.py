@@ -22,6 +22,17 @@ class inference_mode(metaclass=DummyObject):
         requires_backends(self, ["ipex"])
 
 
+class IPEXModel(metaclass=DummyObject):
+    _backends = ["ipex"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["ipex"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["ipex"])
+
+
 class IPEXModelForSequenceClassification(metaclass=DummyObject):
     _backends = ["ipex"]
 
@@ -67,6 +78,28 @@ class IPEXModelForCausalLM(metaclass=DummyObject):
 
 
 class IPEXModelForQuestionAnswering(metaclass=DummyObject):
+    _backends = ["ipex"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["ipex"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["ipex"])
+
+
+class IPEXModelForImageClassification(metaclass=DummyObject):
+    _backends = ["ipex"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["ipex"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["ipex"])
+
+
+class IPEXModelForAudioClassification(metaclass=DummyObject):
     _backends = ["ipex"]
 
     def __init__(self, *args, **kwargs):
