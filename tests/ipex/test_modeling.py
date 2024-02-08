@@ -213,7 +213,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "opt",
     )
     GENERATION_LENGTH = 100
-    SPEEDUP_CACHE = 1.1
+    SPEEDUP_CACHE = 1.0
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):

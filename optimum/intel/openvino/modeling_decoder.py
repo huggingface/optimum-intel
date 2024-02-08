@@ -25,23 +25,17 @@ from openvino.preprocess import PrePostProcessor
 from openvino.runtime import Core, Tensor, Type
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
+from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
-from ..utils.import_utils import is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 from .weight_quantization import OVWeightQuantizationConfig, compress_decoder_weights
-
-
-if is_transformers_version("<", "4.25.0"):
-    from transformers.generation_utils import GenerationMixin
-else:
-    from transformers.generation import GenerationMixin
 
 
 logger = logging.getLogger(__name__)
