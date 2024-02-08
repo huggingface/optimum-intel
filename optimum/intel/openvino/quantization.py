@@ -223,6 +223,10 @@ class OVQuantizer(OptimumQuantizer):
                     "`calibration_dataset` is needed to compute the activations range during the calibration step and was not provided. "
                     "In case you only want to apply quantization on the weights, please set `weights_only=True`."
                 )
+        quantization_config = kwargs.pop("quantization_config", None)
+        if quantization_config is not None:
+            logger.warning("The argument `quantization_config` is deprecated, and will be removed in optimum-intel v1.6.0, please use `ov_config` instead")
+        ov_config = ov_config or quantization_config
 
         if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
             self._quantize_ovcausallm(
