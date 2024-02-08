@@ -262,6 +262,7 @@ class OVBaseDecoderModel(OVModel):
             if use_cache:
                 task = task + "-with-past"
 
+        # If load_in_8bit is not specified then compression_option should be set to None and will be set by default in main_export depending on the model size
         compression_option = None
         if load_in_8bit is not None or load_in_4bit is not None:
             compression_option = "fp32"

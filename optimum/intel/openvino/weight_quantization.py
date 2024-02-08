@@ -59,7 +59,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
 
     def __init__(
         self,
-        mode=nncf.CompressWeightsMode.INT4_ASYM,
+        mode=None,
         tokenizer: Any = None,
         dataset: Optional[Union[nncf.Dataset, str]] = None,
         ratio: Optional[float] = None,

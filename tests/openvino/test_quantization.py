@@ -155,6 +155,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     )
 
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 64, 365),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 6, 379),)
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS = (
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 16, 136),
     )
@@ -287,9 +288,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
             ov_config = OVConfig(
-                weight_quantization_config=OVWeightQuantizationConfig(
-                    mode=nncf.CompressWeightsMode.INT4_SYM, ratio=0.8
-                )
+                quantization_config=OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT4_SYM, ratio=0.8)
             )
             quantizer.quantize(
                 save_directory=tmp_dir,
@@ -330,25 +329,43 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
-        model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=False)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=False)
 
-        if model.export_feature.startswith("text2text-generation"):
-            models = [model.encoder, model.decoder, model.decoder_with_past]
-        elif model.export_feature.startswith("stable-diffusion"):
-            models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
-        else:
-            models = [model]
+            if model.export_feature.startswith("text2text-generation"):
+                models = [model.encoder, model.decoder, model.decoder_with_past]
+            elif model.export_feature.startswith("stable-diffusion"):
+                models = [model.unet, model.vae_encoder, model.vae_decoder]
+                models.append(
+                    model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2
+                )
+            else:
+                models = [model]
 
-        expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
-        for i, model in enumerate(models):
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int8[i], num_int8)
+            expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
+            for i, model in enumerate(models):
+                _, num_int8, _ = get_num_quantized_nodes(model)
+                self.assertEqual(expected_ov_int8[i], num_int8)
+            model.save_pretrained(tmp_dir)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
+    def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_id = MODEL_NAMES[model_type]
+            model = model_cls.from_pretrained(model_id, export=True, load_in_4bit=True)
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            _, num_int8, num_int4 = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int4, num_int4)
+            self.assertEqual(expected_ov_int8, num_int8)
+            model.save_pretrained(tmp_dir)
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
-    def test_ovmodel_4bit_auto_compression(self, model_cls, model_id, quantization_config, expected_ov_int4):
-        task = model_cls.export_feature
-
+    def test_ovmodel_4bit_auto_compression_with_config(
+        self, model_cls, model_id, quantization_config, expected_ov_int4
+    ):
         with tempfile.TemporaryDirectory() as tmp_dir:
             model = model_cls.from_pretrained(
                 model_id, export=True, load_in_4bit=True, quantization_config=quantization_config
@@ -359,6 +376,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             _, num_int4, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int4, num_int4)
+            model.save_pretrained(tmp_dir)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS)
     def test_ovmodel_4bit_auto_compression_with_custom_dataset(

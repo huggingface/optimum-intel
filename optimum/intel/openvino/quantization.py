@@ -49,7 +49,7 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
 )
-from .weight_quantization import compress_decoder_weights
+from .weight_quantization import OVWeightQuantizationConfig, compress_decoder_weights
 
 
 COMPRESSION_OPTIONS = {
@@ -318,12 +318,14 @@ class OVQuantizer(OptimumQuantizer):
         save_directory.mkdir(parents=True, exist_ok=True)
 
         if weights_only:
-            quantization_config = None if ov_config is None else ov_config.weight_quantization_config
+            quantization_config = None if ov_config is None else ov_config.quantization_config
             if quantization_config is None:
                 # Use default 8-bit compression
+                quantization_config = OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT8_SYM)
                 self.model.model = nncf.compress_weights(self.model.model)
             else:
                 compress_decoder_weights(self.model, quantization_config)
+
             self.model.save_pretrained(save_directory)
             return
 
