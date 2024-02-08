@@ -88,6 +88,7 @@ def _save_model(model, path: str, compression_option: Optional[str] = None, comp
                 "ratio": compression_ratio,
             },
         }
+
         model = nncf.compress_weights(model, **COMPRESSION_OPTIONS[compression_option])
 
     compress_to_fp16 = compression_option == "fp16"

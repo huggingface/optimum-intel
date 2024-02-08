@@ -253,7 +253,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
         compression_option = None
         if load_in_8bit is not None:
-            compression_option = "int8" if load_in_8bit else "fp32"
+            compression_option = "fp32"
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -270,7 +270,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
         config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
-            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=False, **kwargs
+            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=load_in_8bit, **kwargs
         )
 
     def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
