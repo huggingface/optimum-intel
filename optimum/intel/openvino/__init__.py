@@ -42,7 +42,6 @@ if is_nncf_available():
     from .training_args import OVTrainingArguments
     from .weight_quantization import OVWeightQuantizationConfig
 
-from .convert import export_from_model
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
