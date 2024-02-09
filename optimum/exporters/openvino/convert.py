@@ -588,40 +588,6 @@ def export_from_model(
     else:
         model_type = model.config.model_type.replace("_", "-")
 
-    # Patch the modules to export of GPTQ models w/o GPU
-    do_gptq_patching = False
-    try:
-        config_dict = model.config.to_dict()
-        quantization_config = config_dict.get("quantization_config", None)
-        do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
-    except Exception:
-        pass
-
-    if do_gptq_patching:
-        import torch
-
-        torch.set_default_dtype(torch.float32)
-        orig_cuda_check = torch.cuda.is_available
-        torch.cuda.is_available = lambda: True
-
-        from optimum.gptq import GPTQQuantizer
-
-        orig_post_init_model = GPTQQuantizer.post_init_model
-
-        def post_init_model(self, model):
-            from auto_gptq import exllama_set_max_input_length
-
-            class StoreAttr(object):
-                pass
-
-            model.quantize_config = StoreAttr()
-            model.quantize_config.desc_act = self.desc_act
-            if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
-                model = exllama_set_max_input_length(model, self.max_input_length)
-            return model
-
-        GPTQQuantizer.post_init_model = post_init_model
-
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
     if task is not None:
@@ -755,11 +721,6 @@ def export_from_model(
         opset=opset,
         model_kwargs=model_kwargs,
     )
-
-    # Unpatch modules after GPTQ export
-    if do_gptq_patching:
-        torch.cuda.is_available = orig_cuda_check
-        GPTQQuantizer.post_init_model = orig_post_init_model
 
 
 def export_tokenizer(
