@@ -1036,7 +1036,7 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = OVModelForCTC.from_pretrained(MODEL_NAMES["t5"], export=True)
 
-        self.assertIn("Unrecognized configuration class", str(context.exception))
+        self.assertIn("only supports the tasks", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1088,7 +1088,7 @@ class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = OVModelForAudioXVector.from_pretrained(MODEL_NAMES["t5"], export=True)
 
-        self.assertIn("Unrecognized configuration class", str(context.exception))
+        self.assertIn("only supports the tasks", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1142,7 +1142,7 @@ class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = OVModelForAudioFrameClassification.from_pretrained(MODEL_NAMES["t5"], export=True)
 
-        self.assertIn("Unrecognized configuration class", str(context.exception))
+        self.assertIn("only supports the tasks", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
