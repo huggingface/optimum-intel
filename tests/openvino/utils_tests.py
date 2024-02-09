@@ -49,6 +49,7 @@ MODEL_NAMES = {
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "longt5": "hf-internal-testing/tiny-random-longt5",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "llama_gptq": "hf-internal-testing/TinyLlama-1.1B-Chat-v0.3-GPTQ",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "opt125m": "facebook/opt-125m",

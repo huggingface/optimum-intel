@@ -482,8 +482,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        # "marian", # TODO : enable it back with openvino 2023.3.0
-        # "mistral",
+        "llama_gptq",
+        "marian",
+        "mistral",
         "mpt",
         "opt",
         "pegasus",
@@ -494,6 +495,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+
+        if "gptq" in model_arch:
+            self.skipTest("Unsupported GPTQ model")
+
         set_seed(SEED)
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
