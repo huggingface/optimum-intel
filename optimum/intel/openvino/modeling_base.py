@@ -22,21 +22,17 @@ import openvino
 from huggingface_hub import hf_hub_download
 from openvino import Core, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from transformers import PretrainedConfig
+from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
+from transformers.generation import GenerationMixin
 
 from optimum.exporters.onnx import OnnxConfig
 from optimum.modeling_base import OptimizedModel
 
 from ...exporters.openvino import export, main_export
-from ..utils.import_utils import is_nncf_available, is_transformers_version
+from ..utils.import_utils import is_nncf_available
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, _print_compiled_model_properties
 
-
-if is_transformers_version("<", "4.25.0"):
-    from transformers.generation_utils import GenerationMixin
-else:
-    from transformers.generation import GenerationMixin
 
 core = Core()
 
@@ -92,12 +88,7 @@ class OVBaseModel(OptimizedModel):
         if enable_compilation:
             self.compile()
 
-        if is_transformers_version("<=", "4.25.1"):
-            self.generation_config = None
-        else:
-            from transformers import GenerationConfig
-
-            self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
+        self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
     @staticmethod
     def load_model(file_name: Union[str, Path], load_in_8bit: bool = False):
