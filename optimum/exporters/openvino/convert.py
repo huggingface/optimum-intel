@@ -33,7 +33,8 @@ from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
-from optimum.utils import is_diffusers_available
+from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
+from optimum.utils.save_utils import maybe_save_preprocessors
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version
 from .model_patcher import patch_model_with_bettertransformer
