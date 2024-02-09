@@ -16,8 +16,9 @@ import functools
 import gc
 import inspect
 import logging
+import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers import T5Tokenizer, T5TokenizerFast
 from transformers.utils import is_tf_available, is_torch_available
@@ -26,6 +27,7 @@ from openvino.runtime import PartialShape, save_model
 from openvino.runtime.exceptions import OVTypeError
 from openvino.runtime.utils.types import get_element_type
 from openvino.tools.ovc import convert_model
+from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
@@ -35,14 +37,25 @@ from optimum.utils import is_diffusers_available
 
 from ...intel.utils.import_utils import is_nncf_available, is_optimum_version
 from .model_patcher import patch_model_with_bettertransformer
-from .stateful import ensure_stateful_is_available, patch_stateful
+from .stateful import ensure_export_task_support_stateful, ensure_stateful_is_available, patch_stateful
 from .utils import (
+    _MAX_UNCOMPRESSED_SIZE,
     OV_XML_FILE_NAME,
     clear_class_registry,
     flattenize_inputs,
     get_input_shapes,
     remove_none_from_dummy_inputs,
 )
+
+
+if is_optimum_version(">=", "1.17.0"):
+    from optimum.exporters.onnx.utils import _get_submodels_and_onnx_configs
+
+else:
+    from optimum.exporters.onnx.__main__ import _get_submodels_and_onnx_configs
+
+
+UNSUPPORTED_TOKENIZER_CLASSES = (T5Tokenizer, T5TokenizerFast)
 
 
 logger = logging.getLogger(__name__)
@@ -540,10 +553,212 @@ def export_models(
     return outputs
 
 
-UNSUPPORTED_TOKENIZER_CLASSES = (
-    T5Tokenizer,
-    T5TokenizerFast,
-)
+def export_from_model(
+    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    output: Union[str, Path],
+    task: Optional[str] = None,
+    compression_option: Optional[str] = None,
+    compression_ratio: Optional[float] = None,
+    stateful: bool = True,
+    opset: Optional[int] = None,
+    model_kwargs: Optional[Dict[str, Any]] = None,
+    custom_onnx_configs: Optional[Dict[str, "OnnxConfig"]] = None,
+    fn_get_submodels: Optional[Callable] = None,
+    preprocessors: List = None,
+    device: str = "cpu",
+    **kwargs_shapes,
+):
+    if (
+        compression_option is not None
+        and compression_option != "fp16"
+        and compression_option != "fp32"
+        and not is_nncf_available()
+    ):
+        raise ImportError(
+            f"Compression of the weights to {compression_option} requires nncf, please install it with `pip install nncf`"
+        )
+
+    model_kwargs = model_kwargs or {}
+    library_name = TasksManager._infer_library_from_model(model)
+    TasksManager.standardize_model_attributes(model, library_name)
+
+    if hasattr(model.config, "export_model_type"):
+        model_type = model.config.export_model_type.replace("_", "-")
+    else:
+        model_type = model.config.model_type.replace("_", "-")
+
+    # Patch the modules to export of GPTQ models w/o GPU
+    do_gptq_patching = False
+    try:
+        config_dict = model.config.to_dict()
+        quantization_config = config_dict.get("quantization_config", None)
+        do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
+    except Exception:
+        pass
+
+    if do_gptq_patching:
+        import torch
+
+        torch.set_default_dtype(torch.float32)
+        orig_cuda_check = torch.cuda.is_available
+        torch.cuda.is_available = lambda: True
+
+        from optimum.gptq import GPTQQuantizer
+
+        orig_post_init_model = GPTQQuantizer.post_init_model
+
+        def post_init_model(self, model):
+            from auto_gptq import exllama_set_max_input_length
+
+            class StoreAttr(object):
+                pass
+
+            model.quantize_config = StoreAttr()
+            model.quantize_config.desc_act = self.desc_act
+            if self.desc_act and not self.disable_exllama and self.max_input_length is not None:
+                model = exllama_set_max_input_length(model, self.max_input_length)
+            return model
+
+        GPTQQuantizer.post_init_model = post_init_model
+
+    custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
+
+    if task is not None:
+        task = TasksManager.map_from_synonym(task)
+    else:
+        try:
+            task = TasksManager._infer_task_from_model_or_model_class(model=model)
+        except (ValueError, KeyError) as e:
+            raise RuntimeError(
+                f"The model task could not be automatically inferred in `onnx_export_from_model`. Please provide the argument `task` with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+            )
+
+        if (
+            not custom_architecture
+            and library_name != "diffusers"
+            and task + "-with-past"
+            in TasksManager.get_supported_tasks_for_model_type(model_type, "onnx", library_name=library_name)
+        ):
+            # -with-past is the default.
+            task = task + "-with-past"
+
+        logger.info(f"Automatic task detection to: {task}.")
+
+    stateful = stateful and ensure_export_task_support_stateful(task)
+
+    # TODO: support onnx_config.py in the model repo
+    if custom_architecture and custom_onnx_configs is None:
+        raise ValueError(
+            f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom onnx configuration was passed as `custom_onnx_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the model type {model_type} to be supported natively in the ONNX export."
+        )
+
+    if task.startswith("text-generation") and model.config.is_encoder_decoder:
+        raise ValueError(
+            f"model.config.is_encoder_decoder is True and task is `{task}`, which are incompatible. If the task was auto-inferred, please fill a bug report"
+            f"at https://github.com/huggingface/optimum, if --task was explicitely passed, make sure you selected the right task for the model,"
+            f" referring to `optimum.exporters.tasks.TaskManager`'s `_TRANSFORMERS_TASKS_TO_MODEL_LOADERS`."
+        )
+    if library_name != "diffusers" and model_type in TasksManager._UNSUPPORTED_CLI_MODEL_TYPE:
+        raise ValueError(
+            f"{model_type} is not supported yet. Only {list(TasksManager._SUPPORTED_CLI_MODEL_TYPE.keys())} are supported. "
+            f"If you want to support {model_type} please propose a PR or open up an issue."
+        )
+
+    output = Path(output)
+    if not output.exists():
+        output.mkdir(parents=True)
+
+    # Get the shapes to be used to generate dummy inputs
+    input_shapes = {}
+    for input_name in DEFAULT_DUMMY_SHAPES.keys():
+        input_shapes[input_name] = (
+            kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
+        )
+
+    onnx_config, models_and_onnx_configs = _get_submodels_and_onnx_configs(
+        model=model,
+        task=task,
+        monolith=False,
+        custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
+        custom_architecture=custom_architecture,
+        fn_get_submodels=fn_get_submodels,
+        preprocessors=preprocessors,
+        library_name=library_name,
+        model_kwargs=model_kwargs,
+        _variant="default",
+        legacy=False,
+    )
+
+    if compression_option is None:
+        # TODO : sentence transformers compatibility
+        num_parameters = model.num_parameters() if not library_name != "diffusers" else model.unet.num_parameters()
+        if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+            if is_nncf_available():
+                compression_option = "int8"
+                logger.info("The model weights will be quantized to int8.")
+            else:
+                logger.warning(
+                    "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
+                    "please install it with `pip install nncf`"
+                )
+
+    if library_name != "diffusers":
+        # Saving the model config and preprocessor as this is needed sometimes.
+        model.config.save_pretrained(output)
+        generation_config = getattr(model, "generation_config", None)
+        if generation_config is not None:
+            generation_config.save_pretrained(output)
+
+        model_name_or_path = model.config._name_or_path
+        maybe_save_preprocessors(model_name_or_path, output)
+
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_onnx_configs.keys()]
+
+    else:
+        # save the subcomponent configuration
+        for model_name in models_and_onnx_configs:
+            subcomponent = models_and_onnx_configs[model_name][0]
+            if hasattr(subcomponent, "save_config"):
+                subcomponent.save_config(output / model_name)
+            elif hasattr(subcomponent, "config") and hasattr(subcomponent.config, "save_pretrained"):
+                subcomponent.config.save_pretrained(output / model_name)
+
+        files_subpaths = [os.path.join(name_dir, OV_XML_FILE_NAME) for name_dir in models_and_onnx_configs]
+
+        # Saving the additional components needed to perform inference.
+        model.scheduler.save_pretrained(output.joinpath("scheduler"))
+
+        feature_extractor = getattr(model, "feature_extractor", None)
+        if feature_extractor is not None:
+            feature_extractor.save_pretrained(output.joinpath("feature_extractor"))
+
+        tokenizer = getattr(model, "tokenizer", None)
+        if tokenizer is not None:
+            tokenizer.save_pretrained(output.joinpath("tokenizer"))
+
+        tokenizer_2 = getattr(model, "tokenizer_2", None)
+        if tokenizer_2 is not None:
+            tokenizer_2.save_pretrained(output.joinpath("tokenizer_2"))
+
+        model.save_config(output)
+
+    export_models(
+        models_and_onnx_configs=models_and_onnx_configs,
+        output_dir=output,
+        output_names=files_subpaths,
+        input_shapes=input_shapes,
+        device=device,
+        compression_option=compression_option,
+        compression_ratio=compression_ratio,
+        stateful=stateful,
+        opset=opset,
+        model_kwargs=model_kwargs,
+    )
+
+    # Unpatch modules after GPTQ export
+    if do_gptq_patching:
+        torch.cuda.is_available = orig_cuda_check
+        GPTQQuantizer.post_init_model = orig_post_init_model
 
 
 def export_tokenizer(
