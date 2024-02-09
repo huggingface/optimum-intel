@@ -49,7 +49,7 @@ from .utils import (
 )
 
 
-if is_optimum_version(">=", "1.17.0"):
+if is_optimum_version(">=", "1.16.99"):
     from optimum.exporters.onnx.utils import _get_submodels_and_onnx_configs
 
 else:
@@ -692,7 +692,7 @@ def export_from_model(
 
     if compression_option is None:
         # TODO : sentence transformers compatibility
-        num_parameters = model.num_parameters() if not library_name != "diffusers" else model.unet.num_parameters()
+        num_parameters = model.num_parameters() if library_name != "diffusers" else model.unet.num_parameters()
         if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
             if is_nncf_available():
                 compression_option = "int8"
