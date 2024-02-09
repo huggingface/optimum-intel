@@ -13,7 +13,7 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum>=1.14.0",
+    "optimum>=1.14.0",  # TODO : 1.17.0
     "transformers>=4.26.0",
     "datasets>=1.4.0",
     "sentencepiece",
@@ -33,6 +33,7 @@ TESTS_REQUIRE = [
     "rjieba",
     "timm",
     "invisible-watermark>=0.2.0",
+    "auto-gptq",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
