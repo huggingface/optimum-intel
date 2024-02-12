@@ -81,11 +81,9 @@ class ExportModelTest(unittest.TestCase):
             model = model_class(f"hf_hub:{model_name}", pretrained=True, exportable=True)
             TasksManager.standardize_model_attributes(model_name, model, library_name=library_name)
         else:
-            config = AutoConfig.from_pretrained(model_name)
-            model_class = TasksManager.get_model_class_for_task(task, model_type=config.model_type.replace("_", "-"))
-            model = model_class.from_pretrained(model_name, **loading_kwargs)
+            model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
 
-        if model.config.model_type == "pix2struct":
+        if getattr(model.config, "model_type", None) == "pix2struct":
             preprocessors = maybe_load_preprocessors(model_name)
         else:
             preprocessors = None
@@ -110,7 +108,7 @@ class ExportModelTest(unittest.TestCase):
                     self.assertEqual(ov_model.use_cache, use_cache)
 
                 if task == "text-generation":
-                    self.assertEqual(ov_model.stateful, stateful)
+                    self.assertEqual(ov_model.stateful, stateful and use_cache)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):
