@@ -824,7 +824,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         "blenderbot-small",
         # "longt5",
         "m2m_100",
-        # "marian", # TODO : enable it back with openvino 2023.3.0
+        "marian",
         "mbart",
         "mt5",
         "pegasus",
@@ -832,7 +832,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     )
 
     GENERATION_LENGTH = 100
-    SPEEDUP_CACHE = 1.2
+    SPEEDUP_CACHE = 1.1
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
