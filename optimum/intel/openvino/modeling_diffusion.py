@@ -28,8 +28,8 @@ from diffusers import (
     LMSDiscreteScheduler,
     PNDMScheduler,
     StableDiffusionPipeline,
-    StableDiffusionXLPipeline,
     StableDiffusionXLImg2ImgPipeline,
+    StableDiffusionXLPipeline,
 )
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available

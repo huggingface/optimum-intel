@@ -25,6 +25,7 @@ from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTE
 from optimum.exporters.openvino import export_from_model
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
+    OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
@@ -39,7 +40,6 @@ from optimum.intel import (
     OVStableDiffusionPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
     OVStableDiffusionXLPipeline,
-    OVLatentConsistencyModelPipeline,
 )
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.utils.save_utils import maybe_load_preprocessors
