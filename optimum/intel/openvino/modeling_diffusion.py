@@ -29,6 +29,7 @@ from diffusers import (
     PNDMScheduler,
     StableDiffusionPipeline,
     StableDiffusionXLPipeline,
+    StableDiffusionXLImg2ImgPipeline,
 )
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available
@@ -903,6 +904,8 @@ class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusi
 
 
 class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLImg2ImgPipelineMixin):
+    auto_model_class = StableDiffusionXLImg2ImgPipeline
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
