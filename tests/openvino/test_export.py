@@ -39,6 +39,7 @@ from optimum.intel import (
     OVStableDiffusionPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
     OVStableDiffusionXLPipeline,
+    OVLatentConsistencyModelPipeline,
 )
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.utils.save_utils import maybe_load_preprocessors
@@ -61,6 +62,7 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion": OVStableDiffusionPipeline,
         "stable-diffusion-xl": OVStableDiffusionXLPipeline,
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
+        "latent-consistency": OVLatentConsistencyModelPipeline,
     }
 
     def _openvino_export(
