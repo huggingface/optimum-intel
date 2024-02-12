@@ -233,6 +233,7 @@ def main_export(
         trust_remote_code=trust_remote_code,
         framework=framework,
         device=device,
+        library_name=library_name,
         **loading_kwargs,
     )
 
