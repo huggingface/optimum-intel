@@ -497,7 +497,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
 
         if "gptq" in model_arch:
-            self.skipTest("Unsupported GPTQ model")
+            self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
 
         set_seed(SEED)
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
