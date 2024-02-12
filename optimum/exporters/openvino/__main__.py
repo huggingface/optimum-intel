@@ -136,7 +136,6 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_onnx/")
     ```
     """
-
     original_task = task
     task = TasksManager.map_from_synonym(task)
     framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)

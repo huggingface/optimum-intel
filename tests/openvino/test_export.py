@@ -19,7 +19,6 @@ from tempfile import TemporaryDirectory
 from typing import Optional
 
 from parameterized import parameterized
-from transformers import AutoConfig
 from utils_tests import MODEL_NAMES
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
