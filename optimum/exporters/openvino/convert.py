@@ -657,8 +657,11 @@ def export_from_model(
     )
 
     if compression_option is None:
-        # TODO : sentence transformers compatibility
-        num_parameters = model.num_parameters() if library_name != "diffusers" else model.unet.num_parameters()
+        if library_name == "diffusers":
+            num_parameters = model.unet.num_parameters()
+        else:
+            num_parameters = sum(param.numel() for param in list(model.parameters()) if param.requires_grad)
+
         if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
             if is_nncf_available():
                 compression_option = "int8"
