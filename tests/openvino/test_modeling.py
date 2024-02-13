@@ -426,6 +426,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "bert",
         "distilbert",
         "roberta",
+        "sentence-transformers-bert",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
