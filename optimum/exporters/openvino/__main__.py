@@ -65,6 +65,7 @@ def main_export(
     compression_ratio: Optional[float] = None,
     stateful: bool = True,
     convert_tokenizer: bool = False,
+    library_name: Optional[str] = None,
     **kwargs_shapes,
 ):
     """
@@ -139,7 +140,9 @@ def main_export(
     original_task = task
     task = TasksManager.map_from_synonym(task)
     framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
-    library_name = TasksManager.infer_library_from_model(model_name_or_path, subfolder=subfolder)
+    library_name = TasksManager.infer_library_from_model(
+        model_name_or_path, subfolder=subfolder, library_name=library_name
+    )
 
     if task == "auto":
         try:

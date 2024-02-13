@@ -374,7 +374,6 @@ def export_pytorch(
         try:
             with config.patch_model_for_export(model, model_kwargs=model_kwargs):
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
-
                 inputs = config.ordered_inputs(model)
                 input_names = list(inputs.keys())
                 output_names = list(config.outputs.keys())
