@@ -371,62 +371,23 @@ def export_pytorch(
             dummy_inputs = tree_map(
                 lambda value: value.to(device) if isinstance(value, torch.Tensor) else value, dummy_inputs
             )
-        check_dummy_inputs_are_allowed(model, dummy_inputs)
-        inputs = config.ordered_inputs(model)
-        input_names = list(inputs.keys())
-        output_names = list(config.outputs.keys())
-        if hasattr(model, "forward"):
-            sig = inspect.signature(model.forward)
-        else:
-            sig = inspect.signature(model.call)
 
-        dummy_inputs, dict_inputs = remove_none_from_dummy_inputs(dummy_inputs)
-        input_info = get_input_shapes(dummy_inputs, inputs)
-        custom_patcher = type(config).patch_model_for_export != OnnxConfig.patch_model_for_export
-        patch_model_forward = False
-        orig_forward = model.forward
+        dummy_inputs = config.rename_ambiguous_inputs(dummy_inputs)
+
         try:
-            # TorchScript used behind OpenVINO conversion. Optimum supports only return_dict=True models for patching,
-            # while TorchScript do not support dictionary with values of mixed types (e.g. Tensor and None) in model input/output
-            # To handle it, additional wrapper on patcher forward applied.
-            # model.config.torchscript = True can not be used for patching, because it overrides return_dict to Flase
-            if custom_patcher or dict_inputs:
-                patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
-                # DecoderModelPatcher does not override model forward in optimum < 1.15
-                if (
-                    isinstance(patcher, DecoderModelPatcher) and is_optimum_version("<", "1.15.0")
-                ) or patcher.orig_forward_name != "forward":
-                    patch_model_forward = True
-                    patched_forward = model.forward
-                else:
-                    patched_forward = patcher.patched_forward
+            with config.patch_model_for_export(model, model_kwargs=model_kwargs):
+                check_dummy_inputs_are_allowed(model, dummy_inputs)
 
-                @functools.wraps(patched_forward)
-                def ts_patched_forward(*args, **kwargs):
-                    for i in range(len(dict_inputs)):
-                        input_name = dict_inputs[i][0]
-                        keys = dict_inputs[i][1]
-                        tuple_input = kwargs[input_name]
-                        input_dict = dict(zip(keys, tuple_input))
-                        kwargs[input_name] = input_dict
-                    outputs = patched_forward(*args, **kwargs)
-                    return tuple(outputs.values())
+                inputs = config.ordered_inputs(model)
+                input_names = list(inputs.keys())
+                output_names = list(config.outputs.keys())
+                input_info = get_input_shapes(dummy_inputs, inputs)
 
-                if not patch_model_forward:
-                    patcher.patched_forward = ts_patched_forward
-                else:
-                    model.forward = ts_patched_forward
-                with patcher:
-                    ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
-            else:
-                model.config.torchscript = True
-                model.config.retun_dict = False
                 ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
 
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
-            if patch_model_forward:
-                model.forward = orig_forward
+
             if stateful:
                 # cannot raise because stateful is enabled by default and it would break backward compatibility for models that couldn't convert to OV directly
                 # TODO: Implement stateful for ONNX path as well, not doing it right now because of lack of validation
@@ -446,10 +407,8 @@ def export_pytorch(
                 compression_option=compression_option,
                 compression_ratio=compression_ratio,
             )
-        # return original forward
-        if patch_model_forward:
-            model.forward = orig_forward
-        ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
+
+        ordered_dummy_inputs = {param: dummy_inputs[param] for param in inputs if param in dummy_inputs}
         ordered_input_names = list(inputs)
         flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
         ov_model.validate_nodes_and_infer_types()
