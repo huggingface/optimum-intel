@@ -24,11 +24,10 @@ import torch
 import transformers
 from accelerate.data_loader import DataLoaderStateMixin
 from datasets import Dataset, load_dataset
-from nncf import NNCFConfig, CompressWeightsMode, SensitivityMetric, IgnoredScope
+from nncf import CompressWeightsMode, IgnoredScope, NNCFConfig, SensitivityMetric
 from nncf.torch import create_compressed_model, register_default_init_args, register_module
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
-
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, Tensor
 from torch.utils._pytree import tree_map
@@ -53,7 +52,6 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
 )
-
 
 
 # TODO : remove as unused
@@ -612,7 +610,6 @@ def _int4_weight_only_quantization(
             dataset = get_dataset(config.dataset, tokenizer, seqlen=32)
             dataset = prepare_dataset(dataset)
             dataset = nncf.Dataset(dataset, lambda x: model.prepare_inputs(**x))
-
 
         sensitivity_metric = None
         if isinstance(config.sensitivity_metric, str):

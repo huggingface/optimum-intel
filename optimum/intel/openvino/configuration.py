@@ -15,7 +15,6 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
-import nncf
 import torch
 from transformers import PretrainedConfig
 from transformers.utils.quantization_config import QuantizationConfigMixin
@@ -76,7 +75,6 @@ INT8_WEIGHT_COMPRESSION_CONFIG = {
     },
     "overflow_fix": "disable",
 }
-
 
 
 DEFAULT_4BIT_CONFIGS = {
@@ -215,7 +213,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
         self.ignored_scope = ignored_scope
-        self.quant_method = "default" # TODO : enable AWQ after nncf v2.9.0 release
+        self.quant_method = "default"  # TODO : enable AWQ after nncf v2.9.0 release
         self.post_init()
 
     def post_init(self):
@@ -232,7 +230,6 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
                     f"""You have entered a string value for dataset. You can only choose between
                     ['wikitext2','c4','c4-new','ptb','ptb-new'], but we found {self.dataset}"""
                 )
-
 
         if self.bits not in [4, 8]:
             raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
