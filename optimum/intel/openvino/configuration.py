@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import nncf
 import torch
-from transformers import AutoTokenizer, PretrainedConfig
+from transformers import PretrainedConfig
 from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
@@ -231,4 +231,3 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
 
 def _check_default_4bit_configs(config: PretrainedConfig):
     return DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
-

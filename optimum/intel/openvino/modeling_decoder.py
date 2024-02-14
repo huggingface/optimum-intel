@@ -33,10 +33,9 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
-from .quantization import compress_decoder_weights 
 from .configuration import OVWeightQuantizationConfig
-
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
+from .quantization import compress_decoder_weights
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
 

@@ -580,7 +580,6 @@ class OVQuantizer(OptimumQuantizer):
         return dataset.remove_columns(ignored_columns)
 
 
-
 def compress_decoder_weights(model, quantization_config: Union[OVWeightQuantizationConfig, Dict] = None):
     quantization_config = quantization_config or _check_default_4bit_configs(model.config)
     ov_model = model.model
@@ -615,6 +614,6 @@ def compress_decoder_weights(model, quantization_config: Union[OVWeightQuantizat
             ignored_scope=config.ignored_scope,
             dataset=dataset,
         )
-    else:  
+    else:
         # Data-free weight-only quantization to asymmetric INT4
         model.model = nncf.compress_weights(ov_model, mode=nncf.CompressWeightsMode.INT4_ASYM)
