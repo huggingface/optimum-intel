@@ -32,7 +32,7 @@ from openvino._offline_transformations import compress_quantize_weights_transfor
 from openvino.runtime import Core, Tensor
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
-from transformers import DataCollator, PreTrainedModel, default_data_collator
+from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
@@ -46,7 +46,6 @@ from ..utils.constant import _TASK_ALIASES
 from ..utils.modeling_utils import get_model_device
 from .configuration import OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
 from .modeling_base import OVBaseModel
-from .modeling_decoder import OVBaseDecoderModel
 from .utils import (
     MAX_ONNX_OPSET,
     MIN_ONNX_QDQ_OPSET,
@@ -233,27 +232,29 @@ class OVQuantizer(OptimumQuantizer):
             )
         ov_config = ov_config or quantization_config
 
-        if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
-            self._quantize_ovcausallm(
-                calibration_dataset,
-                save_directory,
-                batch_size,
-                data_collator,
-                remove_unused_columns,
-                weights_only,
-                ov_config,
-                **kwargs,
-            )
-        elif isinstance(self.model, OVBaseModel):
-            self._quantize_ovbasemodel(
-                calibration_dataset,
-                save_directory,
-                batch_size,
-                data_collator,
-                remove_unused_columns,
-                weights_only,
-                **kwargs,
-            )
+        if isinstance(self.model, OVBaseModel):
+            if self.model.export_feature == "text-generation" and self.model.use_cache:
+                self._quantize_ovcausallm(
+                    calibration_dataset,
+                    save_directory,
+                    batch_size,
+                    data_collator,
+                    remove_unused_columns,
+                    weights_only,
+                    ov_config,
+                    **kwargs,
+                )
+            else:
+                self._quantize_ovbasemodel(
+                    calibration_dataset,
+                    save_directory,
+                    batch_size,
+                    data_collator,
+                    remove_unused_columns,
+                    weights_only,
+                    **kwargs,
+                )
+
         elif isinstance(self.model, torch.nn.Module):
             self._quantize_torchmodel(
                 calibration_dataset,
@@ -276,6 +277,7 @@ class OVQuantizer(OptimumQuantizer):
                 options["ratio"] = config.compression["ratio"]
         return options
 
+    # TODO : add ov_config
     def _quantize_ovbasemodel(
         self,
         calibration_dataset: Dataset,
@@ -333,7 +335,7 @@ class OVQuantizer(OptimumQuantizer):
                 quantization_config = OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT8_SYM)
                 self.model.model = nncf.compress_weights(self.model.model)
             else:
-                compress_decoder_weights(self.model, quantization_config)
+                _int4_weight_only_quantization(self.model, quantization_config)
 
             self.model.save_pretrained(save_directory)
             return
@@ -580,7 +582,12 @@ class OVQuantizer(OptimumQuantizer):
         return dataset.remove_columns(ignored_columns)
 
 
-def compress_decoder_weights(model, quantization_config: Union[OVWeightQuantizationConfig, Dict] = None):
+def _int4_weight_only_quantization(
+    model: OVBaseModel, quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None
+):
+    if model.export_feature != "text-generation":
+        raise ValueError("Only `OVModelForCausalLM` are supported for now")
+
     quantization_config = quantization_config or _check_default_4bit_configs(model.config)
     ov_model = model.model
 
