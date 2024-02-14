@@ -94,7 +94,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         self._model_save_dir = (
             Path(model_save_dir.name) if isinstance(model_save_dir, TemporaryDirectory) else model_save_dir
         )
-        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
+        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self) if vae_decoder is not None else None
         self.unet = OVModelUnet(unet, self)
         self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
         self.text_encoder_2 = (
@@ -104,13 +104,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         )
         self.vae_encoder = OVModelVaeEncoder(vae_encoder, self) if vae_encoder is not None else None
 
-        if "block_out_channels" in self.vae_decoder.config:
-            self.vae_scale_factor = 2 ** (len(self.vae_decoder.config["block_out_channels"]) - 1)
-        else:
-            self.vae_scale_factor = 8
-
-        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
-
+        if vae_decoder is not None:
+            if "block_out_channels" in self.vae_decoder.config:
+                self.vae_scale_factor = 2 ** (len(self.vae_decoder.config["block_out_channels"]) - 1)
+            else:
+                self.vae_scale_factor = 8
+            self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
         self.tokenizer = tokenizer
         self.tokenizer_2 = tokenizer_2
         self.scheduler = scheduler
@@ -270,8 +269,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
-
-        return cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
+        pipe = cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
+        return pipe
 
     @classmethod
     def _from_transformers(
@@ -514,21 +513,29 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     def clone(self):
         self.compile()
-        pipe_cloned = self.__class__(
-            self.unet.model,
-            self._internal_dict,
-            scheduler=self.scheduler,
-            vae_decoder=self.vae_decoder.model,
-            vae_encoder=self.vae_encoder.model,
-            text_encoder=self.text_encoder.model,
-#            text_encoder_2=self.text_encoder_2.clone(),
-            tokenizer=self.tokenizer,
-            tokenizer_2=self.tokenizer_2,
-            feature_extractor=self.feature_extractor)
+        config = self._internal_dict
+        scheduler = self.scheduler
+        unet = self.unet.model
+        model_save_dir = self._model_save_dir
+        pipe_cloned = self.__class__(unet=unet,
+                                     config=config,
+                                     scheduler=scheduler,
+                                     compile=False,
+                                     dynamic_shapes=False,
+                                     model_save_dir=model_save_dir)
         pipe_cloned.unet = self.unet.clone()
-        pipe_cloned.text_encoder = self.text_encoder.clone()
-        pipe_cloned.vae_decoder = self.vae_decoder.clone()
-        pipe_cloned.vae_encoder = self.vae_encoder.clone()
+        if self.vae_decoder is not None:
+            pipe_cloned.vae_decoder = self.vae_decoder.clone()
+        if self.text_encoder is not None:
+            pipe_cloned.text_encoder= self.text_encoder.clone()
+        if self.text_encoder_2 is not None:
+            pipe_cloned.text_encoder_2= self.text_encoder_2.clone()
+        if self.vae_encoder is not None:
+            pipe_cloned.vae_encoder= self.vae_encoder.clone()
+        pipe_cloned.vae_scale_factor = self.vae_scale_factor
+        pipe_cloned.image_processor = self.image_processor
+        pipe_cloned.tokenizer = self.tokenizer
+        pipe_cloned.tokenizer_2 = self.tokenizer_2
         return pipe_cloned
 
 class OVModelPart:
@@ -566,7 +573,7 @@ class OVModelPart:
             ):
                 self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
-            logger.info(f"Compiling the {self._model_name} to {self.device} ...")
+            logger.info(f"Compiling the {self._model_name} to {self.device} with config {self.ov_config} ... ")
             self.compiled_model = core.compile_model(self.model, self.device, self.ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
@@ -643,8 +650,8 @@ class OVModelUnet(OVModelPart):
             inputs["timestep_cond"] = timestep_cond
 
         self.request.start_async(inputs, share_inputs=True)
-        self.request.request.wait()
-        outputs = [self.request.get_tensor(output).data for output in self.results]
+        self.request.wait()
+        outputs = [self.request.get_tensor(output).data for output in self.request.results]
         return outputs
 
 
