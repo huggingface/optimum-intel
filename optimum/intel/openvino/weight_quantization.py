@@ -113,9 +113,9 @@ DEFAULT_4BIT_CONFIGS = {
     "pansophic/rocket-3B": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.8},
     "THUDM/chatglm2-6b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.72},
     "Qwen/Qwen-7B-Chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.6},
-    "openlm-research/open_llama_3b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "all_layers"=True},
-    "tiiuae/falcon-7b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "all_layers"=True},
-    "psmathur/orca_mini_3b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "all_layers"=True},
+    "openlm-research/open_llama_3b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "all_layers": True},
+    "tiiuae/falcon-7b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "all_layers": True},
+    "psmathur/orca_mini_3b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "all_layers": True},
 }
 
 
