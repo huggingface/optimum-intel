@@ -10,12 +10,16 @@ MODEL_PATH = "/model"
 OV_CONFIG = {"PERFORMANCE_HINT": "LATENCY", "NUM_STREAMS": "1"}
 
 
-pipe = OVStableDiffusionPipeline.from_pretrained(MODEL_PATH, device="CPU", ov_config=OV_CONFIG)
+pipe = OVStableDiffusionPipeline.from_pretrained(MODEL_PATH, device="GPU", ov_config=OV_CONFIG, compile=True, dynamic_shapes=True)
 pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+
+vae_decoder_clon = pipe.vae_decoder.clone()
+unet_clon = pipe.unet.clone()
 
 prompt1 = [" Zebras in space "]
 prompt2 = [" The statue of liberty in New York", " Big Ben in London "]
 prompt3 = [" pigs on the grass field", "beach in the storm", "sail yacht on the ocean"]
+
 prompts = [prompt1, prompt2, prompt3]
 
 NUM_THREADS = 3
@@ -33,8 +37,12 @@ def save_response(t, p, r):
 
 
 def gen_thread(prompt, results, i):
+    start = datetime.datetime.now()
+    pipe_exec = pipe.clone()
+    end = datetime.datetime.now()
+    print("Clonning time [s]", ((end - start).total_seconds()))
     text = prompt
-    images = pipe(text).images
+    images = pipe_exec(text).images
     results[i] = images
 
 
