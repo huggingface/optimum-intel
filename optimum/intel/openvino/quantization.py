@@ -24,10 +24,11 @@ import torch
 import transformers
 from accelerate.data_loader import DataLoaderStateMixin
 from datasets import Dataset, load_dataset
-from nncf import NNCFConfig
+from nncf import NNCFConfig, CompressWeightsMode, SensitivityMetric, IgnoredScope
 from nncf.torch import create_compressed_model, register_default_init_args, register_module
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
+
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, Tensor
 from torch.utils._pytree import tree_map
@@ -54,7 +55,9 @@ from .utils import (
 )
 
 
-COMPRESSION_OPTIONS = {
+
+# TODO : remove as unused
+_COMPRESSION_OPTIONS = {
     "int8": {"mode": nncf.CompressWeightsMode.INT8},
     "int4_sym_g128": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128},
     "int4_asym_g128": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 128},
@@ -272,12 +275,11 @@ class OVQuantizer(OptimumQuantizer):
     def _get_compression_options(self, config: OVConfig):
         options = {}
         if config is not None and "type" in config.compression:
-            options = COMPRESSION_OPTIONS[config.compression["type"]]
+            options = _COMPRESSION_OPTIONS[config.compression["type"]]
             if "ratio" in config.compression:
                 options["ratio"] = config.compression["ratio"]
         return options
 
-    # TODO : add ov_config
     def _quantize_ovbasemodel(
         self,
         calibration_dataset: Dataset,
@@ -597,6 +599,7 @@ def _int4_weight_only_quantization(
             config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
         dataset = config.dataset
+
         if config.dataset is not None and isinstance(config.dataset, str):
             tokenizer = config.tokenizer
             if tokenizer is None:
@@ -610,15 +613,24 @@ def _int4_weight_only_quantization(
             dataset = prepare_dataset(dataset)
             dataset = nncf.Dataset(dataset, lambda x: model.prepare_inputs(**x))
 
+
+        sensitivity_metric = None
+        if isinstance(config.sensitivity_metric, str):
+            sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
+
+        ignored_scope = None
+        if isinstance(config.ignored_scope, dict):
+            ignored_scope = IgnoredScope(**config.ignored_scope)
+
         model.model = nncf.compress_weights(
             ov_model,
-            mode=config.mode,
+            mode=CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM,
             ratio=config.ratio,
             group_size=config.group_size,
             all_layers=config.all_layers,
-            sensitivity_metric=config.sensitivity_metric,
-            awq=config.awq,
-            ignored_scope=config.ignored_scope,
+            sensitivity_metric=sensitivity_metric,
+            # awq=config.quant_method == "awq", # TODO : remove and add it back once nncf v2.9.0
+            ignored_scope=ignored_scope,
             dataset=dataset,
         )
     else:

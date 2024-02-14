@@ -78,25 +78,26 @@ INT8_WEIGHT_COMPRESSION_CONFIG = {
 }
 
 
+
 DEFAULT_4BIT_CONFIGS = {
-    "databricks/dolly-v2-3b": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 32, "ratio": 0.5},
-    "EleutherAI/gpt-j-6b": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64},
-    "facebook/opt-6.7b": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64, "ratio": 0.8},
-    "bigscience/bloomz-7b1": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 32, "ratio": 0.6},
-    "togethercomputer/RedPajama-INCITE-7B-Instruct": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 128},
-    "HuggingFaceH4/zephyr-7b-beta": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.6},
-    "meta-llama/Llama-2-7b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.6},
-    "meta-llama/Llama-2-7b-chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.8},
-    "meta-llama/Llama-2-13b-chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.8},
-    "stabilityai/stablelm-3b-4e1t": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.8},
-    "stablelm-epoch-3b-preview": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "ratio": 0.8},
-    "stable-zephyr-3b-dpo": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64, "ratio": 0.8},
-    "pansophic/rocket-3B": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.8},
-    "THUDM/chatglm2-6b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.72},
-    "Qwen/Qwen-7B-Chat": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128, "ratio": 0.6},
-    "openlm-research/open_llama_3b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "all_layers": True},
-    "tiiuae/falcon-7b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "all_layers": True},
-    "psmathur/orca_mini_3b": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64, "all_layers": True},
+    "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 32, "ratio": 0.5},
+    "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
+    "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
+    "bigscience/bloomz-7b1": {"bits": 4, "sym": False, "group_size": 32, "ratio": 0.6},
+    "togethercomputer/RedPajama-INCITE-7B-Instruct": {"bits": 4, "sym": False, "group_size": 128},
+    "HuggingFaceH4/zephyr-7b-beta": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.6},
+    "meta-llama/Llama-2-7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
+    "meta-llama/Llama-2-7b-chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
+    "meta-llama/Llama-2-13b-chat": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
+    "stabilityai/stablelm-3b-4e1t": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
+    "stablelm-epoch-3b-preview": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
+    "stable-zephyr-3b-dpo": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
+    "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
+    "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
+    "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
+    "openlm-research/open_llama_3b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
+    "tiiuae/falcon-7b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
+    "psmathur/orca_mini_3b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
 }
 
 
@@ -159,8 +160,11 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
     loaded using `optimum-intel` api for quantization with NNCF.
 
     Args:
-        mode (`nncf.CompressWeightsMode`, *optional*, defaults to INT8_ASYM):
-            The model defines the weight compressoin method (4-bit, 8-bit, etc.) available in nncf.compress_weights nncf.CompressWeightsMode.
+
+        bits (`int`, defaults to 8):
+            The number of bits to quantize to.
+        sym (`bool`, *optional*, defaults to `False`):
+            Whether to use symetric quantization.
         tokenizer (`str` or `PreTrainedTokenizerBase`, *optional*):
             The tokenizer used to process the dataset. You can pass either:
                 - A custom tokenizer object.
@@ -191,26 +195,27 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
 
     def __init__(
         self,
-        mode=None,
+        bits: int = 8,
+        sym: bool = False,
         tokenizer: Any = None,
-        dataset: Optional[Union[nncf.Dataset, str]] = None,
+        dataset: Optional[str] = None,
         ratio: Optional[float] = None,
         group_size: Optional[int] = None,
         all_layers: Optional[bool] = None,
-        sensitivity_metric: Optional[nncf.SensitivityMetric] = None,
-        awq: Optional[bool] = None,
-        ignored_scope: Optional[nncf.IgnoredScope] = None,
+        sensitivity_metric: Optional[str] = None,
+        ignored_scope: Optional[dict] = None,
         **kwargs,
     ):
-        self.mode = mode
+        self.bits = bits
+        self.sym = sym
         self.tokenizer = tokenizer
         self.dataset = dataset
         self.group_size = group_size
         self.ratio = ratio
-        self.ignored_scope = ignored_scope
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
-        self.awq = awq
+        self.ignored_scope = ignored_scope
+        self.quant_method = "default" # TODO : enable AWQ after nncf v2.9.0 release
         self.post_init()
 
     def post_init(self):
@@ -227,6 +232,10 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
                     f"""You have entered a string value for dataset. You can only choose between
                     ['wikitext2','c4','c4-new','ptb','ptb-new'], but we found {self.dataset}"""
                 )
+
+
+        if self.bits not in [4, 8]:
+            raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
 
 
 def _check_default_4bit_configs(config: PretrainedConfig):
