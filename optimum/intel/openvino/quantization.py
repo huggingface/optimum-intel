@@ -44,7 +44,7 @@ from ...exporters.openvino.model_patcher import patch_model_with_bettertransform
 from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
 from ..utils.modeling_utils import get_model_device
-from .configuration import OVConfig
+from .configuration import OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
 from .modeling_base import OVBaseModel
 from .modeling_decoder import OVBaseDecoderModel
 from .utils import (
@@ -53,7 +53,6 @@ from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
 )
-from .weight_quantization import OVWeightQuantizationConfig, compress_decoder_weights
 
 
 COMPRESSION_OPTIONS = {
@@ -579,3 +578,43 @@ class OVQuantizer(OptimumQuantizer):
     def _remove_unused_columns(self, dataset: Dataset):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
+
+
+
+def compress_decoder_weights(model, quantization_config: Union[OVWeightQuantizationConfig, Dict] = None):
+    quantization_config = quantization_config or _check_default_4bit_configs(model.config)
+    ov_model = model.model
+
+    if quantization_config is not None:
+        config = quantization_config
+        if isinstance(config, Dict):
+            config = OVWeightQuantizationConfig.from_dict(quantization_config)
+
+        dataset = config.dataset
+        if config.dataset is not None and isinstance(config.dataset, str):
+            tokenizer = config.tokenizer
+            if tokenizer is None:
+                tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
+            elif isinstance(tokenizer, str):
+                tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+
+            from optimum.gptq.data import get_dataset, prepare_dataset
+
+            dataset = get_dataset(config.dataset, tokenizer, seqlen=32)
+            dataset = prepare_dataset(dataset)
+            dataset = nncf.Dataset(dataset, lambda x: model.prepare_inputs(**x))
+
+        model.model = nncf.compress_weights(
+            ov_model,
+            mode=config.mode,
+            ratio=config.ratio,
+            group_size=config.group_size,
+            all_layers=config.all_layers,
+            sensitivity_metric=config.sensitivity_metric,
+            awq=config.awq,
+            ignored_scope=config.ignored_scope,
+            dataset=dataset,
+        )
+    else:  
+        # Data-free weight-only quantization to asymmetric INT4
+        model.model = nncf.compress_weights(ov_model, mode=nncf.CompressWeightsMode.INT4_ASYM)
