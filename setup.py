@@ -13,7 +13,7 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum>=1.15.0",  # TODO : 1.17.0
+    "optimum @ git+https://github.com/huggingface/optimum.git",  # TODO : 1.17.0
     "transformers>=4.26.0",
     "datasets>=1.4.0",
     "sentencepiece",
