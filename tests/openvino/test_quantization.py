@@ -167,7 +167,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "hf-internal-testing/tiny-random-gpt2",
-            dict(mode=nncf.CompressWeightsMode.INT4_ASYM, group_size=-1, ratio=0.8),
+            dict(bits=4, sym=False, group_size=-1, ratio=0.8),
             16,
         ),
         (
@@ -290,9 +290,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 tokenizer.pad_token = tokenizer.eos_token
 
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-            ov_config = OVConfig(
-                quantization_config=OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT4_SYM, ratio=0.8)
-            )
+            ov_config = OVConfig(quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, ratio=0.8))
             quantizer.quantize(
                 save_directory=tmp_dir,
                 weights_only=True,
@@ -351,7 +349,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
         with tempfile.TemporaryDirectory() as tmp_dir:
             model_id = MODEL_NAMES[model_type]
-            model = model_cls.from_pretrained(model_id, export=True, load_in_4bit=True)
+            model = model_cls.from_pretrained(model_id, export=True, quantization_config=OVWeightQuantizationConfig(bits=4))
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -366,9 +364,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         self, model_cls, model_id, quantization_config, expected_ov_int4
     ):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            model = model_cls.from_pretrained(
-                model_id, export=True, load_in_4bit=True, quantization_config=quantization_config
-            )
+            model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -408,10 +404,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         model = model_cls.from_pretrained(
             model_id,
             export=True,
-            load_in_4bit=True,
-            quantization_config=OVWeightQuantizationConfig(
-                mode=nncf.CompressWeightsMode.INT4_SYM, group_size=-1, ratio=0.8, dataset=quantization_dataset
-            ),
+            quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, group_size=-1, ratio=0.8, dataset=quantization_dataset),
         )
 
         _, num_int8, num_int4 = get_num_quantized_nodes(model)

@@ -239,10 +239,10 @@ class OVBaseDecoderModel(OVModel):
         use_cache: bool = True,
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
-        load_in_4bit: Optional[bool] = None,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
+
         if config.model_type.replace("_", "-") not in _SUPPORTED_ARCHITECTURES:
             logger.warning(
                 f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures were "
@@ -259,8 +259,9 @@ class OVBaseDecoderModel(OVModel):
 
         # If load_in_8bit is not specified then compression_option should be set to None and will be set by default in main_export depending on the model size
         compression_option = None
-        if load_in_8bit is not None or load_in_4bit is not None:
+        if load_in_8bit is not None or quantization_config is not None:
             compression_option = "fp32"
+
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
         main_export(
             model_name_or_path=model_id,
@@ -286,7 +287,6 @@ class OVBaseDecoderModel(OVModel):
             use_cache=use_cache,
             load_in_8bit=load_in_8bit,
             stateful=None,
-            load_in_4bit=load_in_4bit,
             quantization_config=quantization_config,
             **kwargs,
         )
@@ -557,7 +557,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
-        load_in_4bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
@@ -576,8 +575,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
-        if load_in_8bit and load_in_4bit:
-            raise ValueError("Either load_in_8bit or load_in_4bit should be set to True.")
+        if isinstance(quantization_config, dict):
+            quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
+
+        load_in_4bit = quantization_config.bits == 4 if quantization_config else False
+
         model = cls.load_model(model_cache_path, load_in_8bit=False if load_in_4bit else load_in_8bit)
 
         model_type = config.model_type.replace("_", "-")
