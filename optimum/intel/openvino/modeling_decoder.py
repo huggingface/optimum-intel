@@ -32,10 +32,10 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
+from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import OVWeightQuantizationConfig
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .quantization import _int4_weight_only_quantization
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
 
@@ -596,6 +596,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         causal_model = init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
 
         if load_in_4bit:
+            if not is_nncf_available():
+                raise ImportError(
+                    "Quantization of the weights requires nncf, please install it with `pip install nncf`"
+                )
+            from .quantization import _int4_weight_only_quantization
+
             _int4_weight_only_quantization(causal_model, quantization_config)
         return causal_model
 
