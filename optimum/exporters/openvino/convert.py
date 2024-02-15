@@ -500,6 +500,8 @@ def export_models(
     Returns:
         list of input_names and output_names from ONNX configuration
     """
+
+    # TODO : modify compression_option to quantization_config
     outputs = []
 
     if output_names is not None and len(output_names) != len(models_and_onnx_configs):

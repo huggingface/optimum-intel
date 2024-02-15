@@ -167,33 +167,35 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "hf-internal-testing/tiny-random-gpt2",
-            dict(mode=nncf.CompressWeightsMode.INT4_ASYM, group_size=-1, ratio=0.8),
+            dict(bits=4, sym=False, group_size=-1, ratio=0.8),
             16,
         ),
         (
             OVModelForCausalLM,
             "hf-internal-testing/tiny-random-gpt2",
             dict(
-                mode=nncf.CompressWeightsMode.INT4_ASYM,
+                bits=4,
+                sym=False,
                 group_size=32,
-                ignored_scope=nncf.IgnoredScope(names=["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]),
+                ignored_scope={"names": ["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]},
             ),
             6,
         ),
         (
             OVModelForCausalLM,
             "hf-internal-testing/tiny-random-gpt2",
-            dict(mode=nncf.CompressWeightsMode.INT4_ASYM, group_size=-1, ratio=0.8, all_layers=True),
+            dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
             22,
         ),
         (
             OVModelForCausalLM,
             "hf-internal-testing/tiny-random-OPTForCausalLM",
             dict(
-                mode=nncf.CompressWeightsMode.INT4_SYM,
+                bits=4,
+                sym=True,
                 group_size=-1,
                 ratio=0.8,
-                sensitivity_metric=nncf.SensitivityMetric.MEAN_ACTIVATION_MAGNITUDE,
+                sensitivity_metric="mean_activation_magnitude",
                 dataset="ptb",
             ),
             16,
@@ -202,10 +204,11 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForCausalLM,
             "hf-internal-testing/tiny-random-OPTForCausalLM",
             dict(
-                mode=nncf.CompressWeightsMode.INT4_SYM,
+                bits=4,
+                sym=True,
                 group_size=-1,
                 ratio=0.8,
-                sensitivity_metric=nncf.SensitivityMetric.MEAN_ACTIVATION_MAGNITUDE,
+                sensitivity_metric="mean_activation_magnitude",
                 dataset="ptb",
                 awq=True,
             ),
@@ -287,9 +290,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 tokenizer.pad_token = tokenizer.eos_token
 
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-            ov_config = OVConfig(
-                quantization_config=OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT4_SYM, ratio=0.8)
-            )
+            ov_config = OVConfig(quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, ratio=0.8))
             quantizer.quantize(
                 save_directory=tmp_dir,
                 weights_only=True,
@@ -348,7 +349,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
         with tempfile.TemporaryDirectory() as tmp_dir:
             model_id = MODEL_NAMES[model_type]
-            model = model_cls.from_pretrained(model_id, export=True, load_in_4bit=True)
+            model = model_cls.from_pretrained(
+                model_id, export=True, quantization_config=OVWeightQuantizationConfig(bits=4)
+            )
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -363,9 +366,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         self, model_cls, model_id, quantization_config, expected_ov_int4
     ):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            model = model_cls.from_pretrained(
-                model_id, export=True, load_in_4bit=True, quantization_config=quantization_config
-            )
+            model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -373,6 +374,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             _, num_int4, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int4, num_int4)
             model.save_pretrained(tmp_dir)
+
+            ov_config = OVConfig(quantization_config=quantization_config)
+            ov_config.save_pretrained(tmp_dir)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS)
     def test_ovmodel_4bit_auto_compression_with_custom_dataset(
@@ -402,9 +406,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         model = model_cls.from_pretrained(
             model_id,
             export=True,
-            load_in_4bit=True,
             quantization_config=OVWeightQuantizationConfig(
-                mode=nncf.CompressWeightsMode.INT4_SYM, group_size=-1, ratio=0.8, dataset=quantization_dataset
+                bits=4, sym=True, group_size=-1, ratio=0.8, dataset=quantization_dataset
             ),
         )
 

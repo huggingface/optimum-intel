@@ -24,7 +24,7 @@ import torch
 import transformers
 from accelerate.data_loader import DataLoaderStateMixin
 from datasets import Dataset, load_dataset
-from nncf import NNCFConfig
+from nncf import CompressWeightsMode, IgnoredScope, NNCFConfig, SensitivityMetric
 from nncf.torch import create_compressed_model, register_default_init_args, register_module
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
@@ -32,7 +32,7 @@ from openvino._offline_transformations import compress_quantize_weights_transfor
 from openvino.runtime import Core, Tensor
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
-from transformers import DataCollator, PreTrainedModel, default_data_collator
+from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
@@ -44,19 +44,18 @@ from ...exporters.openvino.model_patcher import patch_model_with_bettertransform
 from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
 from ..utils.modeling_utils import get_model_device
-from .configuration import OVConfig
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
-from .modeling_decoder import OVBaseDecoderModel
 from .utils import (
     MAX_ONNX_OPSET,
     MIN_ONNX_QDQ_OPSET,
     ONNX_WEIGHTS_NAME,
     OV_XML_FILE_NAME,
 )
-from .weight_quantization import OVWeightQuantizationConfig, compress_decoder_weights
 
 
-COMPRESSION_OPTIONS = {
+# TODO : remove as unused
+_COMPRESSION_OPTIONS = {
     "int8": {"mode": nncf.CompressWeightsMode.INT8},
     "int4_sym_g128": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128},
     "int4_asym_g128": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 128},
@@ -234,27 +233,29 @@ class OVQuantizer(OptimumQuantizer):
             )
         ov_config = ov_config or quantization_config
 
-        if isinstance(self.model, OVBaseDecoderModel) and self.model.use_cache:
-            self._quantize_ovcausallm(
-                calibration_dataset,
-                save_directory,
-                batch_size,
-                data_collator,
-                remove_unused_columns,
-                weights_only,
-                ov_config,
-                **kwargs,
-            )
-        elif isinstance(self.model, OVBaseModel):
-            self._quantize_ovbasemodel(
-                calibration_dataset,
-                save_directory,
-                batch_size,
-                data_collator,
-                remove_unused_columns,
-                weights_only,
-                **kwargs,
-            )
+        if isinstance(self.model, OVBaseModel):
+            if self.model.export_feature == "text-generation" and self.model.use_cache:
+                self._quantize_ovcausallm(
+                    calibration_dataset,
+                    save_directory,
+                    batch_size,
+                    data_collator,
+                    remove_unused_columns,
+                    weights_only,
+                    ov_config,
+                    **kwargs,
+                )
+            else:
+                self._quantize_ovbasemodel(
+                    calibration_dataset,
+                    save_directory,
+                    batch_size,
+                    data_collator,
+                    remove_unused_columns,
+                    weights_only,
+                    **kwargs,
+                )
+
         elif isinstance(self.model, torch.nn.Module):
             self._quantize_torchmodel(
                 calibration_dataset,
@@ -272,7 +273,7 @@ class OVQuantizer(OptimumQuantizer):
     def _get_compression_options(self, config: OVConfig):
         options = {}
         if config is not None and "type" in config.compression:
-            options = COMPRESSION_OPTIONS[config.compression["type"]]
+            options = _COMPRESSION_OPTIONS[config.compression["type"]]
             if "ratio" in config.compression:
                 options["ratio"] = config.compression["ratio"]
         return options
@@ -331,10 +332,8 @@ class OVQuantizer(OptimumQuantizer):
             quantization_config = None if ov_config is None else ov_config.quantization_config
             if quantization_config is None:
                 # Use default 8-bit compression
-                quantization_config = OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT8_SYM)
-                self.model.model = nncf.compress_weights(self.model.model)
-            else:
-                compress_decoder_weights(self.model, quantization_config)
+                quantization_config = OVWeightQuantizationConfig(bits=8, sym=True)
+            _weight_only_quantization(self.model, quantization_config)
 
             self.model.save_pretrained(save_directory)
             return
@@ -579,3 +578,51 @@ class OVQuantizer(OptimumQuantizer):
     def _remove_unused_columns(self, dataset: Dataset):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
+
+
+def _weight_only_quantization(model: OVBaseModel, quantization_config: Union[OVWeightQuantizationConfig, Dict]):
+    ov_model = model.model
+
+    config = quantization_config
+    if isinstance(config, dict):
+        config = OVWeightQuantizationConfig.from_dict(quantization_config)
+
+    dataset = config.dataset
+
+    if config.dataset is not None and isinstance(config.dataset, str):
+        tokenizer = config.tokenizer
+        if tokenizer is None:
+            tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
+        elif isinstance(tokenizer, str):
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+
+        from optimum.gptq.data import get_dataset, prepare_dataset
+
+        dataset = get_dataset(config.dataset, tokenizer, seqlen=32)
+        dataset = prepare_dataset(dataset)
+        dataset = nncf.Dataset(dataset, lambda x: model.prepare_inputs(**x))
+
+    sensitivity_metric = None
+    if isinstance(config.sensitivity_metric, str):
+        sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
+
+    ignored_scope = None
+    if isinstance(config.ignored_scope, dict):
+        ignored_scope = IgnoredScope(**config.ignored_scope)
+
+    if config.bits == 8:
+        mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
+    else:
+        mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
+
+    model.model = nncf.compress_weights(
+        ov_model,
+        mode=mode,
+        ratio=config.ratio,
+        group_size=config.group_size,
+        all_layers=config.all_layers,
+        sensitivity_metric=sensitivity_metric,
+        # awq=config.quant_method == "awq", # TODO : remove and add it back once nncf v2.9.0
+        ignored_scope=ignored_scope,
+        dataset=dataset,
+    )

@@ -155,7 +155,6 @@ class OVBaseModel(OptimizedModel):
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
-        load_in_4bit: bool = False,
         **kwargs,
     ):
         """
@@ -185,11 +184,7 @@ class OVBaseModel(OptimizedModel):
                 Whether or not to only look at local files (i.e., do not try to download the model).
             load_in_8bit (`bool`, *optional*, defaults to `False`):
                 Whether or not to apply 8-bit weight quantization.
-            load_in_4bit (`bool`, *optional*, defaults to `False`):
-                Whether or not to apply 4-bit weight quantization.
         """
-        if load_in_4bit:
-            raise ValueError("load_in_4bit is available for OVModelForCausalLM only.")
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
@@ -257,7 +252,6 @@ class OVBaseModel(OptimizedModel):
         task: Optional[str] = None,
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
-        load_in_4bit: Optional[bool] = None,
         **kwargs,
     ):
         """
