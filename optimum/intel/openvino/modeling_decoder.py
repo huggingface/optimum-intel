@@ -34,7 +34,7 @@ from ...exporters.openvino import ensure_stateful_is_available, main_export, pat
 from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
-from .configuration import OVWeightQuantizationConfig
+from .configuration import OVWeightQuantizationConfig, _check_default_4bit_configs
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
@@ -578,7 +578,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
-
         model = cls.load_model(model_cache_path, load_in_8bit=False if load_in_4bit else load_in_8bit)
 
         model_type = config.model_type.replace("_", "-")
@@ -600,9 +599,14 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 raise ImportError(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
                 )
-            from .quantization import _int4_weight_only_quantization
+            from .quantization import _weight_only_quantization
 
-            _int4_weight_only_quantization(causal_model, quantization_config)
+            default_config = _check_default_4bit_configs(config)
+
+            if default_config:
+                logger.info(f"For the given mode, we recommend the following `quantization_config` : {default_config}")
+
+            _weight_only_quantization(causal_model, quantization_config)
         return causal_model
 
 

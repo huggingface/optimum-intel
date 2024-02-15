@@ -44,7 +44,7 @@ from ...exporters.openvino.model_patcher import patch_model_with_bettertransform
 from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
 from ..utils.modeling_utils import get_model_device
-from .configuration import OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     MAX_ONNX_OPSET,
@@ -332,10 +332,8 @@ class OVQuantizer(OptimumQuantizer):
             quantization_config = None if ov_config is None else ov_config.quantization_config
             if quantization_config is None:
                 # Use default 8-bit compression
-                quantization_config = OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT8_SYM)
-                self.model.model = nncf.compress_weights(self.model.model)
-            else:
-                _int4_weight_only_quantization(self.model, quantization_config)
+                quantization_config = OVWeightQuantizationConfig(bits=8, sym=True)
+            _weight_only_quantization(self.model, quantization_config)
 
             self.model.save_pretrained(save_directory)
             return
@@ -580,21 +578,6 @@ class OVQuantizer(OptimumQuantizer):
     def _remove_unused_columns(self, dataset: Dataset):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
-
-
-def _int4_weight_only_quantization(
-    model: OVBaseModel, quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None
-):
-    if model.export_feature != "text-generation":
-        raise ValueError("Only `OVModelForCausalLM` are supported for now")
-
-    quantization_config = quantization_config or _check_default_4bit_configs(model.config)
-
-    # Data-free weight-only quantization to asymmetric INT4
-    if quantization_config is None:
-        quantization_config = OVWeightQuantizationConfig(bits=4, sym=False)
-
-    _weight_only_quantization(model, quantization_config)
 
 
 def _weight_only_quantization(model: OVBaseModel, quantization_config: Union[OVWeightQuantizationConfig, Dict]):
