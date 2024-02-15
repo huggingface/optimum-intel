@@ -588,48 +588,60 @@ def _int4_weight_only_quantization(
     if model.export_feature != "text-generation":
         raise ValueError("Only `OVModelForCausalLM` are supported for now")
 
+
     quantization_config = quantization_config or _check_default_4bit_configs(model.config)
+    
+    # Data-free weight-only quantization to asymmetric INT4
+    if quantization_config is None:
+        quantization_config = OVWeightQuantizationConfig(bits=4, sym=False)
+
+    _weight_only_quantization(model, quantization_config)
+
+
+def _weight_only_quantization(model: OVBaseModel, quantization_config: Union[OVWeightQuantizationConfig, Dict]):
     ov_model = model.model
 
-    if quantization_config is not None:
-        config = quantization_config
-        if isinstance(config, Dict):
-            config = OVWeightQuantizationConfig.from_dict(quantization_config)
+    config = quantization_config
+    if isinstance(config, dict):
+        config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
-        dataset = config.dataset
+    dataset = config.dataset
 
-        if config.dataset is not None and isinstance(config.dataset, str):
-            tokenizer = config.tokenizer
-            if tokenizer is None:
-                tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
-            elif isinstance(tokenizer, str):
-                tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+    if config.dataset is not None and isinstance(config.dataset, str):
+        tokenizer = config.tokenizer
+        if tokenizer is None:
+            tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
+        elif isinstance(tokenizer, str):
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer)
 
-            from optimum.gptq.data import get_dataset, prepare_dataset
+        from optimum.gptq.data import get_dataset, prepare_dataset
 
-            dataset = get_dataset(config.dataset, tokenizer, seqlen=32)
-            dataset = prepare_dataset(dataset)
-            dataset = nncf.Dataset(dataset, lambda x: model.prepare_inputs(**x))
+        dataset = get_dataset(config.dataset, tokenizer, seqlen=32)
+        dataset = prepare_dataset(dataset)
+        dataset = nncf.Dataset(dataset, lambda x: model.prepare_inputs(**x))
 
-        sensitivity_metric = None
-        if isinstance(config.sensitivity_metric, str):
-            sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
+    sensitivity_metric = None
+    if isinstance(config.sensitivity_metric, str):
+        sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
 
-        ignored_scope = None
-        if isinstance(config.ignored_scope, dict):
-            ignored_scope = IgnoredScope(**config.ignored_scope)
+    ignored_scope = None
+    if isinstance(config.ignored_scope, dict):
+        ignored_scope = IgnoredScope(**config.ignored_scope)
 
-        model.model = nncf.compress_weights(
-            ov_model,
-            mode=CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM,
-            ratio=config.ratio,
-            group_size=config.group_size,
-            all_layers=config.all_layers,
-            sensitivity_metric=sensitivity_metric,
-            # awq=config.quant_method == "awq", # TODO : remove and add it back once nncf v2.9.0
-            ignored_scope=ignored_scope,
-            dataset=dataset,
-        )
+    if config.bits == 8:
+        mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
     else:
-        # Data-free weight-only quantization to asymmetric INT4
-        model.model = nncf.compress_weights(ov_model, mode=nncf.CompressWeightsMode.INT4_ASYM)
+        mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
+        
+    model.model = nncf.compress_weights(
+        ov_model,
+        mode=mode,
+        ratio=config.ratio,
+        group_size=config.group_size,
+        all_layers=config.all_layers,
+        sensitivity_metric=sensitivity_metric,
+        # awq=config.quant_method == "awq", # TODO : remove and add it back once nncf v2.9.0
+        ignored_scope=ignored_scope,
+        dataset=dataset,
+    )
+
