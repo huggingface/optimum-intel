@@ -604,7 +604,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             default_config = _check_default_4bit_configs(config)
 
             if default_config:
-                logger.info(f"For the given model, we recommend the following `quantization_config` : {default_config}")
+                logger.info(
+                    f"For the given model, we recommend the following `quantization_config` : {default_config}"
+                )
 
             _weight_only_quantization(causal_model, quantization_config)
         return causal_model
