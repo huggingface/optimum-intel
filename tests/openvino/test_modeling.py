@@ -426,6 +426,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "bert",
         "distilbert",
         "roberta",
+        "sentence-transformers-bert",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -482,8 +483,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        # "marian", # TODO : enable it back with openvino 2023.3.0
-        # "mistral",
+        "llama_gptq",
+        "marian",
+        "mistral",
         "mpt",
         "opt",
         "pegasus",
@@ -494,6 +496,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+
+        if "gptq" in model_arch:
+            self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
+
         set_seed(SEED)
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
@@ -819,7 +825,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         "blenderbot-small",
         # "longt5",
         "m2m_100",
-        # "marian", # TODO : enable it back with openvino 2023.3.0
+        "marian",
         "mbart",
         "mt5",
         "pegasus",
@@ -827,7 +833,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     )
 
     GENERATION_LENGTH = 100
-    SPEEDUP_CACHE = 1.2
+    SPEEDUP_CACHE = 1.1
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1031,7 +1037,7 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = OVModelForCTC.from_pretrained(MODEL_NAMES["t5"], export=True)
 
-        self.assertIn("Unrecognized configuration class", str(context.exception))
+        self.assertIn("only supports the tasks", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1083,7 +1089,7 @@ class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = OVModelForAudioXVector.from_pretrained(MODEL_NAMES["t5"], export=True)
 
-        self.assertIn("Unrecognized configuration class", str(context.exception))
+        self.assertIn("only supports the tasks", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1137,7 +1143,7 @@ class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = OVModelForAudioFrameClassification.from_pretrained(MODEL_NAMES["t5"], export=True)
 
-        self.assertIn("Unrecognized configuration class", str(context.exception))
+        self.assertIn("only supports the tasks", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):

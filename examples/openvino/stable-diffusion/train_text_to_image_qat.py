@@ -19,7 +19,6 @@ import logging
 import math
 import os
 import random
-import tempfile
 from copy import deepcopy
 from functools import partial
 from io import BytesIO
@@ -34,7 +33,7 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import set_seed
+from accelerate.utils import ProjectConfiguration, set_seed
 from datasets import load_dataset
 from diffusers import DDIMScheduler, DDPMScheduler, DiffusionPipeline, LMSDiscreteScheduler, StableDiffusionPipeline
 from diffusers.optimization import get_scheduler
@@ -44,20 +43,12 @@ from nncf.common.logging import nncf_logger
 from nncf.torch import create_compressed_model, register_default_init_args
 from nncf.torch.initialization import PTInitializingDataLoader
 from nncf.torch.layer_utils import CompressionParameter
-from openvino._offline_transformations import apply_moc_transformations, compress_quantize_weights_transformation
 from PIL import Image
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 from torchvision import transforms
 from tqdm import tqdm
 
-from optimum.exporters.onnx import export_models, get_stable_diffusion_models_for_export
-from optimum.intel import OVStableDiffusionPipeline
-from optimum.utils import (
-    DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
-    DIFFUSION_MODEL_UNET_SUBFOLDER,
-    DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
-    DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
-)
+from optimum.exporters.openvino import export_from_model
 
 
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -583,47 +574,6 @@ def get_noise_scheduler(args):
     return noise_scheduler
 
 
-def export_to_onnx(pipeline, save_dir):
-    unet = pipeline.unet
-    vae = pipeline.vae
-    text_encoder = pipeline.text_encoder
-
-    unet.eval().cpu()
-    vae.eval().cpu()
-    text_encoder.eval().cpu()
-
-    ONNX_WEIGHTS_NAME = "model.onnx"
-
-    output_names = [
-        os.path.join(DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER, ONNX_WEIGHTS_NAME),
-        os.path.join(DIFFUSION_MODEL_UNET_SUBFOLDER, ONNX_WEIGHTS_NAME),
-        os.path.join(DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER, ONNX_WEIGHTS_NAME),
-        os.path.join(DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER, ONNX_WEIGHTS_NAME),
-    ]
-
-    with torch.no_grad():
-        models_and_onnx_configs = get_stable_diffusion_models_for_export(pipeline)
-        pipeline.save_config(save_dir)
-        export_models(
-            models_and_onnx_configs=models_and_onnx_configs, output_dir=Path(save_dir), output_names=output_names
-        )
-
-
-def export_to_openvino(pipeline, onnx_dir, save_dir):
-    ov_pipe = OVStableDiffusionPipeline.from_pretrained(
-        model_id=onnx_dir,
-        from_onnx=True,
-        model_save_dir=save_dir,
-        tokenizer=pipeline.tokenizer,
-        scheduler=pipeline.scheduler,
-        feature_extractor=pipeline.feature_extractor,
-        compile=False,
-    )
-    apply_moc_transformations(ov_pipe.unet.model, cf=False)
-    compress_quantize_weights_transformation(ov_pipe.unet.model)
-    ov_pipe.save_pretrained(save_dir)
-
-
 class UnetInitDataset(torch.utils.data.Dataset):
     def __init__(self, data):
         super().__init__()
@@ -700,7 +650,7 @@ def get_nncf_config(pipeline, dataloader, args):
                 "ignored_scopes": [
                     "{re}.*__add___[0-2]",
                     "{re}.*layer_norm_0",
-                    "{re}.*Attention.*/bmm_0",
+                    # "{re}.*Attention.*/bmm_0",
                     "{re}.*__truediv__*",
                     "{re}.*group_norm_0",
                     "{re}.*mul___[0-2]",
@@ -771,11 +721,13 @@ def main():
 
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
 
+    accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
+
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
-        logging_dir=logging_dir,
+        project_config=accelerator_project_config,
     )
 
     logging.basicConfig(
@@ -922,7 +874,7 @@ def main():
 
     with accelerator.main_process_first():
         if args.max_train_samples is not None:
-            dataset["train"] = dataset["train"].shuffle(seed=42, buffer_size=args.max_train_samples)
+            dataset["train"] = dataset["train"].shuffle(seed=42).select(range(args.max_train_samples))
         # Set the training transforms
         train_dataset = dataset["train"]
 
@@ -1132,9 +1084,8 @@ def main():
         feature_extractor=pipeline.feature_extractor,
     )
 
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        export_to_onnx(export_pipeline, tmpdirname)
-        export_to_openvino(export_pipeline, tmpdirname, Path(args.output_dir) / "openvino")
+    save_directory = Path(args.output_dir) / "openvino"
+    export_from_model(export_pipeline, output=save_directory, task="stable-diffusion")
 
 
 if __name__ == "__main__":
