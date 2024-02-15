@@ -349,7 +349,9 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
         with tempfile.TemporaryDirectory() as tmp_dir:
             model_id = MODEL_NAMES[model_type]
-            model = model_cls.from_pretrained(model_id, export=True, quantization_config=OVWeightQuantizationConfig(bits=4))
+            model = model_cls.from_pretrained(
+                model_id, export=True, quantization_config=OVWeightQuantizationConfig(bits=4)
+            )
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -404,7 +406,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         model = model_cls.from_pretrained(
             model_id,
             export=True,
-            quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, group_size=-1, ratio=0.8, dataset=quantization_dataset),
+            quantization_config=OVWeightQuantizationConfig(
+                bits=4, sym=True, group_size=-1, ratio=0.8, dataset=quantization_dataset
+            ),
         )
 
         _, num_int8, num_int4 = get_num_quantized_nodes(model)

@@ -588,9 +588,8 @@ def _int4_weight_only_quantization(
     if model.export_feature != "text-generation":
         raise ValueError("Only `OVModelForCausalLM` are supported for now")
 
-
     quantization_config = quantization_config or _check_default_4bit_configs(model.config)
-    
+
     # Data-free weight-only quantization to asymmetric INT4
     if quantization_config is None:
         quantization_config = OVWeightQuantizationConfig(bits=4, sym=False)
@@ -632,7 +631,7 @@ def _weight_only_quantization(model: OVBaseModel, quantization_config: Union[OVW
         mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
     else:
         mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
-        
+
     model.model = nncf.compress_weights(
         ov_model,
         mode=mode,
@@ -644,4 +643,3 @@ def _weight_only_quantization(model: OVBaseModel, quantization_config: Union[OVW
         ignored_scope=ignored_scope,
         dataset=dataset,
     )
-

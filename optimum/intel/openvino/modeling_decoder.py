@@ -242,7 +242,6 @@ class OVBaseDecoderModel(OVModel):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-
         if config.model_type.replace("_", "-") not in _SUPPORTED_ARCHITECTURES:
             logger.warning(
                 f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures were "
