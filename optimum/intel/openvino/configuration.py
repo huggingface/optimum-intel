@@ -118,14 +118,12 @@ class OVConfig(BaseConfig):
         self.save_onnx_model = save_onnx_model
         self._enable_standard_onnx_export_option()
         self.optimum_version = kwargs.pop("optimum_version", None)
-        self.quantization_config = quantization_config
+        self.quantization_config = quantization_config or {}
 
-        bits = None
-        if isinstance(quantization_config, dict):
-            bits = quantization_config.get("bits", None)
-        elif isinstance(quantization_config, QuantizationConfigMixin):
-            bits = quantization_config.bits
-
+        if isinstance(quantization_config, QuantizationConfigMixin):
+            bits = self.quantization_config.bits
+        else:
+            bits = self.quantization_config.get("bits", None)
         self.dtype = "int" + str(bits) if isinstance(bits, int) else dtype
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
