@@ -74,17 +74,15 @@ model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
 
 > **NOTE:** `load_in_8bit` is enabled by default for models larger than 1 billion parameters.
 
-For the 4-bit weight quantization you can use `load_in_4bit` option. The `quantization_config` can be used to controll the optimization parameters, for example:
+For the 4-bit weight quantization you can use yhe `quantization_config` to specify the optimization parameters, for example:
 
 ```python
 from optimum.intel import OVModelForCausalLM, OVWeightQuantizationConfig
-import nncf
 
 model = OVModelForCausalLM.from_pretrained(
     model_id,
     export=True,
-    load_in_4bit=True,
-    quantization_config=OVWeightQuantizationConfig(mode=nncf.CompressWeightsMode.INT4_ASYM, ratio=0.8, dataset="ptb"),
+    quantization_config=OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, dataset="ptb"),
 ) 
 ```
 
