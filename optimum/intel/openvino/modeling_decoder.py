@@ -23,7 +23,7 @@ import openvino
 import torch
 from openvino.preprocess import PrePostProcessor
 from openvino.runtime import Core, Tensor, Type
-from transformers import AutoModelForCausalLM, PretrainedConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -262,6 +262,7 @@ class OVBaseDecoderModel(OVModel):
             compression_option = "fp32"
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -603,6 +604,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 raise ImportError(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
                 )
+            import nncf
+
             from .quantization import _weight_only_quantization
 
             default_config = _check_default_4bit_configs(config)
@@ -612,7 +615,20 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     f"For the given model, we recommend the following `quantization_config` : {default_config}"
                 )
 
-            _weight_only_quantization(causal_model, quantization_config)
+            if isinstance(quantization_config.dataset, str):
+                tokenizer = quantization_config.tokenizer or AutoTokenizer.from_pretrained(model_id)
+
+                from optimum.gptq.data import get_dataset, prepare_dataset
+
+                # from optimum.gptq.utils import get_seqlen
+
+                # seqlen = get_seqlen(causal_model)
+                dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32)
+                dataset = prepare_dataset(dataset)
+                quantization_config.dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))
+
+            _weight_only_quantization(model, quantization_config)
+
         return causal_model
 
 

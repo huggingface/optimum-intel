@@ -108,7 +108,8 @@ class OVConfig(BaseConfig):
         compression: Union[List[Dict], Dict, None] = None,
         input_info: Optional[List] = None,
         save_onnx_model: bool = False,
-        quantization_config: Optional[QuantizationConfigMixin] = None,
+        quantization_config: Optional[Union[QuantizationConfigMixin, Dict]] = None,
+        dtype: Optional[str] = None,
         **kwargs,
     ):
         super().__init__()
@@ -118,6 +119,14 @@ class OVConfig(BaseConfig):
         self._enable_standard_onnx_export_option()
         self.optimum_version = kwargs.pop("optimum_version", None)
         self.quantization_config = quantization_config
+
+        bits = None
+        if isinstance(quantization_config, dict):
+            bits = quantization_config.get("bits", None)
+        elif isinstance(quantization_config, QuantizationConfigMixin):
+            bits = quantization_config.bits
+
+        self.dtype = "int" + str(bits) if isinstance(bits, int) else dtype
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
         self.input_info = [
@@ -130,8 +139,6 @@ class OVConfig(BaseConfig):
         ]
 
     def save_pretrained(self, *args, **kwargs):
-        if self.quantization_config is None:
-            self.quantization_config = OVWeightQuantizationConfig()
         super().save_pretrained(*args, **kwargs)
 
     def _enable_standard_onnx_export_option(self):
