@@ -78,10 +78,10 @@ It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2
 optimum-cli export openvino --model gpt2 ov_model
 ```
 
-If you add `--int8`, the model linear and embedding weights will be quantized to INT8, the activations will be kept in floating point precision.
+You can also apply 8-bit weight-only quantization when exporting your model : the model linear and embedding weights will be quantized to INT8, the activations will be kept in floating point precision.
 
 ```plain
-optimum-cli export openvino --model gpt2 --int8 ov_model
+optimum-cli export openvino --model gpt2 --weight-format int8 ov_model
 ```
 
 To apply quantization on both weights and activations, you can find more information in the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov).

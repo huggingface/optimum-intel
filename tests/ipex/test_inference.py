@@ -33,9 +33,9 @@ from optimum.intel.ipex.modeling_base import IPEXModel
 
 MODEL_NAMES = {
     "bert": "hf-internal-testing/tiny-random-bert",
+    "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "roberta": "hf-internal-testing/tiny-random-roberta",
-    "bloom": "hf-internal-testing/tiny-random-bloom",
     "gptj": "hf-internal-testing/tiny-random-gptj",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
@@ -59,7 +59,16 @@ class IPEXIntegrationTest(unittest.TestCase):
         "roberta",
     )
 
-    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("gptj", "gpt2", "gpt_neo", "gpt_bigcode", "llama", "opt", "mpt")
+    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
+        "bloom",
+        "gptj",
+        "gpt2",
+        "gpt_neo",
+        # "gpt_bigcode",
+        "llama",
+        "opt",
+        "mpt",
+    )
 
     QA_SUPPORTED_ARCHITECTURES = (
         "bert",
