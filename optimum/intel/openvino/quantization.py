@@ -58,15 +58,6 @@ if is_datasets_available():
     if TYPE_CHECKING:
         from datasets import Dataset
 
-# TODO : remove as unused
-_COMPRESSION_OPTIONS = {
-    "int8": {"mode": nncf.CompressWeightsMode.INT8},
-    "int4_sym_g128": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 128},
-    "int4_asym_g128": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 128},
-    "int4_sym_g64": {"mode": nncf.CompressWeightsMode.INT4_SYM, "group_size": 64},
-    "int4_asym_g64": {"mode": nncf.CompressWeightsMode.INT4_ASYM, "group_size": 64},
-}
-
 register_module(ignored_algorithms=[])(Conv1D)
 
 core = Core()
@@ -241,27 +232,16 @@ class OVQuantizer(OptimumQuantizer):
         ov_config = ov_config or quantization_config
 
         if isinstance(self.model, OVBaseModel):
-            if self.model.export_feature == "text-generation" and self.model.use_cache:
-                self._quantize_ovcausallm(
-                    calibration_dataset,
-                    save_directory,
-                    batch_size,
-                    data_collator,
-                    remove_unused_columns,
-                    weights_only,
-                    ov_config,
-                    **kwargs,
-                )
-            else:
-                self._quantize_ovbasemodel(
-                    calibration_dataset,
-                    save_directory,
-                    batch_size,
-                    data_collator,
-                    remove_unused_columns,
-                    weights_only,
-                    **kwargs,
-                )
+            self._quantize_ovbasemodel(
+                calibration_dataset,
+                save_directory,
+                batch_size,
+                data_collator,
+                remove_unused_columns,
+                weights_only,
+                ov_config,
+                **kwargs,
+            )
 
         elif isinstance(self.model, torch.nn.Module):
             self._quantize_torchmodel(
@@ -277,51 +257,7 @@ class OVQuantizer(OptimumQuantizer):
         else:
             raise TypeError(f"Unsupported model type: {type(self.model)}")
 
-    def _get_compression_options(self, config: OVConfig):
-        options = {}
-        if config is not None and "type" in config.compression:
-            options = _COMPRESSION_OPTIONS[config.compression["type"]]
-            if "ratio" in config.compression:
-                options["ratio"] = config.compression["ratio"]
-        return options
-
     def _quantize_ovbasemodel(
-        self,
-        calibration_dataset: "Dataset",
-        save_directory: Union[str, Path],
-        batch_size: int = 1,
-        data_collator: Optional[DataCollator] = None,
-        remove_unused_columns: bool = True,
-        weights_only: bool = False,
-        **kwargs,
-    ):
-        save_directory = Path(save_directory)
-        save_directory.mkdir(parents=True, exist_ok=True)
-
-        if weights_only:
-            self.model.model = nncf.compress_weights(self.model.model)
-            self.model.save_pretrained(save_directory)
-            return
-
-        calibration_dataloader = self._get_calibration_dataloader(
-            calibration_dataset=calibration_dataset,
-            batch_size=batch_size,
-            remove_unused_columns=remove_unused_columns,
-            data_collator=data_collator,
-        )
-
-        quantization_dataset = nncf.Dataset(calibration_dataloader, lambda x: x)
-        quantized_model = nncf.quantize(
-            self.model.model,
-            quantization_dataset,
-            model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
-            fast_bias_correction=kwargs.get("fast_bias_correction", True),
-            **kwargs,
-        )
-        self.model.model = quantized_model
-        self.model.save_pretrained(save_directory)
-
-    def _quantize_ovcausallm(
         self,
         calibration_dataset: "Dataset",
         save_directory: Union[str, Path],
@@ -336,11 +272,11 @@ class OVQuantizer(OptimumQuantizer):
         save_directory.mkdir(parents=True, exist_ok=True)
 
         if weights_only:
-            quantization_config = None if ov_config is None else ov_config.quantization_config
-            if quantization_config is None:
-                # Use default 8-bit compression
-                quantization_config = OVWeightQuantizationConfig(bits=8, sym=True)
-            _weight_only_quantization(self.model, quantization_config)
+            # Use default 8-bit compression if not provided
+            q_config = (
+                OVWeightQuantizationConfig(bits=8, sym=True) if ov_config is None else ov_config.quantization_config
+            )
+            _weight_only_quantization(self.model, q_config)
 
             self.model.save_pretrained(save_directory)
             return
@@ -352,21 +288,23 @@ class OVQuantizer(OptimumQuantizer):
             data_collator=data_collator,
         )
 
-        # Prefeth past_key_values
-        self.model.update_pkv_precision(True)
-        self.model.compile()
-        subset_size = kwargs.get("subset_size", 300)
-        data_cache = []
+        if self.model.export_feature == "text-generation" and self.model.use_cache:
+            # Prefeth past_key_values
+            self.model.update_pkv_precision(True)
+            self.model.compile()
+            subset_size = kwargs.get("subset_size", 300)
+            data_cache = []
 
-        self.model.request = InferRequestWrapper(self.model.request, data_cache)
-        for _, data in enumerate(calibration_dataloader):
-            self.model.generate(**data, max_new_tokens=1)
-            if len(data_cache) >= subset_size:
-                break
-        self.model.request = self.model.request.request
+            self.model.request = InferRequestWrapper(self.model.request, data_cache)
+            for _, data in enumerate(calibration_dataloader):
+                self.model.generate(**data, max_new_tokens=1)
+                if len(data_cache) >= subset_size:
+                    break
+            self.model.request = self.model.request.request
+            calibration_dataloader = data_cache
 
         # Actual model quantization
-        quantization_dataset = nncf.Dataset(data_cache, lambda x: x)
+        quantization_dataset = nncf.Dataset(calibration_dataloader, lambda x: x)
         quantized_model = nncf.quantize(
             self.model.model,
             quantization_dataset,
