@@ -16,7 +16,7 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple, Union
 
 import nncf
 import openvino
