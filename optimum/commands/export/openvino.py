@@ -94,11 +94,10 @@ def parse_args_openvino(parser: "ArgumentParser"):
     )
     optional_group.add_argument(
         "--sym",
-        type=bool,
+        action="store_true",
         default=None,
         help=("Whether to apply symmetric quantization"),
     )
-
     optional_group.add_argument(
         "--group-size",
         type=int,
