@@ -16,14 +16,12 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple, Union
 
 import nncf
 import openvino
 import torch
 import transformers
-from accelerate.data_loader import DataLoaderStateMixin
-from datasets import Dataset, load_dataset
 from nncf import CompressWeightsMode, IgnoredScope, NNCFConfig, SensitivityMetric
 from nncf.torch import create_compressed_model, register_default_init_args, register_module
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
@@ -34,6 +32,7 @@ from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
+from transformers.utils import is_accelerate_available
 
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.tasks import TasksManager
@@ -43,6 +42,7 @@ from ...exporters.openvino import export, export_pytorch_via_onnx
 from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
 from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
+from ..utils.import_utils import DATASETS_IMPORT_ERROR, is_datasets_available
 from ..utils.modeling_utils import get_model_device
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
@@ -53,6 +53,10 @@ from .utils import (
     OV_XML_FILE_NAME,
 )
 
+
+if is_datasets_available():
+    if TYPE_CHECKING:
+        from datasets import Dataset
 
 register_module(ignored_algorithms=[])(Conv1D)
 
@@ -67,8 +71,11 @@ class OVDataLoader(PTInitializingDataLoader):
     @property
     def batch_size(self):
         batch_size = self._data_loader.batch_size
-        if batch_size is None and isinstance(self._data_loader, DataLoaderStateMixin):
-            batch_size = self._data_loader.total_batch_size
+        if is_accelerate_available():
+            from accelerate.data_loader import DataLoaderStateMixin
+
+            if batch_size is None and isinstance(self._data_loader, DataLoaderStateMixin):
+                batch_size = self._data_loader.total_batch_size
         return batch_size
 
 
@@ -150,7 +157,7 @@ class OVQuantizer(OptimumQuantizer):
 
     def quantize(
         self,
-        calibration_dataset: Dataset = None,
+        calibration_dataset: "Dataset" = None,
         save_directory: Union[str, Path] = None,
         ov_config: OVConfig = None,
         file_name: Optional[str] = None,
@@ -252,7 +259,7 @@ class OVQuantizer(OptimumQuantizer):
 
     def _quantize_ovbasemodel(
         self,
-        calibration_dataset: Dataset,
+        calibration_dataset: "Dataset",
         save_directory: Union[str, Path],
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
@@ -310,7 +317,7 @@ class OVQuantizer(OptimumQuantizer):
 
     def _quantize_torchmodel(
         self,
-        calibration_dataset: Dataset,
+        calibration_dataset: "Dataset",
         save_directory: Union[str, Path],
         ov_config: OVConfig = None,
         file_name: Optional[str] = None,
@@ -452,7 +459,7 @@ class OVQuantizer(OptimumQuantizer):
         preprocess_batch: bool = True,
         use_auth_token: bool = False,
         cache_dir: Optional[str] = None,
-    ) -> Dataset:
+    ) -> "Dataset":
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
 
@@ -477,6 +484,10 @@ class OVQuantizer(OptimumQuantizer):
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
+        if not is_datasets_available():
+            raise ValueError(DATASETS_IMPORT_ERROR.format("OVQuantizer.get_calibration_dataset"))
+        from datasets import load_dataset
+
         calibration_dataset = load_dataset(
             dataset_name,
             name=dataset_config_name,
@@ -496,7 +507,7 @@ class OVQuantizer(OptimumQuantizer):
 
     def _get_calibration_dataloader(
         self,
-        calibration_dataset: Dataset,
+        calibration_dataset: "Dataset",
         batch_size: int,
         remove_unused_columns: bool,
         data_collator: Optional[DataCollator] = None,
@@ -513,7 +524,7 @@ class OVQuantizer(OptimumQuantizer):
         )
         return OVDataLoader(calibration_dataloader)
 
-    def _remove_unused_columns(self, dataset: Dataset):
+    def _remove_unused_columns(self, dataset: "Dataset"):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
 
