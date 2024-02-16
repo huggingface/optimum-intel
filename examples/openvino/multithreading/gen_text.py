@@ -1,6 +1,8 @@
 import threading
 from datetime import datetime
+
 from transformers import AutoConfig, AutoTokenizer, set_seed
+
 from optimum.intel import OVModelForCausalLM
 
 
@@ -25,7 +27,7 @@ model = OVModelForCausalLM.from_pretrained(
     config=AutoConfig.from_pretrained(model_id, trust_remote_code=True),
     ov_config=OV_CONFIG,
     compile=True,
-    export=True
+    export=True,
 )
 
 threads = [None] * NUM_THREADS

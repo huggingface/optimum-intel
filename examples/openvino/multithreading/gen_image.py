@@ -9,7 +9,7 @@ OV_CONFIG = {"PERFORMANCE_HINT": "LATENCY", "NUM_STREAMS": "1"}
 
 
 pipe = OVStableDiffusionPipeline.from_pretrained(
-    MODEL_PATH,  ov_config=OV_CONFIG, compile=True, dynamic_shapes=True, export=True
+    MODEL_PATH, ov_config=OV_CONFIG, compile=True, dynamic_shapes=True, export=True
 )
 
 vae_decoder_clon = pipe.vae_decoder.clone()
@@ -34,6 +34,7 @@ def save_response(t, p, r):
         print("IMG:", i)
         r[i].save("img_" + str(t) + "_" + str(i) + ".png", format="PNG")
 
+
 def gen_thread(prompt, results, i):
     start = datetime.datetime.now()
     pipe_exec = pipe.clone()
@@ -42,6 +43,7 @@ def gen_thread(prompt, results, i):
     text = prompt
     images = pipe_exec(text).images
     results[i] = images
+
 
 start = datetime.datetime.now()
 for i in range(len(threads)):

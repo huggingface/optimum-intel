@@ -271,9 +271,7 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
         pipeline.safety_checker = None
         batch_size, num_images_per_prompt, height, width = 1, 2, 64, 64
 
-        def run_ov_model(
-            prompt, ov_pipeline
-        ):
+        def run_ov_model(prompt, ov_pipeline):
             ov_pipeline_instance = ov_pipeline.clone()
             latents = ov_pipeline_instance.prepare_latents(
                 batch_size * num_images_per_prompt,
