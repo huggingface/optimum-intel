@@ -21,7 +21,8 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
-from optimum.intel.openvino.configuration import OVConfig
+
+
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 from ...intel.utils.import_utils import (
@@ -152,18 +153,21 @@ def main_export(
     if compression_option is not None:
         logger.warning(
             "The `compression_option` argument is deprecated and will be removed in optimum-intel v1.17.0. "
-            "Please, pass a `OVWeightQuantizationConfig` object in `quantization_config` argument instead."
+            "Please, pass an `ov_config` argument instead `OVConfig(..., quantization_config=quantization_config)`."
         )
 
     if compression_ratio is not None:
         logger.warning(
             "The `compression_ratio` argument is deprecated and will be removed in optimum-intel v1.17.0. "
-            "Please, pass a `OVWeightQuantizationConfig(ratio=compression_ratio)` object in `quantization_config` argument instead."
+            "Please, pass an `ov_config` argument instead `OVConfig(quantization_config={ratio=compression_ratio})`."
         )
 
     # default_config = _check_default_4bit_configs(config)
 
     if ov_config is None and compression_option is not None:
+
+        from ...intel.openvino.configuration import OVConfig
+
         if compression_option == "fp16":
             ov_config = OVConfig(dtype="fp16")
         elif compression_option != "fp32":
