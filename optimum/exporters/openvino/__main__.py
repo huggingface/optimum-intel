@@ -161,7 +161,6 @@ def main_export(
             "Please, pass a `OVWeightQuantizationConfig(ratio=compression_ratio)` object in `quantization_config` argument instead."
         )
 
-
     # default_config = _check_default_4bit_configs(config)
 
     if ov_config is None and compression_option is not None:

@@ -85,7 +85,7 @@ def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
 
             _weight_only_quantization(model, ov_config.quantization_config)
 
-        compress_to_fp16 = ov_config.dtype == "fp16":
+        compress_to_fp16 = ov_config.dtype == "fp16"
 
     save_model(model, path, compress_to_fp16)
 
