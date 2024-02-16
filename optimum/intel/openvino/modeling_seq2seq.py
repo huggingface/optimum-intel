@@ -419,7 +419,8 @@ class OVEncoder:
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.main_input_name = self.parent_model.main_input_name or "input_ids"
         self.compiled_model = None
-        self.request = None
+        self.request = None  # Deprecated attribute, use compiled_model instead
+        self.infer_request = None
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
@@ -461,6 +462,7 @@ class OVEncoder:
         if self.compiled_model is None:
             logger.info(f"Compiling the encoder to {self._device} ...")
             self.compiled_model = core.compile_model(self.model, self._device, ov_config)
+            self.request = self.compiled_model  # Deprecated attribute, use compiled_model instead
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
@@ -496,8 +498,9 @@ class OVDecoder:
             self.use_past = False
             self.num_pkv = 4
 
-        self.request = None
+        self.request = None  # Deprecated attribute, use compiled_model instead
         self.compiled_model = None
+        self.infer_request = None
 
     @add_start_docstrings_to_model_forward(DECODER_INPUTS_DOCSTRING)
     def forward(

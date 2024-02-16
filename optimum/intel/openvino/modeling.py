@@ -132,6 +132,7 @@ class OVModel(OVBaseModel):
         if isinstance(device, str):
             self._device = device.upper()
             self.compiled_model = None
+            self.request = None
         else:
             logger.warning(f"device must be of type {str} but got {type(device)} instead")
 
@@ -203,14 +204,14 @@ class OVModelForSequenceClassification(OVModel):
 
         # Run inference
         if self.async_exec:
-            self.request.start_async(inputs)
-            self.request.wait()
+            self.infer_request.start_async(inputs)
+            self.infer_request.wait()
         else:
-            self.request.infer(inputs)
+            self.infer_request.infer(inputs)
         logits = (
-            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.infer_request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else self.request.get_tensor("logits").data
+            else self.infer_request.get_tensor("logits").data
         )
         return SequenceClassifierOutput(logits=logits)
 
@@ -278,20 +279,20 @@ class OVModelForQuestionAnswering(OVModel):
 
         # Run inference
         if self.async_exec:
-            self.request.start_async(inputs)
-            self.request.wait()
+            self.infer_request.start_async(inputs)
+            self.infer_request.wait()
         else:
-            self.request.infer(inputs)
+            self.infer_request.infer(inputs)
 
         start_logits = (
-            torch.from_numpy(self.request.get_tensor("start_logits").data).to(self.device)
+            torch.from_numpy(self.infer_request.get_tensor("start_logits").data).to(self.device)
             if not np_inputs
-            else self.request.get_tensor("start_logits").data
+            else self.infer_request.get_tensor("start_logits").data
         )
         end_logits = (
-            torch.from_numpy(self.request.get_tensor("end_logits").data).to(self.device)
+            torch.from_numpy(self.infer_request.get_tensor("end_logits").data).to(self.device)
             if not np_inputs
-            else self.request.get_tensor("end_logits").data
+            else self.infer_request.get_tensor("end_logits").data
         )
         return QuestionAnsweringModelOutput(start_logits=start_logits, end_logits=end_logits)
 
@@ -358,14 +359,14 @@ class OVModelForTokenClassification(OVModel):
 
         # Run inference
         if self.async_exec:
-            self.request.start_async(inputs)
-            self.request.wait()
+            self.infer_request.start_async(inputs)
+            self.infer_request.wait()
         else:
-            self.request.infer(inputs)
+            self.infer_request.infer(inputs)
         logits = (
-            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.infer_request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else self.request.get_tensor("logits").data
+            else self.infer_request.get_tensor("logits").data
         )
         return TokenClassifierOutput(logits=logits)
 
@@ -432,14 +433,14 @@ class OVModelForFeatureExtraction(OVModel):
 
         # Run inference
         if self.async_exec:
-            self.request.start_async(inputs)
-            self.request.wait()
+            self.infer_request.start_async(inputs)
+            self.infer_request.wait()
         else:
-            self.request.infer(inputs)
+            self.infer_request.infer(inputs)
         last_hidden_state = (
-            torch.from_numpy(self.request.get_tensor("last_hidden_state").data).to(self.device)
+            torch.from_numpy(self.infer_request.get_tensor("last_hidden_state").data).to(self.device)
             if not np_inputs
-            else self.request.get_tensor("last_hidden_state").data
+            else self.infer_request.get_tensor("last_hidden_state").data
         )
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
@@ -507,14 +508,14 @@ class OVModelForMaskedLM(OVModel):
 
         # Run inference
         if self.async_exec:
-            self.request.start_async(inputs)
-            self.request.wait()
+            self.infer_request.start_async(inputs)
+            self.infer_request.wait()
         else:
-            self.request.infer(inputs)
+            self.infer_request.infer(inputs)
         logits = (
-            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.infer_request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else self.request.get_tensor("logits").data
+            else self.infer_request.get_tensor("logits").data
         )
         return MaskedLMOutput(logits=logits)
 
@@ -643,14 +644,14 @@ class OVModelForImageClassification(OVModel):
 
         # Run inference
         if self.async_exec:
-            self.request.start_async(inputs)
-            self.request.wait()
+            self.infer_request.start_async(inputs)
+            self.infer_request.wait()
         else:
-            self.request.infer(inputs)
+            self.infer_request.infer(inputs)
         logits = (
-            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.infer_request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else self.request.get_tensor("logits").data
+            else self.infer_request.get_tensor("logits").data
         )
         return ImageClassifierOutput(logits=logits)
 
@@ -717,14 +718,14 @@ class OVModelForAudioClassification(OVModel):
 
         # Run inference
         if self.async_exec:
-            self.request.start_async(inputs)
-            self.request.wait()
+            self.infer_request.start_async(inputs)
+            self.infer_request.wait()
         else:
-            self.request.infer(inputs)
+            self.infer_request.infer(inputs)
         logits = (
-            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.infer_request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else self.request.get_tensor("logits").data
+            else self.infer_request.get_tensor("logits").data
         )
         return SequenceClassifierOutput(logits=logits)
 
@@ -799,14 +800,14 @@ class OVModelForCTC(OVModel):
 
         # Run inference
         if self.async_exec:
-            self.request.start_async(inputs)
-            self.request.wait()
+            self.infer_request.start_async(inputs)
+            self.infer_request.wait()
         else:
-            self.request.infer(inputs)
+            self.infer_request.infer(inputs)
         logits = (
-            torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+            torch.from_numpy(self.infer_request.get_tensor("logits").data).to(self.device)
             if not np_inputs
-            else self.request.get_tensor("logits").data
+            else self.infer_request.get_tensor("logits").data
         )
         return CausalLMOutput(logits=logits)
 

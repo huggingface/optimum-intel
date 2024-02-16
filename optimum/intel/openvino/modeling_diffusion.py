@@ -572,7 +572,8 @@ class OVModelPart:
         }
         self.ov_config = ov_config or {**self.parent_model.ov_config}
         self.compiled_model = None
-        self.request = None
+        self.request = None  # Deprecated attribute, use compiled_model instead
+        self.infer_request = None
         self._model_name = model_name
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
         config_path = self._model_dir / model_name / self.CONFIG_NAME
@@ -589,14 +590,15 @@ class OVModelPart:
 
             logger.info(f"Compiling the {self._model_name} to {self.device} with config {self.ov_config} ... ")
             self.compiled_model = core.compile_model(self.model, self.device, self.ov_config)
+            self.request = self.compiled_model  # Deprecated attribute, use compiled_model instead
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self.device} SUPPORTED_PROPERTIES:")
                 _print_compiled_model_properties(self.compiled_model)
 
     def create_infer_request(self):
-        if self.request is None:
-            self.request = self.compiled_model.create_infer_request()
+        if self.infer_request is None:
+            self.infer_request = self.compiled_model.create_infer_request()
 
     def clone(self):
         model_cloned = self.__class__(self.model, self.parent_model, ov_config=self.ov_config)
@@ -627,9 +629,9 @@ class OVModelTextEncoder(OVModelPart):
         inputs = {
             "input_ids": input_ids,
         }
-        self.request.start_async(inputs, share_inputs=True)
-        self.request.wait()
-        outputs = [self.request.get_tensor(output).data for output in self.request.results]
+        self.infer_request.start_async(inputs, share_inputs=True)
+        self.infer_request.wait()
+        outputs = [self.infer_request.get_tensor(output).data for output in self.infer_request.results]
         return outputs
 
 
@@ -664,9 +666,9 @@ class OVModelUnet(OVModelPart):
         if timestep_cond is not None:
             inputs["timestep_cond"] = timestep_cond
 
-        self.request.start_async(inputs, share_inputs=True)
-        self.request.wait()
-        outputs = [self.request.get_tensor(output).data for output in self.request.results]
+        self.infer_request.start_async(inputs, share_inputs=True)
+        self.infer_request.wait()
+        outputs = [self.infer_request.get_tensor(output).data for output in self.infer_request.results]
         return outputs
 
 
@@ -683,9 +685,9 @@ class OVModelVaeDecoder(OVModelPart):
         inputs = {
             "latent_sample": latent_sample,
         }
-        self.request.start_async(inputs, share_inputs=True)
-        self.request.wait()
-        outputs = [self.request.results[output].data for output in self.request.results]
+        self.infer_request.start_async(inputs, share_inputs=True)
+        self.infer_request.wait()
+        outputs = [self.infer_request.results[output].data for output in self.infer_request.results]
         return outputs
 
     def _compile(self):
