@@ -11,6 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+
 import logging
 
 from ..utils.import_utils import is_diffusers_available, is_nncf_available
@@ -35,11 +36,10 @@ if is_nncf_available():
 
     patch_torch_operators()
 
-    from .configuration import OVConfig
+    from .configuration import OVConfig, OVWeightQuantizationConfig
     from .quantization import OVQuantizer
     from .trainer import OVTrainer
     from .training_args import OVTrainingArguments
-    from .weight_quantization import OVWeightQuantizationConfig
 
 from .modeling import (
     OVModelForAudioClassification,

@@ -29,6 +29,7 @@ from diffusers import (
     LMSDiscreteScheduler,
     PNDMScheduler,
     StableDiffusionPipeline,
+    StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
 )
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
@@ -964,6 +965,8 @@ class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusi
 
 
 class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLImg2ImgPipelineMixin):
+    auto_model_class = StableDiffusionXLImg2ImgPipeline
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
