@@ -21,8 +21,6 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
-
-
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 from ...intel.utils.import_utils import (
@@ -165,7 +163,6 @@ def main_export(
     # default_config = _check_default_4bit_configs(config)
 
     if ov_config is None and compression_option is not None:
-
         from ...intel.openvino.configuration import OVConfig
 
         if compression_option == "fp16":

@@ -32,7 +32,6 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
-
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
@@ -47,6 +46,7 @@ from .utils import (
     get_input_shapes,
     remove_none_from_dummy_inputs,
 )
+
 
 if is_optimum_version(">=", "1.16.99"):
     from optimum.exporters.onnx.utils import _get_submodels_and_onnx_configs
@@ -598,7 +598,6 @@ def export_from_model(
 
         if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
             if is_nncf_available():
-
                 from ...intel.openvino.configuration import OVConfig
 
                 ov_config = OVConfig(quantization_config={"bits": 8})
