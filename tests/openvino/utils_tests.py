@@ -12,9 +12,10 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import threading
+
 import numpy as np
 import torch
-import threading
 
 
 MODEL_NAMES = {
@@ -100,24 +101,22 @@ TENSOR_ALIAS_TO_TYPE = {
 
 SEED = 42
 
-
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
-    "bert": (68,),
+    "bert": (70,),
     "roberta": (68,),
     "albert": (84,),
-    "vit": (62,),
+    "vit": (64,),
     "blenderbot": (70,),
-    "gpt2": (44,),
-    "wav2vec2": (30,),
+    "gpt2": (46,),
+    "wav2vec2": (34,),
     "distilbert": (66,),
     "t5": (64, 104, 84),
-    "stable-diffusion": (148, 8, 8, 64),
-    "stable-diffusion-xl": (296, 8, 8, 66),
-    "stable-diffusion-xl-refiner": (296, 8, 8, 66),
+    "stable-diffusion": (242, 34, 42, 64),
+    "stable-diffusion-xl": (366, 34, 42, 66),
+    "stable-diffusion-xl-refiner": (366, 34, 42, 66),
 }
 
-
-_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (82, 295)}
+_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (64, 477)}
 
 
 def get_num_quantized_nodes(ov_model):
@@ -137,6 +136,7 @@ def get_num_quantized_nodes(ov_model):
 
 ### Multithreading
 
+
 class OVThread(threading.Thread):
     def __init__(self, target, args):
         super().__init__()
@@ -154,14 +154,15 @@ class OVThread(threading.Thread):
         super().join()
         if self.exception:
             raise self.exception
-        
+
+
 # Each set of args is run in a separate thread.
 # Amount of such sets define how many threads are spawned.
-def run_on_multiple_threads(target, args_list):
+def run_on_multiple_threads(target, list, extra_args):
     threads = []
-    for args in args_list:
-            threads.append(OVThread(target=target, args=args))
+    for input in list:
+        threads.append(OVThread(target=target, args=(input, *extra_args)))
     for thread in threads:
-            thread.start()
+        thread.start()
     for thread in threads:
         thread.join()

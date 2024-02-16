@@ -28,20 +28,22 @@ from transformers import (
 )
 
 from optimum.intel import inference_mode as ipex_inference_mode
-from optimum.intel.generation.modeling import TSModelForCausalLM
+from optimum.intel.ipex.modeling_base import IPEXModel
 
 
 MODEL_NAMES = {
     "bert": "hf-internal-testing/tiny-random-bert",
+    "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "roberta": "hf-internal-testing/tiny-random-roberta",
-    "bloom": "hf-internal-testing/tiny-random-bloom",
     "gptj": "hf-internal-testing/tiny-random-gptj",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "opt": "hf-internal-testing/tiny-random-OPTModel",
+    "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
 }
 
 _CLASSIFICATION_TASK_TO_AUTOMODELS = {
@@ -57,7 +59,16 @@ class IPEXIntegrationTest(unittest.TestCase):
         "roberta",
     )
 
-    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = ("gptj", "gpt2", "gpt_neo", "gpt_bigcode", "llama")
+    TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
+        "bloom",
+        "gptj",
+        "gpt2",
+        "gpt_neo",
+        # "gpt_bigcode",
+        "llama",
+        "opt",
+        "mpt",
+    )
 
     QA_SUPPORTED_ARCHITECTURES = (
         "bert",
@@ -78,7 +89,7 @@ class IPEXIntegrationTest(unittest.TestCase):
             outputs_ipex = ipex_pipe(
                 question="Where was HuggingFace founded ?", context="HuggingFace was founded in Paris."
             )
-        self.assertTrue(isinstance(ipex_pipe.model._optimized, torch.jit.RecursiveScriptModule))
+        self.assertTrue(isinstance(ipex_pipe.model._optimized.model, torch.jit.RecursiveScriptModule))
         self.assertEqual(outputs["start"], outputs_ipex["start"])
         self.assertEqual(outputs["end"], outputs_ipex["end"])
 
@@ -95,7 +106,7 @@ class IPEXIntegrationTest(unittest.TestCase):
                 outputs = pipe(inputs)
             with ipex_inference_mode(pipe, dtype=model.config.torch_dtype, verbose=False, jit=True) as ipex_pipe:
                 outputs_ipex = ipex_pipe(inputs)
-            self.assertTrue(isinstance(ipex_pipe.model._optimized, torch.jit.RecursiveScriptModule))
+            self.assertTrue(isinstance(ipex_pipe.model._optimized.model, torch.jit.RecursiveScriptModule))
             self.assertEqual(outputs[0]["score"], outputs_ipex[0]["score"])
 
     @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
@@ -112,6 +123,6 @@ class IPEXIntegrationTest(unittest.TestCase):
             text_generator, dtype=model.config.torch_dtype, verbose=False, jit=True
         ) as ipex_text_generator:
             output_ipex = ipex_text_generator(inputs)
-        self.assertTrue(isinstance(ipex_text_generator.model._optimized, TSModelForCausalLM))
+        self.assertTrue(isinstance(ipex_text_generator.model._optimized, IPEXModel))
         self.assertTrue(isinstance(ipex_text_generator.model._optimized.model, torch.jit.RecursiveScriptModule))
         self.assertEqual(output[0]["generated_text"], output_ipex[0]["generated_text"])

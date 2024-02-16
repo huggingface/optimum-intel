@@ -6,6 +6,8 @@
 
 🤗 Optimum Intel is the interface between the 🤗 Transformers and Diffusers libraries and the different tools and libraries provided by Intel to accelerate end-to-end pipelines on Intel architectures.
 
+[Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/#introduction) is an open-source library which provides optimizations for both eager mode and graph mode, however, compared to eager mode, graph mode in PyTorch* normally yields better performance from optimization techniques, such as operation fusion.
+
 Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) is an open-source library enabling the usage of the most popular compression techniques such as quantization, pruning and knowledge distillation. It supports automatic accuracy-driven tuning strategies in order for users to easily generate quantized model. The users can easily apply static, dynamic and aware-training quantization approaches while giving an expected accuracy criteria. It also supports different weight pruning techniques enabling the creation of pruned model giving a predefined sparsity target.
 
 [OpenVINO](https://docs.openvino.ai/latest/index.html) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators ([see](https://docs.openvino.ai/latest/openvino_docs_OV_UG_supported_plugins_Supported_Devices.html) the full list of supported devices). It is supplied with a set of tools to optimize your models with compression techniques such as quantization, pruning and knowledge distillation. Optimum Intel provides a simple interface to optimize your Transformers and Diffusers models, convert them to the OpenVINO Intermediate Representation (IR) format and run inference using OpenVINO Runtime.
@@ -19,6 +21,7 @@ To install the latest release of 🤗 Optimum Intel with the corresponding requi
 |:-----------------------------------------------------------------------------------------------------------------|:---------------------------------------------------------------------|
 | [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `pip install --upgrade-strategy eager "optimum[neural-compressor]"`  |
 | [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `pip install --upgrade-strategy eager "optimum[openvino,nncf]"`      |
+| [Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/#introduction)                 | `pip install --upgrade-strategy eager "optimum[ipex]"`               |
 
 The `--upgrade-strategy eager` option is needed to ensure `optimum-intel` is upgraded to the latest version.
 
@@ -37,7 +40,7 @@ or to install from source including dependencies:
 python -m pip install "optimum-intel[extras]"@git+https://github.com/huggingface/optimum-intel.git
 ```
 
-where `extras` can be one or more of `neural-compressor`, `openvino`, `nncf`.
+where `extras` can be one or more of `ipex`, `neural-compressor`, `openvino`, `nncf`.
 
 # Quick tour
 
@@ -75,10 +78,10 @@ It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2
 optimum-cli export openvino --model gpt2 ov_model
 ```
 
-If you add `--int8`, the model linear and embedding weights will be quantized to INT8, the activations will be kept in floating point precision.
+You can also apply 8-bit weight-only quantization when exporting your model : the model linear and embedding weights will be quantized to INT8, the activations will be kept in floating point precision.
 
 ```plain
-optimum-cli export openvino --model gpt2 --int8 ov_model
+optimum-cli export openvino --model gpt2 --weight-format int8 ov_model
 ```
 
 To apply quantization on both weights and activations, you can find more information in the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov).

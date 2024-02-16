@@ -19,9 +19,11 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from transformers import T5Tokenizer, T5TokenizerFast
 from transformers.utils import is_tf_available, is_torch_available
 
 from openvino.runtime import PartialShape, save_model
+from openvino.runtime.exceptions import OVTypeError
 from openvino.runtime.utils.types import get_element_type
 from openvino.tools.ovc import convert_model
 from optimum.exporters.onnx.base import OnnxConfig
@@ -31,14 +33,7 @@ from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflo
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
 from optimum.utils import is_diffusers_available
 
-from ...intel.utils.import_utils import (
-    _torch_version,
-    _transformers_version,
-    is_nncf_available,
-    is_optimum_version,
-    is_torch_version,
-    is_transformers_version,
-)
+from ...intel.utils.import_utils import is_nncf_available, is_optimum_version
 from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_stateful_is_available, patch_stateful
 from .utils import (
@@ -95,6 +90,7 @@ def _save_model(model, path: str, compression_option: Optional[str] = None, comp
                 "ratio": compression_ratio,
             },
         }
+
         model = nncf.compress_weights(model, **COMPRESSION_OPTIONS[compression_option])
 
     compress_to_fp16 = compression_option == "fp16"
@@ -330,18 +326,6 @@ def export_pytorch(
     output = Path(output)
 
     if stateful:
-        if is_transformers_version("<", "4.36") or is_torch_version("<", "2.1.1"):
-            COLOR_RED = "\033[1;31m"
-            COLOR_RESET = "\033[0m"
-            logger.warning(
-                COLOR_RED
-                + "[WARNING] For good performance with stateful models, transformers>=4.36.2 and PyTorch>=2.1.1 are required. "
-                f"This Python environment has Transformers {_transformers_version} and PyTorch {_torch_version}. "
-                "Consider upgrading PyTorch and Transformers, for example by running "
-                "`pip install --upgrade --upgrade-strategy eager optimum[openvino,nncf]`, and export the model again"
-                + COLOR_RESET
-            )
-
         # Trigger bettertransformer together with stateful model because OpenVINO HW-dependent transformations expect
         # both of them are applied to demonstrate the best performance.
         # TODO: Consider applying bettertransformer regardless of stateful flag -- requires additional validation.
@@ -554,3 +538,53 @@ def export_models(
 
     outputs = list(map(list, zip(*outputs)))
     return outputs
+
+
+UNSUPPORTED_TOKENIZER_CLASSES = (
+    T5Tokenizer,
+    T5TokenizerFast,
+)
+
+
+def export_tokenizer(
+    tokenizer,
+    output: Union[str, Path],
+    suffix: Optional[str] = "",
+):
+    from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME  # avoid circular imports
+
+    if isinstance(tokenizer, UNSUPPORTED_TOKENIZER_CLASSES):
+        logger.info(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
+        return
+
+    try:
+        from openvino_tokenizers import convert_tokenizer
+    except ModuleNotFoundError:
+        # avoid this message before tokenizers are part of the openvino dependencies
+        # logger.info(
+        #     "Run `pip install openvino-tokenizers[transformers]` to get OpenVINO tokenizer/detokenizer models."
+        # )
+        return
+
+    if not isinstance(output, Path):
+        output = Path(output)
+
+    try:
+        converted = convert_tokenizer(tokenizer, with_detokenizer=True)
+    except NotImplementedError:
+        logger.warning("Detokenizer is not supported, convert tokenizer only.")
+        converted = convert_tokenizer(tokenizer, with_detokenizer=False)
+    except OVTypeError:
+        logger.warning(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
+        return
+    except Exception as exception:
+        logger.warning(
+            f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported. Exception: {exception}"
+        )
+        return
+
+    if not isinstance(converted, tuple):
+        converted = (converted,)
+
+    for model, file_name in zip(converted, (OV_TOKENIZER_NAME, OV_DETOKENIZER_NAME)):
+        save_model(model, output / file_name.format(suffix))

@@ -15,7 +15,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Optional, Union
-import time
+
 import numpy as np
 import openvino
 import torch
@@ -129,8 +129,12 @@ class OVModel(OVBaseModel):
         Use the specified `device` for inference. For example: "cpu" or "gpu". `device` can
         be in upper or lower case. To speed up first inference, call `.compile()` after `.to()`.
         """
-        self.compiled_model = None
-        self._device = str(device).upper()
+        if isinstance(device, str):
+            self._device = device.upper()
+            self.compiled_model = None
+        else:
+            logger.warning(f"device must be of type {str} but got {type(device)} instead")
+
         return self
 
     def forward(self, *args, **kwargs):
@@ -353,7 +357,7 @@ class OVModelForTokenClassification(OVModel):
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
-        if self.async_exec == True:
+        if self.async_exec:
             self.request.start_async(inputs)
             self.request.wait()
         else:
@@ -427,7 +431,7 @@ class OVModelForFeatureExtraction(OVModel):
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
-        if self.async_exec == True:
+        if self.async_exec:
             self.request.start_async(inputs)
             self.request.wait()
         else:
@@ -502,7 +506,7 @@ class OVModelForMaskedLM(OVModel):
             inputs["token_type_ids"] = token_type_ids
 
         # Run inference
-        if self.async_exec == True:
+        if self.async_exec:
             self.request.start_async(inputs)
             self.request.wait()
         else:
@@ -638,7 +642,7 @@ class OVModelForImageClassification(OVModel):
         }
 
         # Run inference
-        if self.async_exec == True:
+        if self.async_exec:
             self.request.start_async(inputs)
             self.request.wait()
         else:
@@ -712,7 +716,7 @@ class OVModelForAudioClassification(OVModel):
             inputs["attention_mask"] = attention_mask
 
         # Run inference
-        if self.async_exec == True:
+        if self.async_exec:
             self.request.start_async(inputs)
             self.request.wait()
         else:
@@ -794,7 +798,7 @@ class OVModelForCTC(OVModel):
             inputs["attention_mask"] = attention_mask
 
         # Run inference
-        if self.async_exec == True:
+        if self.async_exec:
             self.request.start_async(inputs)
             self.request.wait()
         else:

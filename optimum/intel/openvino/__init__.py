@@ -14,7 +14,14 @@
 import logging
 
 from ..utils.import_utils import is_diffusers_available, is_nncf_available
-from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
+from .utils import (
+    OV_DECODER_NAME,
+    OV_DECODER_WITH_PAST_NAME,
+    OV_DETOKENIZER_NAME,
+    OV_ENCODER_NAME,
+    OV_TOKENIZER_NAME,
+    OV_XML_FILE_NAME,
+)
 
 
 if is_nncf_available():
@@ -32,6 +39,7 @@ if is_nncf_available():
     from .quantization import OVQuantizer
     from .trainer import OVTrainer
     from .training_args import OVTrainingArguments
+    from .weight_quantization import OVWeightQuantizationConfig
 
 from .modeling import (
     OVModelForAudioClassification,

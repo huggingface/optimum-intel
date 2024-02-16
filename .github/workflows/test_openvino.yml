@@ -19,7 +19,6 @@ jobs:
       matrix:
         python-version: [3.8, 3.11]
         os: [ubuntu-latest]
-        openvino: ["openvino", "openvino-nightly"]
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -33,10 +32,7 @@ jobs:
         python -m pip install --upgrade pip
         # install PyTorch CPU version to avoid installing CUDA packages on GitHub runner without GPU
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        pip install .[openvino,nncf,tests,diffusers]
-    - name: Install openvino-nightly (optional)
-      run: pip uninstall -y openvino && pip install ${{ matrix.openvino }}
-      if: matrix.openvino == 'openvino-nightly'
+        pip install .[openvino,openvino-tokenizers,nncf,tests,diffusers]
     - name: Test with Pytest
       run: |
         pytest tests/openvino/ --ignore test_modeling_basic

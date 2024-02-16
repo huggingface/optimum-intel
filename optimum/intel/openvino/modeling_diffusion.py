@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import importlib
 import logging
 import os
@@ -88,7 +89,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         **kwargs,
     ):
         self._internal_dict = config
-        self._device = str(device).upper()
+        self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {}
         self._model_save_dir = (
@@ -329,8 +330,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         )
 
     def to(self, device: str):
-        self._device = device.upper()
-        self.clear_requests()
+        if isinstance(device, str):
+            self._device = device.upper()
+            self.clear_requests()
+        else:
+            logger.warning(f"device must be of type {str} but got {type(device)} instead")
+
         return self
 
     @property
@@ -517,26 +522,35 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         scheduler = self.scheduler
         unet = self.unet.model
         model_save_dir = self._model_save_dir
-        pipe_cloned = self.__class__(unet=unet,
-                                     config=config,
-                                     scheduler=scheduler,
-                                     compile=False,
-                                     dynamic_shapes=False,
-                                     model_save_dir=model_save_dir)
+        pipe_cloned = self.__class__(
+            unet=unet,
+            config=config,
+            scheduler=scheduler,
+            compile=False,
+            dynamic_shapes=False,
+            model_save_dir=model_save_dir,
+        )
         pipe_cloned.unet = self.unet.clone()
         if self.vae_decoder is not None:
             pipe_cloned.vae_decoder = self.vae_decoder.clone()
         if self.text_encoder is not None:
-            pipe_cloned.text_encoder= self.text_encoder.clone()
+            pipe_cloned.text_encoder = self.text_encoder.clone()
         if self.text_encoder_2 is not None:
-            pipe_cloned.text_encoder_2= self.text_encoder_2.clone()
+            pipe_cloned.text_encoder_2 = self.text_encoder_2.clone()
         if self.vae_encoder is not None:
-            pipe_cloned.vae_encoder= self.vae_encoder.clone()
+            pipe_cloned.vae_encoder = self.vae_encoder.clone()
         pipe_cloned.vae_scale_factor = self.vae_scale_factor
         pipe_cloned.image_processor = self.image_processor
         pipe_cloned.tokenizer = self.tokenizer
         pipe_cloned.tokenizer_2 = self.tokenizer_2
+        pipe_cloned.is_dynamic = self.is_dynamic
+        # Default PNDMscheduler is not working in HF with multithreading
+        # https://github.com/huggingface/diffusers/issues/3672
+        # Full copy scheduler as a WA
+        if isinstance(self.scheduler, PNDMScheduler):
+            pipe_cloned.scheduler = copy.deepcopy(self.scheduler)
         return pipe_cloned
+
 
 class OVModelPart:
     CONFIG_NAME = "config.json"
@@ -588,6 +602,7 @@ class OVModelPart:
         model_cloned = self.__class__(self.model, self.parent_model, ov_config=self.ov_config)
         model_cloned.model = self.model
         model_cloned.compiled_model = self.compiled_model
+        model_cloned.config = self.config
         return model_cloned
 
     @property
@@ -616,7 +631,7 @@ class OVModelTextEncoder(OVModelPart):
         self.request.wait()
         outputs = [self.request.get_tensor(output).data for output in self.request.results]
         return outputs
-    
+
 
 class OVModelUnet(OVModelPart):
     def __init__(

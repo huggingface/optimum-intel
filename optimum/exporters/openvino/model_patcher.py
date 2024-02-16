@@ -14,16 +14,31 @@
 
 import logging as log
 
-from optimum.intel.utils.import_utils import is_torch_version
+from optimum.intel.utils.import_utils import (
+    _torch_version,
+    _transformers_version,
+    is_torch_version,
+    is_transformers_version,
+)
 
 
 def patch_model_with_bettertransformer(model):
-    if is_torch_version("<", "2.0"):
+    # check that the model has not yet been pathced
+    if hasattr(model, "use_bettertransformer") and model.use_bettertransformer is True:
+        return model
+
+    if is_transformers_version("<", "4.36") or is_torch_version("<", "2.1.1"):
+        COLOR_RED = "\033[1;31m"
+        COLOR_RESET = "\033[0m"
         log.warn(
-            "integration Scaled Dot Product Attention optimization supported only with torch > 2.0."
-            "Usage model with stateful=True may be non-effective if model does not contain torch.functional.scaled_dot_product_attention"
-            "It is recommended to upgrade PyTorch version for using stateful model or use stateful=False"
+            COLOR_RED
+            + "[WARNING] For good performance with stateful models, transformers>=4.36.2 and PyTorch>=2.1.1 are required. "
+            f"This Python environment has Transformers {_transformers_version} and PyTorch {_torch_version}. "
+            "Consider upgrading PyTorch and Transformers, for example by running "
+            "`pip install --upgrade --upgrade-strategy eager optimum[openvino,nncf]`, and export the model again"
+            + COLOR_RESET
         )
+
     # model already has required SDPA implementation
     if getattr(model, "_supports_sdpa", False) and getattr(model.config, "_attn_implementation", "eager") == "sdpa":
         return model

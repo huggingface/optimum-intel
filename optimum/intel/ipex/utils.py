@@ -1,4 +1,4 @@
-#  Copyright 2022 The HuggingFace Team. All rights reserved.
+#  Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -13,15 +13,9 @@
 #  limitations under the License.
 
 
-import warnings
-
-from .modeling_base import INCModelForCausalLM
-
-
-class INCModelForCausalLM(INCModelForCausalLM):
-    # warning at import time
-    warnings.warn(
-        "Importing `INCModelForCausalLM` from `optimum/intel/neural_compressor/modeling_decoder.py` is deprecated and will "
-        "be removed in a future verson of optimum-intel. Import as `from optimum.intel.neural_compressor import INCModelForCausalLM instead.",
-        FutureWarning,
-    )
+_HEAD_TO_AUTOMODELS = {
+    "text-generation": "IPEXModelForCausalLM",
+    "text-classification": "IPEXModelForSequenceClassification",
+    "token-classification": "IPEXModelForTokenClassification",
+    "question-answering": "IPEXModelForQuestionAnswering",
+}

@@ -1,3 +1,19 @@
+#  Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
+# ruff: noqa
+
 import logging
 from typing import Union
 
@@ -7,7 +23,19 @@ from transformers import add_start_docstrings
 from transformers.pipelines import Pipeline
 from transformers.utils import is_ipex_available
 
-from ..generation.modeling import TSModelForCausalLM, jit_trace
+from ...exporters.tasks import TasksManager
+from ..generation.modeling import jit_trace
+from .modeling_base import (
+    IPEXModel,
+    IPEXModelForCausalLM,
+    IPEXModelForMaskedLM,
+    IPEXModelForSequenceClassification,
+    IPEXModelForTokenClassification,
+    IPEXModelForQuestionAnswering,
+)
+
+
+from .utils import _HEAD_TO_AUTOMODELS
 
 
 logger = logging.getLogger(__name__)
@@ -42,17 +70,6 @@ class _ModelFallbackWrapper:
             return self.item
 
 
-class _ModelGenerationWrapper(_ModelFallbackWrapper):
-    def __getattr__(self, item):
-        if not item.startswith("__"):
-            try:
-                return getattr(self._optimized, item)
-            except Exception:
-                return getattr(self._default, item)
-        else:
-            return self.item
-
-
 @add_start_docstrings(
     """
     inference_mode is an Intel specific context-manager analogous to PyTorch's inference_mode to use for inference
@@ -66,7 +83,6 @@ class inference_mode:
         self,
         model: Union[nn.Module, Pipeline],
         dtype: torch.dtype = torch.float32,
-        jit: bool = False,
         **kwargs,
     ):
         """
@@ -88,65 +104,47 @@ class inference_mode:
         self._dtype = dtype
         self._graph_mode = False  # Let's keep for future use when it doesn't hang anymore
         self._original = None
-        self._jit = jit
+
+        if "jit" in kwargs:
+            logger.warning(
+                "`jit` is deprecated and will be removed in a future version. Use `IPEXModel` to load and export your model to TorchScript instead."
+            )
+        self._jit = kwargs.pop("jit", False)
 
     def __enter__(self):
         if self._model.framework == "pt":
             with torch.inference_mode():
                 try:
                     ipex.enable_onednn_fusion(True)
-                    if isinstance(self._model, Pipeline):
-                        self._original = self._model.model
 
-                        model = ipex.optimize(
-                            self._model.model,
-                            dtype=self._dtype,
-                            graph_mode=self._graph_mode,
-                            level="O1",
-                            auto_kernel_selection=True,
+                    self._original = self._model.model if isinstance(self._model, Pipeline) else self._model
+                    model = ipex.optimize(
+                        self._original,
+                        dtype=self._dtype,
+                        graph_mode=self._graph_mode,
+                        level="O1",
+                        auto_kernel_selection=True,
+                    )
+                    if self._jit:
+                        use_cache = getattr(self._original.config, "use_cache", False)
+                        task = (
+                            self._model.task
+                            if isinstance(self._model, Pipeline)
+                            else TasksManager._infer_task_from_model_or_model_class(model)
                         )
+                        if task in _HEAD_TO_AUTOMODELS:
+                            model = jit_trace(model, task, use_cache)
+                            auto_model_class = eval(_HEAD_TO_AUTOMODELS[task])
+                            model = auto_model_class(model, self._original.config, use_cache=use_cache)
 
-                        # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
-                        with torch.cpu.amp.autocast(
-                            enabled=(self._dtype == torch.bfloat16 and self._original.dtype != torch.bfloat16)
-                        ), torch.no_grad():
-                            if self._jit:
-                                try:
-                                    use_cache = False
-                                    if hasattr(self._original.config, "use_cache") and self._original.config.use_cache:
-                                        use_cache = True
-                                    model = jit_trace(
-                                        model=model,
-                                        task=self._model.task,
-                                        use_cache=use_cache,
-                                    )
-                                    if self._model.task == "text-generation":
-                                        model = TSModelForCausalLM(
-                                            model=model,
-                                            config=self._original.config,
-                                            use_cache=use_cache,
-                                            model_dtype=self._original.dtype,
-                                        )
-                                except Exception as e:
-                                    logger.warning(f"failed to use PyTorch jit mode due to: {e}.")
-                                # Patching model with the new one
-                            self._model.model = _ModelGenerationWrapper(model, self._original)
+                    # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
+                    with torch.cpu.amp.autocast(enabled=self._dtype == torch.bfloat16):
+                        if isinstance(self._model, Pipeline):
+                            # Patching model with the new one
+                            self._model.model = _ModelFallbackWrapper(model, self._original)
                             return self._model
-                    else:
-                        self._original = self._model
-                        model = ipex.optimize(
-                            self._model,
-                            dtype=self._dtype,
-                            graph_mode=self._graph_mode,
-                            level="O1",
-                            auto_kernel_selection=True,
-                        )
+                        return model
 
-                        # Enable automatic mixed precision (AMP) if we are going to target `bfloat16`
-                        with torch.cpu.amp.autocast(
-                            enabled=(self._dtype == torch.bfloat16 and self._original.dtype != torch.bfloat16)
-                        ):
-                            return model
                 except RuntimeError:
                     return self._model
         else:
