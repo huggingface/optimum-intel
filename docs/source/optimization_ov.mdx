@@ -86,8 +86,6 @@ model = OVModelForCausalLM.from_pretrained(
 ) 
 ```
 
-> **NOTE:** if `load_in_4bit` is used without `quantization_config` provided, a pre-defined `model_id` specific configuration is used in case it exists or a default 4-bit configuration is used otherwise.
-
 For more details, please refer to the corresponding NNCF [documentation](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/CompressWeights.md).
 
 
