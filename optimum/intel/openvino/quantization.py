@@ -247,6 +247,10 @@ class OVQuantizer(OptimumQuantizer):
             )
 
         elif isinstance(self.model, torch.nn.Module):
+            logger.warning(
+                "The support of `torch.nn.Module` will be deprecated in a future release of optimum-intel, please use the corresponding `OVModelForXxx` class to load you model."
+                "To convert a PyTorch model to OpenVINO, you can set `export=True` when loading your model as `OVModelForXxx.from_pretrained(..., export=True)`"
+            )
             self._quantize_torchmodel(
                 calibration_dataset,
                 save_directory,
