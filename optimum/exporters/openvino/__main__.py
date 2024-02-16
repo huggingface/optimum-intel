@@ -14,7 +14,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
@@ -40,6 +40,9 @@ else:
         "whisper",
     ]
 
+
+if TYPE_CHECKING:
+    from optimum.intel.openvino.configuration import OVConfig
 
 _COMPRESSION_OPTIONS = {
     "int8": {"bits": 8},

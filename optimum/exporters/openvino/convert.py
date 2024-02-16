@@ -18,7 +18,7 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers import T5Tokenizer, T5TokenizerFast
 from transformers.utils import is_tf_available, is_torch_available
@@ -69,6 +69,10 @@ if is_diffusers_available():
 
 if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
+
+
+if TYPE_CHECKING:
+    from optimum.intel.openvino.configuration import OVConfig
 
 
 def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):

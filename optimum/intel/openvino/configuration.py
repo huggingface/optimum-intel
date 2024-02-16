@@ -77,7 +77,7 @@ INT8_WEIGHT_COMPRESSION_CONFIG = {
 }
 
 
-DEFAULT_4BIT_CONFIGS = {
+_DEFAULT_4BIT_CONFIGS = {
     "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 32, "ratio": 0.5},
     "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
     "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
@@ -241,4 +241,4 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
 
 
 def _check_default_4bit_configs(config: PretrainedConfig):
-    return DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
+    return _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)

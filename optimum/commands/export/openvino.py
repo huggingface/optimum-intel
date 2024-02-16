@@ -77,7 +77,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"],
+        choices=["fp32", "fp16", "int8", "int4", "int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"],
         default=None,
         help=(
             "The weight format of the exporting model, e.g. f32 stands for float32 weights, f16 - for float16 weights, i8 - INT8 weights, int4_* - for INT4 compressed weights."
@@ -86,11 +86,24 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--ratio",
         type=float,
-        default=0.8,
+        default=None,
         help=(
             "Compression ratio between primary and backup precision. In the case of INT4, NNCF evaluates layer sensitivity and keeps the most impactful layers in INT8"
             "precision (by default 20%% in INT8). This helps to achieve better accuracy after weight compression."
         ),
+    )
+    optional_group.add_argument(
+        "--sym",
+        type=bool,
+        default=None,
+        help=("Whether to apply symmetric quantization"),
+    )
+
+    optional_group.add_argument(
+        "--group-size",
+        type=int,
+        default=None,
+        help=("The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization."),
     )
     optional_group.add_argument(
         "--disable-stateful",
@@ -132,6 +145,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
     def run(self):
         from ...exporters.openvino.__main__ import main_export
+        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, OVConfig
 
         if self.args.fp16:
             logger.warning(
@@ -144,6 +158,37 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             self.args.weight_format = "int8"
 
+        ov_config = None
+        if self.args.weight_format in {"fp16", "fp32"}:
+            ov_config = OVConfig(dtype=self.args.weight_format)
+        else:
+            is_int8 = self.args.weight_format == "int8"
+
+            # For int4 quantization if not parameter is provided, then use the default config if exist
+            if (
+                not is_int8
+                and self.args.ratio is None
+                and self.args.group_size is None
+                and self.args.sym is None
+                and self.args.model in _DEFAULT_4BIT_CONFIGS
+            ):
+                quantization_config = _DEFAULT_4BIT_CONFIGS[self.args.model]
+            else:
+                quantization_config = {
+                    "bits": 8 if is_int8 else 4,
+                    "ratio": 1 if is_int8 else (self.args.ratio or 0.8),
+                    "sym": self.args.sym or False,
+                    "group_size": -1 if is_int8 else self.args.group_size,
+                }
+
+            if self.args.weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:
+                logger.warning(
+                    f"--weight-format {self.args.weight_format} is deprecated, possible choices are fp32, fp16, int8, int4"
+                )
+                quantization_config["sym"] = "asym" not in self.args.weight_format
+                quantization_config["group_size"] = 128 if "128" in self.args.weight_format else 64
+            ov_config = OVConfig(quantization_config=quantization_config)
+
         # TODO : add input shapes
         main_export(
             model_name_or_path=self.args.model,
@@ -153,8 +198,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             cache_dir=self.args.cache_dir,
             trust_remote_code=self.args.trust_remote_code,
             pad_token_id=self.args.pad_token_id,
-            compression_option=self.args.weight_format,
-            compression_ratio=self.args.ratio,
+            ov_config=ov_config,
             stateful=not self.args.disable_stateful,
             convert_tokenizer=self.args.convert_tokenizer,
             # **input_shapes,
