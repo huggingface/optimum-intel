@@ -90,13 +90,13 @@ class IPEXModel(OptimizedModel):
         cls,
         model_id: str,
         config: PretrainedConfig,
+        use_cache: bool = True,
         use_auth_token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: Optional[str] = None,
         subfolder: str = "",
         local_files_only: bool = False,
-        use_cache: bool = True,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         trust_remote_code: bool = False,
     ):
@@ -134,6 +134,7 @@ class IPEXModel(OptimizedModel):
             cache_dir=cache_dir,
             local_files_only=local_files_only,
             use_cache=use_cache,
+            model_dtype=torch_dtype,
         )
 
     @classmethod
@@ -325,9 +326,11 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     ):
         # Perform the initial warmup at the end of __init__
         super().__init__(model, config, model_save_dir=model_save_dir, warmup=False)
+        GenerationMixin.__init__(self)
 
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", self.dtype)
+        self._dtype = self.model_dtype
         self.use_cache = "past_key_values" in self.input_names
 
         if use_cache ^ self.use_cache:
@@ -346,14 +349,43 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             )
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
-        self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
-        self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
         if hasattr(self.model_cls, "_convert_to_bloom_cache"):
             self._convert_to_bloom_cache = self.model_cls._convert_to_bloom_cache
         if warmup:
             self._init_warmup()
+
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
+        past_key_values = past_key_values or kwargs.get("past", None)
+
+        if self.use_cache and past_key_values is not None:
+            input_ids = input_ids[:, -1:]
+
+        # `past_key_values` may be in the stardard format (e.g. in contrastive search), converts to bloom's format if needed
+        if past_key_values is not None and self.config.model_type == "bloom":
+            if past_key_values[0][0].shape[0] == input_ids.shape[0]:
+                past_key_values = self._convert_to_bloom_cache(past_key_values)
+
+        position_ids = kwargs.get("position_ids", None)
+
+        attention_mask = kwargs.get("attention_mask", None)
+
+        if attention_mask is not None and position_ids is None:
+            # create position_ids on the fly for batch generation
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values:
+                position_ids = position_ids[:, -1].unsqueeze(-1)
+
+        return {
+            "input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "use_cache": self.use_cache,
+            "position_ids": position_ids,
+            "attention_mask": attention_mask,
+            "token_type_ids": None,
+        }
 
     def _prepare_past_key_values(self, input_ids):
         model_type = self.config.model_type.replace("_", "-")
