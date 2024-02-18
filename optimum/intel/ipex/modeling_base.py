@@ -193,7 +193,7 @@ class IPEXModel(OptimizedModel):
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
-        outputs = self._call_model(**inputs)
+        outputs = self.model(**inputs)
         return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
     def eval(self):
@@ -215,14 +215,6 @@ class IPEXModel(OptimizedModel):
 
     def can_generate(self):
         return isinstance(self, GenerationMixin)
-
-    def _call_model(self, *args, **kwargs):
-        try:
-            with torch.autocast(self.device.type, self.dtype):
-                out = self.model(*args, **kwargs)
-        except RuntimeError:
-            out = self.model(*args, **kwargs)
-        return out
 
     def _init_warmup(self):
         # warmup, the first 2 forwards of an IPEX model include some preprocessing steps and
@@ -261,7 +253,7 @@ class IPEXModelForImageClassification(IPEXModel):
             "pixel_values": pixel_values,
         }
 
-        outputs = self._call_model(**inputs)
+        outputs = self.model(**inputs)
         return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
 
@@ -282,7 +274,7 @@ class IPEXModelForAudioClassification(IPEXModel):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
-        outputs = self._call_model(**inputs)
+        outputs = self.model(**inputs)
         return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
 
@@ -305,7 +297,7 @@ class IPEXModelForQuestionAnswering(IPEXModel):
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
-        outputs = self._call_model(**inputs)
+        outputs = self.model(**inputs)
         start_logits = outputs["start_logits"] if isinstance(outputs, dict) else outputs[0]
         end_logits = outputs["end_logits"] if isinstance(outputs, dict) else outputs[1]
         return ModelOutput(start_logits=start_logits, end_logits=end_logits)
@@ -451,7 +443,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             inputs["past_key_values"] = past_key_values
 
         # 2. Model forward
-        outputs = self._call_model(**inputs)
+        outputs = self.model(**inputs)
 
         # 3. Process model outputs
         if isinstance(outputs, (list, tuple)):
