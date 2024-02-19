@@ -22,6 +22,8 @@ from typing import Optional, Tuple, Union
 import intel_extension_for_pytorch as ipex
 import torch
 from huggingface_hub import hf_hub_download
+from intel_extension_for_pytorch.cpu._auto_kernel_selection import _enable_tpp
+from intel_extension_for_pytorch.transformers.optimize import get_dummy_input
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -45,12 +47,31 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
+from ...exporters.ipex import export_model
 from ..generation.modeling import jit_trace, prepare_jit_inputs
 from ..utils.import_utils import is_torch_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
 
 
 logger = logging.getLogger(__name__)
+
+
+def ipex_jit_trace(model):
+    sample_inputs = get_dummy_input(model, return_dict=True)
+    model.config.return_dict = False
+    _enable_tpp()
+    model = ipex.optimize(model.eval(), dtype=model.dtype, inplace=True)
+    trace_model = torch.jit.trace(
+        model,
+        example_kwarg_inputs=sample_inputs,
+        strict=False,
+        check_trace=False,
+    )
+    trace_model = torch.jit.freeze(trace_model)
+    trace_model(**sample_inputs)
+    trace_model(**sample_inputs)
+
+    return trace_model
 
 
 class IPEXModel(OptimizedModel):
@@ -73,6 +94,7 @@ class IPEXModel(OptimizedModel):
         self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model.to(self._device)
         self.model_save_dir = model_save_dir
+        self.is_ipex_exported = kwargs.get("is_ipex_exported", None)
 
         self.input_names = {
             inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
@@ -116,9 +138,13 @@ class IPEXModel(OptimizedModel):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        model = patch_decoder_attention_mask(model)
-        model = ipex.optimize(model, dtype=torch_dtype, level="O1", auto_kernel_selection=True)
-        traced_model = jit_trace(model, task, use_cache)
+        is_ipex_exported = export_model(model)
+        if is_ipex_exported:
+            traced_model = ipex_jit_trace(model)
+        else:
+            model = patch_decoder_attention_mask(model)
+            model = ipex.optimize(model, dtype=torch_dtype, level="O1", auto_kernel_selection=True)
+            traced_model = jit_trace(model, task, use_cache)
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
@@ -135,6 +161,7 @@ class IPEXModel(OptimizedModel):
             local_files_only=local_files_only,
             use_cache=use_cache,
             model_dtype=torch_dtype,
+            is_ipex_exported=is_ipex_exported,
         )
 
     @classmethod
@@ -193,7 +220,7 @@ class IPEXModel(OptimizedModel):
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
-        outputs = self._call_model(**inputs)
+        outputs = self.model(**inputs)
         return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
     def eval(self):
@@ -216,21 +243,16 @@ class IPEXModel(OptimizedModel):
     def can_generate(self):
         return isinstance(self, GenerationMixin)
 
-    def _call_model(self, *args, **kwargs):
-        try:
-            with torch.autocast(self.device.type, self.dtype):
-                out = self.model(*args, **kwargs)
-        except RuntimeError:
-            out = self.model(*args, **kwargs)
-        return out
-
     def _init_warmup(self):
         # warmup, the first 2 forwards of an IPEX model include some preprocessing steps and
         # the results of the compute are unpredictable
         use_cache = "past_key_values" in self.input_names
-        dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
-        for _ in range(2):
-            self(**dummy_inputs)
+        if self.is_ipex_exported:
+            pass  # not support currently, to do...
+        else:
+            dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
+            for _ in range(2):
+                self(**dummy_inputs)
 
 
 class IPEXModelForSequenceClassification(IPEXModel):
@@ -261,7 +283,7 @@ class IPEXModelForImageClassification(IPEXModel):
             "pixel_values": pixel_values,
         }
 
-        outputs = self._call_model(**inputs)
+        outputs = self.model(**inputs)
         return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
 
@@ -282,7 +304,7 @@ class IPEXModelForAudioClassification(IPEXModel):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
-        outputs = self._call_model(**inputs)
+        outputs = self.model(**inputs)
         return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
 
@@ -305,7 +327,7 @@ class IPEXModelForQuestionAnswering(IPEXModel):
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
-        outputs = self._call_model(**inputs)
+        outputs = self.model(**inputs)
         start_logits = outputs["start_logits"] if isinstance(outputs, dict) else outputs[0]
         end_logits = outputs["end_logits"] if isinstance(outputs, dict) else outputs[1]
         return ModelOutput(start_logits=start_logits, end_logits=end_logits)
@@ -332,6 +354,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         self.model_dtype = kwargs.get("model_dtype", self.dtype)
         self._dtype = self.model_dtype
         self.use_cache = "past_key_values" in self.input_names
+        self.is_ipex_exported = kwargs.get("is_ipex_exported", None)
 
         if use_cache ^ self.use_cache:
             raise ValueError(
@@ -399,7 +422,21 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         else:
             num_attention_heads = self.normalized_config.num_attention_heads
 
-        if model_type == "bloom":
+        if self.is_ipex_exported:
+            beam_idx_tmp = torch.zeros((2048, input_ids.shape[0]), dtype=torch.long).contiguous()
+            past_key_values = tuple(
+                [
+                    (
+                        torch.zeros(1, 0, 0, 1, dtype=torch.long).contiguous(),
+                        torch.zeros([1, 1, 1, 1]).contiguous(),
+                        torch.zeros([1, 1, 1, 1]).contiguous(),
+                        beam_idx_tmp,
+                    )
+                    for i in range(num_layers)
+                ]
+            )
+            return past_key_values
+        elif model_type == "bloom":
             shape_key = (batch_size * num_attention_heads, d_k, 0)
             shape_value = (batch_size * num_attention_heads, 0, d_k)
             key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)
@@ -417,6 +454,104 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             past_key_values = tuple(tuple(pkv for _ in range(nb_pkv)) for _ in range(num_layers))
 
         return past_key_values
+
+    def _reorder_cache(
+        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
+        [`~PreTrainedModel.beam_sample`] is called.
+        This is required to match `past_key_values` with the correct beam_idx at every generation step.
+        """
+        if self.config.model_type == "bloom":
+            return self._reorder_cache_bloom(past_key_values, beam_idx)
+
+        if self.is_ipex_exported:
+            if len(past_key_values[0]) == 4 and past_key_values[0][0].shape[-1] == 1:  # discrete kv_cache
+                for layer_past in past_key_values:
+                    layer_past[3][layer_past[0].size(-2) - 1] = beam_idx
+                return past_key_values
+            elif len(past_key_values[0]) == 8:
+                for layer_past in past_key_values:
+                    layer_past[3][layer_past[0].size(-2) - 1] = beam_idx
+                    layer_past[7][layer_past[0].size(-2) - 1] = beam_idx
+                return past_key_values
+            else:
+                return tuple(
+                    tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+                    for layer_past in past_key_values
+                )
+        # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
+        return tuple(
+            tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+            for layer_past in past_key_values
+        )
+
+    # Copied from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
+    def _reorder_cache_bloom(
+        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
+        [`~PreTrainedModel.beam_sample`] is called for bloom architecture.
+        This is required to match `past_key_values` with the correct beam_idx at every generation step.
+        """
+        standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
+
+        # Get a copy of `beam_idx` on all the devices where we need those indices.
+        device_to_beam_idx = {
+            past_state.device: beam_idx.to(past_state.device)
+            for layer_past in past_key_values
+            for past_state in layer_past
+        }
+        reordered_past = tuple(
+            (
+                layer_past[0].index_select(0, device_to_beam_idx[layer_past[0].device]),
+                layer_past[1].index_select(0, device_to_beam_idx[layer_past[0].device]),
+            )
+            for layer_past in standardized_past
+        )
+        return self._convert_to_bloom_cache(reordered_past)
+
+    # Copied from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_bloom_cache
+    @staticmethod
+    def _convert_to_bloom_cache(past_key_value: Tuple[Tuple[torch.Tensor]]) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        Converts the cache to the format expected by Bloom, i.e. to tuple(tuple([batch_size * num_heads, ...]))
+        """
+        batch_size, num_heads, head_dim, seq_length = past_key_value[0][0].shape
+        batch_size_times_num_heads = batch_size * num_heads
+        # key:  [batch_size, num_heads, head_dim, seq_length] -> [batch_size * num_heads, head_dim, seq_length]
+        # value: [batch_size, num_heads, seq_length, head_dim] -> [batch_size * num_heads, seq_length, head_dim]
+        return tuple(
+            (
+                layer_past[0].view(batch_size_times_num_heads, head_dim, seq_length),
+                layer_past[1].view(batch_size_times_num_heads, seq_length, head_dim),
+            )
+            for layer_past in past_key_value
+        )
+
+    # Adapted from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_standard_cache
+    def _convert_to_standard_cache(
+        self, past_key_value: Tuple[Tuple[torch.Tensor]], batch_size: int
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        Standardizes the format of the cache so as to match most implementations, i.e. to tuple(tuple([batch_size, num_heads, ...]))
+        """
+        if self.config.model_type != "bloom":
+            return past_key_value
+
+        batch_size_times_num_heads, head_dim, seq_length = past_key_value[0][0].shape
+        num_heads = batch_size_times_num_heads // batch_size
+        # key: [batch_size * num_heads, head_dim, seq_length] -> [batch_size, num_heads, head_dim, seq_length]
+        # value: [batch_size * num_heads, seq_length, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
+        return tuple(
+            (
+                layer_past[0].view(batch_size, num_heads, head_dim, seq_length),
+                layer_past[1].view(batch_size, num_heads, seq_length, head_dim),
+            )
+            for layer_past in past_key_value
+        )
 
     def forward(
         self,
@@ -451,7 +586,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             inputs["past_key_values"] = past_key_values
 
         # 2. Model forward
-        outputs = self._call_model(**inputs)
+        outputs = self.model(**inputs)
 
         # 3. Process model outputs
         if isinstance(outputs, (list, tuple)):
