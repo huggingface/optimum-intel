@@ -37,6 +37,8 @@ from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
 from ...intel.utils.import_utils import is_nncf_available
+from .base import init_model_configs
+from .model_configs import *  # noqa: F403
 from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_export_task_support_stateful, ensure_stateful_is_available, patch_stateful
 from .utils import (
@@ -47,8 +49,7 @@ from .utils import (
     get_input_shapes,
     remove_none_from_dummy_inputs,
 )
-from .base import init_model_configs
-from .model_configs import *
+
 
 init_model_configs()
 

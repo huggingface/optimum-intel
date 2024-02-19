@@ -39,7 +39,7 @@ def init_model_configs():
         TasksManager._TIMM_SUPPORTED_MODEL_TYPE[model]["openvino"] = deepcopy(
             TasksManager._TIMM_SUPPORTED_MODEL_TYPE[model]["onnx"]
         )
-    
+
     supported_sentence_transformer_models = TasksManager._SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE
     for model, export_configs in supported_sentence_transformer_models.items():
         if "onnx" not in export_configs:

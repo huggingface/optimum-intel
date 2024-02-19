@@ -15,7 +15,7 @@
 from .__main__ import main_export
 from .base import init_model_configs
 from .convert import export, export_from_model, export_models, export_pytorch_via_onnx
-from .model_configs import *
+from .model_configs import *  # noqa: F403
 from .stateful import ensure_stateful_is_available, patch_stateful
 
 
