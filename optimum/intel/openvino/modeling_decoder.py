@@ -592,7 +592,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         else:
             init_cls = cls
 
-        causal_model = init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
+        causal_model = init_cls(
+            model=model, config=config, model_save_dir=model_cache_path.parent, compile=not load_in_4bit, **kwargs
+        )
 
         if load_in_4bit:
             if not is_nncf_available():
