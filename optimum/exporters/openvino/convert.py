@@ -47,6 +47,10 @@ from .utils import (
     get_input_shapes,
     remove_none_from_dummy_inputs,
 )
+from .base import init_model_configs
+from .model_configs import *
+
+init_model_configs()
 
 
 UNSUPPORTED_TOKENIZER_CLASSES = (T5Tokenizer, T5TokenizerFast)

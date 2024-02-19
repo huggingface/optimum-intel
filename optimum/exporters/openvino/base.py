@@ -25,3 +25,25 @@ def init_model_configs():
         TasksManager._SUPPORTED_MODEL_TYPE[model]["openvino"] = deepcopy(
             TasksManager._SUPPORTED_MODEL_TYPE[model]["onnx"]
         )
+    supported_diffusers_models = TasksManager._DIFFUSERS_SUPPORTED_MODEL_TYPE
+    for model, export_configs in supported_diffusers_models.items():
+        if "onnx" not in export_configs:
+            continue
+        TasksManager._DIFFUSERS_SUPPORTED_MODEL_TYPE[model]["openvino"] = deepcopy(
+            TasksManager._DIFFUSERS_SUPPORTED_MODEL_TYPE[model]["onnx"]
+        )
+    supported_timm_models = TasksManager._TIMM_SUPPORTED_MODEL_TYPE
+    for model, export_configs in supported_timm_models.items():
+        if "onnx" not in export_configs:
+            continue
+        TasksManager._TIMM_SUPPORTED_MODEL_TYPE[model]["openvino"] = deepcopy(
+            TasksManager._TIMM_SUPPORTED_MODEL_TYPE[model]["onnx"]
+        )
+    
+    supported_sentence_transformer_models = TasksManager._SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE
+    for model, export_configs in supported_sentence_transformer_models.items():
+        if "onnx" not in export_configs:
+            continue
+        TasksManager._SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE[model]["openvino"] = deepcopy(
+            TasksManager._SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE[model]["onnx"]
+        )
