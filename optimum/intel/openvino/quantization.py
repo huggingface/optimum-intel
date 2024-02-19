@@ -348,7 +348,7 @@ class OVQuantizer(OptimumQuantizer):
 
         model_type = self.model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
-            exporter="onnx",
+            exporter="openvino",
             model=self.model,
             task=self.task,
             model_type=model_type,

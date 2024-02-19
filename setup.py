@@ -13,8 +13,8 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum~=1.17",
     "transformers>=4.36.0,<4.39.0",
+    "optimum @ git+https://github.com/huggingface/optimum.git#egg=optimum",
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
