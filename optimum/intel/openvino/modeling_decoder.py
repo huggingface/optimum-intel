@@ -611,6 +611,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 )
 
             _weight_only_quantization(causal_model, quantization_config)
+            causal_model.request = None
         return causal_model
 
 
