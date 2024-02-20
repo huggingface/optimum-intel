@@ -592,8 +592,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         else:
             init_cls = cls
 
+        enable_compilation = kwargs.pop("compile", True) and not load_in_4bit
         causal_model = init_cls(
-            model=model, config=config, model_save_dir=model_cache_path.parent, compile=not load_in_4bit, **kwargs
+            model=model, config=config, model_save_dir=model_cache_path.parent, compile=enable_compilation, **kwargs
         )
 
         if load_in_4bit:
