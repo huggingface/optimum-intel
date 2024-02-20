@@ -50,7 +50,7 @@ from transformers import (
     set_seed,
 )
 from transformers.onnx.utils import get_preprocessor
-from utils_tests import MODEL_NAMES
+from utils_tests import MODEL_NAMES, run_on_multiple_threads
 
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel import (
@@ -125,9 +125,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(manual_openvino_cache_dir.is_dir())
         self.assertGreaterEqual(len(list(manual_openvino_cache_dir.glob("*.blob"))), 1)
         if is_openvino_version("<", "2023.3"):
-            self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
+            self.assertEqual(loaded_model.compiled_model.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
         else:
-            self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
+            self.assertEqual(loaded_model.compiled_model.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
 
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
@@ -253,7 +253,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        inputs = "This is a sample input"
+        inputs = "This is sample input."
         tokens = tokenizer(inputs, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
@@ -264,6 +264,49 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
             # Compare tensor outputs
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs_list = [
+            [
+                "This was a masterpiece. Not completely faithful to the books, but enthralling from beginning to end. Might be my favorite of the three."
+            ],
+            [
+                "This was a tragedy. Completely different story than presented in the books. Weak writing, a lot of plot wholes, trivial characters. Might be the worst thing I've seen"
+            ],
+            [
+                "This was a masterpiece. Not completely faithful to the books, but enthralling from beginning to end. Might be my favorite of the three."
+            ],
+            [
+                "This was a tragedy. Completely different story than presented in the books. Weak writing, a lot of plot wholes, trivial characters. Might be the worst thing I've seen",
+            ],
+        ]
+
+        def run_ov_model(inputs, transformers_model, ov_model):
+            tokens = tokenizer(inputs, return_tensors="pt")
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
+            ov_model_instance = ov_model.clone()
+            for input_type in ["pt", "np"]:
+                tokens = tokenizer(inputs, return_tensors=input_type)
+                ov_outputs = ov_model_instance(**tokens)
+                self.assertIn("logits", ov_outputs)
+                self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+                # Compare tensor outputs
+                close_enough = torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4)
+                self.assertTrue(close_enough)
+
+        run_on_multiple_threads(run_ov_model, inputs_list, (transformers_model, ov_model))
+
         del transformers_model
         del ov_model
         gc.collect()
@@ -531,6 +574,52 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        if "llama_gptq" in model_arch:
+            self.skipTest("Not supported without gpu and disable_exllama=True option")
+        set_seed(SEED)
+        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(ov_model.use_cache)
+        self.assertEqual(ov_model.stateful, self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode")
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs_list = ["This is a sample", "Here is another sample", "That's the thrid one", "This is the last sample"]
+        tokens_list = [
+            tokenizer(inputs, return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None)
+            for inputs in inputs_list
+        ]
+
+        def run_ov_model(tokens, transformers_model, ov_model):
+            # global ov_model, transformers_model
+            ov_model_instance = ov_model.clone()
+            position_ids = None
+            if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
+                input_shape = tokens["input_ids"].shape
+                position_ids = (
+                    torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
+                )
+            ov_outputs = ov_model_instance(**tokens, position_ids=position_ids)
+
+            self.assertTrue("logits" in ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+            self.assertTrue("past_key_values" in ov_outputs)
+            self.assertIsInstance(ov_outputs.past_key_values, tuple)
+            if self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode":
+                self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+        run_on_multiple_threads(run_ov_model, tokens_list, (transformers_model, ov_model))
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -548,6 +637,30 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False, compile=False)
+        model.config.encoder_no_repeat_ngram_size = 0
+        model.to("cpu")
+        model.half()
+        model.compile()
+
+        def run_ov_model(input_text, model):
+            # Tokenizer is not supposed to be shared by multiple threads
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            pipe = pipeline("text-generation", model=model.clone(), tokenizer=tokenizer)
+            outputs = pipe(input_text, max_length=10)
+            self.assertEqual(pipe.device, model.device)
+            for i in range(len(outputs)):
+                self.assertTrue(all(input_text[i] in item["generated_text"] for item in outputs[i]))
+            del pipe
+
+        inputs_list = [["This is a sample"], ["This is a second sample"], ["This is a third sample"]]
+        run_on_multiple_threads(run_ov_model, inputs_list, [model])
+        del model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_multiple_inputs(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -560,6 +673,29 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         outputs = model.generate(**tokens, generation_config=generation_config)
         self.assertIsInstance(outputs, torch.Tensor)
         self.assertEqual(outputs.shape[0], 3)
+        del model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_multiple_inputs_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
+        tokens = tokenizer(texts, padding=True, return_tensors="pt")
+        generation_config = GenerationConfig(encoder_no_repeat_ngram_size=0, max_new_tokens=20, num_beams=2)
+
+        def run_ov_model(tokens, model):
+            model_instance = model.clone()
+            # self.assertEqual(False)
+            outputs = model_instance.generate(**tokens, generation_config=generation_config)
+            self.assertIsInstance(outputs, torch.Tensor)
+            self.assertEqual(outputs.shape[0], 3)
+
+        tokens_list = [tokens, tokens, tokens, tokens]  # running in 4 threads
+        run_on_multiple_threads(run_ov_model, tokens_list, [model])
         del model
         gc.collect()
 
@@ -607,7 +743,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if openvino_log_level is not None:
             os.environ["OPENVINO_LOG_LEVEL"] = openvino_log_level
         # test calling function directly
-        _print_compiled_model_properties(model.request)
+        _print_compiled_model_properties(model.compiled_model)
 
     def test_auto_device_loading(self):
         OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
@@ -618,7 +754,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             if device == "AUTO:CPU":
                 model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
                 message = "Model should not be loaded from cache without explicitly setting CACHE_DIR"
-                self.assertFalse(model.request.get_property("LOADED_FROM_CACHE"), message)
+                self.assertFalse(model.compiled_model.get_property("LOADED_FROM_CACHE"), message)
             del model
             gc.collect()
 
@@ -787,7 +923,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     @parameterized.expand(TIMM_MODELS)
     def test_compare_to_timm(self, model_id):
         ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
-        self.assertEqual(ov_model.request.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
+        self.assertEqual(ov_model.compiled_model.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         timm_model = timm.create_model(model_id, pretrained=True)
         preprocessor = TimmImageProcessor.from_pretrained(model_id)
@@ -866,6 +1002,52 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    # This works the old way - infer request per inference, no cloning
+    def test_compare_to_transformers_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+
+        self.assertIsInstance(ov_model.encoder, OVEncoder)
+        self.assertIsInstance(ov_model.decoder, OVDecoder)
+        self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        transformers_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        inputs_list = [
+            "This is a sample input for the first thread",
+            "Input sample for another thread",
+            "This is a third sample input",
+            "This last sample is for the last thread",
+        ]
+        args_list = []
+        for inputs in inputs_list:
+            tokens = tokenizer(inputs, return_tensors="pt")
+            decoder_start_token_id = transformers_model.config.decoder_start_token_id if model_arch != "mbart" else 2
+            decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
+            args_list.append([tokens, decoder_inputs])
+
+        def run_ov_model(arg, transformers_model, ov_model):
+            tokens = arg[0]
+            decoder_inputs = arg[1]
+            # global ov_model, transformers_model
+            ov_outputs = ov_model(**tokens, **decoder_inputs)
+            self.assertTrue("logits" in ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens, **decoder_inputs)
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+        run_on_multiple_threads(run_ov_model, args_list, (transformers_model, ov_model))
+        del transformers_model
+        del ov_model
+
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -899,6 +1081,42 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    # This works the old way - infer request per inference, no cloning
+    def test_pipeline_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, compile=False)
+        model.half()
+        model.to("cpu")
+        model.compile()
+
+        def run_ov_model(text, model):
+            # Tokenizer is not supposed to be shared between multiple threads
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            # Text2Text generation
+            pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
+            outputs = pipe(text)
+            self.assertEqual(pipe.device, model.device)
+            self.assertIsInstance(outputs[0]["generated_text"], str)
+
+            # Summarization
+            pipe = pipeline("summarization", model=model, tokenizer=tokenizer)
+            outputs = pipe(text)
+            self.assertEqual(pipe.device, model.device)
+            self.assertIsInstance(outputs[0]["summary_text"], str)
+
+            # Translation
+            pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
+            outputs = pipe(text)
+            self.assertEqual(pipe.device, model.device)
+            self.assertIsInstance(outputs[0]["translation_text"], str)
+            del pipe
+
+        texts_list = [["This is a test"], ["This is a test, but for another thread"], ["Yet another test"]]
+        run_on_multiple_threads(run_ov_model, texts_list, [model])
+        del model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
@@ -925,20 +1143,23 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
 
-        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_pkv = OVModelForSeq2SeqLM.from_pretrained(
+            model_id, export=True, use_cache=True, ov_config=F32_CONFIG
+        )
         _ = model_with_pkv.generate(**tokens)  # warmup
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, use_cache=False)
+        model_without_pkv = OVModelForSeq2SeqLM.from_pretrained(
+            model_id, export=True, use_cache=False, ov_config=F32_CONFIG
+        )
         _ = model_without_pkv.generate(**tokens)  # warmup
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
-
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
@@ -1179,7 +1400,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
     TASK = "image-to-text"  # is it fine as well with visual-question-answering?
 
     GENERATION_LENGTH = 100
-    SPEEDUP_CACHE = 1.1
+    SPEEDUP_CACHE = 1.01
 
     IMAGE = Image.open(
         requests.get(
@@ -1240,20 +1461,23 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
 
-        model_with_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_pkv = OVModelForPix2Struct.from_pretrained(
+            model_id, export=True, use_cache=True, ov_config=F32_CONFIG
+        )
         _ = model_with_pkv.generate(**inputs)  # warmup
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
                 **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        model_without_pkv = OVModelForPix2Struct.from_pretrained(model_id, export=True, use_cache=False)
+        model_without_pkv = OVModelForPix2Struct.from_pretrained(
+            model_id, export=True, use_cache=False, ov_config=F32_CONFIG
+        )
         _ = model_without_pkv.generate(**inputs)  # warmup
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
                 **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
-
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)

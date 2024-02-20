@@ -107,7 +107,6 @@ class OVBaseDecoderModel(OVModel):
                 "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
             )
 
-        enable_compilation = kwargs.get("compile", True)
         kwargs["compile"] = False  # avoid extra compilation in the base class
 
         super().__init__(
@@ -130,21 +129,14 @@ class OVBaseDecoderModel(OVModel):
         self.num_pkv = 2
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
-        self._original_model = self.model.clone()  # keep original model for serialization
-        self._pkv_precision = Type.f32
         self.next_beam_idx = None
-        self.update_pkv_precision()
-        if self.is_dynamic:
-            self.model = self._reshape(self.model, -1, -1)
         is_stateful_supported = ensure_stateful_is_available(warn=False)
-
         if self.use_cache and not self.stateful:
             logger.warn(
                 "Provided model does not contain state. It may lead to sub-optimal performance."
                 "Please reexport model with updated OpenVINO version >= 2023.3.0 calling the `from_pretrained` method with original model "
                 "and `export=True` parameter"
             )
-
         if self.stateful:
             if stateful is None:
                 stateful = is_stateful_supported
@@ -171,7 +163,13 @@ class OVBaseDecoderModel(OVModel):
         if use_cache ^ self.use_cache:
             raise_error(self.use_cache, use_cache, "use_cache")
 
-        if enable_compilation:
+    def init_ov_model(self, compile=True):
+        self._pkv_precision = Type.f32
+        self.update_pkv_precision(force_fp32=False)
+        if self.is_dynamic:
+            self.model = self._reshape(self.model, -1, -1)
+        self._original_model = self.model.clone()  # keep original model for serialization
+        if compile:
             self.compile()
 
     def update_pkv_precision(self, force_fp32=False):
@@ -209,7 +207,8 @@ class OVBaseDecoderModel(OVModel):
                 self.model = self._original_model.clone()
                 if self.is_dynamic:
                     self.model = self._reshape(self.model, -1, -1)
-                self.request = None
+                self.request = None  # Deprecated attribute, use compiled_model instead
+                self.compiled_model = None
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -280,6 +279,7 @@ class OVBaseDecoderModel(OVModel):
         config.is_decoder = True
         config.is_encoder_decoder = False
         config.save_pretrained(save_dir_path)
+
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -333,13 +333,18 @@ class OVBaseDecoderModel(OVModel):
         return NormalizedConfigManager.get_normalized_config_class(self.config.model_type)(self.config)
 
     def compile(self):
-        if self.request is None:
+        if self.compiled_model is None:
             super().compile()
-            self.request = self.request.create_infer_request()
 
     def _make_stateful(self):
         patch_stateful(self.config, self.model)
         self.stateful = True
+
+    def create_infer_request(self):
+        if self.compiled_model is None:
+            self.compile()
+        if self.infer_request is None:
+            self.infer_request = self.compiled_model.create_infer_request()
 
 
 @add_start_docstrings(
@@ -419,7 +424,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # past_key_values are not used explicitly, instead they are handled inside the model
             if past_key_values is None:
                 # This is the first iteration in a sequence, reset all states
-                self.request.reset_state()
+                self.infer_request.reset_state()
                 # Set initial value for the next beam_idx input that will be used at the current iteration
                 # and will be optionally updated by _reorder_cache at the next iterations if beam_search is used
                 self.next_beam_idx = np.arange(batch_size, dtype=int)
@@ -464,6 +469,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> CausalLMOutputWithPast:
         self.compile()
+        self.create_infer_request()
 
         inputs = self.prepare_inputs(
             input_ids=input_ids,
@@ -474,9 +480,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
 
         # Run inference
-        self.request.start_async(inputs, share_inputs=True)
-        self.request.wait()
-        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        self.infer_request.start_async(inputs, share_inputs=True)
+        self.infer_request.wait()
+        logits = torch.from_numpy(self.infer_request.get_tensor("logits").data).to(self.device)
         if self.stateful:
             # Need a marker to differentiate the first generate iteration from the others in
             # the first condition at the function beginning above.
@@ -486,7 +492,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if not self.stateful:
             if self.use_cache:
                 # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
-                past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+                past_key_values = tuple(self.infer_request.get_tensor(key).data for key in self.key_value_output_names)
                 if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
                     # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
                     past_key_values = tuple(
@@ -593,7 +599,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = cls
 
         causal_model = init_cls(model=model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
-
+        causal_model.init_ov_model(compile=kwargs.get("compile", True))
         if load_in_4bit:
             if not is_nncf_available():
                 raise ImportError(
@@ -610,6 +616,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             _weight_only_quantization(causal_model, quantization_config)
         return causal_model
+
+    def clone(self):
+        model_instance = self.__class__(model=self.model, config=self.config, compile=False, use_cache=self.use_cache)
+        model_instance.compiled_model = self.compiled_model
+        model_instance._pkv_precision = self._pkv_precision
+        model_instance.request = None
+        return model_instance
 
 
 class OVBloomForCausalLM(OVModelForCausalLM):

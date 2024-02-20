@@ -65,12 +65,10 @@ class OVBaseModel(OptimizedModel):
         self.ov_config = ov_config if ov_config is not None else {"PERFORMANCE_HINT": "LATENCY"}
         self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
-
         if self.is_dynamic:
             height = -1 if self.export_feature == "image-classification" else None
             width = -1 if self.export_feature == "image-classification" else None
             model = self._reshape(model, -1, -1, height, width)
-
         input_names = {}
         for idx, key in enumerate(model.inputs):
             names = tuple(key.get_names())
@@ -82,9 +80,11 @@ class OVBaseModel(OptimizedModel):
             names = tuple(key.get_names())
             output_names[next((name for name in names if "/" not in name), names[0])] = idx
         self.output_names = output_names
-
         self.model = model
-        self.request = None
+        self.request = None  # Deprecated attribute, use compiled_model instead
+        self.infer_request = None
+        self.async_exec = False
+        self.compiled_model = None
         if enable_compilation:
             self.compile()
 
@@ -336,7 +336,7 @@ class OVBaseModel(OptimizedModel):
         )
 
     def compile(self):
-        if self.request is None:
+        if self.compiled_model is None:
             logger.info(f"Compiling the model to {self._device} ...")
             ov_config = {**self.ov_config}
             if (
@@ -348,11 +348,16 @@ class OVBaseModel(OptimizedModel):
                 cache_dir = Path(self.model_save_dir).joinpath("model_cache")
                 ov_config["CACHE_DIR"] = str(cache_dir)
                 logger.info(f"Setting OpenVINO CACHE_DIR to {str(cache_dir)}")
-            self.request = core.compile_model(self.model, self._device, ov_config)
+            self.compiled_model = core.compile_model(self.model, self._device, ov_config)
+            self.request = self.compiled_model  # Deprecated attribute, use compiled_model instead
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(self.request)
+                _print_compiled_model_properties(self.compiled_model)
+
+    def create_infer_request(self):
+        if self.infer_request is None:
+            self.infer_request = self.compiled_model.create_infer_request()
 
     def _reshape(
         self,
@@ -390,7 +395,9 @@ class OVBaseModel(OptimizedModel):
         """
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
-        self.request = None
+        self.compiled_model = None
+        self.infer_request = None
+        self.request = None  # Deprecated attribute, use compiled_model instead
         return self
 
     def half(self):
@@ -399,11 +406,21 @@ class OVBaseModel(OptimizedModel):
         """
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)
-        self.request = None
+        self.request = None  # Deprecated attribute, use compiled_model instead
+        self.compiled_model = None
+        self.infer_request = None
         return self
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError
+
+    def clone(self):
+        self.compile()
+        model_cloned = self.__class__(self.model, config=self.config, compile=False, dynamic_shapes=False)
+        model_cloned.compiled_model = self.compiled_model
+        model_cloned.async_exec = True
+        model_cloned._device = self._device
+        return model_cloned
 
     def can_generate(self) -> bool:
         """

@@ -418,7 +418,9 @@ class OVEncoder:
         self.device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.main_input_name = self.parent_model.main_input_name or "input_ids"
-        self.request = None
+        self.compiled_model = None
+        self.request = None  # Deprecated attribute, use compiled_model instead
+        self.infer_request = None
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
@@ -437,9 +439,10 @@ class OVEncoder:
             inputs["attention_mask"] = attention_mask
 
         # Run inference
-        last_hidden_state = torch.from_numpy(
-            self.request(inputs, share_inputs=True, share_outputs=True)["last_hidden_state"]
-        ).to(self.device)
+        infer_request = self.compiled_model.create_infer_request()
+        infer_request.start_async(inputs, share_inputs=True)
+        infer_request.wait()
+        last_hidden_state = torch.from_numpy(infer_request.get_tensor("last_hidden_state").data).to(self.device)
 
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
@@ -456,13 +459,14 @@ class OVEncoder:
             cache_dir = Path(self.parent_model.model_save_dir).joinpath("model_cache")
             ov_config["CACHE_DIR"] = str(cache_dir)
 
-        if self.request is None:
+        if self.compiled_model is None:
             logger.info(f"Compiling the encoder to {self._device} ...")
-            self.request = core.compile_model(self.model, self._device, ov_config)
+            self.compiled_model = core.compile_model(self.model, self._device, ov_config)
+            self.request = self.compiled_model  # Deprecated attribute, use compiled_model instead
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(self.request)
+                _print_compiled_model_properties(self.compiled_model)
 
 
 class OVDecoder:
@@ -494,7 +498,9 @@ class OVDecoder:
             self.use_past = False
             self.num_pkv = 4
 
-        self.request = None
+        self.request = None  # Deprecated attribute, use compiled_model instead
+        self.compiled_model = None
+        self.infer_request = None
 
     @add_start_docstrings_to_model_forward(DECODER_INPUTS_DOCSTRING)
     def forward(
@@ -531,13 +537,14 @@ class OVDecoder:
         if "decoder_attention_mask" in self.input_names and decoder_attention_mask is not None:
             inputs["decoder_attention_mask"] = decoder_attention_mask
         # Run inference
-        self.request.start_async(inputs, share_inputs=True)
-        self.request.wait()
-        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        infer_request = self.compiled_model.create_infer_request()
+        infer_request.start_async(inputs, share_inputs=True)
+        infer_request.wait()
+        logits = torch.from_numpy(infer_request.get_tensor("logits").data).to(self.device)
 
         # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the
         # self-attention layer and 2 to the cross-attention layer)
-        out_past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+        out_past_key_values = tuple(infer_request.get_tensor(key).data for key in self.key_value_output_names)
 
         # Tuple of tuple of length `n_layers`, with each tuple of length equal to:
         # * 4 for the decoder without cache (k/v of self-attention + k/v of cross-attention)
@@ -568,14 +575,13 @@ class OVDecoder:
             cache_dir = Path(self.parent_model.model_save_dir).joinpath("model_cache")
             ov_config["CACHE_DIR"] = str(cache_dir)
 
-        if self.request is None:
+        if self.compiled_model is None:
             logger.info(f"Compiling the decoder to {self._device} ...")
-            compiled_model = core.compile_model(self.model, self._device, ov_config)
-            self.request = compiled_model.create_infer_request()
+            self.compiled_model = core.compile_model(self.model, self._device, ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(compiled_model)
+                _print_compiled_model_properties(self.compiled_model)
 
 
 @add_start_docstrings(

@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import importlib
 import logging
 import os
@@ -95,7 +96,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         self._model_save_dir = (
             Path(model_save_dir.name) if isinstance(model_save_dir, TemporaryDirectory) else model_save_dir
         )
-        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
+        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self) if vae_decoder is not None else None
         self.unet = OVModelUnet(unet, self)
         self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
         self.text_encoder_2 = (
@@ -105,13 +106,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         )
         self.vae_encoder = OVModelVaeEncoder(vae_encoder, self) if vae_encoder is not None else None
 
-        if "block_out_channels" in self.vae_decoder.config:
-            self.vae_scale_factor = 2 ** (len(self.vae_decoder.config["block_out_channels"]) - 1)
-        else:
-            self.vae_scale_factor = 8
-
-        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
-
+        if vae_decoder is not None:
+            if "block_out_channels" in self.vae_decoder.config:
+                self.vae_scale_factor = 2 ** (len(self.vae_decoder.config["block_out_channels"]) - 1)
+            else:
+                self.vae_scale_factor = 8
+            self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
         self.tokenizer = tokenizer
         self.tokenizer_2 = tokenizer_2
         self.scheduler = scheduler
@@ -271,8 +271,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
-
-        return cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
+        pipe = cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
+        return pipe
 
     @classmethod
     def _from_transformers(
@@ -517,6 +517,41 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
     def _save_config(self, save_directory):
         self.save_config(save_directory)
 
+    def clone(self):
+        self.compile()
+        config = self._internal_dict
+        scheduler = self.scheduler
+        unet = self.unet.model
+        model_save_dir = self._model_save_dir
+        pipe_cloned = self.__class__(
+            unet=unet,
+            config=config,
+            scheduler=scheduler,
+            compile=False,
+            dynamic_shapes=False,
+            model_save_dir=model_save_dir,
+        )
+        pipe_cloned.unet = self.unet.clone()
+        if self.vae_decoder is not None:
+            pipe_cloned.vae_decoder = self.vae_decoder.clone()
+        if self.text_encoder is not None:
+            pipe_cloned.text_encoder = self.text_encoder.clone()
+        if self.text_encoder_2 is not None:
+            pipe_cloned.text_encoder_2 = self.text_encoder_2.clone()
+        if self.vae_encoder is not None:
+            pipe_cloned.vae_encoder = self.vae_encoder.clone()
+        pipe_cloned.vae_scale_factor = self.vae_scale_factor
+        pipe_cloned.image_processor = self.image_processor
+        pipe_cloned.tokenizer = self.tokenizer
+        pipe_cloned.tokenizer_2 = self.tokenizer_2
+        pipe_cloned.is_dynamic = self.is_dynamic
+        # Default PNDMscheduler is not working in HF with multithreading
+        # https://github.com/huggingface/diffusers/issues/3672
+        # Full copy scheduler as a WA
+        if isinstance(self.scheduler, PNDMScheduler):
+            pipe_cloned.scheduler = copy.deepcopy(self.scheduler)
+        return pipe_cloned
+
 
 class OVModelPart:
     CONFIG_NAME = "config.json"
@@ -537,14 +572,16 @@ class OVModelPart:
             for inputs in self.model.inputs
         }
         self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self.request = None
+        self.compiled_model = None
+        self.request = None  # Deprecated attribute, use compiled_model instead
+        self.infer_request = None
         self._model_name = model_name
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
         config_path = self._model_dir / model_name / self.CONFIG_NAME
         self.config = self.parent_model._dict_from_json_file(config_path) if config_path.is_file() else {}
 
     def _compile(self):
-        if self.request is None:
+        if self.compiled_model is None:
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
                 and not str(self._model_dir).startswith(gettempdir())
@@ -552,12 +589,24 @@ class OVModelPart:
             ):
                 self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
-            logger.info(f"Compiling the {self._model_name} to {self.device} ...")
-            self.request = core.compile_model(self.model, self.device, self.ov_config)
+            logger.info(f"Compiling the {self._model_name} to {self.device} with config {self.ov_config} ... ")
+            self.compiled_model = core.compile_model(self.model, self.device, self.ov_config)
+            self.request = self.compiled_model  # Deprecated attribute, use compiled_model instead
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self.device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(self.request)
+                _print_compiled_model_properties(self.compiled_model)
+
+    def create_infer_request(self):
+        if self.infer_request is None:
+            self.infer_request = self.compiled_model.create_infer_request()
+
+    def clone(self):
+        model_cloned = self.__class__(self.model, self.parent_model, ov_config=self.ov_config)
+        model_cloned.model = self.model
+        model_cloned.compiled_model = self.compiled_model
+        model_cloned.config = self.config
+        return model_cloned
 
     @property
     def device(self):
@@ -576,12 +625,15 @@ class OVModelTextEncoder(OVModelPart):
 
     def __call__(self, input_ids: np.ndarray):
         self._compile()
+        self.create_infer_request()
 
         inputs = {
             "input_ids": input_ids,
         }
-        outputs = self.request(inputs, share_inputs=True)
-        return list(outputs.values())
+        self.infer_request.start_async(inputs, share_inputs=True)
+        self.infer_request.wait()
+        outputs = [self.infer_request.get_tensor(output).data for output in self.infer_request.results]
+        return outputs
 
 
 class OVModelUnet(OVModelPart):
@@ -600,6 +652,7 @@ class OVModelUnet(OVModelPart):
         timestep_cond: Optional[np.ndarray] = None,
     ):
         self._compile()
+        self.create_infer_request()
 
         inputs = {
             "sample": sample,
@@ -614,8 +667,10 @@ class OVModelUnet(OVModelPart):
         if timestep_cond is not None:
             inputs["timestep_cond"] = timestep_cond
 
-        outputs = self.request(inputs, share_inputs=True)
-        return list(outputs.values())
+        self.infer_request.start_async(inputs, share_inputs=True)
+        self.infer_request.wait()
+        outputs = [self.infer_request.get_tensor(output).data for output in self.infer_request.results]
+        return outputs
 
 
 class OVModelVaeDecoder(OVModelPart):
@@ -626,12 +681,15 @@ class OVModelVaeDecoder(OVModelPart):
 
     def __call__(self, latent_sample: np.ndarray):
         self._compile()
+        self.create_infer_request()
 
         inputs = {
             "latent_sample": latent_sample,
         }
-        outputs = self.request(inputs, share_inputs=True)
-        return list(outputs.values())
+        self.infer_request.start_async(inputs, share_inputs=True)
+        self.infer_request.wait()
+        outputs = [self.infer_request.results[output].data for output in self.infer_request.results]
+        return outputs
 
     def _compile(self):
         if "GPU" in self.device:
@@ -651,8 +709,11 @@ class OVModelVaeEncoder(OVModelPart):
         inputs = {
             "sample": sample,
         }
-        outputs = self.request(inputs, share_inputs=True)
-        return list(outputs.values())
+        infer_request = self.compiled_model.create_infer_request()
+        infer_request.start_async(inputs, share_inputs=True)
+        infer_request.wait()
+        outputs = [infer_request.get_tensor(output).data for output in infer_request.results]
+        return outputs
 
     def _compile(self):
         if "GPU" in self.device:

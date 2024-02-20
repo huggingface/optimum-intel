@@ -21,6 +21,7 @@ import numpy as np
 import PIL
 import torch
 from diffusers import (
+    DDIMScheduler,
     StableDiffusionPipeline,
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
@@ -30,7 +31,7 @@ from diffusers.utils.testing_utils import floats_tensor
 from openvino.runtime.ie_api import CompiledModel
 from packaging.version import Version, parse
 from parameterized import parameterized
-from utils_tests import MODEL_NAMES, SEED
+from utils_tests import MODEL_NAMES, SEED, run_on_multiple_threads
 
 from optimum.intel import (
     OVLatentConsistencyModelPipeline,
@@ -252,6 +253,64 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
         self.assertEqual(pipeline.device.type, ov_pipeline.device)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_diffusers_multithreading(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        ov_pipeline = self.MODEL_CLASS.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, compile=True, trust_remote_code=True
+        )
+        ov_pipeline.scheduler = DDIMScheduler.from_config(ov_pipeline.scheduler.config)
+        self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
+        self.assertIsInstance(ov_pipeline.vae_encoder, OVModelVaeEncoder)
+        self.assertIsInstance(ov_pipeline.vae_decoder, OVModelVaeDecoder)
+        self.assertIsInstance(ov_pipeline.unet, OVModelUnet)
+        self.assertIsInstance(ov_pipeline.config, Dict)
+        pipeline = StableDiffusionPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
+        # Default PNDMscheduler is not working in HF with multithreading
+        # https://github.com/huggingface/diffusers/issues/3672
+        pipeline.safety_checker = None
+        batch_size, num_images_per_prompt, height, width = 1, 2, 64, 64
+
+        def run_ov_model(prompt, ov_pipeline):
+            ov_pipeline_instance = ov_pipeline.clone()
+            latents = ov_pipeline_instance.prepare_latents(
+                batch_size * num_images_per_prompt,
+                ov_pipeline_instance.unet.config["in_channels"],
+                height,
+                width,
+                dtype=np.float32,
+                generator=np.random.RandomState(0),
+            )
+
+            kwargs = {
+                "prompt": prompt,
+                "num_inference_steps": 1,
+                "num_images_per_prompt": num_images_per_prompt,
+                "height": height,
+                "width": width,
+                "guidance_rescale": 0.1,
+            }
+
+            for output_type in ["latent", "np"]:
+                ov_outputs = ov_pipeline_instance(latents=latents, output_type=output_type, **kwargs).images
+                self.assertIsInstance(ov_outputs, np.ndarray)
+                with torch.no_grad():
+                    outputs = pipeline(latents=torch.from_numpy(latents), output_type=output_type, **kwargs).images
+                # Compare model outputs
+                self.assertTrue(np.allclose(ov_outputs, outputs, atol=1e-4))
+
+            # Compare model devices
+            self.assertEqual(pipeline.device.type, ov_pipeline.device)
+
+        prompt_list = [
+            ["sailing ship in storm by Leonardo da Vinci"],
+            ["central park during christmas"],
+            ["zebras in space"],
+        ]
+        prompt_list = [["sailing ship in storm by Leonardo da Vinci"], ["central park during christmas"]]
+        run_on_multiple_threads(run_ov_model, prompt_list, [ov_pipeline])
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_image_reproducibility(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True)
@@ -410,7 +469,7 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
 
         # Verify every subcomponent is compiled by default
         for component in {"unet", "vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"}:
-            self.assertIsInstance(getattr(pipeline, component).request, CompiledModel)
+            self.assertIsInstance(getattr(pipeline, component).compiled_model, CompiledModel)
 
         batch_size, num_images_per_prompt, height, width = 2, 3, 64, 128
         inputs = _generate_inputs(batch_size)

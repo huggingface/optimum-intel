@@ -1,0 +1,2 @@
+optimum-intel[openvino, nncf]"@git+https://github.com/huggingface/optimum-intel.git
+transformers
