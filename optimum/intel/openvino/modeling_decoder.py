@@ -419,7 +419,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # past_key_values are not used explicitly, instead they are handled inside the model
             if past_key_values is None:
                 # This is the first iteration in a sequence, reset all states
-                self.request.reset_state()
+                if self.request is not None:
+                    self.request.reset_state()
                 # Set initial value for the next beam_idx input that will be used at the current iteration
                 # and will be optionally updated by _reorder_cache at the next iterations if beam_search is used
                 self.next_beam_idx = np.arange(batch_size, dtype=int)
