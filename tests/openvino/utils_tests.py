@@ -56,6 +56,7 @@ MODEL_NAMES = {
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "mistral": "echarlaix/tiny-random-mistral",
+    "mixtral": "TitanML/tiny-mixtral",
     "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
     "mobilenet_v1": "google/mobilenet_v1_0.75_192",
     "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",

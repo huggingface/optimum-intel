@@ -486,6 +486,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # "llama_gptq",
         "marian",
         "mistral",
+        "mixtral",
         "mpt",
         "opt",
         "pegasus",
@@ -496,6 +497,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        not_stateful = ["gpt_bigcode", "llama"]
+        if is_openvino_version("<", "2024.0"):
+            not_stateful.append("mixtral")
 
         if "gptq" in model_arch:
             self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
@@ -504,7 +508,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-
+        self.assertEqual(ov_model.stateful, self.IS_SUPPORT_STATEFUL and model_arch not in not_stateful)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer(
@@ -520,8 +524,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         self.assertTrue("past_key_values" in ov_outputs)
         self.assertIsInstance(ov_outputs.past_key_values, tuple)
-
-        is_stateful = ov_model.config.model_type not in {"gpt_bigcode", "llama"} and self.IS_SUPPORT_STATEFUL
+        is_stateful = ov_model.config.model_type not in not_stateful and self.IS_SUPPORT_STATEFUL
         self.assertEqual(ov_model.stateful, is_stateful)
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)

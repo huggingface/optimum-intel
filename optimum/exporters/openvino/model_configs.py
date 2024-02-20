@@ -12,12 +12,26 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+
+from packaging import version
+from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.utils.input_generators import DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator
 from optimum.utils.normalized_config import NormalizedTextConfig
 
+from .model_patcher import MixtralModelPatcher
+
+
+if TYPE_CHECKING:
+    from transformers.modeling_utils import PreTrainedModel
+
+    from optimum.exporters.onnx.model_patcher import ModelPatcher
+
+    if is_tf_available():
+        from transformers.modeling_tf_utils import TFPreTrainedModel
 
 register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_existing=True)
 
@@ -54,3 +68,22 @@ class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager("mixtral", *["text-generation", "text-generation-with-past"])
+class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    # This is because of the patching of torch.triu in AttentionMaskConverter, that exists from transformers>=4.35
+    MIN_TRANSFORMERS_VERSION = version.parse("4.34.99")
+
+    # The ONNX export of this architecture needs the Trilu operator support, available since opset 14
+    DEFAULT_ONNX_OPSET = 14
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        MistralDummyPastKeyValuesGenerator,
+    ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return MixtralModelPatcher(self, model, model_kwargs=model_kwargs)
