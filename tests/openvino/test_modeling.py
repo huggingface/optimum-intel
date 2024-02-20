@@ -576,6 +576,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers_multithreading(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        if "llama_gptq" in model_arch:
+            self.skipTest("Not supported without gpu and disable_exllama=True option")
         set_seed(SEED)
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
