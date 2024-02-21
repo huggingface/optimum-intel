@@ -13,7 +13,7 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum>=1.17.0",
+    "optimum~=1.17",
     "transformers>=4.36.0,<4.39.0",
     "datasets>=1.4.0",
     "sentencepiece",
@@ -48,7 +48,6 @@ EXTRAS_REQUIRE = {
         "openvino>=2023.3",
         "onnx",
         "onnxruntime",
-        "optimum>=1.16.1",
     ],
     "openvino-tokenizers": ["openvino-tokenizers[transformers]"],
     "nncf": ["nncf>=2.8.1"],
