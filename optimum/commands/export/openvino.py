@@ -157,11 +157,13 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             self.args.weight_format = "int8"
 
+        weight_format = self.args.weight_format or "fp32"
+
         ov_config = None
-        if self.args.weight_format in {"fp16", "fp32"}:
-            ov_config = OVConfig(dtype=self.args.weight_format)
+        if weight_format in {"fp16", "fp32"}:
+            ov_config = OVConfig(dtype=weight_format)
         else:
-            is_int8 = self.args.weight_format == "int8"
+            is_int8 = weight_format == "int8"
 
             # For int4 quantization if not parameter is provided, then use the default config if exist
             if (
@@ -180,12 +182,12 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "group_size": -1 if is_int8 else self.args.group_size,
                 }
 
-            if self.args.weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:
+            if weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:
                 logger.warning(
-                    f"--weight-format {self.args.weight_format} is deprecated, possible choices are fp32, fp16, int8, int4"
+                    f"--weight-format {weight_format} is deprecated, possible choices are fp32, fp16, int8, int4"
                 )
-                quantization_config["sym"] = "asym" not in self.args.weight_format
-                quantization_config["group_size"] = 128 if "128" in self.args.weight_format else 64
+                quantization_config["sym"] = "asym" not in weight_format
+                quantization_config["group_size"] = 128 if "128" in weight_format else 64
             ov_config = OVConfig(quantization_config=quantization_config)
 
         # TODO : add input shapes

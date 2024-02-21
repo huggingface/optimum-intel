@@ -77,8 +77,9 @@ if TYPE_CHECKING:
 
 def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
     compress_to_fp16 = False
+
     if ov_config is not None:
-        if ov_config.quantization_config is not None:
+        if ov_config.quantization_config:
             if not is_nncf_available():
                 raise ImportError(
                     "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
