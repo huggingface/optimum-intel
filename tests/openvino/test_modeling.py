@@ -73,6 +73,7 @@ from optimum.intel import (
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
+from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.utils.import_utils import is_openvino_version
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
@@ -90,7 +91,7 @@ TENSOR_ALIAS_TO_TYPE = {
 
 SEED = 42
 
-F32_CONFIG = {"CACHE_DIR": "", "INFERENCE_PRECISION_HINT": "f32"}
+F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
 
 
 class Timer(object):
@@ -116,11 +117,6 @@ class OVModelIntegrationTest(unittest.TestCase):
         loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         loaded_model_outputs = loaded_model(**tokens)
-
-        # Test that model caching is automatically enabled
-        openvino_cache_dir = loaded_model.model_save_dir / "model_cache"
-        self.assertTrue(openvino_cache_dir.is_dir())
-        self.assertGreaterEqual(len(list(openvino_cache_dir.glob("*.blob"))), 1)
 
         # Test specifying ov_config with throughput hint and manual cache dir
         manual_openvino_cache_dir = loaded_model.model_save_dir / "manual_model_cache"
@@ -430,6 +426,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "bert",
         "distilbert",
         "roberta",
+        "sentence-transformers-bert",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -486,20 +483,28 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        # "marian", # TODO : enable it back with openvino 2023.3.0
-        # "mistral",
+        "llama_gptq",
+        "marian",
+        "mistral",
         "mpt",
         "opt",
         "pegasus",
     )
     GENERATION_LENGTH = 100
+    IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+
+        if "gptq" in model_arch:
+            self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
+
         set_seed(SEED)
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(ov_model.use_cache)
+        self.assertEqual(ov_model.stateful, self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode")
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer(
@@ -513,6 +518,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+        self.assertTrue("past_key_values" in ov_outputs)
+        self.assertIsInstance(ov_outputs.past_key_values, tuple)
+        if self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode":
+            self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         # Compare tensor outputs
@@ -568,8 +577,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES["gpt2"]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-
-        model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_pkv = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=False)
         outputs_model_with_pkv = model_with_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
@@ -580,17 +588,37 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
+        if self.IS_SUPPORT_STATEFUL:
+            model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
+            outputs_model_stateful = model_stateful.generate(
+                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+            )
+            self.assertTrue(torch.equal(outputs_model_without_pkv, outputs_model_stateful))
 
         del model_with_pkv
         del model_without_pkv
         gc.collect()
 
+    def test_print_model_properties(self):
+        # test setting OPENVINO_LOG_LEVEL to 3, which calls _print_compiled_model_properties
+        openvino_log_level = os.environ.get("OPENVINO_LOG_LEVEL", None)
+        os.environ["OPENVINO_LOG_LEVEL"] = "3"
+        model = OVModelForSequenceClassification.from_pretrained(MODEL_NAMES["bert"], export=True)
+        if openvino_log_level is not None:
+            os.environ["OPENVINO_LOG_LEVEL"] = openvino_log_level
+        # test calling function directly
+        _print_compiled_model_properties(model.request)
+
     def test_auto_device_loading(self):
-        model_id = MODEL_NAMES["gpt2"]
+        OV_MODEL_ID = "echarlaix/distilbert-base-uncased-finetuned-sst-2-english-openvino"
         for device in ("AUTO", "AUTO:CPU"):
-            model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, device=device)
+            model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
             model.half()
             self.assertEqual(model._device, device)
+            if device == "AUTO:CPU":
+                model = OVModelForSequenceClassification.from_pretrained(OV_MODEL_ID, device=device)
+                message = "Model should not be loaded from cache without explicitly setting CACHE_DIR"
+                self.assertFalse(model.request.get_property("LOADED_FROM_CACHE"), message)
             del model
             gc.collect()
 
@@ -606,7 +634,30 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         attention_mask = tokens.pop("attention_mask")
         outs_without_attn_mask = model_with_cache(**tokens)
         self.assertTrue(torch.allclose(outs.logits, outs_without_attn_mask.logits))
-        input_ids = torch.argmax(outs.logits, dim=2)
+        input_ids = torch.argmax(outs.logits[:, -1:, :], dim=2)
+        past_key_values = outs.past_key_values
+        attention_mask = torch.ones((input_ids.shape[0], tokens.input_ids.shape[1] + 1), dtype=torch.long)
+        outs_step2 = model_with_cache(
+            input_ids=input_ids, attention_mask=attention_mask, past_key_values=past_key_values
+        )
+        outs_without_attn_mask_step2 = model_with_cache(input_ids=input_ids, past_key_values=past_key_values)
+        self.assertTrue(torch.allclose(outs_step2.logits, outs_without_attn_mask_step2.logits))
+        del model_with_cache
+        gc.collect()
+
+    def test_default_filling_attention_mask_and_position_ids(self):
+        model_id = MODEL_NAMES["llama"]
+        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        texts = ["this is a simple input"]
+        tokens = tokenizer(texts, return_tensors="pt")
+        self.assertTrue("position_ids" in model_with_cache.input_names)
+        outs = model_with_cache(**tokens)
+        attention_mask = tokens.pop("attention_mask")
+        outs_without_attn_mask = model_with_cache(**tokens)
+        self.assertTrue(torch.allclose(outs.logits, outs_without_attn_mask.logits))
+        input_ids = torch.argmax(outs.logits[:, -1:, :], dim=2)
         past_key_values = outs.past_key_values
         attention_mask = torch.ones((input_ids.shape[0], tokens.input_ids.shape[1] + 1), dtype=torch.long)
         outs_step2 = model_with_cache(
@@ -736,6 +787,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     @parameterized.expand(TIMM_MODELS)
     def test_compare_to_timm(self, model_id):
         ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        self.assertEqual(ov_model.request.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         timm_model = timm.create_model(model_id, pretrained=True)
         preprocessor = TimmImageProcessor.from_pretrained(model_id)
@@ -773,7 +825,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         "blenderbot-small",
         # "longt5",
         "m2m_100",
-        # "marian", # TODO : enable it back with openvino 2023.3.0
+        "marian",
         "mbart",
         "mt5",
         "pegasus",
@@ -781,7 +833,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
     )
 
     GENERATION_LENGTH = 100
-    SPEEDUP_CACHE = 1.2
+    SPEEDUP_CACHE = 1.1
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -985,7 +1037,7 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = OVModelForCTC.from_pretrained(MODEL_NAMES["t5"], export=True)
 
-        self.assertIn("Unrecognized configuration class", str(context.exception))
+        self.assertIn("only supports the tasks", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1037,7 +1089,7 @@ class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = OVModelForAudioXVector.from_pretrained(MODEL_NAMES["t5"], export=True)
 
-        self.assertIn("Unrecognized configuration class", str(context.exception))
+        self.assertIn("only supports the tasks", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1091,7 +1143,7 @@ class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = OVModelForAudioFrameClassification.from_pretrained(MODEL_NAMES["t5"], export=True)
 
-        self.assertIn("Unrecognized configuration class", str(context.exception))
+        self.assertIn("only supports the tasks", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):

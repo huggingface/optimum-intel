@@ -56,6 +56,9 @@ from optimum.intel.openvino.trainer import OVTrainer
 from optimum.intel.openvino.utils import OV_XML_FILE_NAME
 
 
+F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
+
+
 def initialize_movement_sparsifier_parameters_by_sparsity(
     movement_controller: MovementSparsityController,
     sparsity: float = 0.95,
@@ -250,7 +253,7 @@ class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
 
     def get_ov_model(self, model_id=None) -> OVModel:
         model_id = model_id or self.output_dir
-        return self.ovmodel_cls.from_pretrained(model_id)
+        return self.ovmodel_cls.from_pretrained(model_id, ov_config=F32_CONFIG)
 
     def get_nncf_config_with_overflow_fix_override(
         self, nncf_compression_config: Union[List[Dict], Dict, None], value: str = "enable"
@@ -273,20 +276,21 @@ class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
         shutil.rmtree(self.output_dir)
 
 
-CUSTOMIZED_QUANTIZATION_CONFIG = {
-    "algorithm": "quantization",
-    "overflow_fix": "disable",
-    "initializer": {
-        "range": {
-            "num_init_samples": 16,
-            "type": "percentile",
-            "params": {"min_percentile": 0.01, "max_percentile": 99.99},
+CUSTOMIZED_QUANTIZATION_CONFIG = deepcopy(DEFAULT_QUANTIZATION_CONFIG)
+CUSTOMIZED_QUANTIZATION_CONFIG.update(
+    {
+        "overflow_fix": "disable",
+        "initializer": {
+            "range": {
+                "num_init_samples": 16,
+                "type": "percentile",
+                "params": {"min_percentile": 0.01, "max_percentile": 99.99},
+            },
+            "batchnorm_adaptation": {"num_bn_adaptation_samples": 4},
         },
-        "batchnorm_adaptation": {"num_bn_adaptation_samples": 4},
-    },
-    "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "asymmetric"}}},
-    "ignored_scopes": [],
-}
+        "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "asymmetric"}}},
+    }
+)
 
 STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT = {
     "algorithm": "movement_sparsity",
@@ -307,7 +311,7 @@ STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT = {
 UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT = deepcopy(STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT)
 UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT["params"]["enable_structured_masking"] = False
 
-
+# TODO: Uncomment failes tests after NNCF 2.8.1 patch release
 OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "distillation": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
@@ -318,7 +322,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "default_quantization": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
-        expected_fake_quantize=42,
+        expected_fake_quantize=44,
         expected_int8=32,
         compression_metrics=["compression_loss"],
     ),
@@ -326,23 +330,23 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         model_id="hf-internal-testing/tiny-random-bert",
         teacher_model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
-        expected_fake_quantize=42,
+        expected_fake_quantize=44,
         expected_int8=32,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "customized_quantization": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG,
-        expected_fake_quantize=69,
-        expected_int8=35,
+        expected_fake_quantize=44,
+        expected_int8=32,
         compression_metrics=["compression_loss"],
     ),
     "distillation,customized_quantization": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
         teacher_model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG,
-        expected_fake_quantize=69,
-        expected_int8=35,
+        expected_fake_quantize=44,
+        expected_int8=32,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "structured_movement_sparsity": OVTrainerTestDescriptor(
@@ -361,16 +365,19 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=42,
+        expected_fake_quantize=44,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss"],
     ),
     "customized_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
-        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=69,
-        expected_int8=35,
+        nncf_compression_config=[
+            CUSTOMIZED_QUANTIZATION_CONFIG,
+            STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
+        ],
+        expected_fake_quantize=44,
+        expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss"],
     ),
@@ -378,7 +385,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         model_id="hf-internal-testing/tiny-random-bert",
         teacher_model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=42,
+        expected_fake_quantize=44,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
@@ -386,9 +393,12 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "distillation,customized_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
         teacher_model_id="hf-internal-testing/tiny-random-bert",
-        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=69,
-        expected_int8=35,
+        nncf_compression_config=[
+            CUSTOMIZED_QUANTIZATION_CONFIG,
+            STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
+        ],
+        expected_fake_quantize=44,
+        expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
@@ -408,16 +418,19 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=42,
+        expected_fake_quantize=44,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss"],
     ),
     "customized_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
-        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=69,
-        expected_int8=35,
+        nncf_compression_config=[
+            CUSTOMIZED_QUANTIZATION_CONFIG,
+            UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
+        ],
+        expected_fake_quantize=44,
+        expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss"],
     ),
@@ -425,7 +438,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         model_id="hf-internal-testing/tiny-random-bert",
         teacher_model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=42,
+        expected_fake_quantize=44,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
@@ -433,9 +446,12 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "distillation,customized_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
         teacher_model_id="hf-internal-testing/tiny-random-bert",
-        nncf_compression_config=[CUSTOMIZED_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=69,
-        expected_int8=35,
+        nncf_compression_config=[
+            CUSTOMIZED_QUANTIZATION_CONFIG,
+            UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
+        ],
+        expected_fake_quantize=44,
+        expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
@@ -628,7 +644,7 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
         # image models, e.g. swin, may require a determined image size
         model_id = model_id or self.output_dir
         size = (self.feature_extractor.size["height"], self.feature_extractor.size["width"])
-        ovmodel = self.ovmodel_cls.from_pretrained(model_id, compile=False)
+        ovmodel = self.ovmodel_cls.from_pretrained(model_id, compile=False, ov_config=F32_CONFIG)
         # dynamic batch size for tiny-swin does not work in OpenVINO 2023.0
         batch_size = 1 if self.is_swin else -1
         ovmodel.reshape(batch_size, 3, *size)

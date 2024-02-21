@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import importlib.util
+import logging
 import operator as op
 import sys
 from collections import OrderedDict
@@ -26,6 +27,8 @@ if sys.version_info < (3, 8):
 else:
     import importlib.metadata as importlib_metadata
 
+
+logger = logging.getLogger(__name__)
 
 STR_OPERATION_TO_FUNC = {">": op.gt, ">=": op.ge, "==": op.eq, "!=": op.ne, "<=": op.le, "<": op.lt}
 
@@ -79,13 +82,43 @@ _openvino_available = importlib.util.find_spec("openvino") is not None
 _openvino_version = "N/A"
 if _openvino_available:
     try:
-        _openvino_version = importlib_metadata.version("openvino")
-    except importlib_metadata.PackageNotFoundError:
-        try:
-            _openvino_version = importlib_metadata.version("openvino-nightly")
-        except importlib_metadata.PackageNotFoundError:
-            _openvino_available = False
+        from openvino.runtime import get_version
 
+        version = get_version()
+        # avoid invalid format
+        if "-" in version:
+            ov_major_version, dev_info = version.split("-", 1)
+            commit_id = dev_info.split("-")[0]
+            version = f"{ov_major_version}-{commit_id}"
+        _openvino_version = version
+    except ImportError:
+        _openvino_available = False
+
+_openvino_tokenizers_available = importlib.util.find_spec("openvino_tokenizers") is not None and _openvino_available
+_openvino_tokenizers_version = "N/A"
+if _openvino_tokenizers_available:
+    try:
+        _openvino_tokenizers_version = importlib_metadata.version("openvino_tokenizers")
+    except importlib_metadata.PackageNotFoundError:
+        _openvino_tokenizers_available = False
+
+if _openvino_tokenizers_available and _openvino_tokenizers_version != "N/A":
+    _compatible_openvino_version = next(
+        (
+            requirement.split("==")[-1]
+            for requirement in importlib_metadata.requires("openvino-tokenizers")
+            if requirement.startswith("openvino==")
+        ),
+        "",
+    )
+    _openvino_tokenizers_available = _compatible_openvino_version == ov_major_version
+    if not _openvino_tokenizers_available:
+        logger.warning(
+            "OpenVINO Tokenizer version is not compatible with OpenVINO version. "
+            f"Installed OpenVINO version: {ov_major_version},"
+            f"OpenVINO Tokenizers requires {_compatible_openvino_version}. "
+            f"OpenVINO Tokenizers models will not be added during export."
+        )
 
 _nncf_available = importlib.util.find_spec("nncf") is not None
 _nncf_version = "N/A"
@@ -94,7 +127,6 @@ if _nncf_available:
         _nncf_version = importlib_metadata.version("nncf")
     except importlib_metadata.PackageNotFoundError:
         _nncf_available = False
-
 
 _diffusers_available = importlib.util.find_spec("diffusers") is not None
 _diffusers_version = "N/A"
@@ -123,6 +155,16 @@ if _timm_available:
         _timm_available = False
 
 
+_datasets_available = importlib.util.find_spec("datasets") is not None
+_datasets_version = "N/A"
+
+if _datasets_available:
+    try:
+        _datasets_version = importlib_metadata.version("datasets")
+    except importlib_metadata.PackageNotFoundError:
+        _datasets_available = False
+
+
 def is_transformers_available():
     return _transformers_available
 
@@ -143,6 +185,10 @@ def is_openvino_available():
     return _openvino_available
 
 
+def is_openvino_tokenizers_available():
+    return _openvino_tokenizers_available
+
+
 def is_nncf_available():
     return _nncf_available
 
@@ -157,6 +203,10 @@ def is_safetensors_available():
 
 def is_timm_available():
     return _timm_available
+
+
+def is_datasets_available():
+    return _datasets_available
 
 
 # This function was copied from: https://github.com/huggingface/accelerate/blob/874c4967d94badd24f893064cc3bef45f57cadf7/src/accelerate/utils/versions.py#L319
@@ -287,6 +337,11 @@ NEURAL_COMPRESSOR_IMPORT_ERROR = """
 INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR = """
 {0} requires the intel-extension-for-transformers library but it was not found in your environment. You can install it with pip:
 `pip install neural-compressor`. Please note that you may need to restart your runtime after installation.
+"""
+
+DATASETS_IMPORT_ERROR = """
+{0} requires the datasets library but it was not found in your environment. You can install it with pip:
+`pip install datasets`. Please note that you may need to restart your runtime after installation.
 """
 
 BACKENDS_MAPPING = OrderedDict(

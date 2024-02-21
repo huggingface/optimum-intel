@@ -49,6 +49,7 @@ MODEL_NAMES = {
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "longt5": "hf-internal-testing/tiny-random-longt5",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "llama_gptq": "hf-internal-testing/TinyLlama-1.1B-Chat-v0.3-GPTQ",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "opt125m": "facebook/opt-125m",
@@ -69,6 +70,7 @@ MODEL_NAMES = {
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
     "segformer": "hf-internal-testing/tiny-random-SegformerModel",
+    "sentence-transformers-bert": "sentence-transformers-testing/stsb-bert-tiny-safetensors",
     "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
@@ -99,24 +101,22 @@ TENSOR_ALIAS_TO_TYPE = {
 
 SEED = 42
 
-
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
-    "bert": (68,),
+    "bert": (70,),
     "roberta": (68,),
     "albert": (84,),
-    "vit": (62,),
+    "vit": (64,),
     "blenderbot": (70,),
-    "gpt2": (44,),
-    "wav2vec2": (30,),
+    "gpt2": (46,),
+    "wav2vec2": (34,),
     "distilbert": (66,),
     "t5": (64, 104, 84),
-    "stable-diffusion": (148, 8, 8, 64),
-    "stable-diffusion-xl": (296, 8, 8, 66),
-    "stable-diffusion-xl-refiner": (296, 8, 8, 66),
+    "stable-diffusion": (242, 34, 42, 64),
+    "stable-diffusion-xl": (366, 34, 42, 66),
+    "stable-diffusion-xl-refiner": (366, 34, 42, 66),
 }
 
-
-_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (82, 295)}
+_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (64, 477)}
 
 
 def get_num_quantized_nodes(ov_model):

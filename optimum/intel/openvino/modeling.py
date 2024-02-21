@@ -11,9 +11,11 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+
 import logging
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Optional, Union
 
 import numpy as np
@@ -49,6 +51,7 @@ from transformers.modeling_outputs import (
 
 from optimum.exporters import TasksManager
 
+from ...exporters.openvino import main_export
 from ..utils.import_utils import is_timm_available, is_timm_version
 from .modeling_base import OVBaseModel
 from .utils import _is_timm_ov_dir
@@ -129,8 +132,12 @@ class OVModel(OVBaseModel):
         Use the specified `device` for inference. For example: "cpu" or "gpu". `device` can
         be in upper or lower case. To speed up first inference, call `.compile()` after `.to()`.
         """
-        self._device = device.upper()
-        self.request = None
+        if isinstance(device, str):
+            self._device = device.upper()
+            self.request = None
+        else:
+            logger.warning(f"device must be of type {str} but got {type(device)} instead")
+
         return self
 
     def forward(self, *args, **kwargs):
@@ -406,6 +413,48 @@ class OVModelForFeatureExtraction(OVModel):
         )
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
+    @classmethod
+    def _from_transformers(
+        cls,
+        model_id: str,
+        config: PretrainedConfig,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: Optional[str] = None,
+        subfolder: str = "",
+        local_files_only: bool = False,
+        task: Optional[str] = None,
+        trust_remote_code: bool = False,
+        load_in_8bit: Optional[bool] = None,
+        load_in_4bit: Optional[bool] = None,
+        **kwargs,
+    ):
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
+
+        # If load_in_8bit is not specified then compression_option should be set to None and will be set by default in main_export depending on the model size
+        compression_option = "fp32" if load_in_8bit is not None else None
+
+        # OVModelForFeatureExtraction works with Transformers type of models, thus even sentence-transformers models are loaded as such.
+        main_export(
+            model_name_or_path=model_id,
+            output=save_dir_path,
+            task=task or cls.export_feature,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            use_auth_token=use_auth_token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+            compression_option=compression_option,
+            library_name="transformers",
+        )
+
+        config.save_pretrained(save_dir_path)
+        return cls._from_pretrained(model_id=save_dir_path, config=config, load_in_8bit=load_in_8bit, **kwargs)
+
 
 MASKED_LM_EXAMPLE = r"""
     Example of masked language modeling using `transformers.pipelines`:
@@ -554,7 +603,7 @@ class OVModelForImageClassification(OVModel):
             model = TimmForImageClassification.from_pretrained(model_id, **kwargs)
             onnx_config = TimmOnnxConfig(model.config)
 
-            return cls._to_load(model=model, config=config, onnx_config=onnx_config)
+            return cls._to_load(model=model, config=config, onnx_config=onnx_config, stateful=False, **kwargs)
         else:
             return super().from_pretrained(
                 model_id=model_id,

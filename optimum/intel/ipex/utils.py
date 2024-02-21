@@ -12,15 +12,10 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from optimum.intel.ipex.modeling_base import (
-    IPEXModel,
-    IPEXModelForAudioClassification,
-    IPEXModelForCausalLM,
-    IPEXModelForImageClassification,
-    IPEXModelForMaskedLM,
-    IPEXModelForQuestionAnswering,
-    IPEXModelForSequenceClassification,
-    IPEXModelForTokenClassification,
-)
 
-from .inference import inference_mode
+_HEAD_TO_AUTOMODELS = {
+    "text-generation": "IPEXModelForCausalLM",
+    "text-classification": "IPEXModelForSequenceClassification",
+    "token-classification": "IPEXModelForTokenClassification",
+    "question-answering": "IPEXModelForQuestionAnswering",
+}

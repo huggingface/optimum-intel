@@ -13,8 +13,8 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum>=1.14.0",
-    "transformers>=4.20.0",
+    "optimum>=1.17.0",
+    "transformers>=4.26.0",
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
@@ -35,6 +35,7 @@ TESTS_REQUIRE = [
     "invisible-watermark>=0.2.0",
     "intel-extension-for-transformers>=1.3",
     "peft",
+    "auto-gptq",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
@@ -46,9 +47,16 @@ EXTRAS_REQUIRE = {
         "onnxruntime<1.15.0",
         "transformers>=4.34.0",
     ],
-    "openvino": ["openvino>=2023.2", "onnx", "onnxruntime", "transformers>=4.34.0"],
-    "nncf": ["nncf>=2.7.0"],
-    "ipex": ["transformers<4.32.0", "intel-extension-for-pytorch", "onnx"],
+    "openvino": [
+        "openvino>=2023.3",
+        "onnx",
+        "onnxruntime",
+        "transformers>=4.36.0",
+        "optimum>=1.16.1",
+    ],
+    "openvino-tokenizers": ["openvino-tokenizers[transformers]"],
+    "nncf": ["nncf>=2.8.1"],
+    "ipex": ["intel-extension-for-pytorch", "onnx"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
