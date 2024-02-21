@@ -348,11 +348,95 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if warmup:
             self._init_warmup()
 
+    def _reorder_cache(
+        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
+        [`~PreTrainedModel.beam_sample`] is called.
+        This is required to match `past_key_values` with the correct beam_idx at every generation step.
+        """
+        if self.config.model_type == "bloom":
+            return self._reorder_cache_bloom(past_key_values, beam_idx)
+
+        # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
+        return tuple(
+            tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+            for layer_past in past_key_values
+        )
+
+    # Copied from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
+    def _reorder_cache_bloom(
+        self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        This function is used to re-order the `past_key_values` cache if [`~PreTrainedModel.beam_search`] or
+        [`~PreTrainedModel.beam_sample`] is called for bloom architecture.
+        This is required to match `past_key_values` with the correct beam_idx at every generation step.
+        """
+        standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
+
+        # Get a copy of `beam_idx` on all the devices where we need those indices.
+        device_to_beam_idx = {
+            past_state.device: beam_idx.to(past_state.device)
+            for layer_past in past_key_values
+            for past_state in layer_past
+        }
+        reordered_past = tuple(
+            (
+                layer_past[0].index_select(0, device_to_beam_idx[layer_past[0].device]),
+                layer_past[1].index_select(0, device_to_beam_idx[layer_past[0].device]),
+            )
+            for layer_past in standardized_past
+        )
+        return self._convert_to_bloom_cache(reordered_past)
+
+    # Copied from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_bloom_cache
+    @staticmethod
+    def _convert_to_bloom_cache(past_key_value: Tuple[Tuple[torch.Tensor]]) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        Converts the cache to the format expected by Bloom, i.e. to tuple(tuple([batch_size * num_heads, ...]))
+        """
+        batch_size, num_heads, head_dim, seq_length = past_key_value[0][0].shape
+        batch_size_times_num_heads = batch_size * num_heads
+        # key:  [batch_size, num_heads, head_dim, seq_length] -> [batch_size * num_heads, head_dim, seq_length]
+        # value: [batch_size, num_heads, seq_length, head_dim] -> [batch_size * num_heads, seq_length, head_dim]
+        return tuple(
+            (
+                layer_past[0].view(batch_size_times_num_heads, head_dim, seq_length),
+                layer_past[1].view(batch_size_times_num_heads, seq_length, head_dim),
+            )
+            for layer_past in past_key_value
+        )
+
+    # Adapted from transformers.models.bloom.modeling_bloom.BloomPreTrainedModel._convert_to_standard_cache
+    def _convert_to_standard_cache(
+        self, past_key_value: Tuple[Tuple[torch.Tensor]], batch_size: int
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        """
+        Standardizes the format of the cache so as to match most implementations, i.e. to tuple(tuple([batch_size, num_heads, ...]))
+        """
+        if self.config.model_type != "bloom":
+            return past_key_value
+
+        batch_size_times_num_heads, head_dim, seq_length = past_key_value[0][0].shape
+        num_heads = batch_size_times_num_heads // batch_size
+        # key: [batch_size * num_heads, head_dim, seq_length] -> [batch_size, num_heads, head_dim, seq_length]
+        # value: [batch_size * num_heads, seq_length, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
+        return tuple(
+            (
+                layer_past[0].view(batch_size, num_heads, head_dim, seq_length),
+                layer_past[1].view(batch_size, num_heads, seq_length, head_dim),
+            )
+            for layer_past in past_key_value
+        )
+
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
         past_key_values = past_key_values or kwargs.get("past", None)
 
         if self.use_cache and past_key_values is not None:
-            input_ids = input_ids[:, -1:]
+            past_length = self.get_past_length(past_key_values)
+            input_ids = input_ids[:, past_length:]
 
         # `past_key_values` may be in the stardard format (e.g. in contrastive search), converts to bloom's format if needed
         if past_key_values is not None and self.config.model_type == "bloom":
@@ -368,7 +452,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
             if past_key_values:
-                position_ids = position_ids[:, -1].unsqueeze(-1)
+                position_ids = position_ids[:, -input_ids.shape[-1] :]
 
         return {
             "input_ids": input_ids,
@@ -378,6 +462,15 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             "attention_mask": attention_mask,
             "token_type_ids": None,
         }
+
+    def get_past_length(self, past_key_values):
+        model_type = self.config.model_type.replace("_", "-")
+        if model_type == "bloom":
+            return past_key_values[0][0].shape[-1]
+        elif model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS:
+            return past_key_values[0].shape[1]
+        else:
+            return past_key_values[0][0].shape[-2]
 
     def _prepare_past_key_values(self, input_ids):
         model_type = self.config.model_type.replace("_", "-")
@@ -431,7 +524,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
             if past_key_values:
-                position_ids = position_ids[:, -1].unsqueeze(-1)
+                position_ids = position_ids[:, -input_ids.shape[-1] :]
 
         if "position_ids" in self.input_names or not self.input_names:
             inputs["position_ids"] = position_ids
