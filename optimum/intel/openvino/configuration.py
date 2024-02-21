@@ -200,9 +200,9 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         self,
         bits: int = 8,
         sym: bool = False,
-        tokenizer: Any = None,
+        tokenizer: Optional[Any] = None,
         dataset: Optional[str] = None,
-        ratio: Optional[float] = None,
+        ratio: float = 1.0,
         group_size: Optional[int] = None,
         all_layers: Optional[bool] = None,
         sensitivity_metric: Optional[str] = None,
@@ -213,7 +213,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         self.sym = sym
         self.tokenizer = tokenizer
         self.dataset = dataset
-        self.group_size = group_size
+        self.group_size = group_size or (-1 if bits == 8 else 128)
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
@@ -226,9 +226,9 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         Safety checker that arguments are correct
         """
         if self.ratio is not None and not (0 <= self.ratio <= 1):
-            raise ValueError("damp_percent must between 0 and 1.")
+            raise ValueError("`damp_percent` must between 0 and 1.")
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
-            raise ValueError("group_size must be greater than 0 or equal to -1")
+            raise ValueError("`group_size` must be greater than 0 or equal to -1")
         if self.dataset is not None and isinstance(self.dataset, str):
             if self.dataset not in ["wikitext2", "c4", "c4-new", "ptb", "ptb-new"]:
                 raise ValueError(
@@ -238,6 +238,16 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
 
         if self.bits not in [4, 8]:
             raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
+
+        if self.bits == 8:
+            if self.ratio != 1:
+                raise ValueError(
+                    f"For 8-bit quantization, `ratio` is expected to be set to 1.0, but was set to {self.ratio}"
+                )
+            if self.group_size != -1:
+                raise ValueError(
+                    f"For 8-bit quantization, `group_size` is expected to be set to -1, but was set to {self.group_size}"
+                )
 
 
 def _check_default_4bit_configs(config: PretrainedConfig):
