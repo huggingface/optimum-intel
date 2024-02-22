@@ -504,7 +504,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-        self.assertEqual(ov_model.stateful, self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode")
+
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer(
@@ -520,10 +520,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         self.assertTrue("past_key_values" in ov_outputs)
         self.assertIsInstance(ov_outputs.past_key_values, tuple)
-        if self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode":
+
+        is_stateful = ov_model.config.model_type not in {"gpt_bigcode", "llama"} and self.IS_SUPPORT_STATEFUL
+        self.assertEqual(ov_model.stateful, is_stateful)
+        if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
+
         # Compare tensor outputs
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
         del transformers_model
@@ -540,7 +545,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model.half()
         model.compile()
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-        outputs = pipe("This is a sample", max_length=10)
+        outputs = pipe("This is a sample", max_length=20)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
         del pipe
