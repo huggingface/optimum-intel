@@ -35,4 +35,4 @@ jobs:
         pip install .[openvino,openvino-tokenizers,nncf,tests,diffusers]
     - name: Test with Pytest
       run: |
-        pytest tests/openvino/test_quantization.py
+        pytest tests/openvino/test_modeling.py
