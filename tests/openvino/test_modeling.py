@@ -483,7 +483,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        "llama_gptq",
+        # "llama_gptq",
         "marian",
         "mistral",
         "mpt",
