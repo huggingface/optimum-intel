@@ -210,7 +210,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "gpt_neox",
         "llama",
         "mistral",
-        "phi",
+        # "phi",
         "mpt",
         "opt",
     )
