@@ -172,7 +172,7 @@ def main_export(
             ov_config = OVConfig(dtype="fp16")
         elif compression_option != "fp32":
             q_config = _COMPRESSION_OPTIONS[compression_option] if compression_option in _COMPRESSION_OPTIONS else {}
-            q_config["ratio"] = compression_ratio
+            q_config["ratio"] = compression_ratio or 1.0
             ov_config = OVConfig(quantization_config=q_config)
 
     original_task = task
