@@ -34,7 +34,7 @@ from ...exporters.openvino import ensure_stateful_is_available, main_export, pat
 from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
-from .configuration import OVWeightQuantizationConfig, _check_default_4bit_configs
+from .configuration import OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
@@ -252,14 +252,14 @@ class OVBaseDecoderModel(OVModel):
 
         if task is None:
             task = cls.export_feature
-
             if use_cache:
                 task = task + "-with-past"
 
-        # If load_in_8bit is not specified then compression_option should be set to None and will be set by default in main_export depending on the model size
-        compression_option = None
-        if load_in_8bit is not None or quantization_config is not None:
-            compression_option = "fp32"
+        # If load_in_8bit or quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None or not quantization_config:
+            ov_config = None
+        else:
+            ov_config = OVConfig(dtype="fp32")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
 
@@ -274,7 +274,7 @@ class OVBaseDecoderModel(OVModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            compression_option=compression_option,
+            ov_config=ov_config,
             stateful=stateful,
         )
 
@@ -285,8 +285,8 @@ class OVBaseDecoderModel(OVModel):
             model_id=save_dir_path,
             config=config,
             use_cache=use_cache,
-            load_in_8bit=load_in_8bit,
             stateful=None,
+            load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
             **kwargs,
         )
@@ -576,11 +576,15 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
+        # Give default quantization config if not provided and load_in_8bit=True
+        if load_in_8bit:
+            quantization_config = quantization_config or {"bits": 8}
+
         if isinstance(quantization_config, dict):
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
-        model = cls.load_model(model_cache_path, load_in_8bit=False if load_in_4bit else load_in_8bit)
+        model = cls.load_model(model_cache_path, quantization_config=None if load_in_4bit else quantization_config)
 
         model_type = config.model_type.replace("_", "-")
         if model_type == "bloom":
