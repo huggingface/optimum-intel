@@ -163,8 +163,6 @@ def main_export(
             "Please, pass an `ov_config` argument instead `OVConfig(quantization_config={ratio=compression_ratio})`."
         )
 
-    # default_config = _check_default_4bit_configs(config)
-
     if ov_config is None and compression_option is not None:
         from ...intel.openvino.configuration import OVConfig
 
