@@ -347,12 +347,12 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
 
-        self._reorder_cache = self.model_cls._reorder_cache
+        self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
 
         if is_transformers_version(">=", "4.38.0") and model_type in {"llama", "phi", "persimmon"}:
             self.prepare_inputs_for_generation = _prepare_inputs_for_generation_for_llama
         else:
-            self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation
+            self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)
 
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
