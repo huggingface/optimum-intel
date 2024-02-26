@@ -67,7 +67,6 @@ MODEL_NAMES = {
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
-    "opt": "hf-internal-testing/tiny-random-OPTModel",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "mistral": "echarlaix/tiny-random-mistral",
@@ -76,6 +75,8 @@ MODEL_NAMES = {
     "mobilevit": "hf-internal-testing/tiny-random-mobilevit",
     "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
     "mt5": "stas/mt5-tiny-random",
+    "opt": "hf-internal-testing/tiny-random-OPTModel",
+    "phi": "hf-internal-testing/tiny-random-PhiForCausalLM",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
@@ -199,7 +200,7 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
 class IPEXModelForCausalLMTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
-        # "gpt_bigcode",
+        "gpt_bigcode",
         "blenderbot",
         "blenderbot-small",
         "bloom",
@@ -208,8 +209,9 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
-        # "mistral",
-        # "mpt",
+        "mistral",
+        # "phi",
+        "mpt",
         "opt",
     )
     GENERATION_LENGTH = 100

@@ -74,19 +74,16 @@ model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
 
 > **NOTE:** `load_in_8bit` is enabled by default for models larger than 1 billion parameters.
 
-For the 4-bit weight quantization we recommend using the NNCF API like below:
-```python
-from optimum.intel import OVModelForCausalLM
-import nncf
+For the 4-bit weight quantization you can use the `quantization_config` to specify the optimization parameters, for example:
 
-model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=False)
-model.model = nncf.compress_weights(
-        model.model,
-        mode=nncf.CompressWeightsMode.INT4_SYM,
-        ratio=0.8,
-        group_size=128,
-    )
-model.save_pretrained("compressed_model")
+```python
+from optimum.intel import OVModelForCausalLM, OVWeightQuantizationConfig
+
+model = OVModelForCausalLM.from_pretrained(
+    model_id,
+    export=True,
+    quantization_config=OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, dataset="ptb"),
+) 
 ```
 
 For more details, please refer to the corresponding NNCF [documentation](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/CompressWeights.md).
