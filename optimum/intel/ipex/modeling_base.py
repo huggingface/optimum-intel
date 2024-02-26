@@ -472,6 +472,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         else:
             return past_key_values[0][0].shape[-2]
 
+    # Rewrite it to avoid jit failed, original function may call attributes which jit model don't have
     def _prepare_past_key_values(self, input_ids):
         model_type = self.config.model_type.replace("_", "-")
         nb_pkv = 2
