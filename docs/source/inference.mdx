@@ -114,7 +114,7 @@ For INT4 quantization you can also specify the following arguments :
 
 Smaller `group_size` and `ratio` of usually improve accuracy at the sacrifice of the model size and inference latency.
 
-You can also apply apply 8-bit quantization on your model's weight when loading your model by setting the `load_in_8bit=True` argument when calling the `from_pretrained()` method.
+You can also apply 8-bit quantization on your model's weight when loading your model by setting the `load_in_8bit=True` argument when calling the `from_pretrained()` method.
 
 ```python
 from optimum.intel import OVModelForCausalLM
