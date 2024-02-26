@@ -6,18 +6,7 @@ from intel_extension_for_pytorch.llm.modules import linear2SiluMul, linearAdd
 from torch import nn
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
-
-
-def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """
-    This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
-    num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
-    """
-    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
-    if n_rep == 1:
-        return hidden_states
-    hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+from transformers.models.llama.modeling_llama import repeat_kv
 
 
 def llama_layer_norm_forward(self, hidden_states):
@@ -35,51 +24,34 @@ def llama_attn_forward(
     **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     bsz, q_len, _ = hidden_states.size()
-    concat_qkv = None
-    if hasattr(self, "concat_qkv") and self.concat_qkv is not None:
-        concat_qkv = self.concat_qkv(hidden_states)
-    else:
-        query = self.q_proj(hidden_states)
-        key = self.k_proj(hidden_states)
-        value = self.v_proj(hidden_states)
+
+    query = self.q_proj(hidden_states)
+    key = self.k_proj(hidden_states)
+    value = self.v_proj(hidden_states)
 
     kv_seq_len = q_len + past_key_value[0].size(-2) if past_key_value is not None else q_len
 
-    if concat_qkv is not None and type(concat_qkv) is not tuple:
-        query, key, value = self.ipex_rope(
-            concat_qkv,
-            position_ids,
-            self.num_heads,
-            self.head_dim,
-            self.head_dim // 2,
-            self.head_dim,
-            kv_seq_len,
-            self.concat_qkv._num_concats,
-        )
-    else:
-        if concat_qkv is not None:
-            query, key, value = concat_qkv
-        query = query.view(bsz, q_len, self.num_heads, self.head_dim)
-        key = key.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
-        value = value.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
-        key = self.ipex_rope(
-            key,
-            position_ids,
-            self.num_key_value_heads,
-            self.head_dim,
-            self.head_dim // 2,
-            self.head_dim,
-            kv_seq_len,
-        )
-        query = self.ipex_rope(
-            query,
-            position_ids,
-            self.num_heads,
-            self.head_dim,
-            self.head_dim // 2,
-            self.head_dim,
-            kv_seq_len,
-        )
+    query = query.view(bsz, q_len, self.num_heads, self.head_dim)
+    key = key.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
+    value = value.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
+    key = self.ipex_rope(
+        key,
+        position_ids,
+        self.num_key_value_heads,
+        self.head_dim,
+        self.head_dim // 2,
+        self.head_dim,
+        kv_seq_len,
+    )
+    query = self.ipex_rope(
+        query,
+        position_ids,
+        self.num_heads,
+        self.head_dim,
+        self.head_dim // 2,
+        self.head_dim,
+        kv_seq_len,
+    )
 
     if use_cache:
         (attn_output, attn_weights, past_key_value) = self.ipex_scale_dot_product(

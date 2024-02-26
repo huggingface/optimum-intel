@@ -1,4 +1,4 @@
-from intel_extension_for_pytorch.llm.modules import ApplyRotaryEmbedding, IndirectKVCache
+from intel_extension_for_pytorch.llm.modules import ApplyRotaryEmbedding, IndirectAccessKVCache
 from transformers.models.llama.modeling_llama import (
     LlamaAttention,
     LlamaDecoderLayer,
@@ -50,7 +50,7 @@ def export_llama_model(model):
         model.config.rope_theta,
         model.config.architectures[0],
     )
-    ipex_scale_dot_product = IndirectKVCache(text_max_length=model.config.max_position_embeddings)
+    ipex_scale_dot_product = IndirectAccessKVCache(text_max_length=model.config.max_position_embeddings)
     patch_op(model, LlamaAttention, "ipex_rope", ipex_rope)
     patch_op(model, LlamaAttention, "ipex_scale_dot_product", ipex_scale_dot_product)
 
@@ -65,7 +65,5 @@ def export_llama_model(model):
 
 def export_model(model):
     if isinstance(model, LlamaForCausalLM):
-        export_llama_model(model)
-        return True
-
-    return False
+        model = export_llama_model(model)
+    return model
