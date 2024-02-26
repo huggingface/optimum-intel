@@ -34,6 +34,7 @@ def llama_attn_forward(
     query = query.view(bsz, q_len, self.num_heads, self.head_dim)
     key = key.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
     value = value.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
+    # Use ipex op to rotary position embedding more efficient.
     key = self.ipex_rope(
         key,
         position_ids,
@@ -54,6 +55,8 @@ def llama_attn_forward(
     )
 
     if use_cache:
+        # This ipex op pre-allocates buffers for past_key_values and use beam index history
+        # which to decide which beam should be used to make attention scale dot more efficient.
         (attn_output, attn_weights, past_key_value) = self.ipex_scale_dot_product(
             query,
             key,
