@@ -150,6 +150,7 @@ class IPEXModel(OptimizedModel):
         save_dir_path = Path(save_dir.name)
         torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
         config.torchscript = True
+        config.torch_dtype = torch_dtype
 
         return cls._from_pretrained(
             model_id=save_dir_path,
@@ -233,6 +234,11 @@ class IPEXModel(OptimizedModel):
 
     @property
     def dtype(self) -> torch.dtype:
+        return self._dtype
+
+    @property
+    def model_dtype(self):
+        logger.warning("model_dtype will be removed after v1.18.0")
         return self._dtype
 
     def to(self, device: Union[torch.device, str]):
@@ -352,8 +358,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         model_type = config.model_type.replace("_", "-")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(config)
-        self.model_dtype = kwargs.get("model_dtype", self.dtype)
-        self._dtype = self.model_dtype
         self.use_cache = "past_key_values" in self.input_names
         self.is_ipex_exported = kwargs.get("is_ipex_exported", None)
 
@@ -375,12 +379,12 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
 
-        self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
+        self._reorder_cache = self.model_cls._reorder_cache
 
         if is_transformers_version(">=", "4.38.0") and model_type in {"llama", "phi", "persimmon"}:
             self.prepare_inputs_for_generation = _prepare_inputs_for_generation_for_llama
         else:
-            self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)
+            self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation
 
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
@@ -584,7 +588,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
             if past_key_values:
-                position_ids = position_ids[:, -1].unsqueeze(-1)
+                position_ids = position_ids[:, -input_ids.shape[-1] :]
 
         if "position_ids" in self.input_names or not self.input_names:
             inputs["position_ids"] = position_ids
