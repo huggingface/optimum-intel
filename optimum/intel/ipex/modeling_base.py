@@ -124,6 +124,7 @@ class IPEXModel(OptimizedModel):
         save_dir_path = Path(save_dir.name)
         torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
         config.torchscript = True
+        config.torch_dtype = torch_dtype
 
         return cls._from_pretrained(
             model_id=save_dir_path,
@@ -134,7 +135,6 @@ class IPEXModel(OptimizedModel):
             cache_dir=cache_dir,
             local_files_only=local_files_only,
             use_cache=use_cache,
-            model_dtype=torch_dtype,
         )
 
     @classmethod
@@ -206,6 +206,11 @@ class IPEXModel(OptimizedModel):
 
     @property
     def dtype(self) -> torch.dtype:
+        return self._dtype
+
+    @property
+    def model_dtype(self):
+        logger.warning("model_dtype will be removed after v1.18.0")
         return self._dtype
 
     def to(self, device: Union[torch.device, str]):
@@ -322,8 +327,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         model_type = config.model_type.replace("_", "-")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(config)
-        self.model_dtype = kwargs.get("model_dtype", self.dtype)
-        self._dtype = self.model_dtype
         self.use_cache = "past_key_values" in self.input_names
 
         if use_cache ^ self.use_cache:
