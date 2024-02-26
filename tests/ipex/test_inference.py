@@ -115,7 +115,7 @@ class IPEXIntegrationTest(unittest.TestCase):
         model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32, return_dict=False)
         model = model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        inputs = "DeepSpeed is a machine learning framework for deep neural networks and deep reinforcement learning. It is written in C++ and is available for Linux, Mac OS X,"
+        inputs = "This is a simple input"
         text_generator = pipeline("text-generation", model=model, tokenizer=tokenizer)
         with torch.inference_mode():
             output = text_generator(inputs)
