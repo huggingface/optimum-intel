@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 import numpy as np
 import openvino
@@ -53,6 +53,7 @@ from optimum.exporters import TasksManager
 
 from ...exporters.openvino import main_export
 from ..utils.import_utils import is_timm_available, is_timm_version
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import _is_timm_ov_dir
 
@@ -427,14 +428,17 @@ class OVModelForFeatureExtraction(OVModel):
         task: Optional[str] = None,
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
-        load_in_4bit: Optional[bool] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
-        # If load_in_8bit is not specified then compression_option should be set to None and will be set by default in main_export depending on the model size
-        compression_option = "fp32" if load_in_8bit is not None else None
+        # If load_in_8bit or quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None or not quantization_config:
+            ov_config = None
+        else:
+            ov_config = OVConfig(dtype="fp32")
 
         # OVModelForFeatureExtraction works with Transformers type of models, thus even sentence-transformers models are loaded as such.
         main_export(
@@ -448,12 +452,18 @@ class OVModelForFeatureExtraction(OVModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            compression_option=compression_option,
+            ov_config=ov_config,
             library_name="transformers",
         )
 
         config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(model_id=save_dir_path, config=config, load_in_8bit=load_in_8bit, **kwargs)
+        return cls._from_pretrained(
+            model_id=save_dir_path,
+            config=config,
+            load_in_8bit=load_in_8bit,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
 
 
 MASKED_LM_EXAMPLE = r"""

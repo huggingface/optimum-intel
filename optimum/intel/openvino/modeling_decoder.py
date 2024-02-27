@@ -23,7 +23,7 @@ import openvino
 import torch
 from openvino.preprocess import PrePostProcessor
 from openvino.runtime import Core, Tensor, Type
-from transformers import AutoModelForCausalLM, PretrainedConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -34,7 +34,7 @@ from ...exporters.openvino import ensure_stateful_is_available, main_export, pat
 from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
-from .configuration import OVWeightQuantizationConfig, _check_default_4bit_configs
+from .configuration import _DEFAULT_4BIT_CONFIGS, OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
@@ -252,16 +252,17 @@ class OVBaseDecoderModel(OVModel):
 
         if task is None:
             task = cls.export_feature
-
             if use_cache:
                 task = task + "-with-past"
 
-        # If load_in_8bit is not specified then compression_option should be set to None and will be set by default in main_export depending on the model size
-        compression_option = None
-        if load_in_8bit is not None or quantization_config is not None:
-            compression_option = "fp32"
+        # If load_in_8bit or quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None or not quantization_config:
+            ov_config = None
+        else:
+            ov_config = OVConfig(dtype="fp32")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -273,7 +274,7 @@ class OVBaseDecoderModel(OVModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            compression_option=compression_option,
+            ov_config=ov_config,
             stateful=stateful,
         )
 
@@ -284,8 +285,8 @@ class OVBaseDecoderModel(OVModel):
             model_id=save_dir_path,
             config=config,
             use_cache=use_cache,
-            load_in_8bit=load_in_8bit,
             stateful=None,
+            load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
             **kwargs,
         )
@@ -575,11 +576,18 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
+        # Give default quantization config if not provided and load_in_8bit=True
+        if load_in_8bit:
+            quantization_config = quantization_config or {"bits": 8}
+
         if isinstance(quantization_config, dict):
+            if quantization_config == {"bits": 4} and config.name_or_path in _DEFAULT_4BIT_CONFIGS:
+                quantization_config = _DEFAULT_4BIT_CONFIGS[config.name_or_path]
+
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
-        model = cls.load_model(model_cache_path, load_in_8bit=False if load_in_4bit else load_in_8bit)
+        model = cls.load_model(model_cache_path, quantization_config=None if load_in_4bit else quantization_config)
 
         model_type = config.model_type.replace("_", "-")
         if model_type == "bloom":
@@ -603,6 +611,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 raise ImportError(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
                 )
+            import nncf
+
             from .quantization import _weight_only_quantization
 
             default_config = _check_default_4bit_configs(config)
@@ -612,7 +622,20 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     f"For the given model, we recommend the following `quantization_config` : {default_config}"
                 )
 
-            _weight_only_quantization(causal_model, quantization_config)
+            if isinstance(quantization_config.dataset, str):
+                tokenizer = quantization_config.tokenizer or AutoTokenizer.from_pretrained(model_id)
+
+                from optimum.gptq.data import get_dataset, prepare_dataset
+
+                # from optimum.gptq.utils import get_seqlen
+
+                # seqlen = get_seqlen(causal_model)
+                dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32)
+                dataset = prepare_dataset(dataset)
+                quantization_config.dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))
+
+            _weight_only_quantization(model, quantization_config)
+
         return causal_model
 
 
