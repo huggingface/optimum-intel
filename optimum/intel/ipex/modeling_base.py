@@ -47,7 +47,7 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
-from ...exporters.ipex import export_model
+from ...exporters.ipex import LlamaModelPatcher
 from ..generation.modeling import jit_trace, prepare_jit_inputs
 from ..utils.import_utils import is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
@@ -56,11 +56,11 @@ from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attent
 logger = logging.getLogger(__name__)
 
 
-IPEX_EXPORTED_LIST = ("LlamaForCausalLM", )
+IPEX_EXPORTED_LIST = {"LlamaForCausalLM": LlamaModelPatcher}
 
 
 def is_ipex_exported_model(model_name):
-    for name in IPEX_EXPORTED_LIST:
+    for name in IPEX_EXPORTED_LIST.keys():
         if model_name == name:
             return True
     return False
@@ -150,8 +150,9 @@ class IPEXModel(OptimizedModel):
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         is_ipex_exported = is_ipex_exported_model(model.__class__.__name__)
         if is_ipex_exported:
-            model = export_model(model)
-            traced_model = ipex_jit_trace(model)
+            model_patcher = IPEX_EXPORTED_LIST[model.__class__.__name__]
+            with model_patcher(model) as patched_model:
+                traced_model = ipex_jit_trace(patched_model)
         else:
             model = patch_decoder_attention_mask(model)
             model = ipex.optimize(model, dtype=torch_dtype, level="O1", auto_kernel_selection=True)
@@ -562,7 +563,6 @@ def _prepare_inputs_for_generation_for_llama(
 def _ipex_reorder_cache(
     past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
 ) -> Tuple[Tuple[torch.Tensor]]:
-
     if len(past_key_values[0]) == 4 and past_key_values[0][0].shape[-1] == 1:  # discrete kv_cache
         for layer_past in past_key_values:
             layer_past[3][layer_past[0].size(-2) - 1] = beam_idx

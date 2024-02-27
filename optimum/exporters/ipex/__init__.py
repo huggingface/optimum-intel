@@ -1,1 +1,1 @@
-from .model_patcher import export_model
+from .model_patcher import LlamaModelPatcher

@@ -2,7 +2,6 @@ import math
 from typing import List, Optional, Tuple, Union
 
 import torch
-from intel_extension_for_pytorch.llm.modules import linear2SiluMul, linearAdd
 from torch import nn
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
@@ -94,46 +93,6 @@ def llama_attn_forward(
         attn_weights = None
 
     return attn_output, attn_weights, past_key_value
-
-
-def prepare_inputs_for_generation(
-    self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
-):
-    if past_key_values is not None:
-        past_length = past_key_values[0][0].shape[2]
-
-        # Some generation methods already pass only the last input ID
-        if input_ids.shape[1] > past_length:
-            remove_prefix_length = past_length
-        else:
-            # Default to old behavior: keep only final ID
-            remove_prefix_length = input_ids.shape[1] - 1
-
-        input_ids = input_ids[:, remove_prefix_length:]
-
-    position_ids = kwargs.get("position_ids", None)
-    if attention_mask is not None and position_ids is None:
-        # create position_ids on the fly for batch generation
-        position_ids = attention_mask.long().cumsum(-1) - 1
-        position_ids.masked_fill_(attention_mask == 0, 1)
-        if past_key_values:
-            position_ids = position_ids[:, -input_ids.shape[1] :]
-
-    # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-    if inputs_embeds is not None and past_key_values is None:
-        model_inputs = {"inputs_embeds": inputs_embeds}
-    else:
-        model_inputs = {"input_ids": input_ids}
-
-    model_inputs.update(
-        {
-            "position_ids": position_ids,
-            "past_key_values": past_key_values,
-            "use_cache": kwargs.get("use_cache"),
-            "attention_mask": attention_mask,
-        }
-    )
-    return model_inputs
 
 
 def llama_model_forward(
@@ -252,86 +211,67 @@ def llama_model_forward(
     )
 
 
-class _IPEXLlamaDecoderLayerRef(nn.Module):
-    def __init__(self, module, config, distributed=False):
-        super().__init__()
-        for k, v in module.__dict__.items():
-            setattr(self, k, v)
-        for k, v in module.__class__.__dict__.items():
-            if k.startswith("__") or k.startswith("forward"):
-                continue
-            setattr(self.__class__, k, getattr(module.__class__, k))
-        self.distributed = distributed
-        if not self.distributed:
-            self.mha_linear_add = linearAdd(module.self_attn.o_proj)
-            self.mlp_linear_add = linearAdd(module.mlp.down_proj)
-            del self.__dict__["_modules"]["self_attn"].o_proj
-            del self.__dict__["_modules"]["mlp"].down_proj
-        self.linear_silu_mul = linear2SiluMul(module.mlp.gate_proj, module.mlp.up_proj)
-        del self.__dict__["_modules"]["mlp"].gate_proj
-        del self.__dict__["_modules"]["mlp"].up_proj
+def llama_decoder_layer_forward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    output_attentions: Optional[bool] = False,
+    use_cache: Optional[bool] = False,
+    **kwargs,
+) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    """
+    Args:
+        hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
+        attention_mask (`torch.FloatTensor`, *optional*):
+            attention mask of size `(batch_size, sequence_length)` if flash attention is used or `(batch_size, 1,
+            query_sequence_length, key_sequence_length)` if default attention is used.
+        output_attentions (`bool`, *optional*):
+            Whether or not to return the attentions tensors of all attention layers. See `attentions` under
+            returned tensors for more detail.
+        use_cache (`bool`, *optional*):
+            If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
+            (see `past_key_values`).
+        past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
+    """
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-        **kwargs,
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
-        """
-        Args:
-            hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
-            attention_mask (`torch.FloatTensor`, *optional*):
-                attention mask of size `(batch_size, sequence_length)` if flash attention is used or `(batch_size, 1,
-                query_sequence_length, key_sequence_length)` if default attention is used.
-            output_attentions (`bool`, *optional*):
-                Whether or not to return the attentions tensors of all attention layers. See `attentions` under
-                returned tensors for more detail.
-            use_cache (`bool`, *optional*):
-                If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
-                (see `past_key_values`).
-            past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
-        """
+    residual = hidden_states
+    hidden_states = self.input_layernorm(hidden_states)
 
-        residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
+    # Self Attention
+    hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        hidden_states=hidden_states,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        past_key_value=past_key_value,
+        output_attentions=output_attentions,
+        use_cache=use_cache,
+    )
+    if hasattr(self, "mha_linear_add"):
+        hidden_states = self.mha_linear_add(hidden_states, residual)
+    else:
+        hidden_states = self.self_attn.o_proj(hidden_states)
+        hidden_states = residual + hidden_states
 
-        # Self Attention
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-        )
-        if not self.distributed:
-            hidden_states = self.mha_linear_add(hidden_states, residual)
-        else:
-            hidden_states = self.self_attn.o_proj(hidden_states)
-            hidden_states = residual + hidden_states
+    # Fully Connected
+    residual = hidden_states
+    hidden_states = self.post_attention_layernorm(hidden_states)
 
-        # Fully Connected
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
+    mlp_gate = self.linear_silu_mul(hidden_states)
 
-        mlp_gate = self.linear_silu_mul(hidden_states)
+    if hasattr(self, "mlp_linear_add"):
+        hidden_states = self.mlp_linear_add(mlp_gate, residual)
+    else:
+        hidden_states = self.mlp.down_proj(mlp_gate)
+        hidden_states = residual + hidden_states
 
-        if not self.distributed:
-            hidden_states = self.mlp_linear_add(mlp_gate, residual)
-        else:
-            hidden_states = self.mlp.down_proj(mlp_gate)
-            hidden_states = residual + hidden_states
+    outputs = (hidden_states,)
 
-        outputs = (hidden_states,)
+    if output_attentions:
+        outputs += (self_attn_weights,)
 
-        if output_attentions:
-            outputs += (self_attn_weights,)
+    if use_cache:
+        outputs += (present_key_value,)
 
-        if use_cache:
-            outputs += (present_key_value,)
-
-        return outputs
+    return outputs
