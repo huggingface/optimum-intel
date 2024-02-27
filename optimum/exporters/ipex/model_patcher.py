@@ -69,28 +69,6 @@ def patch_linear(m, target_m, linear_name, linear_class, attr_list, attr_list_2=
             patch_linear(sub_m, target_m, linear_name, linear_class, attr_list)
 
 
-def export_llama_model(model):
-    ipex_rope = ApplyRotaryEmbedding(
-        model.config.max_position_embeddings,
-        model.config.hidden_size // model.config.num_attention_heads,
-        model.config.rope_theta,
-        model.config.architectures[0],
-    )
-    ipex_scale_dot_product = IndirectAccessKVCache(text_max_length=model.config.max_position_embeddings)
-    patch_op(model, LlamaAttention, "ipex_rope", ipex_rope)
-    patch_op(model, LlamaAttention, "ipex_scale_dot_product", ipex_scale_dot_product)
-
-    convert_functions(model, LlamaModel, "forward", llama_model_forward)
-    convert_functions(model, LlamaAttention, "forward", llama_attn_forward)
-    convert_functions(model, LlamaRMSNorm, "forward", llama_layer_norm_forward)
-    convert_functions(model, LlamaDecoderLayer, "forward", llama_decoder_layer_forward)
-
-    patch_linear(model, LlamaDecoderLayer, "mha_linear_add", linearAdd, ["self_attn", "o_proj"])
-    patch_linear(model, LlamaDecoderLayer, "mlp_linear_add", linearAdd, ["mlp", "down_proj"])
-    patch_linear(model, LlamaDecoderLayer, "linear_silu_mul", linear2SiluMul, ["mlp", "gate_proj"], ["mlp", "up_proj"])
-    return model
-
-
 class ModelPatcher:
     def __init__(self, model, ipex_ops=None, ipex_functions=None, ipex_linears=None, original_functions=None):
         self.model = model
