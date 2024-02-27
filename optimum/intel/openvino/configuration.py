@@ -226,7 +226,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         Safety checker that arguments are correct
         """
         if self.ratio is not None and not (0 <= self.ratio <= 1):
-            raise ValueError("`damp_percent` must between 0 and 1.")
+            raise ValueError("`ratio` must between 0 and 1.")
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
             raise ValueError("`group_size` must be greater than 0 or equal to -1")
         if self.dataset is not None and isinstance(self.dataset, str):
