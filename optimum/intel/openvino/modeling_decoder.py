@@ -34,7 +34,7 @@ from ...exporters.openvino import ensure_stateful_is_available, main_export, pat
 from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
-from .configuration import OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
+from .configuration import _DEFAULT_4BIT_CONFIGS, OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
@@ -581,6 +581,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             quantization_config = quantization_config or {"bits": 8}
 
         if isinstance(quantization_config, dict):
+            if quantization_config == {"bits": 4} and config.name_or_path in _DEFAULT_4BIT_CONFIGS:
+                quantization_config = _DEFAULT_4BIT_CONFIGS[config.name_or_path]
+
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
