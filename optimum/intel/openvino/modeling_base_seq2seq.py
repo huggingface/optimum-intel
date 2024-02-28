@@ -58,6 +58,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         self.config = config
@@ -76,6 +77,12 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
         self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
+        if quantization_config:
+            self.ov_config["quantization_config"] = quantization_config
+
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -95,6 +102,8 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         for src_file, dst_file_name in zip(src_files, dst_file_names):
             dst_path = os.path.join(save_directory, dst_file_name)
             openvino.save_model(src_file, dst_path, compress_to_fp16=False)
+
+        self._save_openvino_config(save_directory)
 
     @classmethod
     def _from_pretrained(
@@ -155,9 +164,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
         decoder_with_past = None
 
-        # Give default quantization config if not provided and load_in_8bit=True
-        if load_in_8bit:
-            quantization_config = quantization_config or {"bits": 8}
+        quantization_config = self._prepare_quantization_config(quantization_config, load_in_8bit)
 
         # Load model from a local directory
         if os.path.isdir(model_id):
@@ -205,6 +212,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             decoder_with_past=decoder_with_past,
             config=config,
             model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
             **kwargs,
         )
 

@@ -100,6 +100,7 @@ class OVBaseDecoderModel(OVModel):
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         if not dynamic_shapes:
@@ -117,6 +118,7 @@ class OVBaseDecoderModel(OVModel):
             dynamic_shapes=False,
             ov_config=ov_config,
             model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
             **kwargs,
         )
 
@@ -223,6 +225,8 @@ class OVBaseDecoderModel(OVModel):
         model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
+
+        self._save_openvino_config(save_directory)
 
     @classmethod
     def _from_transformers(
@@ -576,15 +580,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
-        # Give default quantization config if not provided and load_in_8bit=True
-        if load_in_8bit:
-            quantization_config = quantization_config or {"bits": 8}
+        if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
+            quantization_config = _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, quantization_config) 
 
-        if isinstance(quantization_config, dict):
-            if quantization_config == {"bits": 4} and config.name_or_path in _DEFAULT_4BIT_CONFIGS:
-                quantization_config = _DEFAULT_4BIT_CONFIGS[config.name_or_path]
-
-            quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
+        quantization_config = self._prepare_quantization_config(quantization_config, load_in_8bit)
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
         model = cls.load_model(model_cache_path, quantization_config=None if load_in_4bit else quantization_config)
@@ -603,7 +602,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         enable_compilation = kwargs.pop("compile", True) and not load_in_4bit
         causal_model = init_cls(
-            model=model, config=config, model_save_dir=model_cache_path.parent, compile=enable_compilation, **kwargs
+            model=model, config=config, model_save_dir=model_cache_path.parent, compile=enable_compilation, quantization_config=quantization_config, **kwargs
         )
 
         if load_in_4bit:

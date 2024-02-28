@@ -57,6 +57,7 @@ class OVBaseModel(OptimizedModel):
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         self.config = config
@@ -90,6 +91,10 @@ class OVBaseModel(OptimizedModel):
             self.compile()
 
         self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
+
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
 
     @staticmethod
     def load_model(file_name: Union[str, Path], quantization_config: Union[OVWeightQuantizationConfig, Dict] = None):
@@ -142,6 +147,14 @@ class OVBaseModel(OptimizedModel):
         """
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(self.model, dst_path, compress_to_fp16=False)
+
+        self._save_openvino_config(save_directory)
+
+
+    def _save_openvino_config(self, save_directory: Union[str, Path]):
+        if self._openvino_config is not None:
+            self._openvino_config.save_pretrained(save_directory)
+
 
     @classmethod
     def _from_pretrained(
@@ -203,12 +216,19 @@ class OVBaseModel(OptimizedModel):
             local_files_only=local_files_only,
         )
 
-        # Give default quantization config if not provided and load_in_8bit=True
-        if load_in_8bit:
-            quantization_config = quantization_config or {"bits": 8}
+        quantization_config = self._prepare_quantization_config(quantization_config, load_in_8bit)
 
         model = cls.load_model(model_cache_path, quantization_config=quantization_config)
-        return cls(model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
+        return cls(model, config=config, model_save_dir=model_cache_path.parent, quantization_config=quantization_config, **kwargs)
+
+    def _prepare_quantization_config(quantization_config : Optional[Union[OVWeightQuantizationConfig, Dict]] = None, load_in_8bit:bool= False):
+        # Give default quantization config if not provided and load_in_8bit=True
+        if not quantization_config and load_in_8bit:
+            quantization_config = OVWeightQuantizationConfig(bits=8)
+        elif isinstance(quantization_config, dict):
+            quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
+
+        return quantization_config
 
     @staticmethod
     def _cached_file(
