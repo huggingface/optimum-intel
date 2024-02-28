@@ -15,12 +15,17 @@
 import math
 from typing import List, Optional, Tuple, Union
 
+import intel_extension_for_pytorch as ipex
 import torch
-from intel_extension_for_pytorch.llm.modules import linear2SiluMul, linearAdd
+from packaging import version
 from torch import nn
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.models.llama.modeling_llama import repeat_kv
+
+
+if version.parse(ipex.__version__) > version.parse("2.3.0"):
+    from intel_extension_for_pytorch.llm.modules import linear2SiluMul, linearAdd
 
 
 def llama_layer_norm_forward(self, hidden_states):
