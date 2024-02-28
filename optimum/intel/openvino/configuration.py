@@ -113,7 +113,7 @@ class OVConfig(BaseConfig):
         **kwargs,
     ):
         super().__init__()
-        self.compression = compression or DEFAULT_QUANTIZATION_CONFIG
+        self.compression = compression
         self.input_info = input_info
         self.save_onnx_model = save_onnx_model
         self._enable_standard_onnx_export_option()
