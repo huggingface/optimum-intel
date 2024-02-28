@@ -628,5 +628,5 @@ class InferRequestWrapperTest(unittest.TestCase):
                 x = (v.numpy() if isinstance(v, torch.Tensor) else v).copy()
                 data_hashes_per_key[k].append(hash(x.tobytes()))
         for k, data_hashes in data_hashes_per_key.items():
-            # All hashes must not be equal because calibration dataset contains at least 2 different samples
-            assert any(data_hashes[0] != it for it in data_hashes), f"Collected samples are all equal for input {k}"
+            # All hashes can not be equal because calibration dataset contains at least 2 different samples
+            assert any(data_hashes[0] != it for it in data_hashes), f"Collected tensors are all equal for input {k}"
