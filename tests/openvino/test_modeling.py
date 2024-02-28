@@ -50,7 +50,7 @@ from transformers import (
     set_seed,
 )
 from transformers.onnx.utils import get_preprocessor
-from utils_tests import MODEL_NAMES
+from utils_tests import MODEL_NAMES, run_on_multiple_threads
 
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel import (
@@ -519,19 +519,60 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
-        #self.assertTrue("past_key_values" in ov_outputs)
-        #self.assertIsInstance(ov_outputs.past_key_values, tuple)
 
         is_stateful = self.IS_SUPPORT_STATEFUL
         self.assertEqual(ov_model.stateful, is_stateful)
-        #if is_stateful:
-        #    self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
 
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        if "llama_gptq" in model_arch:
+            self.skipTest("Not supported without gpu and disable_exllama=True option")
+        set_seed(SEED)
+        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(ov_model.use_cache)
+        self.assertEqual(ov_model.stateful, self.IS_SUPPORT_STATEFUL)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs_list = ["This is a sample", "Here is another sample", "That's the thrid one", "This is the last sample"]
+        tokens_list = [
+            tokenizer(inputs, return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None)
+            for inputs in inputs_list
+        ]
+
+        def run_ov_model(tokens, transformers_model, ov_model):
+            # global ov_model, transformers_model
+            position_ids = None
+            if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
+                input_shape = tokens["input_ids"].shape
+                position_ids = (
+                    torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
+                )
+            ov_outputs = ov_model(**tokens, position_ids=position_ids)
+
+            self.assertTrue("logits" in ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+            # self.assertTrue("past_key_values" in ov_outputs)
+            # self.assertIsInstance(ov_outputs.past_key_values, tuple)
+            # if self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode":
+            #    self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+        run_on_multiple_threads(run_ov_model, tokens_list, (transformers_model, ov_model))
+
         del transformers_model
         del ov_model
         gc.collect()
@@ -554,6 +595,30 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False, compile=False)
+        model.config.encoder_no_repeat_ngram_size = 0
+        model.to("cpu")
+        model.half()
+        model.compile()
+
+        def run_ov_model(input_text, model):
+            # Tokenizer is not supposed to be shared by multiple threads
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+            outputs = pipe(input_text, max_length=10)
+            self.assertEqual(pipe.device, model.device)
+            for i in range(len(outputs)):
+                self.assertTrue(all(input_text[i] in item["generated_text"] for item in outputs[i]))
+            del pipe
+
+        inputs_list = [["This is a sample"], ["This is a second sample"], ["This is a third sample"]]
+        run_on_multiple_threads(run_ov_model, inputs_list, [model])
+        del model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_multiple_inputs(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -566,6 +631,27 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         outputs = model.generate(**tokens, generation_config=generation_config)
         self.assertIsInstance(outputs, torch.Tensor)
         self.assertEqual(outputs.shape[0], 3)
+        del model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_multiple_inputs_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
+        tokens = tokenizer(texts, padding=True, return_tensors="pt")
+        generation_config = GenerationConfig(encoder_no_repeat_ngram_size=0, max_new_tokens=20, num_beams=2)
+
+        def run_ov_model(tokens, model):
+            outputs = model.generate(**tokens, generation_config=generation_config)
+            self.assertIsInstance(outputs, torch.Tensor)
+            self.assertEqual(outputs.shape[0], 3)
+
+        tokens_list = [tokens, tokens, tokens, tokens]  # running in 4 threads
+        run_on_multiple_threads(run_ov_model, tokens_list, [model])
         del model
         gc.collect()
 
@@ -1260,7 +1346,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
                 **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        #self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
+        # self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertTrue(

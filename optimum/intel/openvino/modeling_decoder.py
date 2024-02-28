@@ -17,7 +17,6 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
-from datetime import datetime
 
 import numpy as np
 import openvino
@@ -133,7 +132,7 @@ class OVBaseDecoderModel(OVModel):
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
         self._pkv_precision = Type.f32
-        self.next_beam_idx = None
+        # self.next_beam_idx = None
         self.update_pkv_precision()
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
@@ -335,10 +334,10 @@ class OVBaseDecoderModel(OVModel):
         return NormalizedConfigManager.get_normalized_config_class(self.config.model_type)(self.config)
 
     def compile(self):
-        if self.request is None:
+        if self.compiled_model is None:
             super().compile()
-            self.compiled_model =self.request
-            self.request = self.request.create_infer_request()
+            self.compiled_model = self.request
+            # self.request = self.request.create_infer_request()
 
     def _make_stateful(self):
         patch_stateful(self.config, self.model)
@@ -390,13 +389,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         batch_size = input_ids.shape[0]
         if self.config.model_type == "bloom":
             batch_size *= self.config.num_attention_heads
-        #print("prepare inputs - input_ids:",input_ids)
         inputs = {}
         past_len = 0
-        #print("model stateful", self.stateful)
-        #print("use cache", self.use_cache)
         if not self.stateful:
-            #print("prepare inputs - past_key_values:",past_key_values)
             if past_key_values is not None:
                 if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
                     past_len = past_key_values[0][1].shape[-2]
@@ -433,18 +428,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                         else:
                             shape[1] = 0
                     inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
-        else:
-            # past_key_values are not used explicitly, instead they are handled inside the model
-            #print("past_values", past_key_values)
-            #if past_key_values is None:
-                # This is the first iteration in a sequence, reset all states
-                #if infer_request is not None:
-                #    infer_request.reset_state()
-                #    print("reseting state")
-                # Set initial value for the next beam_idx input that will be used at the current iteration
-                # and will be optionally updated by _reorder_cache at the next iterations if beam_search is used
-                #past_key_values = [np.arange(batch_size, dtype=int)]
-            ...
 
         inputs["input_ids"] = np.array(input_ids)
         # Add the attention_mask inputs when needed
@@ -474,8 +457,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             inputs["beam_idx"] = (
                 past_key_values[0] if past_key_values is not None else np.arange(batch_size, dtype=int)
             )
-            #if past_key_values is not None:
-            #    print("type",type(past_key_values[0]))
 
         return inputs
 
@@ -488,7 +469,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         infer_context: Optional[list[openvino.runtime.InferRequest]] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
-        self.compile()
         inputs = self.prepare_inputs(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -498,25 +478,24 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
         # Run inference
         if self.stateful and past_key_values is not None:
+            # for stateful models, infer request is created in generate and __call_ methods and passed in the cycle via past_key_values param
             infer_request = past_key_values[1]
         else:
-            infer_request = infer_context[0]
-        #print("infer request", infer_context[0])
-        #print("Inputs", inputs)
-        #print("past_values", past_key_values)
-        start = datetime.now()
+            if infer_context[0] is not None:
+                infer_request = infer_context[
+                    0
+                ]  # Use passed inference request if provided in kwargs, create new one overwise
+            else:
+                self.compile()
+                infer_request = self.compiled_model.create_infer_request()
         infer_request.start_async(inputs, share_inputs=True)
         infer_request.wait()
-        end = datetime.now()
-        print(start)
-        print(end)
-        print("Infernece time [s]", ((end - start).total_seconds()))
         logits = torch.from_numpy(infer_request.get_tensor("logits").data).to(self.device)
         if self.stateful:
             # Need a marker to differentiate the first generate iteration from the others in
             # the first condition at the function beginning above.
             # It should be something that is not None and it should be True when converted to Boolean.
-            past_key_values = ((inputs["beam_idx"]),infer_request)
+            past_key_values = ((inputs["beam_idx"]), infer_request)
 
         if not self.stateful:
             if self.use_cache:
@@ -530,7 +509,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             else:
                 past_key_values = None
 
-        #print("logits", logits)
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
@@ -568,12 +546,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if self.stateful:
             # TODO: Apply it differently based on model type
             # TODO: At least for bloom we need to replicate values for each attention head
-            past_key_values = ((np.array(beam_idx)),past_key_values[1])  # save beam_idx to be used as an input in the next iteration
+            past_key_values = (
+                (np.array(beam_idx)),
+                past_key_values[1],
+            )  # save beam_idx and infer_request to be used as an input in the next iteration
             return past_key_values
         else:
-            #print("_reorder_cache return", tuple(
-            #    tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past) for layer_past in past_key_values
-            #))
             return tuple(
                 tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past) for layer_past in past_key_values
             )
@@ -689,10 +667,10 @@ class OVBloomForCausalLM(OVModelForCausalLM):
             batch_size = beam_idx.shape[0]
             indices = np.array(range(batch_size * self.config.num_attention_heads))
             indices = indices.reshape([batch_size, self.config.num_attention_heads])
-            #self.next_beam_idx = np.take(indices, beam_idx, 0).flatten()
-            #return past_key_values
-            #print("_reorder_cache output",np.take(indices, beam_idx, 0).flatten())
-            return ((np.take(indices, beam_idx, 0).flatten()),past_key_values[1])
+            # self.next_beam_idx = np.take(indices, beam_idx, 0).flatten()
+            # return past_key_values
+            # print("_reorder_cache output",np.take(indices, beam_idx, 0).flatten())
+            return ((np.take(indices, beam_idx, 0).flatten()), past_key_values[1])
         else:
             standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
             reordered_past = tuple(
