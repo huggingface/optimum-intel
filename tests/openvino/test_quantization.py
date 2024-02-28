@@ -18,7 +18,6 @@ import tempfile
 import unittest
 from collections import defaultdict
 from functools import partial
-from itertools import islice
 
 import evaluate
 import numpy as np
@@ -599,27 +598,27 @@ class OVTrainerTest(unittest.TestCase):
 
 class InferRequestWrapperTest(unittest.TestCase):
     MODEL_ID = ("openai/whisper-tiny.en",)
-    DATASET_ID = ("hf-internal-testing/librispeech_asr_dummy",)
 
     @staticmethod
-    def _extract_input_features(processor, sample):
+    def _generate_random_audio_data(processor):
+        t = np.linspace(0, 1.0, int(1000), endpoint=False)
+        audio_data = 0.5 * np.sin((2 + np.random.random()) * np.pi * t)
         input_features = processor(
-            sample["audio"]["array"],
-            sampling_rate=sample["audio"]["sampling_rate"],
+            audio_data,
+            sampling_rate=16000,
             return_tensors="pt",
         ).input_features
         return input_features
 
-    @parameterized.expand(zip(MODEL_ID, DATASET_ID))
-    def test_calibration_data_uniqueness(self, model_id, dataset_id):
+    @parameterized.expand(MODEL_ID)
+    def test_calibration_data_uniqueness(self, model_id):
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True)
         processor = AutoProcessor.from_pretrained(model_id)
 
-        dataset = load_dataset(dataset_id, "clean", split="validation")
         calibration_data = []
         ov_model.decoder_with_past.request = InferRequestWrapper(ov_model.decoder_with_past.request, calibration_data)
-        for data in islice(dataset, 2):
-            input_features = self._extract_input_features(processor, data)
+        for _ in range(2):
+            input_features = self._generate_random_audio_data(processor)
             ov_model.generate(input_features)
 
         data_hashes_per_key = defaultdict(list)

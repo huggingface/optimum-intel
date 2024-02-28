@@ -34,8 +34,6 @@ TESTS_REQUIRE = [
     "timm",
     "invisible-watermark>=0.2.0",
     "auto-gptq",
-    "librosa",
-    "soundfile",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
