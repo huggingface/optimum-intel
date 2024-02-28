@@ -109,7 +109,6 @@ class OVQuantizerTest(unittest.TestCase):
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(DEFAULT_QUANTIZATION_CONFIG, loaded_config.to_dict()["compression"])
 
-
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
         task = model_cls.export_feature
