@@ -88,11 +88,11 @@ class InferRequestWrapper:
         self.data_cache = data_cache
 
     def __call__(self, *args, **kwargs):
-        self.data_cache.append(*args)
+        self.data_cache.append(copy.deepcopy(args))
         return self.request(*args, **kwargs)
 
     def infer(self, inputs: Any = None, share_inputs: bool = False):
-        self.data_cache.append(inputs)
+        self.data_cache.append(copy.deepcopy(inputs))
         return self.request.infer(inputs, share_inputs)
 
     def start_async(
