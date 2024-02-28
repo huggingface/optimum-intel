@@ -74,6 +74,14 @@ _openvino_version = "N/A"
 if _openvino_available:
     try:
         from openvino.runtime import get_version
+        import openvino_telemetry as tm
+        tm = tm.Telemetry(tid="G-W5E9RNLD4H",
+                          app_name="Optimum Intel",
+                          app_version=importlib_metadata.version("optimum"),
+                          backend='ga4',
+                          enable_opt_in_dialog=False,
+                          disable_in_ci=True)
+        tm.send_event("optimum_intel", "usage", "Openvino was imported.")
 
         version = get_version()
         # avoid invalid format
