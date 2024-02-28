@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import inspect
 import logging
 import os
@@ -102,7 +103,7 @@ class InferRequestWrapper:
         *,
         shared_memory: Any = None,
     ):
-        self.data_cache.append(inputs)
+        self.data_cache.append(copy.deepcopy(inputs))
         self.request.infer(inputs, share_inputs, share_outputs=True)
 
     def wait(self):
