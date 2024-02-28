@@ -82,12 +82,13 @@ if _openvino_available:
                           backend='ga4',
                           enable_opt_in_dialog=False,
                           disable_in_ci=True)
-        tm.send_event("optimum_intel", "openvino_imported", "OpenVino {}, Optimum {}.".format(get_version(), importlib_metadata.version("optimum")))
 
         # temporal code to check that "CI" variable is set in CI pipelines,
         # needs to be removed before merge
         import os
         assert "CI" in os.environ and os.environ["CI"].lower() == "true"
+
+        tm.send_event("optimum_intel", "openvino_imported", "OpenVino {}, Optimum {}.".format(get_version(), importlib_metadata.version("optimum")))
 
         version = get_version()
         # avoid invalid format
