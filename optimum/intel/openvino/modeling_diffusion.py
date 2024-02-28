@@ -145,7 +145,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
 
-
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
@@ -265,7 +264,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 else:
                     kwargs[name] = load_method(new_model_save_dir)
 
-        quantization_config = self._prepare_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
         unet = cls.load_model(
             new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name, quantization_config
         )
@@ -283,7 +282,14 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
-        return cls(unet=unet, config=config, model_save_dir=model_save_dir, quantization_config=quantization_config, **components, **kwargs)
+        return cls(
+            unet=unet,
+            config=config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **components,
+            **kwargs,
+        )
 
     @classmethod
     def _from_transformers(

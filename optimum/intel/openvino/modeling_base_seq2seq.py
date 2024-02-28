@@ -164,7 +164,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
         decoder_with_past = None
 
-        quantization_config = self._prepare_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
 
         # Load model from a local directory
         if os.path.isdir(model_id):

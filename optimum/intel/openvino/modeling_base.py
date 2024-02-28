@@ -150,11 +150,9 @@ class OVBaseModel(OptimizedModel):
 
         self._save_openvino_config(save_directory)
 
-
     def _save_openvino_config(self, save_directory: Union[str, Path]):
         if self._openvino_config is not None:
             self._openvino_config.save_pretrained(save_directory)
-
 
     @classmethod
     def _from_pretrained(
@@ -216,12 +214,21 @@ class OVBaseModel(OptimizedModel):
             local_files_only=local_files_only,
         )
 
-        quantization_config = self._prepare_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
 
         model = cls.load_model(model_cache_path, quantization_config=quantization_config)
-        return cls(model, config=config, model_save_dir=model_cache_path.parent, quantization_config=quantization_config, **kwargs)
+        return cls(
+            model,
+            config=config,
+            model_save_dir=model_cache_path.parent,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
 
-    def _prepare_quantization_config(quantization_config : Optional[Union[OVWeightQuantizationConfig, Dict]] = None, load_in_8bit:bool= False):
+    @staticmethod
+    def _prepare_quantization_config(
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None, load_in_8bit: bool = False
+    ):
         # Give default quantization config if not provided and load_in_8bit=True
         if not quantization_config and load_in_8bit:
             quantization_config = OVWeightQuantizationConfig(bits=8)

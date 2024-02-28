@@ -89,7 +89,7 @@ from optimum.exporters.onnx import OnnxConfig
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_transformers_version
-from .configuration import OVConfig, DEFAULT_QUANTIZATION_CONFIG
+from .configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
 from .quantization import OVDataLoader
 from .training_args import OVTrainingArguments
 from .utils import (
