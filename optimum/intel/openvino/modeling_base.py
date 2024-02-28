@@ -152,7 +152,12 @@ class OVBaseModel(OptimizedModel):
 
     def _save_openvino_config(self, save_directory: Union[str, Path]):
         if self._openvino_config is not None:
+
+            if not isinstance(self._openvino_config.quantization_config.dataset, (str, type(None))):
+                self._openvino_config.quantization_config.dataset = None
+            
             self._openvino_config.save_pretrained(save_directory)
+
 
     @classmethod
     def _from_pretrained(

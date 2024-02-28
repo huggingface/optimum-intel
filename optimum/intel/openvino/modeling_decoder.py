@@ -14,6 +14,7 @@
 
 import logging
 import os
+import copy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
@@ -636,6 +637,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 # seqlen = get_seqlen(causal_model)
                 dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32)
                 dataset = prepare_dataset(dataset)
+                quantization_config = copy.deepcopy(quantization_config)
                 quantization_config.dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))
 
             _weight_only_quantization(model, quantization_config)
