@@ -155,7 +155,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     )
 
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 64, 365),)
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 6, 379),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 388),)
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS = (
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 16, 136),
     )
@@ -232,6 +232,8 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
 
+    DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_automodel_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
         task = model_cls.export_feature
@@ -254,8 +256,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertTrue("logits" in outputs)
 
             # Verify that that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertIsNotNone(loaded_config)
+            openvino_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(openvino_config.quantization_config["bits"], 8)
+            self.assertEqual(openvino_config.dtype, "int8")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_ovmodel_8bit_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
@@ -345,13 +348,14 @@ class OVWeightCompressionTest(unittest.TestCase):
             _, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int8[i], num_int8)
 
+
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
+    @unittest.mock.patch.dict("optimum.intel.openvino.configuration._DEFAULT_4BIT_CONFIGS", {"facebook/opt-125m": DEFAULT_INT4_CONFIG})
     def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
         with tempfile.TemporaryDirectory() as tmp_dir:
             model_id = MODEL_NAMES[model_type]
-            model = model_cls.from_pretrained(
-                model_id, export=True, quantization_config=OVWeightQuantizationConfig(bits=4)
-            )
+            model = model_cls.from_pretrained(model_id, export=True, quantization_config={"bits":4})
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -360,6 +364,14 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(expected_ov_int4, num_int4)
             self.assertEqual(expected_ov_int8, num_int8)
             model.save_pretrained(tmp_dir)
+    
+            openvino_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(openvino_config.quantization_config["bits"], 4)
+            self.assertEqual(openvino_config.dtype, "int4")
+            if model_id == "facebook/opt-125m":
+                for key, value in self.DEFAULT_INT4_CONFIG.items():
+                    self.assertEqual(value, openvino_config.quantization_config[key])
+
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(
@@ -375,8 +387,13 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(expected_ov_int4, num_int4)
             model.save_pretrained(tmp_dir)
 
-            ov_config = OVConfig(quantization_config=quantization_config)
-            ov_config.save_pretrained(tmp_dir)
+            expected_config = OVConfig(quantization_config=quantization_config)
+
+            openvino_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(openvino_config.quantization_config["bits"], 4)
+            self.assertEqual(openvino_config.dtype, "int4")
+            self.assertEqual(openvino_config.quantization_config, expected_config.quantization_config)
+
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS)
     def test_ovmodel_4bit_auto_compression_with_custom_dataset(
