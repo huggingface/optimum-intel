@@ -81,6 +81,7 @@ def ipex_jit_trace(model, task, use_cache):
     model = _patch_model(model)
     sample_inputs = get_dummy_input(model, return_dict=True)
     model.config.return_dict = False
+    # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
     _enable_tpp()
     model = ipex.optimize(model.eval(), dtype=model.dtype, inplace=True)
     trace_model = torch.jit.trace(
