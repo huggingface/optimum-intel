@@ -75,13 +75,19 @@ if _openvino_available:
     try:
         from openvino.runtime import get_version
         import openvino_telemetry as tm
+
         tm = tm.Telemetry(tid="G-W5E9RNLD4H",
                           app_name="Optimum Intel",
-                          app_version=importlib_metadata.version("optimum"),
+                          app_version=get_version(),
                           backend='ga4',
                           enable_opt_in_dialog=False,
                           disable_in_ci=True)
-        tm.send_event("optimum_intel", "usage", "Openvino was imported.")
+        tm.send_event("optimum_intel", "openvino_imported", "OpenVino {}, Optimum {}.".format(get_version(), importlib_metadata.version("optimum")))
+
+        # temporal code to check that "CI" variable is set in CI pipelines,
+        # needs to be removed before merge
+        import os
+        assert "CI" in os.environ and os.environ["CI"].lower() == "true"
 
         version = get_version()
         # avoid invalid format
