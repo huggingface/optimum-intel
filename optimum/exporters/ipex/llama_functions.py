@@ -1,3 +1,17 @@
+#  Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
 import math
 from typing import List, Optional, Tuple, Union
 
@@ -94,46 +108,6 @@ def llama_attn_forward(
         attn_weights = None
 
     return attn_output, attn_weights, past_key_value
-
-
-def prepare_inputs_for_generation(
-    self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
-):
-    if past_key_values is not None:
-        past_length = past_key_values[0][0].shape[2]
-
-        # Some generation methods already pass only the last input ID
-        if input_ids.shape[1] > past_length:
-            remove_prefix_length = past_length
-        else:
-            # Default to old behavior: keep only final ID
-            remove_prefix_length = input_ids.shape[1] - 1
-
-        input_ids = input_ids[:, remove_prefix_length:]
-
-    position_ids = kwargs.get("position_ids", None)
-    if attention_mask is not None and position_ids is None:
-        # create position_ids on the fly for batch generation
-        position_ids = attention_mask.long().cumsum(-1) - 1
-        position_ids.masked_fill_(attention_mask == 0, 1)
-        if past_key_values:
-            position_ids = position_ids[:, -input_ids.shape[1] :]
-
-    # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
-    if inputs_embeds is not None and past_key_values is None:
-        model_inputs = {"inputs_embeds": inputs_embeds}
-    else:
-        model_inputs = {"input_ids": input_ids}
-
-    model_inputs.update(
-        {
-            "position_ids": position_ids,
-            "past_key_values": past_key_values,
-            "use_cache": kwargs.get("use_cache"),
-            "attention_mask": attention_mask,
-        }
-    )
-    return model_inputs
 
 
 def llama_model_forward(

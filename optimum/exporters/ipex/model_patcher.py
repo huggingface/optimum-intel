@@ -1,3 +1,17 @@
+#  Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
 from intel_extension_for_pytorch.llm.modules import ApplyRotaryEmbedding, IndirectAccessKVCache
 from transformers.models.llama.modeling_llama import (
     LlamaAttention,
@@ -12,8 +26,11 @@ from .llama_functions import (
     llama_attn_forward,
     llama_layer_norm_forward,
     llama_model_forward,
-    prepare_inputs_for_generation,
 )
+
+
+IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
+IPEX_EXPORTED_TASK = ("text-generation",)
 
 
 def convert_func(m, func_name, new_function):
@@ -43,7 +60,7 @@ def patch_op(m, target_m, new_op_name, new_op):
         patch_op(sub_m, target_m, new_op_name, new_op)
 
 
-def export_llama_model(model):
+def _patch_llama_model(model):
     ipex_rope = ApplyRotaryEmbedding(
         model.config.max_position_embeddings,
         model.config.hidden_size // model.config.num_attention_heads,
@@ -54,7 +71,6 @@ def export_llama_model(model):
     patch_op(model, LlamaAttention, "ipex_rope", ipex_rope)
     patch_op(model, LlamaAttention, "ipex_scale_dot_product", ipex_scale_dot_product)
 
-    convert_func(model, "prepare_inputs_for_generation", prepare_inputs_for_generation)
     convert_functions(model, LlamaModel, "forward", llama_model_forward)
     convert_functions(model, LlamaAttention, "forward", llama_attn_forward)
     convert_functions(model, LlamaRMSNorm, "forward", llama_layer_norm_forward)
@@ -63,7 +79,7 @@ def export_llama_model(model):
     return model
 
 
-def export_model(model):
+def _patch_model(model):
     if isinstance(model, LlamaForCausalLM):
-        model = export_llama_model(model)
+        model = _patch_llama_model(model)
     return model

@@ -24,6 +24,7 @@ import torch
 from huggingface_hub import hf_hub_download
 from intel_extension_for_pytorch.cpu._auto_kernel_selection import _enable_tpp
 from intel_extension_for_pytorch.transformers.optimize import get_dummy_input
+from packaging import version
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -47,7 +48,7 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
-from ...exporters.ipex import export_model
+from ...exporters.ipex.model_patcher import IPEX_EXPORTED_ARCH, IPEX_EXPORTED_TASK, _patch_model
 from ..generation.modeling import jit_trace, prepare_jit_inputs
 from ..utils.import_utils import is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
@@ -56,17 +57,28 @@ from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attent
 logger = logging.getLogger(__name__)
 
 
-IPEX_EXPORTED_LIST = ("LlamaForCausalLM", )
+IPEX_SUPPORT_MODEL_TYPES = "llama"
 
 
-def is_ipex_exported_model(model_name):
-    for name in IPEX_EXPORTED_LIST:
-        if model_name == name:
-            return True
-    return False
+def is_model_support_ipex_export(model, task):
+    if isinstance(model, torch.jit.ScriptModule):
+        is_ipex_exported = model.original_name in IPEX_EXPORTED_ARCH
+    else:
+        is_ipex_exported = model.config.model_type in IPEX_SUPPORT_MODEL_TYPES and task in IPEX_EXPORTED_TASK
+
+    return is_ipex_exported
 
 
-def ipex_jit_trace(model):
+def ipex_jit_trace(model, task, use_cache):
+    if version.parse(ipex.__version__) <= version.parse("2.3.0") or not is_model_support_ipex_export(model, task):
+        model = patch_decoder_attention_mask(model)
+        model = ipex.optimize(model, dtype=model.dtype, level="O1", auto_kernel_selection=True)
+        return jit_trace(model, task, use_cache)
+
+    if is_torch_version("<", "2.1.0"):
+        raise ImportError("`torch>=2.1.0` is needed to trace your model")
+
+    model = _patch_model(model)
     sample_inputs = get_dummy_input(model, return_dict=True)
     model.config.return_dict = False
     _enable_tpp()
@@ -104,7 +116,7 @@ class IPEXModel(OptimizedModel):
         self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model.to(self._device)
         self.model_save_dir = model_save_dir
-        self.is_ipex_exported = kwargs.get("is_ipex_exported", None)
+        self.is_ipex_exported = is_model_support_ipex_export(model, self.export_feature)
 
         self.input_names = {
             inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
@@ -148,14 +160,7 @@ class IPEXModel(OptimizedModel):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        is_ipex_exported = is_ipex_exported_model(model.__class__.__name__)
-        if is_ipex_exported:
-            model = export_model(model)
-            traced_model = ipex_jit_trace(model)
-        else:
-            model = patch_decoder_attention_mask(model)
-            model = ipex.optimize(model, dtype=torch_dtype, level="O1", auto_kernel_selection=True)
-            traced_model = jit_trace(model, task, use_cache)
+        traced_model = ipex_jit_trace(model, task, use_cache)
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
@@ -173,7 +178,6 @@ class IPEXModel(OptimizedModel):
             local_files_only=local_files_only,
             use_cache=use_cache,
             model_dtype=torch_dtype,
-            is_ipex_exported=is_ipex_exported,
         )
 
     @classmethod
@@ -210,8 +214,6 @@ class IPEXModel(OptimizedModel):
 
         model = torch.jit.load(model_cache_path)
         torch.jit.freeze(model.eval())
-        is_ipex_exported = is_ipex_exported_model(model.original_name)
-        kwargs["is_ipex_exported"] = is_ipex_exported
 
         return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
 
@@ -372,7 +374,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         model_type = config.model_type.replace("_", "-")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(config)
         self.use_cache = "past_key_values" in self.input_names
-        self.is_ipex_exported = kwargs.get("is_ipex_exported", None)
 
         if use_cache ^ self.use_cache:
             raise ValueError(
@@ -422,7 +423,11 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             num_attention_heads = self.normalized_config.num_attention_heads
 
         if self.is_ipex_exported:
-            beam_idx_tmp = torch.zeros((2048, input_ids.shape[0]), dtype=torch.long).contiguous()
+            # Indirect access kv cache has a different data layout compared with most transformers model,
+            # see https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/llm.html#indirect-access-kv-cache
+            beam_idx_tmp = torch.zeros(
+                (self.config.max_position_embeddings, input_ids.shape[0]), dtype=torch.long
+            ).contiguous()
             past_key_values = tuple(
                 [
                     (
@@ -562,8 +567,8 @@ def _prepare_inputs_for_generation_for_llama(
 def _ipex_reorder_cache(
     past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
 ) -> Tuple[Tuple[torch.Tensor]]:
-
-    if len(past_key_values[0]) == 4 and past_key_values[0][0].shape[-1] == 1:  # discrete kv_cache
+    # Ipex patched model uses indirect access kv cache which has a different shape with other transformers models
+    if len(past_key_values[0]) == 4 and past_key_values[0][0].shape[-1] == 1:
         for layer_past in past_key_values:
             layer_past[3][layer_past[0].size(-2) - 1] = beam_idx
         return past_key_values
@@ -577,8 +582,3 @@ def _ipex_reorder_cache(
             tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
             for layer_past in past_key_values
         )
-
-    return tuple(
-        tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
-        for layer_past in past_key_values
-    )
