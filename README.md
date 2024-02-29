@@ -201,6 +201,13 @@ Quantization aware training (QAT) is applied in order to simulate the effects of
 
 You can find more examples in the [documentation](https://huggingface.co/docs/optimum/intel/index).
 
+#### Telemetry
+OpenVINO™ collects software performance and usage data for the purpose of improving OpenVINO™ tools. This data is collected directly by OpenVINO™ or through the use of Google Analytics 4.
+You can opt-out at any time by running the command:
+
+``` bash
+opt_in_out --opt_out
+```
 
 ## Running the examples
 
