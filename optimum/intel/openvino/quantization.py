@@ -234,7 +234,7 @@ class OVQuantizer(OptimumQuantizer):
         if ov_config is not None:
             if not isinstance(ov_config, OVConfig):
                 raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
-            elif not ov_config.compression:
+            elif ov_config.compression is None:
                 ov_config.compression = DEFAULT_QUANTIZATION_CONFIG
 
         if isinstance(self.model, OVBaseModel):

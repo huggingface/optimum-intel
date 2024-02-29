@@ -255,7 +255,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertTrue("logits" in outputs)
 
             # Verify that that the configuration is correctly saved and loaded
-            openvino_config = OVConfig.from_pretrained(tmp_dir)
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertIsNotNone(loaded_config)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)

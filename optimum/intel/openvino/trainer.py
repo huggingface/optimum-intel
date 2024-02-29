@@ -226,7 +226,7 @@ class OVTrainer(Trainer):
         self.compression_controller = None
 
         if self.ov_config is not None:
-            if not self.ov_config.compression:
+            if self.ov_config.compression is None:
                 self.ov_config.compression = DEFAULT_QUANTIZATION_CONFIG
 
             if self.args.do_train:
