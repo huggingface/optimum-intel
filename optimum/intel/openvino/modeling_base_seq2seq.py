@@ -77,9 +77,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
         self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
-        if quantization_config:
-            self.ov_config["quantization_config"] = quantization_config
-
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
