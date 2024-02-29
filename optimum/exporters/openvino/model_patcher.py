@@ -71,7 +71,7 @@ def patch_model_with_bettertransformer(model):
     return model
 
 
-def mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
     """ """
     batch_size, sequence_length, hidden_dim = hidden_states.shape
     hidden_states = hidden_states.view(-1, hidden_dim)
@@ -113,7 +113,9 @@ class MixtralModelPatcher(DecoderModelPatcher):
         super().__enter__()
         for layer in self._model.model.layers:
             layer.block_sparse_moe._unpatched_forward = layer.block_sparse_moe.forward
-            layer.block_sparse_moe.forward = types.MethodType(mixtral_sparse_moe_block_forward, layer.block_sparse_moe)
+            layer.block_sparse_moe.forward = types.MethodType(
+                _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
+            )
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)

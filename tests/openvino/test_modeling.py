@@ -497,7 +497,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     )
     GENERATION_LENGTH = 100
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
-    REMOTE_CODE_MODELS = ("chatglm", )
+    REMOTE_CODE_MODELS = ("chatglm",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -513,13 +513,18 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         model_kwargs = {}
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {"config": AutoConfig.from_pretrained(model_id, trust_remote_code=True), "trust_remote_code": True}
+            model_kwargs = {
+                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
+                "trust_remote_code": True,
+            }
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-        self.assertEqual(ov_model.stateful, self.IS_SUPPORT_STATEFUL and model_arch not in not_stateful)
+        self.assertEqual(
+            ov_model.stateful, self.IS_SUPPORT_STATEFUL and ov_model.config.model_type not in not_stateful
+        )
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in remote_code)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokens = tokenizer(
             "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
         )
@@ -552,9 +557,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {"config": AutoConfig.from_pretrained(model_id, trust_remote_code=True), "trust_remote_code": True}
+            model_kwargs = {
+                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
+                "trust_remote_code": True,
+            }
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
-        model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False, compile=False, **model_kwargs)
+        model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, use_cache=False, compile=False, **model_kwargs
+        )
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         model.half()
@@ -573,7 +583,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         model_kwargs = {}
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {"config": AutoConfig.from_pretrained(model_id, trust_remote_code=True), "trust_remote_code": True}
+            model_kwargs = {
+                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
+                "trust_remote_code": True,
+            }
         model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=False, **model_kwargs)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokenizer.pad_token = tokenizer.eos_token
