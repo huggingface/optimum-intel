@@ -18,7 +18,7 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers import T5Tokenizer, T5TokenizerFast
 from transformers.utils import is_tf_available, is_torch_available
@@ -71,42 +71,26 @@ if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
-def _save_model(model, path: str, compression_option: Optional[str] = None, compression_ratio: Optional[float] = None):
-    if compression_option is not None and compression_option != "fp16" and compression_option != "fp32":
-        if not is_nncf_available():
-            raise ImportError(
-                "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
-            )
+if TYPE_CHECKING:
+    from optimum.intel.openvino.configuration import OVConfig
 
-        import nncf
 
-        COMPRESSION_OPTIONS = {
-            "int8": {"mode": nncf.CompressWeightsMode.INT8},
-            "int4_sym_g128": {
-                "mode": nncf.CompressWeightsMode.INT4_SYM,
-                "group_size": 128,
-                "ratio": compression_ratio,
-            },
-            "int4_asym_g128": {
-                "mode": nncf.CompressWeightsMode.INT4_ASYM,
-                "group_size": 128,
-                "ratio": compression_ratio,
-            },
-            "int4_sym_g64": {
-                "mode": nncf.CompressWeightsMode.INT4_SYM,
-                "group_size": 64,
-                "ratio": compression_ratio,
-            },
-            "int4_asym_g64": {
-                "mode": nncf.CompressWeightsMode.INT4_ASYM,
-                "group_size": 64,
-                "ratio": compression_ratio,
-            },
-        }
+def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
+    compress_to_fp16 = False
 
-        model = nncf.compress_weights(model, **COMPRESSION_OPTIONS[compression_option])
+    if ov_config is not None:
+        if ov_config.quantization_config:
+            if not is_nncf_available():
+                raise ImportError(
+                    "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
+                )
 
-    compress_to_fp16 = compression_option == "fp16"
+            from optimum.intel.openvino.quantization import _weight_only_quantization
+
+            _weight_only_quantization(model, ov_config.quantization_config)
+
+        compress_to_fp16 = ov_config.dtype == "fp16"
+
     save_model(model, path, compress_to_fp16)
 
 
@@ -118,8 +102,7 @@ def export(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    compression_option: Optional[str] = None,
-    compression_ratio: Optional[float] = None,
+    ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
 ) -> Tuple[List[str], List[str]]:
     """
@@ -137,11 +120,8 @@ def export(
         device (`str`, *optional*, defaults to `cpu`):
             The device on which the model will be exported. Either `cpu` or `cuda`. Only PyTorch is supported for
             export on CUDA devices.
-        compression_option (`Optional[str]`, defaults to `None`):
-            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
-            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
-        compression_ratio (`Optional[float]`, defaults to `None`):
-            Compression ratio between primary and backup precision (only relevant to INT4).
+        ov_config (`OVConfig`, *optional*):
+            The configuration containing the parameters related to quantization.
         input_shapes (`Optional[Dict]`, defaults to `None`):
             If specified, allows to use specific shapes for the example input provided to the exporter.
         stateful (`bool`, defaults to `True`):
@@ -172,8 +152,7 @@ def export(
             output,
             device=device,
             input_shapes=input_shapes,
-            compression_option=compression_option,
-            compression_ratio=compression_ratio,
+            ov_config=ov_config,
             model_kwargs=model_kwargs,
             stateful=stateful,
         )
@@ -186,9 +165,7 @@ def export(
             raise RuntimeError("`tf2onnx` does not support export on CUDA device.")
         if input_shapes is not None:
             logger.info("`input_shapes` argument is not supported by the Tensorflow ONNX export and will be ignored.")
-        return export_tensorflow(
-            model, config, opset, output, compression_option=compression_option, compression_ratio=compression_ratio
-        )
+        return export_tensorflow(model, config, opset, output, ov_config=ov_config)
 
     else:
         raise RuntimeError(
@@ -201,8 +178,7 @@ def export_tensorflow(
     config: OnnxConfig,
     opset: int,
     output: Path,
-    compression_option: Optional[str] = None,
-    compression_ratio: Optional[float] = None,
+    ov_config: Optional["OVConfig"] = None,
 ):
     """
     Export the TensorFlow model to OpenVINO format.
@@ -221,9 +197,7 @@ def export_tensorflow(
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
-    _save_model(
-        ov_model, output.parent / output, compression_option=compression_option, compression_ratio=compression_ratio
-    )
+    _save_model(ov_model, output.parent / output, ov_config=ov_config)
     return input_names, output_names, True
 
 
@@ -235,8 +209,7 @@ def export_pytorch_via_onnx(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    compression_option: Optional[str] = None,
-    compression_ratio: Optional[float] = None,
+    ov_config: Optional["OVConfig"] = None,
 ):
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation via ONNX export.
@@ -257,11 +230,8 @@ def export_pytorch_via_onnx(
             If specified, allows to use specific shapes for the example input provided to the exporter.
         model_kwargs (optional[Dict[str, Any]], defaults to `None`):
             Additional kwargs for model export.
-        compression_option (`Optional[str]`, defaults to `None`):
-            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
-            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
-        compression_ratio (`Optional[float]`, defaults to `None`):
-            Compression ratio between primary and backup precision (only relevant to INT4).
+        ov_config (`OVConfig`, *optional*):
+            The configuration containing the parameters related to quantization.
 
     Returns:
         `Tuple[List[str], List[str], bool]`: A tuple with an ordered list of the model's inputs, and the named inputs from
@@ -280,12 +250,7 @@ def export_pytorch_via_onnx(
     )
     torch.onnx.export = orig_torch_onnx_export
     ov_model = convert_model(str(onnx_output))
-    _save_model(
-        ov_model,
-        output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
-        compression_option=compression_option,
-        compression_ratio=compression_ratio,
-    )
+    _save_model(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output, ov_config=ov_config)
     return input_names, output_names, True
 
 
@@ -297,8 +262,7 @@ def export_pytorch(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    compression_option: Optional[str] = None,
-    compression_ratio: Optional[float] = None,
+    ov_config: Optional["OVConfig"] = None,
     stateful: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
@@ -320,11 +284,8 @@ def export_pytorch(
             If specified, allows to use specific shapes for the example input provided to the exporter.
         model_kwargs (optional[Dict[str, Any]], defaults to `None`):
             Additional kwargs for model export
-        compression_option (`Optional[str]`, defaults to `None`):
-            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
-            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
-        compression_ratio (`Optional[float]`, defaults to `None`):
-            Compression ratio between primary and backup precision (only relevant to INT4).
+        ov_config (`OVConfig`, *optional*):
+            The configuration containing the parameters related to quantization.
         stateful (`bool`, defaults to `False`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
 
@@ -422,8 +383,7 @@ def export_pytorch(
                 device,
                 input_shapes,
                 model_kwargs,
-                compression_option=compression_option,
-                compression_ratio=compression_ratio,
+                ov_config=ov_config,
             )
 
         sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
@@ -450,7 +410,7 @@ def export_pytorch(
         if stateful:
             patch_stateful(model.config, ov_model)
 
-        _save_model(ov_model, output, compression_option=compression_option, compression_ratio=compression_ratio)
+        _save_model(ov_model, output, ov_config=ov_config)
         clear_class_registry()
         del model
         gc.collect()
@@ -467,8 +427,7 @@ def export_models(
     device: str = "cpu",
     input_shapes: Optional[Dict] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    compression_option: Optional[str] = None,
-    compression_ratio: Optional[int] = None,
+    ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
@@ -484,11 +443,8 @@ def export_models(
             export on CUDA devices.
         input_shapes (Optional[Dict], optional, Defaults to None):
             If specified, allows to use specific shapes for the example input provided to the exporter.
-        compression_option (`Optional[str]`, defaults to `None`):
-            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
-            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point.
-        compression_ratio (`Optional[int]`, defaults to `None`):
-            Compression ratio between primary and backup precision (only relevant to INT4).
+        ov_config (`OVConfig`, *optional*):
+            The configuration containing the parameters related to quantization.
         model_kwargs (Optional[Dict[str, Any]], optional):
             Additional kwargs for model export.
         stateful (`bool`, defaults to `True`)
@@ -501,7 +457,6 @@ def export_models(
         list of input_names and output_names from ONNX configuration
     """
 
-    # TODO : modify compression_option to quantization_config
     outputs = []
 
     if output_names is not None and len(output_names) != len(models_and_onnx_configs):
@@ -523,8 +478,7 @@ def export_models(
                 device=device,
                 input_shapes=input_shapes,
                 model_kwargs=model_kwargs,
-                compression_option=compression_option,
-                compression_ratio=compression_ratio,
+                ov_config=ov_config,
                 stateful=stateful,
             )
         )
@@ -537,8 +491,7 @@ def export_from_model(
     model: Union["PreTrainedModel", "TFPreTrainedModel"],
     output: Union[str, Path],
     task: Optional[str] = None,
-    compression_option: Optional[str] = None,
-    compression_ratio: Optional[float] = None,
+    ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
     opset: Optional[int] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
@@ -548,14 +501,9 @@ def export_from_model(
     device: str = "cpu",
     **kwargs_shapes,
 ):
-    if (
-        compression_option is not None
-        and compression_option != "fp16"
-        and compression_option != "fp32"
-        and not is_nncf_available()
-    ):
+    if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
         raise ImportError(
-            f"Compression of the weights to {compression_option} requires nncf, please install it with `pip install nncf`"
+            f"Compression of the weights to {ov_config.quantization_config} requires nncf, please install it with `pip install nncf`"
         )
 
     model_kwargs = model_kwargs or {}
@@ -635,7 +583,7 @@ def export_from_model(
         legacy=False,
     )
 
-    if compression_option is None:
+    if ov_config is None:
         if library_name == "diffusers":
             num_parameters = model.unet.num_parameters()
         else:
@@ -643,7 +591,10 @@ def export_from_model(
 
         if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
             if is_nncf_available():
-                compression_option = "int8"
+                from ...intel.openvino.configuration import OVConfig
+
+                ov_config = OVConfig(quantization_config={"bits": 8})
+
                 logger.info("The model weights will be quantized to int8.")
             else:
                 logger.warning(
@@ -697,8 +648,7 @@ def export_from_model(
         output_names=files_subpaths,
         input_shapes=input_shapes,
         device=device,
-        compression_option=compression_option,
-        compression_ratio=compression_ratio,
+        ov_config=ov_config,
         stateful=stateful,
         opset=opset,
         model_kwargs=model_kwargs,

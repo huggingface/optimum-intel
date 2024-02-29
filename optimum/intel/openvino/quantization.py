@@ -231,6 +231,9 @@ class OVQuantizer(OptimumQuantizer):
             )
         ov_config = ov_config or quantization_config
 
+        if ov_config is not None and not isinstance(ov_config, OVConfig):
+            raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
+
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
                 calibration_dataset,
@@ -244,6 +247,10 @@ class OVQuantizer(OptimumQuantizer):
             )
 
         elif isinstance(self.model, torch.nn.Module):
+            logger.warning(
+                "The support of `torch.nn.Module` will be deprecated in a future release of optimum-intel, please use the corresponding `OVModelForXxx` class to load you model."
+                "To convert a PyTorch model to OpenVINO, you can set `export=True` when loading your model as `OVModelForXxx.from_pretrained(..., export=True)`"
+            )
             self._quantize_torchmodel(
                 calibration_dataset,
                 save_directory,
@@ -272,11 +279,10 @@ class OVQuantizer(OptimumQuantizer):
         save_directory.mkdir(parents=True, exist_ok=True)
 
         if weights_only:
+            q_config = getattr(ov_config, "quantization_config", None)
             # Use default 8-bit compression if not provided
-            q_config = (
-                OVWeightQuantizationConfig(bits=8, sym=True) if ov_config is None else ov_config.quantization_config
-            )
-            _weight_only_quantization(self.model, q_config)
+            q_config = q_config or OVWeightQuantizationConfig(bits=8, sym=True)
+            _weight_only_quantization(self.model.model, q_config)
 
             self.model.save_pretrained(save_directory)
             return
@@ -529,9 +535,9 @@ class OVQuantizer(OptimumQuantizer):
         return dataset.remove_columns(ignored_columns)
 
 
-def _weight_only_quantization(model: OVBaseModel, quantization_config: Union[OVWeightQuantizationConfig, Dict]):
-    ov_model = model.model
-
+def _weight_only_quantization(
+    model: openvino.runtime.Model, quantization_config: Union[OVWeightQuantizationConfig, Dict]
+):
     config = quantization_config
     if isinstance(config, dict):
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
@@ -540,16 +546,13 @@ def _weight_only_quantization(model: OVBaseModel, quantization_config: Union[OVW
 
     if config.dataset is not None and isinstance(config.dataset, str):
         tokenizer = config.tokenizer
-        if tokenizer is None:
-            tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
-        elif isinstance(tokenizer, str):
+        if isinstance(tokenizer, str):
             tokenizer = AutoTokenizer.from_pretrained(tokenizer)
 
         from optimum.gptq.data import get_dataset, prepare_dataset
 
         dataset = get_dataset(config.dataset, tokenizer, seqlen=32)
         dataset = prepare_dataset(dataset)
-        dataset = nncf.Dataset(dataset, lambda x: model.prepare_inputs(**x))
 
     sensitivity_metric = None
     if isinstance(config.sensitivity_metric, str):
@@ -564,8 +567,8 @@ def _weight_only_quantization(model: OVBaseModel, quantization_config: Union[OVW
     else:
         mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
 
-    model.model = nncf.compress_weights(
-        ov_model,
+    return nncf.compress_weights(
+        model,
         mode=mode,
         ratio=config.ratio,
         group_size=config.group_size,

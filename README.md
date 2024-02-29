@@ -126,7 +126,7 @@ from optimum.intel import OVQuantizer, OVModelForSequenceClassification
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
-model = AutoModelForSequenceClassification.from_pretrained(model_id)
+model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 def preprocess_fn(examples, tokenizer):
     return tokenizer(

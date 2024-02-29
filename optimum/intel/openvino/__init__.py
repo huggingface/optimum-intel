@@ -36,11 +36,12 @@ if is_nncf_available():
 
     patch_torch_operators()
 
-    from .configuration import OVConfig, OVWeightQuantizationConfig
     from .quantization import OVQuantizer
     from .trainer import OVTrainer
     from .training_args import OVTrainingArguments
 
+
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
