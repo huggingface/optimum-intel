@@ -116,9 +116,9 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
-        "--convert-tokenizer",
+        "--disable-convert-tokenizer",
         action="store_true",
-        help="Add converted tokenizer and detokenizer with OpenVINO Tokenizers",
+        help="Do not add converted tokenizer and detokenizer OpenVINO models.",
     )
 
 
@@ -201,6 +201,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             pad_token_id=self.args.pad_token_id,
             ov_config=ov_config,
             stateful=not self.args.disable_stateful,
-            convert_tokenizer=self.args.convert_tokenizer,
+            convert_tokenizer=not self.args.disable_convert_tokenizer,
             # **input_shapes,
         )
