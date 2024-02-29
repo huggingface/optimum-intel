@@ -571,6 +571,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_multiple_inputs(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
+        model_kwargs = {}
         if model_arch in self.REMOTE_CODE_MODELS:
             model_kwargs = {"config": AutoConfig.from_pretrained(model_id, trust_remote_code=True), "trust_remote_code": True}
         model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=False, **model_kwargs)
