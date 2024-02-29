@@ -332,7 +332,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=False)
-        self.assertEqual(model._openvino_config.quantization_config["bits"], 8)
+        self.assertEqual(model._openvino_config.quantization_config.bits, 8)
         self.assertEqual(model._openvino_config.dtype, "int8")
 
         if model.export_feature.startswith("text2text-generation"):
