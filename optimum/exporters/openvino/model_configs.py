@@ -12,12 +12,14 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 from packaging import version
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
+from optimum.exporters.openvino.model_patcher import ChatGLMModelPatcher, MixtralModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -28,7 +30,27 @@ from optimum.utils.input_generators import (
 )
 from optimum.utils.normalized_config import NormalizedTextConfig
 
-from .model_patcher import ChatGLMModelPatcher, MixtralModelPatcher
+
+def init_model_configs():
+    supported_model_types = [
+        "_SUPPORTED_MODEL_TYPE",
+        "_DIFFUSERS_SUPPORTED_MODEL_TYPE",
+        "_TIMM_SUPPORTED_MODEL_TYPE",
+        "_SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE",
+    ]
+
+    for supported_models_config in supported_model_types:
+        supported_models = getattr(TasksManager, supported_models_config)
+        for model, export_configs in supported_models.items():
+            if "onnx" not in export_configs:
+                continue
+            onnx_config = export_configs["onnx"]
+            supported_models[model]["openvino"] = deepcopy(onnx_config)
+
+        setattr(TasksManager, supported_models_config, supported_models)
+
+
+init_model_configs()
 
 
 if TYPE_CHECKING:
@@ -38,6 +60,7 @@ if TYPE_CHECKING:
 
     if is_tf_available():
         from transformers.modeling_tf_utils import TFPreTrainedModel
+
 
 register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_existing=True)
 
@@ -69,6 +92,15 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 @register_in_tasks_manager("minicpm", *["text-generation", "text-generation-with-past"])
 class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager("stablelm", *["text-generation", "text-generation-with-past"])
+class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)

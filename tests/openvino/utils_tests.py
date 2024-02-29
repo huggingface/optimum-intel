@@ -78,7 +78,7 @@ MODEL_NAMES = {
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
-    "stabellm": "hf-internal-testing/tiny-random-StableLmForCausalLM",
+    "stablelm": "hf-internal-testing/tiny-random-StableLmForCausalLM",
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
     "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",

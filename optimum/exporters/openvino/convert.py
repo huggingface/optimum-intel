@@ -37,8 +37,6 @@ from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
 from ...intel.utils.import_utils import is_nncf_available
-from .base import init_model_configs
-from .model_configs import *  # noqa: F403
 from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_export_task_support_stateful, ensure_stateful_is_available, patch_stateful
 from .utils import (
@@ -49,9 +47,6 @@ from .utils import (
     get_input_shapes,
     remove_none_from_dummy_inputs,
 )
-
-
-init_model_configs()
 
 
 UNSUPPORTED_TOKENIZER_CLASSES = (T5Tokenizer, T5TokenizerFast)
@@ -523,14 +518,14 @@ def export_from_model(
             task = TasksManager._infer_task_from_model_or_model_class(model=model)
         except (ValueError, KeyError) as e:
             raise RuntimeError(
-                f"The model task could not be automatically inferred in `onnx_export_from_model`. Please provide the argument `task` with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+                f"The model task could not be automatically inferred in `export_from_model`. Please provide the argument `task` with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
             )
 
         if (
             not custom_architecture
             and library_name != "diffusers"
             and task + "-with-past"
-            in TasksManager.get_supported_tasks_for_model_type(model_type, "onnx", library_name=library_name)
+            in TasksManager.get_supported_tasks_for_model_type(model_type, "openvino", library_name=library_name)
         ):
             # -with-past is the default.
             task = task + "-with-past"
@@ -542,7 +537,7 @@ def export_from_model(
     # TODO: support onnx_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
         raise ValueError(
-            f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom onnx configuration was passed as `custom_onnx_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the model type {model_type} to be supported natively in the ONNX export."
+            f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the model type {model_type} to be supported natively in the ONNX export."
         )
 
     if task.startswith("text-generation") and model.config.is_encoder_decoder:
