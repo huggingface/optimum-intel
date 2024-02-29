@@ -85,14 +85,9 @@ class ChatGLM2DummyTextInputGenerator(DummyTextInputGenerator):
     }
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        import torch
-
         input = super().generate(input_name, framework, int_dtype, float_dtype)
         if input_name == "attention_mask":
-            input = torch.ones(input.shape, dtype=input.dtype)
-        if input_name == "position_ids":
-            bs = input.shape[0]
-            input = torch.range(0, input.shape[1], dtype=input.dtype).repeat(bs, 1)
+            input = self.random_int_tensor(input.shape, max_value=1, min_value=1)
         return input
 
 
@@ -141,11 +136,10 @@ class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 
 
 @register_in_tasks_manager("chatglm", *["text-generation", "text-generation-with-past"])
-class ChatGLM2OpenVINOConfig(TextDecoderOnnxConfig):
+class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(vocab_size="padded_vocab_size", num_layers="num_layers")
     DUMMY_INPUT_GENERATOR_CLASSES = (ChatGLM2DummyTextInputGenerator, ChatGLM2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = ChatGLM2DummyPastKeyValuesGenerator
-    no_position_ids = False
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
@@ -173,33 +167,23 @@ class ChatGLM2OpenVINOConfig(TextDecoderOnnxConfig):
                 )
 
         # refer to https://github.com/huggingface/optimum/pull/764
-        cond1 = self.use_past_in_inputs
-        cond2 = self.PAD_ATTENTION_MASK_TO_PAST
-        cond3 = self.use_cache_branch is not False
-        cond4 = "attention_mask" in dummy_inputs
-        if cond1 and cond2 and cond3 and cond4:
-            # Obtain the past sequence length from the value instead of the key (Bloom).
-            past_length = dummy_inputs["past_key_values"][0][1].shape[0]
-            for k, v in dummy_inputs.items():
-                if k not in ["attention_mask", "past_key_values"]:
-                    dummy_inputs[k] = v[:, -1:]
+        if (
+            self.use_past_in_inputs
+            and self.PAD_ATTENTION_MASK_TO_PAST
+            and self.use_cache_branch is not False
+            and "attention_mask" in dummy_inputs
+        ):
+            # Obtain the past sequence length from the value instead of the key (Bloom). ChatGLM has seq_len in 0 dim instead of -2
+            past_present_length = dummy_inputs["input_ids"].shape[1] + dummy_inputs["past_key_values"][0][1].shape[0]
 
             dummy_inputs["attention_mask"] = DummyInputGenerator.pad_input_on_dim(
                 dummy_inputs["attention_mask"],
-                desired_length=past_length + 1,
+                desired_length=past_present_length,
                 dim=1,
                 dtype=dummy_inputs["attention_mask"].dtype,
             )
 
         return dummy_inputs
-
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        common_inputs = super().inputs
-        if not self.no_position_ids and self.task == "text-generation":
-            common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
-
-        return common_inputs
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         """
@@ -218,7 +202,7 @@ class ChatGLM2OpenVINOConfig(TextDecoderOnnxConfig):
             decoder_sequence_name = "past_sequence_length"
             name = "past_key_values"
         else:
-            decoder_sequence_name = "past_sequence_length + 1"
+            decoder_sequence_name = "past_sequence_length + present_lenght"
             name = "present"
 
         for i in range(self._normalized_config.num_layers):
