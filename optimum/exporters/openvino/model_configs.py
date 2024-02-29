@@ -32,12 +32,8 @@ from optimum.utils.normalized_config import NormalizedTextConfig
 
 
 def init_model_configs():
-    supported_model_types = [
-        "_SUPPORTED_MODEL_TYPE",
-        "_DIFFUSERS_SUPPORTED_MODEL_TYPE",
-        "_TIMM_SUPPORTED_MODEL_TYPE",
-        "_SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE",
-    ]
+
+    supported_model_types = ["_SUPPORTED_MODEL_TYPE", "_DIFFUSERS_SUPPORTED_MODEL_TYPE", "_TIMM_SUPPORTED_MODEL_TYPE", "_SENTENCE_TRANSFORMERS_SUPPORTED_MODEL_TYPE"]
 
     for supported_models_config in supported_model_types:
         supported_models = getattr(TasksManager, supported_models_config)
@@ -46,8 +42,9 @@ def init_model_configs():
                 continue
             onnx_config = export_configs["onnx"]
             supported_models[model]["openvino"] = deepcopy(onnx_config)
-
+        
         setattr(TasksManager, supported_models_config, supported_models)
+
 
 
 init_model_configs()
@@ -108,21 +105,6 @@ class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
 
-class ChatGLM2DummyTextInputGenerator(DummyTextInputGenerator):
-    SUPPORTED_INPUT_NAMES = {
-        "input_ids",
-        "attention_mask",
-        "token_type_ids",
-        "position_ids",
-    }
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        input = super().generate(input_name, framework, int_dtype, float_dtype)
-        if input_name == "attention_mask":
-            input = self.random_int_tensor(input.shape, max_value=1, min_value=1)
-        return input
-
-
 class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
@@ -170,7 +152,7 @@ class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 @register_in_tasks_manager("chatglm", *["text-generation", "text-generation-with-past"])
 class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(vocab_size="padded_vocab_size", num_layers="num_layers")
-    DUMMY_INPUT_GENERATOR_CLASSES = (ChatGLM2DummyTextInputGenerator, ChatGLM2DummyPastKeyValuesGenerator)
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, ChatGLM2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = ChatGLM2DummyPastKeyValuesGenerator
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):

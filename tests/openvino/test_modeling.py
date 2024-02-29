@@ -28,6 +28,7 @@ from evaluate import evaluator
 from parameterized import parameterized
 from PIL import Image
 from transformers import (
+    AutoConfig,
     AutoFeatureExtractor,
     AutoModel,
     AutoModelForAudioClassification,
@@ -477,6 +478,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "blenderbot",
         "blenderbot-small",
         "bloom",
+        "chatglm",
         "codegen",
         # "data2vec-text", # TODO : enable when enabled in exporters
         "gpt2",
@@ -495,6 +497,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     )
     GENERATION_LENGTH = 100
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
+    REMOTE_CODE_MODELS = ("chatglm", )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -507,12 +510,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
 
         set_seed(SEED)
-        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+
+        model_kwargs = {}
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {"config": AutoConfig.from_pretrained(model_id, trust_remote_code=True), "trust_remote_code": True}
+        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
         self.assertEqual(ov_model.stateful, self.IS_SUPPORT_STATEFUL and model_arch not in not_stateful)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in remote_code)
         tokens = tokenizer(
             "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
         )
@@ -542,9 +549,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
+        model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False, compile=False)
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {"config": AutoConfig.from_pretrained(model_id, trust_remote_code=True), "trust_remote_code": True}
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False, compile=False, **model_kwargs)
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         model.half()
@@ -561,8 +571,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_multiple_inputs(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=False)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {"config": AutoConfig.from_pretrained(model_id, trust_remote_code=True), "trust_remote_code": True}
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=False, **model_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
         tokens = tokenizer(texts, padding=True, return_tensors="pt")

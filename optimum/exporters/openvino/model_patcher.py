@@ -161,9 +161,7 @@ def _chatglm_transformer_forward(
             )
 
     if full_attention_mask is None:
-        if (attention_mask is not None and not attention_mask.all()) or (past_key_values and seq_length != 1):
-            full_attention_mask = self.get_masks(input_ids, past_key_values, padding_mask=attention_mask)
-        elif past_key_values is not None:
+        if past_key_values is not None:
             full_attention_mask = torch.ones(
                 batch_size,
                 seq_length,

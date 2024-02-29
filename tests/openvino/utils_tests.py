@@ -28,6 +28,7 @@ MODEL_NAMES = {
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "camembert": "hf-internal-testing/tiny-random-camembert",
     "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
+    "chatglm": "katuni4ka/tiny-random-chatglm2",
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
     "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
     "data2vec_vision": "hf-internal-testing/tiny-random-Data2VecVisionModel",
