@@ -73,22 +73,23 @@ _openvino_available = importlib.util.find_spec("openvino") is not None
 _openvino_version = "N/A"
 if _openvino_available:
     try:
-        from openvino.runtime import get_version
         import openvino_telemetry as tm
+        from openvino.runtime import get_version
 
-        tm = tm.Telemetry(tid="G-W5E9RNLD4H",
-                          app_name="Optimum Intel",
-                          app_version=get_version(),
-                          backend='ga4',
-                          enable_opt_in_dialog=False,
-                          disable_in_ci=True)
+        tm = tm.Telemetry(
+            tid="G-W5E9RNLD4H",
+            app_name="Optimum Intel",
+            app_version=get_version(),
+            backend="ga4",
+            enable_opt_in_dialog=False,
+            disable_in_ci=True,
+        )
 
-        # temporal code to check that "CI" variable is set in CI pipelines,
-        # needs to be removed before merge
-        import os
-        assert "CI" in os.environ and os.environ["CI"].lower() == "true"
-
-        tm.send_event("optimum_intel", "openvino_imported", "OpenVino {}, Optimum {}.".format(get_version(), importlib_metadata.version("optimum")))
+        tm.send_event(
+            "optimum_intel",
+            "openvino_imported",
+            "OpenVino {}, Optimum {}.".format(get_version(), importlib_metadata.version("optimum")),
+        )
 
         version = get_version()
         # avoid invalid format
