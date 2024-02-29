@@ -490,6 +490,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mpt",
         "opt",
         "pegasus",
+        "qwen2",
+        "stablelm",
     )
     GENERATION_LENGTH = 100
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
