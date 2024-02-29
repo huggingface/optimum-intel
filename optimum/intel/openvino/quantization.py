@@ -88,7 +88,10 @@ class InferRequestWrapper:
         self.data_cache = data_cache
 
     def __call__(self, *args, **kwargs):
-        self.data_cache.append(copy.deepcopy(args))
+        # If __call__ is invoked then self.request must be an instance of CompiledModel
+        signature = inspect.signature(self.request)
+        bound_args = signature.bind(*args, **kwargs).arguments
+        self.data_cache.append(copy.deepcopy(bound_args["inputs"]))
         return self.request(*args, **kwargs)
 
     def infer(self, inputs: Any = None, share_inputs: bool = False):
