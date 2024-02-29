@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -467,7 +467,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        infer_context: Optional[list[openvino.runtime.InferRequest]] = None,
+        infer_context: Optional[List[openvino.runtime.InferRequest]] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         inputs = self.prepare_inputs(
