@@ -45,7 +45,7 @@ from ...exporters.openvino.stateful import ensure_export_task_support_stateful, 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import DATASETS_IMPORT_ERROR, is_datasets_available
 from ..utils.modeling_utils import get_model_device
-from .configuration import OVConfig, OVWeightQuantizationConfig
+from .configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     MAX_ONNX_OPSET,
@@ -235,8 +235,11 @@ class OVQuantizer(OptimumQuantizer):
             )
         ov_config = ov_config or quantization_config
 
-        if ov_config is not None and not isinstance(ov_config, OVConfig):
-            raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
+        if ov_config is not None:
+            if not isinstance(ov_config, OVConfig):
+                raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
+            elif ov_config.compression is None:
+                ov_config.compression = DEFAULT_QUANTIZATION_CONFIG
 
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
@@ -355,7 +358,7 @@ class OVQuantizer(OptimumQuantizer):
             logger.info(
                 "No configuration describing the quantization process was provided, a default OVConfig will be generated."
             )
-            ov_config = OVConfig()
+            ov_config = OVConfig(compression=DEFAULT_QUANTIZATION_CONFIG)
         onnx_file_name = (
             ONNX_WEIGHTS_NAME
             if file_name is None and ov_config.save_onnx_model
