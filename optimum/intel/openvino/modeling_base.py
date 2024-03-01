@@ -217,7 +217,7 @@ class OVBaseModel(OptimizedModel):
             local_files_only=local_files_only,
         )
 
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         model = cls.load_model(model_cache_path, quantization_config=quantization_config)
         return cls(
@@ -229,7 +229,7 @@ class OVBaseModel(OptimizedModel):
         )
 
     @staticmethod
-    def _prepare_quantization_config(
+    def _prepare_weight_quantization_config(
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None, load_in_8bit: bool = False
     ):
         # Give default quantization config if not provided and load_in_8bit=True

@@ -584,7 +584,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
             quantization_config = _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, quantization_config)
 
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
         model = cls.load_model(model_cache_path, quantization_config=None if load_in_4bit else quantization_config)

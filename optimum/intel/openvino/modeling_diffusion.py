@@ -264,7 +264,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 else:
                     kwargs[name] = load_method(new_model_save_dir)
 
-        quantization_config = cls._prepare_quantization_config(quantization_config, load_in_8bit)
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
         unet = cls.load_model(
             new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name, quantization_config
         )
