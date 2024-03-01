@@ -25,6 +25,7 @@ from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from ...exporters.openvino import main_export
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_DECODER_NAME,
@@ -111,6 +112,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         use_cache: bool = True,
         from_onnx: bool = False,
         load_in_8bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         """
@@ -152,12 +154,19 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         decoder_file_name = decoder_file_name or default_decoder_file_name
         decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
         decoder_with_past = None
+
+        # Give default quantization config if not provided and load_in_8bit=True
+        if load_in_8bit:
+            quantization_config = quantization_config or {"bits": 8}
+
         # Load model from a local directory
         if os.path.isdir(model_id):
-            encoder = cls.load_model(os.path.join(model_id, encoder_file_name), load_in_8bit)
-            decoder = cls.load_model(os.path.join(model_id, decoder_file_name), load_in_8bit)
+            encoder = cls.load_model(os.path.join(model_id, encoder_file_name), quantization_config)
+            decoder = cls.load_model(os.path.join(model_id, decoder_file_name), quantization_config)
             if use_cache:
-                decoder_with_past = cls.load_model(os.path.join(model_id, decoder_with_past_file_name), load_in_8bit)
+                decoder_with_past = cls.load_model(
+                    os.path.join(model_id, decoder_with_past_file_name), quantization_config
+                )
 
             model_save_dir = Path(model_id)
 
@@ -185,10 +194,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 file_names[name] = model_cache_path
 
             model_save_dir = Path(model_cache_path).parent
-            encoder = cls.load_model(file_names["encoder"], load_in_8bit)
-            decoder = cls.load_model(file_names["decoder"], load_in_8bit)
+            encoder = cls.load_model(file_names["encoder"], quantization_config)
+            decoder = cls.load_model(file_names["decoder"], quantization_config)
             if use_cache:
-                decoder_with_past = cls.load_model(file_names["decoder_with_past"], load_in_8bit)
+                decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
 
         return cls(
             encoder=encoder,
@@ -214,6 +223,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         use_cache: bool = True,
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         """
@@ -240,13 +250,15 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
         if task is None:
             task = cls.export_feature
-
             if use_cache:
                 task = task + "-with-past"
 
-        compression_option = None
-        if load_in_8bit is not None:
-            compression_option = "fp32"
+        # If load_in_8bit or quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None or not quantization_config:
+            ov_config = None
+        else:
+            ov_config = OVConfig(dtype="fp32")
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -258,12 +270,17 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            compression_option=compression_option,
+            ov_config=ov_config,
         )
 
         config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
-            model_id=save_dir_path, config=config, use_cache=use_cache, load_in_8bit=load_in_8bit, **kwargs
+            model_id=save_dir_path,
+            config=config,
+            use_cache=use_cache,
+            load_in_8bit=load_in_8bit,
+            quantization_config=quantization_config,
+            **kwargs,
         )
 
     def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):

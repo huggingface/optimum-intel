@@ -77,7 +77,7 @@ INT8_WEIGHT_COMPRESSION_CONFIG = {
 }
 
 
-DEFAULT_4BIT_CONFIGS = {
+_DEFAULT_4BIT_CONFIGS = {
     "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 32, "ratio": 0.5},
     "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
     "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
@@ -96,6 +96,7 @@ DEFAULT_4BIT_CONFIGS = {
     "openlm-research/open_llama_3b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
     "tiiuae/falcon-7b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
     "psmathur/orca_mini_3b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
+    "mistralai/Mixtral-8x7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
 }
 
 
@@ -108,7 +109,8 @@ class OVConfig(BaseConfig):
         compression: Union[List[Dict], Dict, None] = None,
         input_info: Optional[List] = None,
         save_onnx_model: bool = False,
-        quantization_config: Optional[QuantizationConfigMixin] = None,
+        quantization_config: Optional[Union[QuantizationConfigMixin, Dict]] = None,
+        dtype: Optional[str] = None,
         **kwargs,
     ):
         super().__init__()
@@ -117,7 +119,13 @@ class OVConfig(BaseConfig):
         self.save_onnx_model = save_onnx_model
         self._enable_standard_onnx_export_option()
         self.optimum_version = kwargs.pop("optimum_version", None)
-        self.quantization_config = quantization_config
+        self.quantization_config = quantization_config or {}
+
+        if isinstance(quantization_config, QuantizationConfigMixin):
+            bits = self.quantization_config.bits
+        else:
+            bits = self.quantization_config.get("bits", None)
+        self.dtype = "int" + str(bits) if isinstance(bits, int) else dtype
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
         self.input_info = [
@@ -130,8 +138,6 @@ class OVConfig(BaseConfig):
         ]
 
     def save_pretrained(self, *args, **kwargs):
-        if self.quantization_config is None:
-            self.quantization_config = OVWeightQuantizationConfig()
         super().save_pretrained(*args, **kwargs)
 
     def _enable_standard_onnx_export_option(self):
@@ -195,9 +201,9 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         self,
         bits: int = 8,
         sym: bool = False,
-        tokenizer: Any = None,
+        tokenizer: Optional[Any] = None,
         dataset: Optional[str] = None,
-        ratio: Optional[float] = None,
+        ratio: float = 1.0,
         group_size: Optional[int] = None,
         all_layers: Optional[bool] = None,
         sensitivity_metric: Optional[str] = None,
@@ -208,7 +214,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         self.sym = sym
         self.tokenizer = tokenizer
         self.dataset = dataset
-        self.group_size = group_size
+        self.group_size = group_size or (-1 if bits == 8 else 128)
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
@@ -221,9 +227,9 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         Safety checker that arguments are correct
         """
         if self.ratio is not None and not (0 <= self.ratio <= 1):
-            raise ValueError("damp_percent must between 0 and 1.")
+            raise ValueError("`ratio` must between 0 and 1.")
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
-            raise ValueError("group_size must be greater than 0 or equal to -1")
+            raise ValueError("`group_size` must be greater than 0 or equal to -1")
         if self.dataset is not None and isinstance(self.dataset, str):
             if self.dataset not in ["wikitext2", "c4", "c4-new", "ptb", "ptb-new"]:
                 raise ValueError(
@@ -234,6 +240,16 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         if self.bits not in [4, 8]:
             raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
 
+        if self.bits == 8:
+            if self.ratio != 1:
+                raise ValueError(
+                    f"For 8-bit quantization, `ratio` is expected to be set to 1.0, but was set to {self.ratio}"
+                )
+            if self.group_size != -1:
+                raise ValueError(
+                    f"For 8-bit quantization, `group_size` is expected to be set to -1, but was set to {self.group_size}"
+                )
+
 
 def _check_default_4bit_configs(config: PretrainedConfig):
-    return DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
+    return _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
