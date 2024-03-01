@@ -210,7 +210,9 @@ class IPEXModel(OptimizedModel):
 
     @property
     def model_dtype(self):
-        logger.warning("model_dtype will be removed after v1.18.0")
+        logger.warning(
+            "access to the `model_dtype` attribute is deprecated and will be removed after v1.18.0, please use `_dtype` instead."
+        )
         return self._dtype
 
     def _call_model(self, *args, **kwargs):
