@@ -19,7 +19,8 @@ from packaging import version
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
-from optimum.exporters.openvino.model_patcher import ChatGLMModelPatcher, MixtralModelPatcher
+from optimum.exporters.onnx.model_configs import GemmaOnnxConfig
+from optimum.exporters.openvino.model_patcher import ChatGLMModelPatcher, GemmaModelPatcher, MixtralModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -65,7 +66,7 @@ if TYPE_CHECKING:
 register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_existing=True)
 
 
-@register_in_tasks_manager("baichuan", *["text-generation", "text-generation-with-past"])
+@register_in_tasks_manager("baichuan", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class BaichaunOpenVINOConfig(TextDecoderOnnxConfig):
     DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
@@ -73,7 +74,7 @@ class BaichaunOpenVINOConfig(TextDecoderOnnxConfig):
     )
 
 
-@register_in_tasks_manager("jais", *["text-generation", "text-generation-with-past"])
+@register_in_tasks_manager("jais", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class JaisOpenVINOConfig(TextDecoderOnnxConfig):
     DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
@@ -81,7 +82,7 @@ class JaisOpenVINOConfig(TextDecoderOnnxConfig):
     )
 
 
-@register_in_tasks_manager("qwen2", *["text-generation", "text-generation-with-past"])
+@register_in_tasks_manager("qwen2", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -90,7 +91,7 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
 
-@register_in_tasks_manager("minicpm", *["text-generation", "text-generation-with-past"])
+@register_in_tasks_manager("minicpm", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -99,7 +100,7 @@ class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
 
-@register_in_tasks_manager("stablelm", *["text-generation", "text-generation-with-past"])
+@register_in_tasks_manager("stablelm", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -128,7 +129,7 @@ class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             random_sequence_length_range=random_sequence_length_range,
         )
         self.multi_query_group_num = normalized_config.multi_query_group_num
-        self.head_dim = self.hidden_size // self.num_attention_heads
+        self.head_dim = normalized_config.kv_channels
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         past_key_shape = (
@@ -152,7 +153,7 @@ class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         ]
 
 
-@register_in_tasks_manager("chatglm", *["text-generation", "text-generation-with-past"])
+@register_in_tasks_manager("chatglm", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(vocab_size="padded_vocab_size", num_layers="num_layers")
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, ChatGLM2DummyPastKeyValuesGenerator)
@@ -232,7 +233,7 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         return ChatGLMModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("mixtral", *["text-generation", "text-generation-with-past"])
+@register_in_tasks_manager("mixtral", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     # This is because of the patching of torch.triu in AttentionMaskConverter, that exists from transformers>=4.35
     MIN_TRANSFORMERS_VERSION = version.parse("4.34.99")
@@ -249,3 +250,21 @@ class MixtralOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return MixtralModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "gemma",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GemmaOpenVINOConfig(GemmaOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return GemmaModelPatcher(self, model, model_kwargs=model_kwargs)

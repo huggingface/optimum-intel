@@ -1,4 +1,4 @@
-#  Copyright 2023 The HuggingFace Team. All rights reserved.
+#  Copyright 2024 The HuggingFace Team. All rights reserved.
 #
 #  Licensed under the Apache License, Version 2.0 (the "License");
 #  you may not use this file except in compliance with the License.
@@ -214,6 +214,33 @@ def _chatglm_transformer_forward(
     )
 
 
+def _chatglm2_get_context_layer(query_layer: torch.Tensor, key_layer: torch.Tensor, value_layer: torch.Tensor):
+    mask = torch.zeros((query_layer.shape[-2], key_layer.shape[-2]), dtype=query_layer.dtype)
+    if query_layer.shape[2] == key_layer.shape[2]:
+        tmp_mask = torch.ones((query_layer.shape[-2], key_layer.shape[-2]), dtype=torch.bool).triu(diagonal=1)
+        mask.masked_fill_(tmp_mask, float("-inf"))
+
+    context_layer = torch.nn.functional.scaled_dot_product_attention(
+        query_layer, key_layer, value_layer, attn_mask=mask
+    )
+    return context_layer
+
+
+def _chatglm2_core_attention_forward(self, query_layer, key_layer, value_layer, attention_mask):
+    query_layer, key_layer, value_layer = [k.permute(1, 2, 0, 3) for k in [query_layer, key_layer, value_layer]]
+    if attention_mask is None:
+        context_layer = _chatglm2_get_context_layer(query_layer, key_layer, value_layer)
+    else:
+        context_layer = torch.nn.functional.scaled_dot_product_attention(
+            query_layer, key_layer, value_layer, attention_mask
+        )
+    context_layer = context_layer.permute(2, 0, 1, 3)
+    new_context_layer_shape = context_layer.size()[:-2] + (self.hidden_size_per_partition,)
+    context_layer = context_layer.reshape(*new_context_layer_shape)
+
+    return context_layer
+
+
 class ChatGLMModelPatcher(DecoderModelPatcher):
     def __init__(
         self,
@@ -228,7 +255,27 @@ class ChatGLMModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         self._model.transformer.forward = types.MethodType(_chatglm_transformer_forward, self._model.transformer)
+        for block in self._model.transformer.encoder.layers:
+            block.self_attention.core_attention._orig_forward = block.self_attention.core_attention.forward
+            block.self_attention.core_attention.forward = types.MethodType(
+                _chatglm2_core_attention_forward, block.self_attention.core_attention
+            )
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.transformer.forward = self.original_chatglm_transformer_forward
+        for block in self._model.transformer.encoder.layers:
+            block.self_attention.core_attention.forward = block.self_attention.core_attention._orig_forward
+
+
+class GemmaModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        # init inv_freq for torchscript tracing
+        for layer in self._model.model.layers:
+            if layer.self_attn.rotary_emb.inv_freq is None:
+                rotary_emb = layer.self_attn.rotary_emb
+                layer.self_attn.rotary_emb.inv_freq = 1.0 / (
+                    rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
+                )

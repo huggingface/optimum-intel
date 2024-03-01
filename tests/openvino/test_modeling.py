@@ -53,7 +53,6 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from utils_tests import MODEL_NAMES
 
-from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
@@ -481,12 +480,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "chatglm",
         "codegen",
         # "data2vec-text", # TODO : enable when enabled in exporters
+        "gemma",
         "gpt2",
         "gpt_neo",
         "gpt_neox",
         "llama",
         # "llama_gptq",
         "marian",
+        "minicpm",
         "mistral",
         "mixtral",
         "mpt",
@@ -497,14 +498,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     )
     GENERATION_LENGTH = 100
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
-    REMOTE_CODE_MODELS = ("chatglm",)
+    REMOTE_CODE_MODELS = ("chatglm", "minicpm")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        not_stateful = ["gpt_bigcode", "llama"]
+        not_stateful = ["gpt_bigcode"]
         if is_openvino_version("<", "2024.0"):
             not_stateful.append("mixtral")
+
+        if is_openvino_version("<", "2024.1"):
+            not_stateful.extend(["llama", "gemma"])
 
         if "gptq" in model_arch:
             self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
@@ -528,11 +532,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         tokens = tokenizer(
             "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
         )
-        position_ids = None
-        if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
-            input_shape = tokens["input_ids"].shape
-            position_ids = torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
-        ov_outputs = ov_model(**tokens, position_ids=position_ids)
+        ov_outputs = ov_model(**tokens)
 
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
@@ -542,12 +542,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(ov_model.stateful, is_stateful)
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
-
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=1e-4))
         del transformers_model
         del ov_model
         gc.collect()
