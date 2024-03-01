@@ -89,15 +89,16 @@ def ipex_jit_trace(model, task, use_cache):
     model.config.return_dict = False
 
     model = ipex.optimize(model.eval(), dtype=model.dtype, inplace=True)
-    trace_model = torch.jit.trace(
-        model,
-        example_kwarg_inputs=sample_inputs,
-        strict=False,
-        check_trace=False,
-    )
-    trace_model = torch.jit.freeze(trace_model)
-    trace_model(**sample_inputs)
-    trace_model(**sample_inputs)
+    with torch.no_grad():
+        trace_model = torch.jit.trace(
+            model,
+            example_kwarg_inputs=sample_inputs,
+            strict=False,
+            check_trace=False,
+        )
+        trace_model = torch.jit.freeze(trace_model)
+        trace_model(**sample_inputs)
+        trace_model(**sample_inputs)
 
     return trace_model
 
