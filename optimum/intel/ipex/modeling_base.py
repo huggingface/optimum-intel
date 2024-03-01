@@ -15,7 +15,6 @@
 
 import logging
 import os
-import types
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
@@ -414,7 +413,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             self._reorder_cache = _ipex_reorder_cache
         else:
             # Check if _reorder_cache is a static method
-            if isinstance(self.model_cls._reorder_cache, types.FunctionType):
+            if isinstance(self.model_cls.__dict__["_reorder_cache"], staticmethod):
                 self._reorder_cache = self.model_cls._reorder_cache
             else:
                 self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
