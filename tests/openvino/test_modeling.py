@@ -473,6 +473,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
+        "baichuan2",
         "gpt_bigcode",
         "blenderbot",
         "blenderbot-small",
@@ -484,6 +485,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt2",
         "gpt_neo",
         "gpt_neox",
+        "jais",
         "llama",
         # "llama_gptq",
         "marian",
@@ -498,7 +500,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     )
     GENERATION_LENGTH = 100
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
-    REMOTE_CODE_MODELS = ("chatglm", "minicpm")
+    REMOTE_CODE_MODELS = ("chatglm", "minicpm", "baichuan2", "jais")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
