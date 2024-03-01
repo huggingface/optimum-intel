@@ -22,7 +22,7 @@ from transformers.models.llama.modeling_llama import (
     LlamaRMSNorm,
 )
 
-from .llama_functions import (
+from .modeling_utils import (
     _IPEXLlamaDecoderLayerRef,
     llama_attn_forward,
     llama_layer_norm_forward,
@@ -34,8 +34,8 @@ if version.parse(ipex.__version__) > version.parse("2.3.0"):
     from intel_extension_for_pytorch.llm.modules import ApplyRotaryEmbedding, IndirectAccessKVCache
 
 
-IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
-IPEX_EXPORTED_TASK = ("text-generation",)
+_IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
+_IPEX_EXPORTED_TASK = ("text-generation",)
 
 
 def convert_func(m, func_name, new_function):

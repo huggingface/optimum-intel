@@ -15,17 +15,13 @@
 import math
 from typing import List, Optional, Tuple, Union
 
-import intel_extension_for_pytorch as ipex
 import torch
-from packaging import version
 from torch import nn
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.models.llama.modeling_llama import repeat_kv
 
-
-if version.parse(ipex.__version__) > version.parse("2.3.0"):
-    from intel_extension_for_pytorch.llm.modules import linear2SiluMul, linearAdd
+from optimum.intel.utils.import_utils import is_ipex_version
 
 
 def llama_layer_norm_forward(self, hidden_states):
@@ -233,6 +229,11 @@ def llama_model_forward(
 
 class _IPEXLlamaDecoderLayerRef(nn.Module):
     def __init__(self, module, config, distributed=False):
+        if is_ipex_version("<=", "2.3.0"):
+            raise ValueError("Only ipex version > 2.3.0 supports linear2SiluMul and linearAdd")
+
+        from intel_extension_for_pytorch.llm.modules import linear2SiluMul, linearAdd
+
         super().__init__()
         for k, v in module.__dict__.items():
             setattr(self, k, v)

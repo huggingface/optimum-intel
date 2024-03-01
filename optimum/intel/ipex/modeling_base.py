@@ -24,7 +24,6 @@ import torch
 from huggingface_hub import hf_hub_download
 from intel_extension_for_pytorch.cpu._auto_kernel_selection import _enable_tpp
 from intel_extension_for_pytorch.transformers.optimize import get_dummy_input
-from packaging import version
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -48,41 +47,47 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
-from ...exporters.ipex.model_patcher import IPEX_EXPORTED_ARCH, IPEX_EXPORTED_TASK, _patch_model
-from ..generation.modeling import jit_trace, prepare_jit_inputs
-from ..utils.import_utils import is_torch_version, is_transformers_version
+from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _patch_model
+from ..generation.modeling import prepare_jit_inputs
+from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
 
 
 logger = logging.getLogger(__name__)
 
 
-IPEX_SUPPORT_MODEL_TYPES = "llama"
+_IPEX_SUPPORT_MODEL_TYPES = ("llama",)
 
 
-def is_model_support_ipex_export(model, task):
+def _is_patched_with_ipex(model, task):
+    if is_ipex_version("<=", "2.3.0"):
+        return False
     if isinstance(model, torch.jit.ScriptModule):
-        is_ipex_exported = model.original_name in IPEX_EXPORTED_ARCH
+        for node in model.graph.nodes():
+            # Jit will record the codes position so we can check if the node use ipex exporter.
+            if "optimum/exporters/ipex/modeling_utils.py" in node.__str__():
+                return True
+        return False
     else:
-        is_ipex_exported = model.config.model_type in IPEX_SUPPORT_MODEL_TYPES and task in IPEX_EXPORTED_TASK
-
-    return is_ipex_exported
+        return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES and task in _IPEX_EXPORTED_TASK
 
 
 def ipex_jit_trace(model, task, use_cache):
-    if version.parse(ipex.__version__) <= version.parse("2.3.0") or not is_model_support_ipex_export(model, task):
-        model = patch_decoder_attention_mask(model)
-        model = ipex.optimize(model, dtype=model.dtype, level="O1", auto_kernel_selection=True)
-        return jit_trace(model, task, use_cache)
-
+    # Only support torch version >= 2.1.0 to support example_kwarg_inputs in jit.trace
     if is_torch_version("<", "2.1.0"):
         raise ImportError("`torch>=2.1.0` is needed to trace your model")
 
-    model = _patch_model(model)
-    sample_inputs = get_dummy_input(model, return_dict=True)
+    if _is_patched_with_ipex(model, task):
+        model = _patch_model(model)
+        sample_inputs = get_dummy_input(model, return_dict=True)
+        # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
+        _enable_tpp()
+    else:
+        model = patch_decoder_attention_mask(model)
+        sample_inputs = prepare_jit_inputs(model, task, use_cache)
+
     model.config.return_dict = False
-    # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
-    _enable_tpp()
+
     model = ipex.optimize(model.eval(), dtype=model.dtype, inplace=True)
     trace_model = torch.jit.trace(
         model,
@@ -117,7 +122,7 @@ class IPEXModel(OptimizedModel):
         self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model.to(self._device)
         self.model_save_dir = model_save_dir
-        self.is_ipex_exported = is_model_support_ipex_export(model, self.export_feature)
+        self.is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
 
         self.input_names = {
             inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
@@ -237,7 +242,7 @@ class IPEXModel(OptimizedModel):
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
-        outputs = self.model(**inputs)
+        outputs = self._call_model(**inputs)
         return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
     def eval(self):
@@ -254,7 +259,9 @@ class IPEXModel(OptimizedModel):
 
     @property
     def model_dtype(self):
-        logger.warning("model_dtype will be removed after v1.18.0")
+        logger.warning(
+            "access to the `model_dtype` attribute is deprecated and will be removed after v1.18.0, please use `_dtype` instead."
+        )
         return self._dtype
 
     def to(self, device: Union[torch.device, str]):
@@ -265,13 +272,20 @@ class IPEXModel(OptimizedModel):
     def can_generate(self):
         return isinstance(self, GenerationMixin)
 
+    def _call_model(self, *args, **kwargs):
+        try:
+            with torch.autocast(self.device.type, self.dtype):
+                out = self.model(*args, **kwargs)
+        except RuntimeError:
+            out = self.model(*args, **kwargs)
+        return out
+
     def _init_warmup(self):
         # warmup, the first 2 forwards of an IPEX model include some preprocessing steps and
         # the results of the compute are unpredictable
-        use_cache = "past_key_values" in self.input_names
-        if self.is_ipex_exported:
-            pass  # not support currently, to do...
-        else:
+        # TODO : add warmup for IPEX exported model
+        if not self.is_ipex_exported:
+            use_cache = "past_key_values" in self.input_names
             dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
             for _ in range(2):
                 self(**dummy_inputs)
@@ -305,7 +319,7 @@ class IPEXModelForImageClassification(IPEXModel):
             "pixel_values": pixel_values,
         }
 
-        outputs = self.model(**inputs)
+        outputs = self._call_model(**inputs)
         return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
 
@@ -326,7 +340,7 @@ class IPEXModelForAudioClassification(IPEXModel):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
-        outputs = self.model(**inputs)
+        outputs = self._call_model(**inputs)
         return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
 
@@ -349,7 +363,7 @@ class IPEXModelForQuestionAnswering(IPEXModel):
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
 
-        outputs = self.model(**inputs)
+        outputs = self._call_model(**inputs)
         start_logits = outputs["start_logits"] if isinstance(outputs, dict) else outputs[0]
         end_logits = outputs["end_logits"] if isinstance(outputs, dict) else outputs[1]
         return ModelOutput(start_logits=start_logits, end_logits=end_logits)
@@ -493,7 +507,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             inputs["past_key_values"] = past_key_values
 
         # 2. Model forward
-        outputs = self.model(**inputs)
+        outputs = self._call_model(**inputs)
 
         # 3. Process model outputs
         if isinstance(outputs, (list, tuple)):
