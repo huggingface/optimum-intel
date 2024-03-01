@@ -16,10 +16,12 @@
 
 import tempfile
 import unittest
+from collections import defaultdict
 from functools import partial
 
 import evaluate
 import numpy as np
+import torch
 from datasets import load_dataset
 from parameterized import parameterized
 import openvino.runtime as ov
@@ -30,6 +32,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForTokenClassification,
     AutoTokenizer,
+    AutoProcessor,
     TrainingArguments,
     default_data_collator,
 )
@@ -45,6 +48,7 @@ from optimum.intel import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
+    OVModelForSpeechSeq2Seq,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
     OVQuantizer,
@@ -52,8 +56,8 @@ from optimum.intel import (
     OVWeightQuantizationConfig,
 )
 
-
 from optimum.intel.openvino.configuration import INT8_WEIGHT_COMPRESSION_CONFIG, DEFAULT_QUANTIZATION_CONFIG
+from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version
 from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
 
@@ -601,3 +605,38 @@ class OVTrainerTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
+
+
+class InferRequestWrapperTest(unittest.TestCase):
+    MODEL_ID = ("openai/whisper-tiny.en",)
+
+    @staticmethod
+    def _generate_random_audio_data(processor):
+        t = np.linspace(0, 1.0, int(1000), endpoint=False)
+        audio_data = 0.5 * np.sin((2 + np.random.random()) * np.pi * t)
+        input_features = processor(
+            audio_data,
+            sampling_rate=16000,
+            return_tensors="pt",
+        ).input_features
+        return input_features
+
+    @parameterized.expand(MODEL_ID)
+    def test_calibration_data_uniqueness(self, model_id):
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True)
+        processor = AutoProcessor.from_pretrained(model_id)
+
+        calibration_data = []
+        ov_model.decoder_with_past.request = InferRequestWrapper(ov_model.decoder_with_past.request, calibration_data)
+        for _ in range(2):
+            input_features = self._generate_random_audio_data(processor)
+            ov_model.generate(input_features)
+
+        data_hashes_per_key = defaultdict(list)
+        for inputs_dict in calibration_data:
+            for k, v in inputs_dict.items():
+                x = (v.numpy() if isinstance(v, torch.Tensor) else v).copy()
+                data_hashes_per_key[k].append(hash(x.tobytes()))
+        for k, data_hashes in data_hashes_per_key.items():
+            # All hashes can not be equal because calibration dataset contains at least 2 different samples
+            self.assertTrue(any(data_hashes[0] != it for it in data_hashes))

@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import inspect
 import logging
 import os
@@ -87,11 +88,14 @@ class InferRequestWrapper:
         self.data_cache = data_cache
 
     def __call__(self, *args, **kwargs):
-        self.data_cache.append(*args)
+        # If __call__ is invoked then self.request must be an instance of CompiledModel
+        signature = inspect.signature(self.request)
+        bound_args = signature.bind(*args, **kwargs).arguments
+        self.data_cache.append(copy.deepcopy(bound_args["inputs"]))
         return self.request(*args, **kwargs)
 
     def infer(self, inputs: Any = None, share_inputs: bool = False):
-        self.data_cache.append(inputs)
+        self.data_cache.append(copy.deepcopy(inputs))
         return self.request.infer(inputs, share_inputs)
 
     def start_async(
@@ -102,7 +106,7 @@ class InferRequestWrapper:
         *,
         shared_memory: Any = None,
     ):
-        self.data_cache.append(inputs)
+        self.data_cache.append(copy.deepcopy(inputs))
         self.request.infer(inputs, share_inputs, share_outputs=True)
 
     def wait(self):
