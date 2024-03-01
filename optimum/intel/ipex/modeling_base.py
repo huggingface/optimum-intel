@@ -412,7 +412,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if self.is_ipex_exported:
             self._reorder_cache = _ipex_reorder_cache
         else:
-            if self.model_type in ("bloom", "mpt", "gpt-neox"):
+            if model_type in ("bloom", "mpt", "gpt-neox"):
                 self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
             else:
                 # These models' _reorder_cache is static method and don't have "self"
