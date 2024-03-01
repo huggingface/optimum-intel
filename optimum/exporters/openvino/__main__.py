@@ -14,7 +14,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
@@ -41,6 +41,18 @@ else:
     ]
 
 
+if TYPE_CHECKING:
+    from optimum.intel.openvino.configuration import OVConfig
+
+_COMPRESSION_OPTIONS = {
+    "int8": {"bits": 8},
+    "int4_sym_g128": {"bits": 4, "sym": True, "group_size": 128},
+    "int4_asym_g128": {"bits": 4, "sym": False, "group_size": 128},
+    "int4_sym_g64": {"bits": 4, "sym": True, "group_size": 64},
+    "int4_asym_g64": {"bits": 4, "sym": False, "group_size": 64},
+}
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,6 +75,7 @@ def main_export(
     fn_get_submodels: Optional[Callable] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
+    ov_config: "OVConfig" = None,
     stateful: bool = True,
     convert_tokenizer: bool = False,
     library_name: Optional[str] = None,
@@ -137,6 +150,29 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_onnx/")
     ```
     """
+
+    if compression_option is not None:
+        logger.warning(
+            "The `compression_option` argument is deprecated and will be removed in optimum-intel v1.17.0. "
+            "Please, pass an `ov_config` argument instead `OVConfig(..., quantization_config=quantization_config)`."
+        )
+
+    if compression_ratio is not None:
+        logger.warning(
+            "The `compression_ratio` argument is deprecated and will be removed in optimum-intel v1.17.0. "
+            "Please, pass an `ov_config` argument instead `OVConfig(quantization_config={ratio=compression_ratio})`."
+        )
+
+    if ov_config is None and compression_option is not None:
+        from ...intel.openvino.configuration import OVConfig
+
+        if compression_option == "fp16":
+            ov_config = OVConfig(dtype="fp16")
+        elif compression_option != "fp32":
+            q_config = _COMPRESSION_OPTIONS[compression_option] if compression_option in _COMPRESSION_OPTIONS else {}
+            q_config["ratio"] = compression_ratio or 1.0
+            ov_config = OVConfig(quantization_config=q_config)
+
     original_task = task
     task = TasksManager.map_from_synonym(task)
     framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
@@ -293,8 +329,7 @@ def main_export(
         model=model,
         output=output,
         task=task,
-        compression_option=compression_option,
-        compression_ratio=compression_ratio,
+        ov_config=ov_config,
         stateful=stateful,
         model_kwargs=model_kwargs,
         custom_onnx_configs=custom_onnx_configs,

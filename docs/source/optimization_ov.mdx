@@ -26,11 +26,11 @@ Here is how to apply static quantization on a fine-tuned DistilBERT:
 
 ```python
 from functools import partial
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from optimum.intel import OVConfig, OVQuantizer
+from transformers import  AutoTokenizer
+from optimum.intel import OVConfig, OVQuantizer, OVModelForSequenceClassification,
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
-model = AutoModelForSequenceClassification.from_pretrained(model_id)
+model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 # The directory where the quantized model will be saved
 save_dir = "ptq_model"

@@ -54,6 +54,7 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
 from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, _print_compiled_model_properties
@@ -193,6 +194,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         from_onnx: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         load_in_8bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
@@ -255,8 +257,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 else:
                     kwargs[name] = load_method(new_model_save_dir)
 
+        # Give default quantization config if not provided and load_in_8bit=True
+        if load_in_8bit:
+            quantization_config = quantization_config or {"bits": 8}
+
         unet = cls.load_model(
-            new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name, load_in_8bit=load_in_8bit
+            new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name, quantization_config
         )
 
         components = {
@@ -267,7 +273,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         }
 
         for key, value in components.items():
-            components[key] = cls.load_model(value, load_in_8bit=load_in_8bit) if value.is_file() else None
+            components[key] = cls.load_model(value, quantization_config) if value.is_file() else None
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
@@ -287,16 +293,19 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         tokenizer: Optional["CLIPTokenizer"] = None,
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
-        load_in_8bit: Optional[bool] = None,
         tokenizer_2: Optional["CLIPTokenizer"] = None,
+        load_in_8bit: Optional[bool] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
-        compression_option = None
-        if load_in_8bit is not None:
-            compression_option = "int8" if load_in_8bit else "fp32"
+        # If load_in_8bit or quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None or not quantization_config:
+            ov_config = None
+        else:
+            ov_config = OVConfig(dtype="fp32")
 
         main_export(
             model_name_or_path=model_id,
@@ -309,7 +318,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             use_auth_token=use_auth_token,
             local_files_only=local_files_only,
             force_download=force_download,
-            compression_option=compression_option,
+            ov_config=ov_config,
         )
 
         return cls._from_pretrained(
@@ -326,7 +335,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             tokenizer_2=tokenizer_2,
             scheduler=scheduler,
             feature_extractor=feature_extractor,
-            load_in_8bit=False,
+            load_in_8bit=load_in_8bit,
+            quantization_config=quantization_config,
             **kwargs,
         )
 
