@@ -27,6 +27,7 @@ from transformers import (
     AutoModelForQuestionAnswering,
     AutoTokenizer,
     PretrainedConfig,
+    GenerationConfig,
     pipeline,
     set_seed,
 )
@@ -254,6 +255,20 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         outputs = pipe("This is a sample", max_length=10)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_multiple_inputs(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
+        tokens = tokenizer(texts, padding=True, return_tensors="pt")
+        generation_config = GenerationConfig(encoder_no_repeat_ngram_size=0, max_new_tokens=20, num_beams=2)
+        outputs = model.generate(**tokens, generation_config=generation_config)
+        self.assertIsInstance(outputs, torch.Tensor)
+        self.assertEqual(outputs.shape[0], 3)
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
