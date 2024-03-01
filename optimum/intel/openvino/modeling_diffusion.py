@@ -94,9 +94,18 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {}
-        self._model_save_dir = (
-            Path(model_save_dir.name) if isinstance(model_save_dir, TemporaryDirectory) else model_save_dir
-        )
+
+        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
+        # would end-up removing the directory containing the underlying OpenVINO model
+        self._model_save_dir_tempdirectory_instance = None
+        if isinstance(model_save_dir, TemporaryDirectory):
+            self._model_save_dir_tempdirectory_instance = model_save_dir
+            self._model_save_dir = Path(model_save_dir.name)
+        elif isinstance(model_save_dir, str):
+            self._model_save_dir = Path(model_save_dir)
+        else:
+            self._model_save_dir = model_save_dir
+
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
         self.unet = OVModelUnet(unet, self)
         self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
