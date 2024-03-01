@@ -15,6 +15,7 @@
 
 import logging
 import os
+import types
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
@@ -412,11 +413,11 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if self.is_ipex_exported:
             self._reorder_cache = _ipex_reorder_cache
         else:
-            if model_type in ("bloom", "mpt", "gpt-neox"):
-                self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
-            else:
-                # These models' _reorder_cache is static method and don't have "self"
+            # Check if _reorder_cache is a static method
+            if isinstance(self.model_cls._reorder_cache, types.FunctionType):
                 self._reorder_cache = self.model_cls._reorder_cache
+            else:
+                self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
 
         if is_transformers_version(">=", "4.38.0") and model_type in {"llama", "phi", "persimmon"}:
             self.prepare_inputs_for_generation = _prepare_inputs_for_generation_for_llama
