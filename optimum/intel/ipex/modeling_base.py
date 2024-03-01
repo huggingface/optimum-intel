@@ -412,7 +412,11 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if self.is_ipex_exported:
             self._reorder_cache = _ipex_reorder_cache
         else:
-            self._reorder_cache = self.model_cls._reorder_cache
+            if self.model_type in ("bloom", "mpt", "gpt-neox"):
+                self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
+            else:
+                # These models' _reorder_cache is static method and don't have "self"
+                self._reorder_cache = self.model_cls._reorder_cache
 
         if is_transformers_version(">=", "4.38.0") and model_type in {"llama", "phi", "persimmon"}:
             self.prepare_inputs_for_generation = _prepare_inputs_for_generation_for_llama
