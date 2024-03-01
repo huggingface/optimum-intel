@@ -14,7 +14,7 @@
 
 import logging as log
 import types
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -279,3 +279,201 @@ class GemmaModelPatcher(DecoderModelPatcher):
                 layer.self_attn.rotary_emb.inv_freq = 1.0 / (
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
                 )
+
+
+SUPPORT_SDPA = is_torch_version(">", "2.1.0")
+
+
+def _qwen_rotate_half(x):
+    from einops import rearrange
+
+    x = rearrange(x, "... (j d) -> ... j d", j=2)
+    x1, x2 = x.unbind(dim=-2)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def _qwen_apply_rotary_pos_emb(t, freqs):
+    cos, sin = freqs
+    rot_dim = freqs[0].shape[-1]
+    cos, sin = freqs
+    t_, t_pass_ = t[..., :rot_dim], t[..., rot_dim:]
+    t_ = t_.float()
+    t_pass_ = t_pass_.float()
+    t_ = (t_ * cos) + (_qwen_rotate_half(t_) * sin)
+    return torch.cat((t_, t_pass_), dim=-1).type_as(t)
+
+
+def _qwen_quantize_cache_v(fdata, bits, qmax, qmin):
+    # b, s, head, h-dim->b, head, s, h-dim
+    qtype = torch.uint8
+    device = fdata.device
+    shape = fdata.shape
+
+    fdata_cal = torch.flatten(fdata, 2)
+    fmax = torch.amax(fdata_cal, dim=-1, keepdim=True)
+    fmin = torch.amin(fdata_cal, dim=-1, keepdim=True)
+    # Compute params
+    if qmax.device != fmax.device:
+        qmax = qmax.to(device)
+        qmin = qmin.to(device)
+    scale = (fmax - fmin) / (qmax - qmin)
+    zero = qmin - fmin / scale
+    scale = scale.unsqueeze(-1).repeat(1, 1, shape[2], 1).contiguous()
+    zero = zero.unsqueeze(-1).repeat(1, 1, shape[2], 1).contiguous()
+    # Quantize
+    res_data = fdata / scale + zero
+    qdata = torch.clamp(res_data, qmin, qmax).to(qtype)
+    return qdata.contiguous(), scale, zero
+
+
+def _qwen_attention_forward(
+    self,
+    hidden_states: Optional[Tuple[torch.FloatTensor]],
+    rotary_pos_emb_list: Optional[List[List[torch.Tensor]]] = None,
+    layer_past: Optional[Tuple[torch.Tensor]] = None,
+    attention_mask: Optional[torch.FloatTensor] = None,
+    head_mask: Optional[torch.FloatTensor] = None,
+    encoder_hidden_states: Optional[torch.Tensor] = None,
+    encoder_attention_mask: Optional[torch.FloatTensor] = None,
+    output_attentions: Optional[bool] = False,
+    use_cache: Optional[bool] = False,
+):
+    mixed_x_layer = self.c_attn(hidden_states)
+
+    query, key, value = mixed_x_layer.split(self.split_size, dim=2)
+
+    query = self._split_heads(query, self.num_heads, self.head_dim)
+    key = self._split_heads(key, self.num_heads, self.head_dim)
+    value = self._split_heads(value, self.num_heads, self.head_dim)
+
+    if rotary_pos_emb_list is not None:
+        cur_len = query.shape[1]
+        if len(rotary_pos_emb_list) == 1:
+            rotary_pos_emb = rotary_pos_emb_list[0]
+            rotary_pos_emb = [i[:, -cur_len:, :, :] for i in rotary_pos_emb]
+            rotary_pos_emb = (rotary_pos_emb,) * 2
+            q_pos_emb, k_pos_emb = rotary_pos_emb
+            # Slice the pos emb for current inference
+            query = _qwen_apply_rotary_pos_emb(query, q_pos_emb)
+            key = _qwen_apply_rotary_pos_emb(key, k_pos_emb)
+        else:
+            query_list = []
+            key_list = []
+            for i, rotary_pos_emb in enumerate(rotary_pos_emb_list):
+                rotary_pos_emb = [i[:, -cur_len:, :, :] for i in rotary_pos_emb]
+                rotary_pos_emb = (rotary_pos_emb,) * 2
+                q_pos_emb, k_pos_emb = rotary_pos_emb
+                # Slice the pos emb for current inference
+                query_list += [_qwen_apply_rotary_pos_emb(query[i : i + 1, :, :], q_pos_emb)]
+                key_list += [_qwen_apply_rotary_pos_emb(key[i : i + 1, :, :], k_pos_emb)]
+            query = torch.cat(query_list, dim=0)
+            key = torch.cat(key_list, dim=0)
+
+    if self.use_cache_quantization:
+        key = _qwen_quantize_cache_v(key.permute(0, 2, 1, 3), bits=8, qmin=self.cache_qmin, qmax=self.cache_qmax)
+        value = _qwen_quantize_cache_v(value.permute(0, 2, 1, 3), bits=8, qmin=self.cache_qmin, qmax=self.cache_qmax)
+
+    if layer_past is not None:
+        past_key, past_value = layer_past[0], layer_past[1]
+        if self.use_cache_quantization:
+            # use_cache_quantization:
+            # present=((q_key,key_scale,key_zero_point),
+            #          (q_value,value_scale,value_zero_point))
+            key = (
+                torch.cat((past_key[0], key[0]), dim=2),
+                torch.cat((past_key[1], key[1]), dim=2),
+                torch.cat((past_key[2], key[2]), dim=2),
+            )
+            value = (
+                torch.cat((past_value[0], value[0]), dim=2),
+                torch.cat((past_value[1], value[1]), dim=2),
+                torch.cat((past_value[2], value[2]), dim=2),
+            )
+        else:
+            # not use_cache_quantization:
+            # present=(key,value)
+            key = torch.cat((past_key, key), dim=1)
+            value = torch.cat((past_value, value), dim=1)
+
+    if use_cache:
+        present = (key, value)
+    else:
+        present = None
+
+    if self.use_logn_attn and not self.training:
+        if self.use_cache_quantization:
+            seq_start = key[0].size(2) - query.size(1)
+            seq_end = key[0].size(2)
+        else:
+            seq_start = key.size(1) - query.size(1)
+            seq_end = key.size(1)
+        logn_tensor = self.logn_tensor[:, seq_start:seq_end, :, :].type_as(query)
+        query = query * logn_tensor.expand_as(query)
+
+    if self.use_flash_attn and not self.is_fp32 and query.is_cuda:
+        q, k, v = query, key, value
+        attn_output = self.core_attention_flash(q, k, v, attention_mask=attention_mask)
+    else:
+        registered_causal_mask = torch.tril(
+            torch.ones((key.size(1), key.size(1)), dtype=torch.bool, device=key.device)
+        ).view(1, 1, key.size(1), key.size(1))
+        query = query.permute(0, 2, 1, 3)
+        if not self.use_cache_quantization:
+            key = key.permute(0, 2, 1, 3)
+            value = value.permute(0, 2, 1, 3)
+
+        if not self.use_cache_quantization and SUPPORT_SDPA:
+            causal_mask = registered_causal_mask[:, :, key.size(-2) - query.size(-2) : key.size(-2), : key.size(-2)]
+            if attention_mask is not None:
+                attention_mask = attention_mask.expand(-1, -1, causal_mask.size(2), -1).masked_fill(
+                    ~causal_mask, torch.finfo(query.dtype).min
+                )
+            else:
+                attention_mask = causal_mask
+            attn_output = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask).transpose(1, 2)
+            attn_weight = None
+        else:
+            attn_output, attn_weight = self._attn(query, key, value, registered_causal_mask, attention_mask, head_mask)
+    context_layer = self._merge_heads(attn_output, self.num_heads, self.head_dim)
+
+    attn_output = self.c_proj(context_layer)
+
+    outputs = (attn_output, present)
+    if output_attentions:
+        if self.use_flash_attn and not self.is_fp32:
+            raise ValueError("Cannot output attentions while using flash-attn")
+        else:
+            outputs += (attn_weight,)
+
+    return outputs
+
+
+class QwenModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        self.original_fp16 = model.config.fp16
+        self.original_bf16 = model.config.bf16
+        model.config.bf16 = False
+        model.config.fp16 = False
+        if self.original_fp16 or self.original_bf16:
+            model.to(torch.float32)
+        model.transformer.rotary_emb(2048)
+
+    def __enter__(self):
+        super().__enter__()
+        for block in self._model.transformer.h:
+            block.attn._orig_forward = block.attn.forward
+            block.attn.forward = types.MethodType(_qwen_attention_forward, block.attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for block in self._model.transformer.h:
+            block.attn.forward = block.attn._orig_forward
+        self._model.config.bf16 = self.original_bf16
+        self._model.config.fp16 = self.original_fp16
