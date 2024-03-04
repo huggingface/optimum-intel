@@ -122,9 +122,11 @@ from optimum.intel import OVModelForCausalLM
 model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
 ```
 
-> [!NOTE]
-> `load_in_8bit` is enabled by default for the models larger than 1 billion parameters.
+<Tip warning={true}>
 
+`load_in_8bit` is enabled by default for the models larger than 1 billion parameters.
+
+</Tip>
 
 To apply quantization on both weights and activations, you can use the `OVQuantizer`, more information in the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov#optimization).
 
