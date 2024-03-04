@@ -35,6 +35,8 @@ TESTS_REQUIRE = [
     "timm",
     "invisible-watermark>=0.2.0",
     "auto-gptq",
+    "transformers_stream_generator",
+    "einops",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]

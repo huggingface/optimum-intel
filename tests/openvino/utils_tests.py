@@ -49,7 +49,6 @@ MODEL_NAMES = {
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "hubert": "hf-internal-testing/tiny-random-HubertModel",
     "ibert": "hf-internal-testing/tiny-random-ibert",
-    "jais": "katuni4ka/tiny-random-jais",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "longt5": "hf-internal-testing/tiny-random-longt5",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",

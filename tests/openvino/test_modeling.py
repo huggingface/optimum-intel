@@ -485,7 +485,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt2",
         "gpt_neo",
         "gpt_neox",
-        "jais",
         "llama",
         # "llama_gptq",
         "marian",
@@ -585,6 +584,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_multiple_inputs(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
+        if model_arch == "qwen":
+            self.skipTest("Qwen tokenizer does not support padding")
         model_kwargs = {}
         if model_arch in self.REMOTE_CODE_MODELS:
             model_kwargs = {

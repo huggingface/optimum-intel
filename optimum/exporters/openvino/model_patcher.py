@@ -477,3 +477,16 @@ class QwenModelPatcher(DecoderModelPatcher):
             block.attn.forward = block.attn._orig_forward
         self._model.config.bf16 = self.original_bf16
         self._model.config.fp16 = self.original_fp16
+
+
+class BaichuanModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+        # model has first inference buffers initialization
+        if self._model.lm_head.first_flag:
+            self._model(torch.ones((1, 10), dtype=torch.int64), torch.ones((1, 10), dtype=torch.int64))

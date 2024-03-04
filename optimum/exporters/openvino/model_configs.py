@@ -30,7 +30,13 @@ from optimum.utils.input_generators import (
 )
 from optimum.utils.normalized_config import NormalizedTextConfig
 
-from .model_patcher import ChatGLMModelPatcher, GemmaModelPatcher, MixtralModelPatcher, QwenModelPatcher
+from .model_patcher import (
+    BaichuanModelPatcher,
+    ChatGLMModelPatcher,
+    GemmaModelPatcher,
+    MixtralModelPatcher,
+    QwenModelPatcher,
+)
 
 
 def init_model_configs():
@@ -74,13 +80,10 @@ class BaichaunOpenVINOConfig(TextDecoderOnnxConfig):
         num_layers="num_hidden_layers", num_attention_heads="num_attention_heads", hidden_size="hidden_size"
     )
 
-
-@register_in_tasks_manager("jais", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class JaisOpenVINOConfig(TextDecoderOnnxConfig):
-    DEFAULT_ONNX_OPSET = 13
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
-        num_layers="n_layer", num_attention_heads="n_head", hidden_size="n_embd"
-    )
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return BaichuanModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("qwen2", *["text-generation", "text-generation-with-past"], library_name="transformers")
