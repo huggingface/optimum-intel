@@ -230,7 +230,7 @@ def llama_model_forward(
 class _IPEXLlamaDecoderLayerRef(nn.Module):
     def __init__(self, module, config, distributed=False):
         if is_ipex_version("<=", "2.3.0"):
-            raise ValueError("Only ipex version > 2.3.0 supports linear2SiluMul and linearAdd")
+            raise ImportError("Only ipex version > 2.3.0 supports linear2SiluMul and linearAdd")
 
         from intel_extension_for_pytorch.llm.modules import linear2SiluMul, linearAdd
 

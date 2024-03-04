@@ -65,7 +65,7 @@ def _is_patched_with_ipex(model, task):
     if isinstance(model, torch.jit.ScriptModule):
         for node in model.graph.nodes():
             # Jit will record the codes position so we can check if the node use ipex exporter.
-            if "optimum/exporters/ipex/modeling_utils.py" in node.__str__():
+            if "torch_ipex::rotary_position_embedding" in node.__str__():
                 return True
         return False
     else:
@@ -123,7 +123,7 @@ class IPEXModel(OptimizedModel):
         self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model.to(self._device)
         self.model_save_dir = model_save_dir
-        self.is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
+        self._is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
 
         self.input_names = {
             inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
@@ -285,7 +285,7 @@ class IPEXModel(OptimizedModel):
         # warmup, the first 2 forwards of an IPEX model include some preprocessing steps and
         # the results of the compute are unpredictable
         # TODO : add warmup for IPEX exported model
-        if not self.is_ipex_exported:
+        if not self._is_ipex_exported:
             use_cache = "past_key_values" in self.input_names
             dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
             for _ in range(2):
@@ -409,7 +409,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
 
-        if self.is_ipex_exported:
+        if self._is_ipex_exported:
             self._reorder_cache = _ipex_reorder_cache
         else:
             # Check if _reorder_cache is a static method
@@ -442,7 +442,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         else:
             num_attention_heads = self.normalized_config.num_attention_heads
 
-        if self.is_ipex_exported:
+        if self._is_ipex_exported:
             # Indirect access kv cache has a different data layout compared with most transformers model,
             # see https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/llm.html#indirect-access-kv-cache
             beam_idx_tmp = torch.zeros(

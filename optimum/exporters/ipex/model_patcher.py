@@ -12,8 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import intel_extension_for_pytorch as ipex
-from packaging import version
 from transformers.models.llama.modeling_llama import (
     LlamaAttention,
     LlamaDecoderLayer,
@@ -22,16 +20,14 @@ from transformers.models.llama.modeling_llama import (
     LlamaRMSNorm,
 )
 
+from optimum.intel.utils.import_utils import is_ipex_version
+
 from .modeling_utils import (
     _IPEXLlamaDecoderLayerRef,
     llama_attn_forward,
     llama_layer_norm_forward,
     llama_model_forward,
 )
-
-
-if version.parse(ipex.__version__) > version.parse("2.3.0"):
-    from intel_extension_for_pytorch.llm.modules import ApplyRotaryEmbedding, IndirectAccessKVCache
 
 
 _IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
@@ -66,6 +62,11 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 
 def _patch_llama_model(model):
+    if is_ipex_version("<=", "2.3.0"):
+        raise ImportError("Only ipex version > 2.3.0 supports ApplyRotaryEmbedding and IndirectAccessKVCache")
+
+    from intel_extension_for_pytorch.llm.modules import ApplyRotaryEmbedding, IndirectAccessKVCache
+
     ipex_rope = ApplyRotaryEmbedding(
         model.config.max_position_embeddings,
         model.config.hidden_size // model.config.num_attention_heads,
