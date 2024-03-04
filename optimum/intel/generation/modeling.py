@@ -105,13 +105,13 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
         self.model_dtype = kwargs.get("model_dtype", None)
 
-        logger.warning(
-            f"The class `{self.__class__}` has been depreciated and will be removed in optimum-intel v1.14, please use IPEXModel instead"
-        )
         if isinstance(model, torch.jit.ScriptModule):
             self.input_names = {
                 inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
             }
+            logger.warning(
+                f"The class `{self.__class__}` has been depreciated for TorchScript model, please use IPEXModel instead"
+            )
         else:
             self.input_names = set()
 
