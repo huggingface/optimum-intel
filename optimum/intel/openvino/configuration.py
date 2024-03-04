@@ -179,7 +179,8 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`Union[List[str]]`, *optional*):
             The dataset used for data-aware compression. You can provide your own dataset in a list of string or just use the
-            the one from the list ['wikitext2','c4','c4-new','ptb','ptb-new']
+            the one from the list ['wikitext2','c4','c4-new','ptb','ptb-new'] for LLLMs or
+            ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for SD models
         group_size (`int`, *optional*, defaults to 128):
             The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
         ratio (`float`, *optional*, defaults to 1.0):
@@ -194,6 +195,8 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
             Enables AWQ method to unify weight ranges and improve overall model accuracy.
         ignored_scope (`nncf.IgnoredScope`, *optional*):
             An ignored scope that defined the list of model control flow graph nodes to be ignored during quantization.
+        subset_size (`int`, *optional*, defaults to 128):
+            Number of data samples to calculate activation statistics.
 
     """
 
@@ -208,6 +211,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         all_layers: Optional[bool] = None,
         sensitivity_metric: Optional[str] = None,
         ignored_scope: Optional[dict] = None,
+        subset_size: int = 128,
         **kwargs,
     ):
         self.bits = bits
@@ -219,6 +223,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
         self.ignored_scope = ignored_scope
+        self.subset_size = subset_size
         self.quant_method = "default"  # TODO : enable AWQ after nncf v2.9.0 release
         self.post_init()
 
@@ -231,10 +236,16 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
             raise ValueError("`group_size` must be greater than 0 or equal to -1")
         if self.dataset is not None and isinstance(self.dataset, str):
-            if self.dataset not in ["wikitext2", "c4", "c4-new", "ptb", "ptb-new"]:
+            llm_datasets = ["wikitext2", "c4", "c4-new", "ptb", "ptb-new"]
+            stable_diffusion_datasets = [
+                "conceptual_captions",
+                "laion/220k-GPT4Vision-captions-from-LIVIS",
+                "laion/filtered-wit"
+            ]
+            if self.dataset not in llm_datasets + stable_diffusion_datasets:
                 raise ValueError(
                     f"""You have entered a string value for dataset. You can only choose between
-                    ['wikitext2','c4','c4-new','ptb','ptb-new'], but we found {self.dataset}"""
+                    {llm_datasets} for LLLMs or {stable_diffusion_datasets} for SD models, but we found {self.dataset}"""
                 )
 
         if self.bits not in [4, 8]:

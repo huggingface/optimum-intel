@@ -39,6 +39,7 @@ from transformers import (
 
 from optimum.intel import (
     OVConfig,
+    OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
@@ -233,6 +234,12 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl"),
     )
 
+    SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = (
+        (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
+        (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
+        (OVLatentConsistencyModelPipeline, "latent-consistency", 50, 135),
+    )
+
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
 
     DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
@@ -351,6 +358,40 @@ class OVWeightCompressionTest(unittest.TestCase):
         for i, model in enumerate(models):
             _, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int8[i], num_int8)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
+    def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8):
+        model_id = MODEL_NAMES[model_type]
+        quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", subset_size=5)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
+
+            num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
+            self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
+            self.assertEqual(expected_ov_int8, num_int8)
+            self.assertEqual(0, num_int4)
+
+            model.save_pretrained(tmp_dir)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
+    def test_ovmodel_hybrid_quantization_with_custom_dataset(
+        self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8
+    ):
+        model_id = MODEL_NAMES[model_type]
+        dataset_name = "daspartho/stable-diffusion-prompts"
+        dataset = load_dataset(dataset_name, split="train", streaming=True)
+        quantization_dataset = nncf.Dataset(dataset, lambda x: x["prompt"])
+        model = model_cls.from_pretrained(
+            model_id,
+            export=True,
+            quantization_config=OVWeightQuantizationConfig(
+                bits=8, dataset=quantization_dataset, subset_size=3
+            ),
+        )
+        num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
+        self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
+        self.assertEqual(expected_ov_int8, num_int8)
+        self.assertEqual(0, num_int4)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
     @unittest.mock.patch.dict(

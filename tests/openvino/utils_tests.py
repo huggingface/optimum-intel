@@ -127,8 +127,8 @@ def get_num_quantized_nodes(ov_model):
         if "FakeQuantize" in elem.name:
             num_fake_quantize += 1
         for i in range(elem.get_output_size()):
-            if "8" in elem.get_output_element_type(i).get_type_name():
+            if elem.get_output_element_type(i).get_type_name() in ["i8", "u8"]:
                 num_int8 += 1
-            if "4" in elem.get_output_element_type(i).get_type_name():
+            if elem.get_output_element_type(i).get_type_name() in ["i4", "u4"]:
                 num_int4 += 1
     return num_fake_quantize, num_int8, num_int4

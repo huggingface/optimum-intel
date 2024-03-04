@@ -16,6 +16,9 @@ import copy
 import inspect
 import logging
 import os
+from collections import deque
+from copy import deepcopy
+from datasets import load_dataset
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
@@ -24,6 +27,7 @@ import openvino
 import torch
 import transformers
 from nncf import CompressWeightsMode, IgnoredScope, NNCFConfig, SensitivityMetric
+from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters
 from nncf.torch import create_compressed_model, register_default_init_args, register_module
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
@@ -590,4 +594,104 @@ def _weight_only_quantization(
         # awq=config.quant_method == "awq", # TODO : remove and add it back once nncf v2.9.0
         ignored_scope=ignored_scope,
         dataset=dataset,
+        subset_size=config.subset_size,
     )
+
+
+def _get_operation_const_op(operation, const_port_id: int):
+    node = operation.input_value(const_port_id).get_node()
+    queue = deque([node])
+    constant_node = None
+    allowed_propagation_types_list = ["Convert", "FakeQuantize", "Reshape"]
+
+    while len(queue) != 0:
+        curr_node = queue.popleft()
+        if curr_node.get_type_name() == "Constant":
+            constant_node = curr_node
+            break
+        if len(curr_node.inputs()) == 0:
+            break
+        if curr_node.get_type_name() in allowed_propagation_types_list:
+            queue.append(curr_node.input_value(0).get_node())
+
+    return constant_node
+
+
+def _is_embedding(node) -> bool:
+    allowed_types_list = ["f16", "f32", "f64"]
+    const_port_id = 0
+    input_tensor = node.input_value(const_port_id)
+    if input_tensor.get_element_type().get_type_name() in allowed_types_list:
+        const_node = _get_operation_const_op(node, const_port_id)
+        if const_node is not None:
+            return True
+
+    return False
+
+
+def _collect_ops_with_weights(model):
+    ops_with_weights = []
+    for op in model.get_ops():
+        if op.get_type_name() == "MatMul":
+            constant_node_0 = _get_operation_const_op(op, const_port_id=0)
+            constant_node_1 = _get_operation_const_op(op, const_port_id=1)
+            if constant_node_0 or constant_node_1:
+                ops_with_weights.append(op.get_friendly_name())
+        if op.get_type_name() == "Gather" and _is_embedding(op):
+            ops_with_weights.append(op.get_friendly_name())
+
+    return ops_with_weights
+
+
+def get_stable_diffusion_dataset(
+    dataset_name: str, nsamples: int = 50, seed: int = 0, text_column: str = "caption"
+) -> nncf.Dataset:
+    if dataset_name not in [
+            "conceptual_captions",
+            "laion/220k-GPT4Vision-captions-from-LIVIS",
+            "laion/filtered-wit"
+        ]:
+        raise ValueError(
+            f"""You have entered a string value for dataset. You can only choose between
+             ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'],
+             but we found {dataset_name}"""
+        )
+
+    data = load_dataset(dataset_name, split="train", streaming=True).shuffle(seed=seed).take(nsamples)
+    dataset = [batch[text_column] for batch in data]
+    return nncf.Dataset(dataset)
+
+
+def _hybrid_quantization(
+    model: openvino.runtime.Model, quantization_config: Union[OVWeightQuantizationConfig, Dict]
+):
+    dataset = quantization_config.dataset
+    wc_ignored_scope = deepcopy(quantization_config.ignored_scope)
+
+    if isinstance(wc_ignored_scope, dict):
+        wc_ignored_scope["types"] = wc_ignored_scope.get("types", []) + ["Convolution"]
+    else:
+        assert wc_ignored_scope is None
+        wc_ignored_scope = {"types": ["Convolution"]}
+
+    ops_to_compress = _collect_ops_with_weights(model)
+    ptq_ignored_scope = deepcopy(quantization_config.ignored_scope)
+    if isinstance(ptq_ignored_scope, dict):
+        ptq_ignored_scope["names"] = ptq_ignored_scope.get("names", []) + ops_to_compress
+    else:
+        assert ptq_ignored_scope is None
+        ptq_ignored_scope = {"names": ops_to_compress}
+
+    quantization_config.dataset = None  # Apply Weight Compression without dataset
+    quantization_config.ignored_scope = wc_ignored_scope
+    compressed_model = _weight_only_quantization(model, quantization_config)
+
+    quantized_model = nncf.quantize(
+        compressed_model,
+        dataset,
+        model_type=nncf.ModelType.TRANSFORMER,
+        ignored_scope=nncf.IgnoredScope(**ptq_ignored_scope),
+        advanced_parameters=nncf.AdvancedQuantizationParameters(AdvancedSmoothQuantParameters(matmul=-1)),
+        subset_size=quantization_config.subset_size,
+    )
+    return quantized_model
