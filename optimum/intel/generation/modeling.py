@@ -110,7 +110,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
                 inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
             }
             logger.warning(
-                f"The class `{self.__class__}` has been depreciated for TorchScript model, please use IPEXModel instead"
+                f"The class `{self.__class__}` has been depreciated for TorchScript model, please use `IPEXModelForCausalLM` instead"
             )
         else:
             self.input_names = set()
