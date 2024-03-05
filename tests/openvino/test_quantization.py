@@ -158,10 +158,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 44, 44),
     )
 
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 365),)
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 385),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 86),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 150),)
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS = (
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 14, 136),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 14, 50),
     )
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = (
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 44, 44),
