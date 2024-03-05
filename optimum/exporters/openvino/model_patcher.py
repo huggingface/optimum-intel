@@ -273,6 +273,7 @@ class GemmaModelPatcher(DecoderModelPatcher):
         super().__enter__()
 
         # init inv_freq for torchscript tracing
+        # https://github.com/huggingface/transformers/blob/ed74d97871468f3a4695ede50abdc0b55717a84d/src/transformers/models/gemma/modeling_gemma.py#L108
         for layer in self._model.model.layers:
             if layer.self_attn.rotary_emb.inv_freq is None:
                 rotary_emb = layer.self_attn.rotary_emb
