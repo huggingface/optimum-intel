@@ -30,7 +30,7 @@ MODEL_NAMES = {
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "mistral": "echarlaix/tiny-random-mistral",
-    "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "llama": "Jiqing/tiny_random_llama2",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
 }
 

@@ -41,7 +41,7 @@ MODEL_NAMES = {
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
-    "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "llama": "Jiqing/tiny_random_llama2",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
 }

@@ -66,7 +66,7 @@ MODEL_NAMES = {
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
-    "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "llama": "Jiqing/tiny_random_llama2",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "mistral": "echarlaix/tiny-random-mistral",
