@@ -35,6 +35,7 @@ from diffusers import (
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available
 from huggingface_hub import snapshot_download
+from nncf import Dataset
 from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
@@ -341,13 +342,13 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     def prepare_inputs(
         self,
-        dataset: "Dataset",
+        dataset: Dataset,
         subset_size: int,
         num_inference_steps: int,
         height: Optional[int] = 512,
         width: Optional[int] = 512,
         **kwargs,
-    ) -> "Dataset":
+    ) -> Dataset:
         self.compile()
         calibration_data = []
 
@@ -359,9 +360,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             if len(calibration_data) >= subset_size:
                 break
         self.unet.request = self.unet.request.request
-
-        from nncf import Dataset
-
         return Dataset(calibration_data)
 
     @classmethod

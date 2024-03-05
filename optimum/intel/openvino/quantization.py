@@ -18,7 +18,6 @@ import logging
 import os
 from collections import deque
 from copy import deepcopy
-from datasets import load_dataset
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
@@ -26,6 +25,7 @@ import nncf
 import openvino
 import torch
 import transformers
+from datasets import load_dataset
 from nncf import CompressWeightsMode, IgnoredScope, NNCFConfig, SensitivityMetric
 from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters
 from nncf.torch import create_compressed_model, register_default_init_args, register_module
@@ -594,7 +594,7 @@ def _weight_only_quantization(
         # awq=config.quant_method == "awq", # TODO : remove and add it back once nncf v2.9.0
         ignored_scope=ignored_scope,
         dataset=dataset,
-        subset_size=config.subset_size,
+        # subset_size=config.subset_size, # TODO : enable from nncf v2.9.0
     )
 
 
