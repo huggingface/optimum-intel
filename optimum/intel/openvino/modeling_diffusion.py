@@ -306,7 +306,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             supported_pipelines = (
                 OVStableDiffusionPipeline,
                 OVStableDiffusionXLPipeline,
-                OVLatentConsistencyModelPipeline
+                OVLatentConsistencyModelPipeline,
             )
             if not isinstance(sd_model, supported_pipelines):
                 raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
@@ -316,14 +316,18 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
             if isinstance(quantization_config.dataset, str):
                 from .quantization import get_stable_diffusion_dataset
+
                 dataset_name = quantization_config.dataset
                 num_samples = math.ceil(quantization_config.subset_size / num_inference_steps)
                 quantization_config.dataset = get_stable_diffusion_dataset(dataset_name, num_samples)
 
-            unet_inputs = sd_model.prepare_inputs(quantization_config.dataset, quantization_config.subset_size, num_inference_steps)
+            unet_inputs = sd_model.prepare_inputs(
+                quantization_config.dataset, quantization_config.subset_size, num_inference_steps
+            )
             quantization_config.dataset = unet_inputs
 
             from .quantization import _hybrid_quantization
+
             unet = _hybrid_quantization(sd_model.unet.model, quantization_config)
 
         return cls(
@@ -348,6 +352,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         calibration_data = []
 
         from .quantization import InferRequestWrapper
+
         self.unet.request = InferRequestWrapper(self.unet.request, calibration_data)
         for prompt in dataset.get_inference_data():
             _ = self.__call__(prompt, num_inference_steps=num_inference_steps, height=height, width=width)
@@ -356,8 +361,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         self.unet.request = self.unet.request.request
 
         from nncf import Dataset
-        return Dataset(calibration_data)
 
+        return Dataset(calibration_data)
 
     @classmethod
     def _from_transformers(

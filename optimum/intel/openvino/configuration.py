@@ -240,7 +240,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
             stable_diffusion_datasets = [
                 "conceptual_captions",
                 "laion/220k-GPT4Vision-captions-from-LIVIS",
-                "laion/filtered-wit"
+                "laion/filtered-wit",
             ]
             if self.dataset not in llm_datasets + stable_diffusion_datasets:
                 raise ValueError(

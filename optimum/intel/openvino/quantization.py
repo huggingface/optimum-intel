@@ -646,11 +646,7 @@ def _collect_ops_with_weights(model):
 def get_stable_diffusion_dataset(
     dataset_name: str, nsamples: int = 50, seed: int = 0, text_column: str = "caption"
 ) -> nncf.Dataset:
-    if dataset_name not in [
-            "conceptual_captions",
-            "laion/220k-GPT4Vision-captions-from-LIVIS",
-            "laion/filtered-wit"
-        ]:
+    if dataset_name not in ["conceptual_captions", "laion/220k-GPT4Vision-captions-from-LIVIS", "laion/filtered-wit"]:
         raise ValueError(
             f"""You have entered a string value for dataset. You can only choose between
              ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'],
@@ -662,9 +658,7 @@ def get_stable_diffusion_dataset(
     return nncf.Dataset(dataset)
 
 
-def _hybrid_quantization(
-    model: openvino.runtime.Model, quantization_config: Union[OVWeightQuantizationConfig, Dict]
-):
+def _hybrid_quantization(model: openvino.runtime.Model, quantization_config: Union[OVWeightQuantizationConfig, Dict]):
     dataset = quantization_config.dataset
     wc_ignored_scope = deepcopy(quantization_config.ignored_scope)
 
