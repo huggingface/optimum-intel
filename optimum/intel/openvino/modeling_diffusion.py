@@ -312,7 +312,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             if not isinstance(sd_model, supported_pipelines):
                 raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
 
-            num_inference_steps = 4 if isinstance(cls, OVLatentConsistencyModelPipeline) else 50
+            num_inference_steps = 4 if isinstance(sd_model, OVLatentConsistencyModelPipeline) else 50
             quantization_config.dataset = dataset
 
             if isinstance(quantization_config.dataset, str):
