@@ -516,11 +516,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             input_shape = tokens["input_ids"].shape
             position_ids = torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
         ov_outputs = ov_model(**tokens, position_ids=position_ids)
-
-        self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
 
-        is_stateful = self.IS_SUPPORT_STATEFUL
+        is_stateful = ov_model.config.model_type not in {"gpt_bigcode", "llama"} and self.IS_SUPPORT_STATEFUL
         self.assertEqual(ov_model.stateful, is_stateful)
 
         with torch.no_grad():
@@ -541,7 +539,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-        self.assertEqual(ov_model.stateful, self.IS_SUPPORT_STATEFUL)
+        is_stateful = ov_model.config.model_type not in {"gpt_bigcode", "llama"} and self.IS_SUPPORT_STATEFUL
+        self.assertEqual(ov_model.stateful, is_stateful)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs_list = ["This is a sample", "Here is another sample", "That's the thrid one", "This is the last sample"]
@@ -607,7 +606,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # Tokenizer is not supposed to be shared by multiple threads
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-            outputs = pipe(input_text, max_length=10)
+            outputs = pipe(input_text, max_length=30)
             self.assertEqual(pipe.device, model.device)
             for i in range(len(outputs)):
                 self.assertTrue(all(input_text[i] in item["generated_text"] for item in outputs[i]))

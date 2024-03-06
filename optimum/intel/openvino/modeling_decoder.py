@@ -338,7 +338,6 @@ class OVBaseDecoderModel(OVModel):
         if self.compiled_model is None:
             super().compile()
             self.compiled_model = self.request
-            # self.request = self.request.create_infer_request()
 
     def _make_stateful(self):
         patch_stateful(self.config, self.model)
@@ -358,15 +357,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
     def generate(self, *args, **kwargs):
         self.compile()
-        infer_context = [self.compiled_model.create_infer_request()]
-        kwargs["infer_context"] = infer_context
+        if kwargs.get("infer_request") is None:
+            infer_context = [self.compiled_model.create_infer_request()]
+            kwargs["infer_context"] = infer_context
         return super().generate(*args, **kwargs)
-
-    def __call__(self, *args, **kwargs):
-        self.compile()
-        infer_context = [self.compiled_model.create_infer_request()]
-        kwargs["infer_context"] = infer_context
-        return super().__call__(*args, **kwargs)
 
     @add_start_docstrings_to_model_forward(
         INPUTS_DOCSTRING.format("batch_size, sequence_length")
@@ -482,7 +476,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # for stateful models, infer request is created in generate and __call_ methods and passed in the cycle via past_key_values param
             infer_request = past_key_values[1]
         else:
-            if infer_context[0] is not None:
+            if infer_context is not None:
                 infer_request = infer_context[
                     0
                 ]  # Use passed inference request if provided in kwargs, create new one overwise
@@ -501,7 +495,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if not self.stateful:
             if self.use_cache:
                 # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
-                past_key_values = tuple(infer_context[0].get_tensor(key).data for key in self.key_value_output_names)
+                past_key_values = tuple(infer_request.get_tensor(key).data for key in self.key_value_output_names)
                 if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
                     # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
                     past_key_values = tuple(
@@ -690,9 +684,6 @@ class OVBloomForCausalLM(OVModelForCausalLM):
             batch_size = beam_idx.shape[0]
             indices = np.array(range(batch_size * self.config.num_attention_heads))
             indices = indices.reshape([batch_size, self.config.num_attention_heads])
-            # self.next_beam_idx = np.take(indices, beam_idx, 0).flatten()
-            # return past_key_values
-            # print("_reorder_cache output",np.take(indices, beam_idx, 0).flatten())
             return ((np.take(indices, beam_idx, 0).flatten()), past_key_values[1])
         else:
             standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
