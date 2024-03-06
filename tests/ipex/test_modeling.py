@@ -67,6 +67,7 @@ MODEL_NAMES = {
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "llama2": "Jiqing/tiny_random_llama2",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "mistral": "echarlaix/tiny-random-mistral",
@@ -209,6 +210,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "gpt_neo",
         "gpt_neox",
         "llama",
+        "llama2",
         "mistral",
         # "phi",
         "mpt",
@@ -226,7 +228,9 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         self.assertTrue(ipex_model.use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer(
-            "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
+            "This is a sample",
+            return_tensors="pt",
+            return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
         )
         position_ids = None
         if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
