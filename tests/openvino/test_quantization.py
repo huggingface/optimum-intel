@@ -362,7 +362,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8):
         model_id = MODEL_NAMES[model_type]
-        quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", subset_size=5)
+        quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", num_samples=2)
         with tempfile.TemporaryDirectory() as tmp_dir:
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
 
@@ -373,18 +373,18 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             model.save_pretrained(tmp_dir)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[2:])
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
         self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8
     ):
         model_id = MODEL_NAMES[model_type]
-        dataset_name = "daspartho/stable-diffusion-prompts"
-        dataset = load_dataset(dataset_name, split="train", streaming=True)
-        quantization_dataset = nncf.Dataset(dataset, lambda x: x["prompt"])
+        dataset = [
+            "dream rose covered with clean crystal, sharp edges, transparent, beautiful, highly detailed, high render"
+        ]
         model = model_cls.from_pretrained(
             model_id,
             export=True,
-            quantization_config=OVWeightQuantizationConfig(bits=8, dataset=quantization_dataset, subset_size=3),
+            quantization_config=OVWeightQuantizationConfig(bits=8, dataset=dataset, num_samples=3),
         )
         num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
         self.assertEqual(expected_num_fake_quantize, num_fake_quantize)

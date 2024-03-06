@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import shutil
+from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
 from typing import Any, Dict, List, Optional, Union
@@ -35,7 +36,6 @@ from diffusers import (
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available
 from huggingface_hub import snapshot_download
-from nncf import Dataset
 from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
@@ -276,17 +276,15 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                     kwargs[name] = load_method(new_model_save_dir)
 
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
-
-        dataset = None
-        if quantization_config:
-            dataset = quantization_config.dataset
-            quantization_config.dataset = None  # apply weight compression without dataset
-
+        weight_quantization_config = deepcopy(quantization_config)
         unet_path = new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name
-        if quantization_config and dataset is None:
-            unet = cls.load_model(unet_path, quantization_config)
-        else:
+        if weight_quantization_config is not None and weight_quantization_config.dataset is not None:
+            # load the UNet model uncompressed to apply hybrid quantization further
             unet = cls.load_model(unet_path)
+            # Apply weights compression to other `components` without dataset
+            weight_quantization_config.dataset = None
+        else:
+            unet = cls.load_model(unet_path, quantization_config)
 
         components = {
             "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
@@ -296,12 +294,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         }
 
         for key, value in components.items():
-            components[key] = cls.load_model(value, quantization_config) if value.is_file() else None
+            components[key] = cls.load_model(value, weight_quantization_config) if value.is_file() else None
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
-        if quantization_config and dataset is not None:
+        if quantization_config and quantization_config.dataset is not None:
             sd_model = cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
 
             supported_pipelines = (
@@ -313,23 +311,23 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
 
             num_inference_steps = 4 if isinstance(sd_model, OVLatentConsistencyModelPipeline) else 50
-            quantization_config.dataset = dataset
+            nsamples = quantization_config.num_samples if quantization_config.num_samples else 200
+            dataset = deepcopy(quantization_config.dataset)
 
-            if isinstance(quantization_config.dataset, str):
+            if isinstance(dataset, str):
                 from .quantization import get_stable_diffusion_dataset
 
-                dataset_name = quantization_config.dataset
-                num_samples = math.ceil(quantization_config.subset_size / num_inference_steps)
-                quantization_config.dataset = get_stable_diffusion_dataset(dataset_name, num_samples)
+                num_unet_runs = math.ceil(nsamples / num_inference_steps)
+                dataset = get_stable_diffusion_dataset(dataset, num_unet_runs)
 
-            unet_inputs = sd_model.prepare_inputs(
-                quantization_config.dataset, quantization_config.subset_size, num_inference_steps
-            )
-            quantization_config.dataset = unet_inputs
+            unet_inputs = sd_model._prepare_unet_inputs(dataset, nsamples, num_inference_steps)
 
             from .quantization import _hybrid_quantization
 
-            unet = _hybrid_quantization(sd_model.unet.model, quantization_config)
+            hybrid_quantization_config = deepcopy(quantization_config)
+            hybrid_quantization_config.dataset = unet_inputs
+            hybrid_quantization_config.num_samples = nsamples
+            unet = _hybrid_quantization(sd_model.unet.model, hybrid_quantization_config)
 
         return cls(
             unet=unet,
@@ -340,27 +338,26 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             **kwargs,
         )
 
-    def prepare_inputs(
+    def _prepare_unet_inputs(
         self,
-        dataset: Dataset,
-        subset_size: int,
+        dataset: List[str],
+        num_samples: int,
         num_inference_steps: int,
         height: Optional[int] = 512,
         width: Optional[int] = 512,
         **kwargs,
-    ) -> Dataset:
+    ) -> Dict[str, Any]:
         self.compile()
         calibration_data = []
 
         from .quantization import InferRequestWrapper
 
         self.unet.request = InferRequestWrapper(self.unet.request, calibration_data)
-        for prompt in dataset.get_inference_data():
+        for prompt in dataset:
             _ = self.__call__(prompt, num_inference_steps=num_inference_steps, height=height, width=width)
-            if len(calibration_data) >= subset_size:
-                break
+
         self.unet.request = self.unet.request.request
-        return Dataset(calibration_data)
+        return calibration_data[:num_samples]
 
     @classmethod
     def _from_transformers(

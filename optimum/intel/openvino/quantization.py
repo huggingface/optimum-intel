@@ -19,7 +19,7 @@ import os
 from collections import deque
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import nncf
 import openvino
@@ -554,7 +554,7 @@ class OVQuantizer(OptimumQuantizer):
 
 def _weight_only_quantization(
     model: openvino.runtime.Model, quantization_config: Union[OVWeightQuantizationConfig, Dict]
-):
+) -> openvino.runtime.Model:
     config = quantization_config
     if isinstance(config, dict):
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
@@ -568,7 +568,8 @@ def _weight_only_quantization(
 
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        dataset = get_dataset(config.dataset, tokenizer, seqlen=32)
+        nsamples = config.num_samples if config.num_samples else 128
+        dataset = get_dataset(config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
         dataset = prepare_dataset(dataset)
 
     sensitivity_metric = None
@@ -594,7 +595,7 @@ def _weight_only_quantization(
         # awq=config.quant_method == "awq", # TODO : remove and add it back once nncf v2.9.0
         ignored_scope=ignored_scope,
         dataset=dataset,
-        # subset_size=config.subset_size, # TODO : enable from nncf v2.9.0
+        # subset_size=config.num_samples if config.num_samples else 128, # TODO : enable from nncf v2.9.0
     )
 
 
@@ -645,7 +646,7 @@ def _collect_ops_with_weights(model):
 
 def get_stable_diffusion_dataset(
     dataset_name: str, nsamples: int = 50, seed: int = 0, text_column: str = "caption"
-) -> nncf.Dataset:
+) -> List[str]:
     if dataset_name not in ["conceptual_captions", "laion/220k-GPT4Vision-captions-from-LIVIS", "laion/filtered-wit"]:
         raise ValueError(
             f"""You have entered a string value for dataset. You can only choose between
@@ -655,37 +656,46 @@ def get_stable_diffusion_dataset(
 
     data = load_dataset(dataset_name, split="train", streaming=True).shuffle(seed=seed).take(nsamples)
     dataset = [batch[text_column] for batch in data]
-    return nncf.Dataset(dataset)
+    return dataset
 
 
-def _hybrid_quantization(model: openvino.runtime.Model, quantization_config: Union[OVWeightQuantizationConfig, Dict]):
-    dataset = quantization_config.dataset
-    wc_ignored_scope = deepcopy(quantization_config.ignored_scope)
+def _hybrid_quantization(
+    model: openvino.runtime.Model, quantization_config: OVWeightQuantizationConfig
+) -> openvino.runtime.Model:
+    """
+    Quantize a model in hybrid mode with NNCF which means that we quantize:
+    weights of MatMul and Embedding layers and activations of other layers.
+    The optimization specifications defined in `quantization_config`.
 
-    if isinstance(wc_ignored_scope, dict):
-        wc_ignored_scope["types"] = wc_ignored_scope.get("types", []) + ["Convolution"]
-    else:
-        assert wc_ignored_scope is None
-        wc_ignored_scope = {"types": ["Convolution"]}
+    Args:
+        model (`openvino.runtime.Model`):
+            The OpenVINO Runtime model for applying hybrid quantization.
+        quantization_config (`OVWeightQuantizationConfig`):
+            The configuration containing the parameters related to quantization.
+    Returns:
+        The OpenVINO Runtime model with applied hybrid quantization.
+    """
+    ignored_scope = quantization_config.ignored_scope if quantization_config.ignored_scope is not None else {}
 
     ops_to_compress = _collect_ops_with_weights(model)
-    ptq_ignored_scope = deepcopy(quantization_config.ignored_scope)
-    if isinstance(ptq_ignored_scope, dict):
-        ptq_ignored_scope["names"] = ptq_ignored_scope.get("names", []) + ops_to_compress
-    else:
-        assert ptq_ignored_scope is None
-        ptq_ignored_scope = {"names": ops_to_compress}
+    ptq_ignored_scope = deepcopy(ignored_scope)
+    ptq_ignored_scope["names"] = ignored_scope.get("names", []) + ops_to_compress
 
-    quantization_config.dataset = None  # Apply Weight Compression without dataset
-    quantization_config.ignored_scope = wc_ignored_scope
-    compressed_model = _weight_only_quantization(model, quantization_config)
+    wc_quantization_config = deepcopy(quantization_config)
+    wc_quantization_config.ignored_scope = ignored_scope
+    wc_quantization_config.ignored_scope["types"] = ignored_scope.get("types", []) + ["Convolution"]
+    # Apply Weight Compression without dataset
+    wc_quantization_config.dataset = None
+    compressed_model = _weight_only_quantization(model, wc_quantization_config)
 
+    subset_size = quantization_config.num_samples if quantization_config.num_samples else 200
     quantized_model = nncf.quantize(
-        compressed_model,
-        dataset,
+        model=compressed_model,
+        calibration_dataset=nncf.Dataset(quantization_config.dataset),
         model_type=nncf.ModelType.TRANSFORMER,
         ignored_scope=nncf.IgnoredScope(**ptq_ignored_scope),
+        # The SQ algo should be disabled for MatMul nodes because their weights are already compressed
         advanced_parameters=nncf.AdvancedQuantizationParameters(AdvancedSmoothQuantParameters(matmul=-1)),
-        subset_size=quantization_config.subset_size,
+        subset_size=subset_size,
     )
     return quantized_model
