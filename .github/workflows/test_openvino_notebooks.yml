@@ -51,6 +51,14 @@ jobs:
       run: |
         python -m pytest --nbval-lax notebooks/openvino/optimum_openvino_inference.ipynb  notebooks/openvino/question_answering_quantization.ipynb
 
+    - name: Install dependencies
+      run: |
+        pip install -r examples/openvino/audio-classification/requirements.txt
+        pip install -r examples/openvino/image-classification/requirements.txt
+        pip install -r examples/openvino/question-answering/requirements.txt
+        pip install -r examples/openvino/stable-diffusion/requirements.txt
+        pip install -r examples/openvino/text-classification/requirements.txt
+
     - name: Test examples
       run: |
         pip install datasets==2.4.0  &&  python run_image_classification.py     --model_name_or_path nateraw/vit-base-beans     --dataset_name beans     --max_train_samples 50   --max_eval_samples 10  --remove_unused_columns False     --do_train     --do_eval     --learning_rate 2e-5     --num_train_epochs 1     --logging_strategy steps     --logging_steps 10     --evaluation_strategy epoch     --save_strategy epoch     --save_total_limit 3     --seed 1337     --output_dir /tmp/beans_outputs/
