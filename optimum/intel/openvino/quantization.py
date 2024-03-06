@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import inspect
 import logging
 import os
@@ -44,7 +45,7 @@ from ...exporters.openvino.stateful import ensure_export_task_support_stateful, 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import DATASETS_IMPORT_ERROR, is_datasets_available
 from ..utils.modeling_utils import get_model_device
-from .configuration import OVConfig, OVWeightQuantizationConfig
+from .configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     MAX_ONNX_OPSET,
@@ -87,11 +88,14 @@ class InferRequestWrapper:
         self.data_cache = data_cache
 
     def __call__(self, *args, **kwargs):
-        self.data_cache.append(*args)
+        # If __call__ is invoked then self.request must be an instance of CompiledModel
+        signature = inspect.signature(self.request)
+        bound_args = signature.bind(*args, **kwargs).arguments
+        self.data_cache.append(copy.deepcopy(bound_args["inputs"]))
         return self.request(*args, **kwargs)
 
     def infer(self, inputs: Any = None, share_inputs: bool = False):
-        self.data_cache.append(inputs)
+        self.data_cache.append(copy.deepcopy(inputs))
         return self.request.infer(inputs, share_inputs)
 
     def start_async(
@@ -102,7 +106,7 @@ class InferRequestWrapper:
         *,
         shared_memory: Any = None,
     ):
-        self.data_cache.append(inputs)
+        self.data_cache.append(copy.deepcopy(inputs))
         self.request.infer(inputs, share_inputs, share_outputs=True)
 
     def wait(self):
@@ -231,8 +235,11 @@ class OVQuantizer(OptimumQuantizer):
             )
         ov_config = ov_config or quantization_config
 
-        if ov_config is not None and not isinstance(ov_config, OVConfig):
-            raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
+        if ov_config is not None:
+            if not isinstance(ov_config, OVConfig):
+                raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
+            elif ov_config.compression is None:
+                ov_config.compression = DEFAULT_QUANTIZATION_CONFIG
 
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
@@ -351,7 +358,7 @@ class OVQuantizer(OptimumQuantizer):
             logger.info(
                 "No configuration describing the quantization process was provided, a default OVConfig will be generated."
             )
-            ov_config = OVConfig()
+            ov_config = OVConfig(compression=DEFAULT_QUANTIZATION_CONFIG)
         onnx_file_name = (
             ONNX_WEIGHTS_NAME
             if file_name is None and ov_config.save_onnx_model

@@ -89,7 +89,7 @@ from optimum.exporters.onnx import OnnxConfig
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_transformers_version
-from .configuration import OVConfig
+from .configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
 from .quantization import OVDataLoader
 from .training_args import OVTrainingArguments
 from .utils import (
@@ -225,37 +225,41 @@ class OVTrainer(Trainer):
             self.teacher.eval()
         self.compression_controller = None
 
-        if self.ov_config is not None and self.args.do_train:
-            self._set_task()
-            train_dataloader = self.get_train_dataloader()
-            model_inputs = next(iter(train_dataloader))
-            for label_name in self.label_names:
-                model_inputs.pop(label_name)
-            force_batch_one = self._is_pruning_enabled()
-            self.ov_config.add_input_info(model_inputs, force_batch_one)
-            nncf_config = NNCFConfig.from_dict(self.ov_config.__dict__)
-            nncf_config.register_extra_structs(
-                [
-                    QuantizationRangeInitArgs(OVDataLoader(train_dataloader)),
-                    BNAdaptationInitArgs(OVDataLoader(train_dataloader)),
-                ]
-            )
+        if self.ov_config is not None:
+            if self.ov_config.compression is None:
+                self.ov_config.compression = DEFAULT_QUANTIZATION_CONFIG
 
-            # Configure NNCF logging
-            # Disable nncf logging to stdout except error
-            # but to file nncf_output.log
-            nncf_config["log_dir"] = args.output_dir
-            nncf_log_file_handler = logging.logging.FileHandler(os.path.join(args.output_dir, NNCF_LOG_FILE_NAME))
-            nncf_log_file_handler.setFormatter(logging.logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
-            nncf_logger.addHandler(nncf_log_file_handler)
-            set_log_level(logging.ERROR)
-            nncf_logger.setLevel(logging.INFO)
-            nncf_log_file_handler.setLevel(logging.INFO)
+            if self.args.do_train:
+                self._set_task()
+                train_dataloader = self.get_train_dataloader()
+                model_inputs = next(iter(train_dataloader))
+                for label_name in self.label_names:
+                    model_inputs.pop(label_name)
+                force_batch_one = self._is_pruning_enabled()
+                self.ov_config.add_input_info(model_inputs, force_batch_one)
+                nncf_config = NNCFConfig.from_dict(self.ov_config.__dict__)
+                nncf_config.register_extra_structs(
+                    [
+                        QuantizationRangeInitArgs(OVDataLoader(train_dataloader)),
+                        BNAdaptationInitArgs(OVDataLoader(train_dataloader)),
+                    ]
+                )
 
-            self.compression_controller, self.model = create_compressed_model(self.model, nncf_config)
-            self.model_wrapped = self.model
-            # TODO : To deprecate once support transformers > 4.30.0
-            self.deepspeed = None
+                # Configure NNCF logging
+                # Disable nncf logging to stdout except error
+                # but to file nncf_output.log
+                nncf_config["log_dir"] = args.output_dir
+                nncf_log_file_handler = logging.logging.FileHandler(os.path.join(args.output_dir, NNCF_LOG_FILE_NAME))
+                nncf_log_file_handler.setFormatter(logging.logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+                nncf_logger.addHandler(nncf_log_file_handler)
+                set_log_level(logging.ERROR)
+                nncf_logger.setLevel(logging.INFO)
+                nncf_log_file_handler.setLevel(logging.INFO)
+
+                self.compression_controller, self.model = create_compressed_model(self.model, nncf_config)
+                self.model_wrapped = self.model
+                # TODO : To deprecate once support transformers > 4.30.0
+                self.deepspeed = None
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
