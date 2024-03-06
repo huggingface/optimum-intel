@@ -87,15 +87,25 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         compile: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         self._internal_dict = config
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {}
-        self._model_save_dir = (
-            Path(model_save_dir.name) if isinstance(model_save_dir, TemporaryDirectory) else model_save_dir
-        )
+
+        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
+        # would end-up removing the directory containing the underlying OpenVINO model
+        self._model_save_dir_tempdirectory_instance = None
+        if isinstance(model_save_dir, TemporaryDirectory):
+            self._model_save_dir_tempdirectory_instance = model_save_dir
+            self._model_save_dir = Path(model_save_dir.name)
+        elif isinstance(model_save_dir, str):
+            self._model_save_dir = Path(model_save_dir)
+        else:
+            self._model_save_dir = model_save_dir
+
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
         self.unet = OVModelUnet(unet, self)
         self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
@@ -140,6 +150,10 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
         self._internal_dict.pop("vae", None)
 
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
@@ -176,6 +190,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             self.tokenizer.save_pretrained(save_directory / "tokenizer")
         if self.tokenizer_2 is not None:
             self.tokenizer_2.save_pretrained(save_directory / "tokenizer_2")
+
+        self._save_openvino_config(save_directory)
 
     @classmethod
     def _from_pretrained(
@@ -257,10 +273,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 else:
                     kwargs[name] = load_method(new_model_save_dir)
 
-        # Give default quantization config if not provided and load_in_8bit=True
-        if load_in_8bit:
-            quantization_config = quantization_config or {"bits": 8}
-
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
         unet = cls.load_model(
             new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name, quantization_config
         )
@@ -278,7 +291,14 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
-        return cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
+        return cls(
+            unet=unet,
+            config=config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **components,
+            **kwargs,
+        )
 
     @classmethod
     def _from_transformers(

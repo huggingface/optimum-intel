@@ -16,10 +16,12 @@
 
 import tempfile
 import unittest
+from collections import defaultdict
 from functools import partial
 
 import evaluate
 import numpy as np
+import torch
 from datasets import load_dataset
 from parameterized import parameterized
 import openvino.runtime as ov
@@ -30,6 +32,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForTokenClassification,
     AutoTokenizer,
+    AutoProcessor,
     TrainingArguments,
     default_data_collator,
 )
@@ -45,6 +48,7 @@ from optimum.intel import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
+    OVModelForSpeechSeq2Seq,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
     OVQuantizer,
@@ -52,8 +56,8 @@ from optimum.intel import (
     OVWeightQuantizationConfig,
 )
 
-
-from optimum.intel.openvino.configuration import INT8_WEIGHT_COMPRESSION_CONFIG
+from optimum.intel.openvino.configuration import INT8_WEIGHT_COMPRESSION_CONFIG, DEFAULT_QUANTIZATION_CONFIG
+from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version
 from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
 
@@ -106,9 +110,8 @@ class OVQuantizerTest(unittest.TestCase):
             self.assertTrue("logits" in outputs)
 
             # Verify that that the configuration is correctly saved and loaded
-            expected_config = OVConfig()
             loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertEqual(expected_config.to_dict()["compression"], loaded_config.to_dict()["compression"])
+            self.assertEqual(DEFAULT_QUANTIZATION_CONFIG, loaded_config.to_dict()["compression"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
@@ -155,7 +158,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     )
 
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 64, 365),)
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 6, 379),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 388),)
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS = (
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 16, 136),
     )
@@ -231,6 +234,8 @@ class OVWeightCompressionTest(unittest.TestCase):
     )
 
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
+
+    DEFAULT_INT4_CONFIG = {"bits": 4, "sym": True, "group_size": 64, "all_layers": True}
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_automodel_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
@@ -331,6 +336,8 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=False)
+        self.assertEqual(model._openvino_config.quantization_config.bits, 8)
+        self.assertEqual(model._openvino_config.dtype, "int8")
 
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
@@ -346,12 +353,13 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(expected_ov_int8[i], num_int8)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
+    @unittest.mock.patch.dict(
+        "optimum.intel.openvino.configuration._DEFAULT_4BIT_CONFIGS", {"facebook/opt-125m": DEFAULT_INT4_CONFIG}
+    )
     def test_ovmodel_4bit_auto_compression(self, model_cls, model_type, expected_ov_int8, expected_ov_int4):
         with tempfile.TemporaryDirectory() as tmp_dir:
             model_id = MODEL_NAMES[model_type]
-            model = model_cls.from_pretrained(
-                model_id, export=True, quantization_config=OVWeightQuantizationConfig(bits=4)
-            )
+            model = model_cls.from_pretrained(model_id, export=True, quantization_config={"bits": 4})
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -360,6 +368,13 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(expected_ov_int4, num_int4)
             self.assertEqual(expected_ov_int8, num_int8)
             model.save_pretrained(tmp_dir)
+
+            openvino_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(openvino_config.quantization_config["bits"], 4)
+            self.assertEqual(openvino_config.dtype, "int4")
+            if model_id == "facebook/opt-125m":
+                for key, value in self.DEFAULT_INT4_CONFIG.items():
+                    self.assertEqual(value, openvino_config.quantization_config[key])
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(
@@ -375,8 +390,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(expected_ov_int4, num_int4)
             model.save_pretrained(tmp_dir)
 
-            ov_config = OVConfig(quantization_config=quantization_config)
-            ov_config.save_pretrained(tmp_dir)
+            openvino_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(openvino_config.quantization_config["bits"], 4)
+            self.assertEqual(openvino_config.dtype, "int4")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS)
     def test_ovmodel_4bit_auto_compression_with_custom_dataset(
@@ -589,3 +605,38 @@ class OVTrainerTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
+
+
+class InferRequestWrapperTest(unittest.TestCase):
+    MODEL_ID = ("openai/whisper-tiny.en",)
+
+    @staticmethod
+    def _generate_random_audio_data(processor):
+        t = np.linspace(0, 1.0, int(1000), endpoint=False)
+        audio_data = 0.5 * np.sin((2 + np.random.random()) * np.pi * t)
+        input_features = processor(
+            audio_data,
+            sampling_rate=16000,
+            return_tensors="pt",
+        ).input_features
+        return input_features
+
+    @parameterized.expand(MODEL_ID)
+    def test_calibration_data_uniqueness(self, model_id):
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True)
+        processor = AutoProcessor.from_pretrained(model_id)
+
+        calibration_data = []
+        ov_model.decoder_with_past.request = InferRequestWrapper(ov_model.decoder_with_past.request, calibration_data)
+        for _ in range(2):
+            input_features = self._generate_random_audio_data(processor)
+            ov_model.generate(input_features)
+
+        data_hashes_per_key = defaultdict(list)
+        for inputs_dict in calibration_data:
+            for k, v in inputs_dict.items():
+                x = (v.numpy() if isinstance(v, torch.Tensor) else v).copy()
+                data_hashes_per_key[k].append(hash(x.tobytes()))
+        for k, data_hashes in data_hashes_per_key.items():
+            # All hashes can not be equal because calibration dataset contains at least 2 different samples
+            self.assertTrue(any(data_hashes[0] != it for it in data_hashes))
