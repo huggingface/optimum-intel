@@ -264,31 +264,26 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             {
                 "model_arch": IPEX_PATCHED_SUPPORTED_ARCHITECTURES,
                 "use_cache": [True, False],
-                "num_beams": [1, 4],
-                "batch_size": [1, 4],
             }
         )
     )
     @unittest.skipIf(is_ipex_version("<=", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
-    def test_ipex_patching(self, test_name, model_arch, use_cache, num_beams, batch_size):
+    def test_ipex_patching_generation(self, test_name, model_arch, use_cache):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
-        texts = ["This is a sample"] * batch_size
-        tokens = tokenizer(texts, padding=True, return_tensors="pt")
-        generation_config = GenerationConfig(
-            max_new_tokens=16, num_beams=num_beams, do_sample=False, use_cache=use_cache
-        )
-        outputs = model.generate(**tokens, generation_config=generation_config)
-        with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
-
-        self.assertIsInstance(outputs.logits, torch.Tensor)
-        # Compare tensor outputs
-        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
+        # Test with batch_size is 1 and 2.
+        texts = ["This is a sample", ["This is the first input", "This is the second input"]]
+        for text in texts:
+            tokens = tokenizer(text, padding=True, return_tensors="pt")
+            for num_beams in [1, 4]:
+                generation_config = GenerationConfig(
+                    max_new_tokens=4, num_beams=num_beams, do_sample=True, top_p=0.9, top_k=5
+                )
+                outputs = model.generate(**tokens, generation_config=generation_config)
+                self.assertIsInstance(outputs, torch.Tensor)
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"

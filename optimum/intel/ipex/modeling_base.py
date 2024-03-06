@@ -62,6 +62,7 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama",)
 def _is_patched_with_ipex(model, task):
     if is_ipex_version("<=", "2.3.0"):
         return False
+
     if isinstance(model, torch.jit.ScriptModule):
         for node in model.graph.nodes():
             # Jit will record the codes position so we can check if the node use ipex exporter.

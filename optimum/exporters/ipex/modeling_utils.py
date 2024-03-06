@@ -24,11 +24,13 @@ from transformers.models.llama.modeling_llama import repeat_kv
 from optimum.intel.utils.import_utils import is_ipex_version
 
 
-def llama_layer_norm_forward(self, hidden_states):
+# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
+def _llama_layer_norm_forward(self, hidden_states):
     return torch.ops.torch_ipex.rmsnorm(hidden_states, self.weight, self.variance_epsilon)
 
 
-def llama_attn_forward(
+# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L321
+def _llama_attn_forward(
     self,
     hidden_states: torch.Tensor,
     attention_mask: Optional[torch.Tensor] = None,
@@ -111,7 +113,8 @@ def llama_attn_forward(
     return attn_output, attn_weights, past_key_value
 
 
-def llama_model_forward(
+# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L1130
+def _llama_model_forward(
     self,
     input_ids: torch.LongTensor = None,
     attention_mask: Optional[torch.Tensor] = None,
@@ -168,9 +171,6 @@ def llama_model_forward(
     # embed positions
     hidden_states = inputs_embeds
 
-    if self.gradient_checkpointing and self.training:
-        use_cache = False
-
     # decoder layers
     all_hidden_states = () if output_hidden_states else None
     all_self_attns = () if output_attentions else None
@@ -182,25 +182,14 @@ def llama_model_forward(
 
         past_key_value = past_key_values[idx] if past_key_values is not None else None
 
-        if self.gradient_checkpointing and self.training:
-            layer_outputs = self._gradient_checkpointing_func(
-                decoder_layer.__call__,
-                hidden_states,
-                attention_mask,
-                position_ids,
-                past_key_value,
-                output_attentions,
-                use_cache,
-            )
-        else:
-            layer_outputs = decoder_layer(
-                hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_value,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
-            )
+        layer_outputs = decoder_layer(
+            hidden_states,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_value=past_key_value,
+            output_attentions=output_attentions,
+            use_cache=use_cache,
+        )
 
         hidden_states = layer_outputs[0]
 
@@ -227,6 +216,7 @@ def llama_model_forward(
     )
 
 
+# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L694
 class _IPEXLlamaDecoderLayerRef(nn.Module):
     def __init__(self, module, config, distributed=False):
         if is_ipex_version("<=", "2.3.0"):

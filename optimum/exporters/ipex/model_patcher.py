@@ -24,9 +24,9 @@ from optimum.intel.utils.import_utils import is_ipex_version
 
 from .modeling_utils import (
     _IPEXLlamaDecoderLayerRef,
-    llama_attn_forward,
-    llama_layer_norm_forward,
-    llama_model_forward,
+    _llama_attn_forward,
+    _llama_layer_norm_forward,
+    _llama_model_forward,
 )
 
 
@@ -77,9 +77,9 @@ def _patch_llama_model(model):
     patch_op(model, LlamaAttention, "ipex_rope", ipex_rope)
     patch_op(model, LlamaAttention, "ipex_scale_dot_product", ipex_scale_dot_product)
 
-    convert_functions(model, LlamaModel, "forward", llama_model_forward)
-    convert_functions(model, LlamaAttention, "forward", llama_attn_forward)
-    convert_functions(model, LlamaRMSNorm, "forward", llama_layer_norm_forward)
+    convert_functions(model, LlamaModel, "forward", _llama_model_forward)
+    convert_functions(model, LlamaAttention, "forward", _llama_attn_forward)
+    convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
 
     convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayerRef, model.config)
     return model
