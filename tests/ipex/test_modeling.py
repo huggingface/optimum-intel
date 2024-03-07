@@ -297,7 +297,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         )
     )
     @unittest.skipIf(is_ipex_version("<", "2.5.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
-    def test_ipex_patching_topk(self, test_name, model_arch, use_cache):
+    def test_ipex_patching_top_k(self, test_name, model_arch, use_cache):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache)
@@ -308,7 +308,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         texts = ["This is a sample", ["This is the first input", "This is the second input"]]
         for text in texts:
             tokens = tokenizer(text, padding=True, return_tensors="pt")
-            generation_config = GenerationConfig(max_new_tokens=4, do_sample=True, top_k=5)
+            generation_config = GenerationConfig(max_new_tokens=4, do_sample=True, top_p=1.0, top_k=5)
             outputs = model.generate(**tokens, generation_config=generation_config)
             self.assertIsInstance(outputs, torch.Tensor)
 
@@ -321,7 +321,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         )
     )
     @unittest.skipIf(is_ipex_version("<", "2.5.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
-    def test_ipex_patching_topp(self, test_name, model_arch, use_cache):
+    def test_ipex_patching_top_p(self, test_name, model_arch, use_cache):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache)
