@@ -14,7 +14,6 @@
 
 import importlib
 import logging
-import math
 import os
 import shutil
 from copy import deepcopy
@@ -59,7 +58,13 @@ from ...exporters.openvino import main_export
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
-from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, _print_compiled_model_properties
+from .utils import (
+    ONNX_WEIGHTS_NAME,
+    OV_TO_NP_TYPE,
+    OV_XML_FILE_NAME,
+    PREDEFINED_SD_DATASETS,
+    _print_compiled_model_properties,
+)
 
 
 core = Core()
@@ -276,13 +281,15 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                     kwargs[name] = load_method(new_model_save_dir)
 
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
-        weight_quantization_config = deepcopy(quantization_config)
+
+        dataset = None
         unet_path = new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name
-        if weight_quantization_config is not None and weight_quantization_config.dataset is not None:
+        if quantization_config is not None and quantization_config.dataset is not None:
+            dataset = quantization_config.dataset
             # load the UNet model uncompressed to apply hybrid quantization further
             unet = cls.load_model(unet_path)
             # Apply weights compression to other `components` without dataset
-            weight_quantization_config.dataset = None
+            quantization_config.dataset = None
         else:
             unet = cls.load_model(unet_path, quantization_config)
 
@@ -294,12 +301,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         }
 
         for key, value in components.items():
-            components[key] = cls.load_model(value, weight_quantization_config) if value.is_file() else None
+            components[key] = cls.load_model(value, quantization_config) if value.is_file() else None
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
-        if quantization_config and quantization_config.dataset is not None:
+        if dataset is not None:
             sd_model = cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
 
             supported_pipelines = (
@@ -310,24 +317,13 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             if not isinstance(sd_model, supported_pipelines):
                 raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
 
-            num_inference_steps = 4 if isinstance(sd_model, OVLatentConsistencyModelPipeline) else 50
             nsamples = quantization_config.num_samples if quantization_config.num_samples else 200
-            dataset = deepcopy(quantization_config.dataset)
-
-            if isinstance(dataset, str):
-                from .quantization import get_stable_diffusion_dataset
-
-                num_unet_runs = math.ceil(nsamples / num_inference_steps)
-                dataset = get_stable_diffusion_dataset(dataset, num_unet_runs)
-
-            unet_inputs = sd_model._prepare_unet_inputs(dataset, nsamples, num_inference_steps)
+            unet_inputs = sd_model._prepare_unet_inputs(dataset, nsamples)
 
             from .quantization import _hybrid_quantization
 
-            hybrid_quantization_config = deepcopy(quantization_config)
-            hybrid_quantization_config.dataset = unet_inputs
-            hybrid_quantization_config.num_samples = nsamples
-            unet = _hybrid_quantization(sd_model.unet.model, hybrid_quantization_config)
+            unet = _hybrid_quantization(sd_model.unet.model, quantization_config, dataset=unet_inputs)
+            quantization_config.dataset = dataset
 
         return cls(
             unet=unet,
@@ -340,21 +336,52 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     def _prepare_unet_inputs(
         self,
-        dataset: List[str],
+        dataset: Union[str, List[Any]],
         num_samples: int,
-        num_inference_steps: int,
         height: Optional[int] = 512,
         width: Optional[int] = 512,
+        seed: Optional[int] = 42,
         **kwargs,
     ) -> Dict[str, Any]:
         self.compile()
-        calibration_data = []
+
+        if isinstance(dataset, str):
+            dataset = deepcopy(dataset)
+            available_datasets = PREDEFINED_SD_DATASETS.keys()
+            if dataset not in available_datasets:
+                raise ValueError(
+                    f"""You have entered a string value for dataset. You can only choose between
+                    {list(available_datasets)}, but the {dataset} was found"""
+                )
+
+            from datasets import load_dataset
+
+            dataset_metadata = PREDEFINED_SD_DATASETS[dataset]
+            dataset = load_dataset(dataset, split=dataset_metadata["split"], streaming=True).shuffle(seed=seed)
+            input_names = dataset_metadata["inputs"]
+            dataset = dataset.select_columns(list(input_names.values()))
+
+            def transform_fn(data_item):
+                return {inp_name: data_item[column] for inp_name, column in input_names.items()}
+
+        else:
+
+            def transform_fn(data_item):
+                return data_item if isinstance(data_item, (list, dict)) else [data_item]
 
         from .quantization import InferRequestWrapper
 
+        calibration_data = []
         self.unet.request = InferRequestWrapper(self.unet.request, calibration_data)
-        for prompt in dataset:
-            _ = self.__call__(prompt, num_inference_steps=num_inference_steps, height=height, width=width)
+
+        for inputs in dataset:
+            inputs = transform_fn(inputs)
+            if isinstance(inputs, dict):
+                self.__call__(**inputs, height=height, width=width)
+            else:
+                self.__call__(*inputs, height=height, width=width)
+            if len(calibration_data) > num_samples:
+                break
 
         self.unet.request = self.unet.request.request
         return calibration_data[:num_samples]

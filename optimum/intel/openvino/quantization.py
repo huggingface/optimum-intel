@@ -17,15 +17,13 @@ import inspect
 import logging
 import os
 from collections import deque
-from copy import deepcopy
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import nncf
 import openvino
 import torch
 import transformers
-from datasets import load_dataset
 from nncf import CompressWeightsMode, IgnoredScope, NNCFConfig, SensitivityMetric
 from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters
 from nncf.torch import create_compressed_model, register_default_init_args, register_module
@@ -644,23 +642,8 @@ def _collect_ops_with_weights(model):
     return ops_with_weights
 
 
-def get_stable_diffusion_dataset(
-    dataset_name: str, nsamples: int = 50, seed: int = 0, text_column: str = "caption"
-) -> List[str]:
-    if dataset_name not in ["conceptual_captions", "laion/220k-GPT4Vision-captions-from-LIVIS", "laion/filtered-wit"]:
-        raise ValueError(
-            f"""You have entered a string value for dataset. You can only choose between
-             ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'],
-             but we found {dataset_name}"""
-        )
-
-    data = load_dataset(dataset_name, split="train", streaming=True).shuffle(seed=seed).take(nsamples)
-    dataset = [batch[text_column] for batch in data]
-    return dataset
-
-
 def _hybrid_quantization(
-    model: openvino.runtime.Model, quantization_config: OVWeightQuantizationConfig
+    model: openvino.runtime.Model, quantization_config: OVWeightQuantizationConfig, dataset: Dict[str, Any]
 ) -> openvino.runtime.Model:
     """
     Quantize a model in hybrid mode with NNCF which means that we quantize:
@@ -672,28 +655,28 @@ def _hybrid_quantization(
             The OpenVINO Runtime model for applying hybrid quantization.
         quantization_config (`OVWeightQuantizationConfig`):
             The configuration containing the parameters related to quantization.
+        dataset (`Dict[str, Any]`):
+            The dataset used for hybrid quantization.
     Returns:
         The OpenVINO Runtime model with applied hybrid quantization.
     """
-    ignored_scope = quantization_config.ignored_scope if quantization_config.ignored_scope is not None else {}
-
     ops_to_compress = _collect_ops_with_weights(model)
-    ptq_ignored_scope = deepcopy(ignored_scope)
-    ptq_ignored_scope["names"] = ignored_scope.get("names", []) + ops_to_compress
 
-    wc_quantization_config = deepcopy(quantization_config)
+    ignored_scope = quantization_config.ignored_scope if isinstance(quantization_config.ignored_scope, dict) else {}
+    ptq_ignored_scope = nncf.IgnoredScope(**ignored_scope)
+    ptq_ignored_scope.names += ops_to_compress
+
+    wc_quantization_config = copy.deepcopy(quantization_config)
     wc_quantization_config.ignored_scope = ignored_scope
     wc_quantization_config.ignored_scope["types"] = ignored_scope.get("types", []) + ["Convolution"]
-    # Apply Weight Compression without dataset
-    wc_quantization_config.dataset = None
     compressed_model = _weight_only_quantization(model, wc_quantization_config)
 
     subset_size = quantization_config.num_samples if quantization_config.num_samples else 200
     quantized_model = nncf.quantize(
         model=compressed_model,
-        calibration_dataset=nncf.Dataset(quantization_config.dataset),
+        calibration_dataset=nncf.Dataset(dataset),
         model_type=nncf.ModelType.TRANSFORMER,
-        ignored_scope=nncf.IgnoredScope(**ptq_ignored_scope),
+        ignored_scope=ptq_ignored_scope,
         # The SQ algo should be disabled for MatMul nodes because their weights are already compressed
         advanced_parameters=nncf.AdvancedQuantizationParameters(AdvancedSmoothQuantParameters(matmul=-1)),
         subset_size=subset_size,
