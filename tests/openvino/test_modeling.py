@@ -115,6 +115,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID)
+        loaded_model.eval()
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         loaded_model_outputs = loaded_model(**tokens)
 
