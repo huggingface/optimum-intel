@@ -21,24 +21,11 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
+from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-from ...intel.utils.import_utils import (
-    is_openvino_tokenizers_available,
-    is_optimum_version,
-    is_transformers_version,
-)
+from ...intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
 from .convert import export_from_model, export_tokenizer
-
-
-if is_optimum_version(">=", "1.16.0"):
-    from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-else:
-    # Copied from https://github.com/huggingface/optimum/blob/main/optimum/exporters/onnx/constants.py
-    SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED = [
-        "bart",
-        "whisper",
-    ]
 
 
 if TYPE_CHECKING:

@@ -13,7 +13,8 @@ Optimum Intel can be used to load optimized models from the [Hugging Face Hub](h
 
 ## Transformers models
 
-You can now easily perform inference with OpenVINO Runtime on a variety of Intel processors ([see](https://docs.openvino.ai/latest/openvino_docs_OV_UG_supported_plugins_Supported_Devices.html) the full list of supported devices). 
+You can now easily perform inference with OpenVINO Runtime on a variety of Intel processors
+([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices). 
 For that, just replace the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
 
 As shown in the table below, each task is associated with a class enabling to automatically load your model.
@@ -33,7 +34,7 @@ As shown in the table below, each task is associated with a class enabling to au
 
 ### Export
 
-It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format with the CLI :
+It is possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
 
 ```bash
 optimum-cli export openvino --model gpt2 ov_model
@@ -182,7 +183,7 @@ model.reshape(1,128)
 model.compile()
 ```
 
-To run inference on Intel integrated or discrete GPU, use `.to("gpu")`. On GPU, models run in FP16 precision by default. (See [OpenVINO documentation](https://docs.openvino.ai/nightly/openvino_docs_install_guides_configurations_for_intel_gpu.html) about installing drivers for GPU inference).
+To run inference on Intel integrated or discrete GPU, use `.to("gpu")`. On GPU, models run in FP16 precision by default. (See [OpenVINO documentation](https://docs.openvino.ai/2024/get-started/configurations/configurations-intel-gpu.html) about installing drivers for GPU inference).
 
 ```python
 # Static shapes speed up inference
@@ -471,7 +472,7 @@ image = refiner(prompt=prompt, image=image[None, :]).images[0]
 ```
 
 
-## Latent Consistency Models
+### Latent Consistency Models
 
 
 | Task                                 | Auto Class                           |
@@ -479,7 +480,7 @@ image = refiner(prompt=prompt, image=image[None, :]).images[0]
 | `text-to-image`                      | `OVLatentConsistencyModelPipeline`   |
 
 
-### Text-to-Image
+#### Text-to-Image
 
 Here is an example of how you can load a Latent Consistency Models (LCMs) from [SimianLuo/LCM_Dreamshaper_v7](https://huggingface.co/SimianLuo/LCM_Dreamshaper_v7) and run inference using OpenVINO :
 
