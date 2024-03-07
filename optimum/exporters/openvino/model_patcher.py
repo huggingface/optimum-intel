@@ -35,7 +35,7 @@ def patch_model_with_bettertransformer(model):
             + "[WARNING] For good performance with stateful models, transformers>=4.36.2 and PyTorch>=2.1.1 are required. "
             f"This Python environment has Transformers {_transformers_version} and PyTorch {_torch_version}. "
             "Consider upgrading PyTorch and Transformers, for example by running "
-            "`pip install --upgrade --upgrade-strategy eager optimum[openvino,nncf]`, and export the model again"
+            "`pip install --upgrade --upgrade-strategy eager optimum[openvino]`, and export the model again"
             + COLOR_RESET
         )
 
