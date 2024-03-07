@@ -60,7 +60,7 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama",)
 
 
 def _is_patched_with_ipex(model, task):
-    if is_ipex_version("<=", "2.3.0"):
+    if is_ipex_version("<", "2.5.0"):
         return False
 
     if isinstance(model, torch.jit.ScriptModule):

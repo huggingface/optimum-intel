@@ -62,7 +62,7 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 
 def _patch_llama_model(model):
-    if is_ipex_version("<=", "2.3.0"):
+    if is_ipex_version("<", "2.5.0"):
         raise ImportError("Only ipex version > 2.3.0 supports RotaryEmbedding and IndirectAccessKVCache")
 
     from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCache, RotaryEmbedding

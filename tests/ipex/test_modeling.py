@@ -271,7 +271,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             }
         )
     )
-    @unittest.skipIf(is_ipex_version("<=", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    @unittest.skipIf(is_ipex_version("<", "2.5.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
     def test_ipex_patching_beam_search(self, test_name, model_arch, use_cache):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -296,7 +296,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             }
         )
     )
-    @unittest.skipIf(is_ipex_version("<=", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    @unittest.skipIf(is_ipex_version("<", "2.5.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
     def test_ipex_patching_topk(self, test_name, model_arch, use_cache):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -320,7 +320,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             }
         )
     )
-    @unittest.skipIf(is_ipex_version("<=", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    @unittest.skipIf(is_ipex_version("<", "2.5.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
     def test_ipex_patching_topp(self, test_name, model_arch, use_cache):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
