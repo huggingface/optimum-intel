@@ -42,6 +42,7 @@ MODEL_NAMES = {
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",
+    "llama2": "Jiqing/tiny_random_llama2",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
 }
@@ -66,6 +67,7 @@ class IPEXIntegrationTest(unittest.TestCase):
         "gpt_neo",
         # "gpt_bigcode",
         "llama",
+        "llama2",
         "opt",
         "mpt",
     )
