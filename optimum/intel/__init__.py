@@ -30,6 +30,7 @@ from .version import __version__
 
 _import_structure = {
     "openvino": [],
+    "utils.dummy_openvino_and_nncf_objects": [],
 }
 
 try:
@@ -58,7 +59,7 @@ try:
     if not (is_openvino_available() and is_nncf_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_nncf_objects"] = ["OVQuantizer", "OVTrainingArguments"]
+    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(["OVQuantizer", "OVTrainingArguments"])
 else:
     _import_structure["openvino"].extend(["OVQuantizer", "OVTrainingArguments"])
 
@@ -67,7 +68,7 @@ try:
     if not (is_openvino_available() and is_nncf_available() and is_accelerate_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_nncf_objects"] = ["OVTrainer"]
+    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(["OVTrainer"])
 else:
     _import_structure["openvino"].extend(["OVTrainer"])
 
@@ -152,6 +153,7 @@ else:
         "INCSeq2SeqTrainer",
         "INCTrainer",
     ]
+
 try:
     if not (is_neural_compressor_available() and is_diffusers_available()):
         raise OptionalDependencyNotAvailable()
