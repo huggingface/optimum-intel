@@ -448,9 +448,6 @@ class OVBaseModel(OptimizedModel):
         self.request = None
         return self
 
-    def eval(self):
-        return self
-
     def forward(self, *args, **kwargs):
         raise NotImplementedError
 
