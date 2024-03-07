@@ -220,9 +220,9 @@ def _llama_model_forward(
 class _IPEXLlamaDecoderLayerRef(nn.Module):
     def __init__(self, module, config, distributed=False):
         if is_ipex_version("<=", "2.3.0"):
-            raise ImportError("Only ipex version > 2.3.0 supports linear2SiluMul and linearAdd")
+            raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
 
-        from intel_extension_for_pytorch.llm.modules import linear2SiluMul, linearAdd
+        from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
 
         super().__init__()
         for k, v in module.__dict__.items():
@@ -233,11 +233,11 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
             setattr(self.__class__, k, getattr(module.__class__, k))
         self.distributed = distributed
         if not self.distributed:
-            self.mha_linear_add = linearAdd(module.self_attn.o_proj)
-            self.mlp_linear_add = linearAdd(module.mlp.down_proj)
+            self.mha_linear_add = LinearAdd(module.self_attn.o_proj)
+            self.mlp_linear_add = LinearAdd(module.mlp.down_proj)
             del self.__dict__["_modules"]["self_attn"].o_proj
             del self.__dict__["_modules"]["mlp"].down_proj
-        self.linear_silu_mul = linear2SiluMul(module.mlp.gate_proj, module.mlp.up_proj)
+        self.linear_silu_mul = Linear2SiluMul(module.mlp.gate_proj, module.mlp.up_proj)
         del self.__dict__["_modules"]["mlp"].gate_proj
         del self.__dict__["_modules"]["mlp"].up_proj
 

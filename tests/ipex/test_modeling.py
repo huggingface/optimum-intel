@@ -132,7 +132,7 @@ class IPEXModelTest(unittest.TestCase):
         outputs = ipex_model(**tokens)
         # Compare tensor outputs
         for output_name in {"logits", "last_hidden_state"}:
-            if output_name in transformers_outputs and output_name in outputs:
+            if output_name in transformers_outputs:
                 self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-4))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -272,22 +272,69 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         )
     )
     @unittest.skipIf(is_ipex_version("<=", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
-    def test_ipex_patching_generation(self, test_name, model_arch, use_cache):
+    def test_ipex_patching_beam_search(self, test_name, model_arch, use_cache):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache)
+        self.assertEqual(model.use_cache, use_cache)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        # Test with batch_size is 1 and 2.
+        texts = ["This is a sample", ["This is the first input", "This is the second input"]]
+        for text in texts:
+            for num_beams in [2, 4, 8, 32]:
+                tokens = tokenizer(text, padding=True, return_tensors="pt")
+                generation_config = GenerationConfig(max_new_tokens=4, num_beams=4, do_sample=True)
+                outputs = model.generate(**tokens, generation_config=generation_config)
+                self.assertIsInstance(outputs, torch.Tensor)
+
+    @parameterized.expand(
+        grid_parameters(
+            {
+                "model_arch": IPEX_PATCHED_SUPPORTED_ARCHITECTURES,
+                "use_cache": [True, False],
+            }
+        )
+    )
+    @unittest.skipIf(is_ipex_version("<=", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    def test_ipex_patching_topk(self, test_name, model_arch, use_cache):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache)
+        self.assertEqual(model.use_cache, use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         # Test with batch_size is 1 and 2.
         texts = ["This is a sample", ["This is the first input", "This is the second input"]]
         for text in texts:
             tokens = tokenizer(text, padding=True, return_tensors="pt")
-            for num_beams in [1, 4]:
-                generation_config = GenerationConfig(
-                    max_new_tokens=4, num_beams=num_beams, do_sample=True, top_p=0.9, top_k=5
-                )
-                outputs = model.generate(**tokens, generation_config=generation_config)
-                self.assertIsInstance(outputs, torch.Tensor)
+            generation_config = GenerationConfig(max_new_tokens=4, do_sample=True, top_k=5)
+            outputs = model.generate(**tokens, generation_config=generation_config)
+            self.assertIsInstance(outputs, torch.Tensor)
+
+    @parameterized.expand(
+        grid_parameters(
+            {
+                "model_arch": IPEX_PATCHED_SUPPORTED_ARCHITECTURES,
+                "use_cache": [True, False],
+            }
+        )
+    )
+    @unittest.skipIf(is_ipex_version("<=", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    def test_ipex_patching_topp(self, test_name, model_arch, use_cache):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache)
+        self.assertEqual(model.use_cache, use_cache)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        # Test with batch_size is 1 and 2.
+        texts = ["This is a sample", ["This is the first input", "This is the second input"]]
+        for text in texts:
+            tokens = tokenizer(text, padding=True, return_tensors="pt")
+            generation_config = GenerationConfig(max_new_tokens=4, do_sample=True, top_p=0.9, top_k=0)
+            outputs = model.generate(**tokens, generation_config=generation_config)
+            self.assertIsInstance(outputs, torch.Tensor)
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"

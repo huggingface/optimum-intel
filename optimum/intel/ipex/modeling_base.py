@@ -501,7 +501,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
             if past_key_values:
-                position_ids = position_ids[:, -input_ids.shape[-1] :]
+                position_ids = position_ids[:, -1].unsqueeze(0)
 
         if "position_ids" in self.input_names or not self.input_names:
             inputs["position_ids"] = position_ids

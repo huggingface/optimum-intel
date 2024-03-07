@@ -63,11 +63,11 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 def _patch_llama_model(model):
     if is_ipex_version("<=", "2.3.0"):
-        raise ImportError("Only ipex version > 2.3.0 supports ApplyRotaryEmbedding and IndirectAccessKVCache")
+        raise ImportError("Only ipex version > 2.3.0 supports RotaryEmbedding and IndirectAccessKVCache")
 
-    from intel_extension_for_pytorch.llm.modules import ApplyRotaryEmbedding, IndirectAccessKVCache
+    from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCache, RotaryEmbedding
 
-    ipex_rope = ApplyRotaryEmbedding(
+    ipex_rope = RotaryEmbedding(
         model.config.max_position_embeddings,
         model.config.hidden_size // model.config.num_attention_heads,
         model.config.rope_theta,
