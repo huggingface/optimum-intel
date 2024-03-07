@@ -272,6 +272,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, compile=False)
+        model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
         text = "This restaurant is awesome"
@@ -345,6 +346,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
+        model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
         question = "What's my name?"
@@ -411,6 +413,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForTokenClassification.from_pretrained(model_id, export=True)
+        model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
         outputs = pipe("My Name is Arthur and I live in Lyon.")
@@ -460,6 +463,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForFeatureExtraction.from_pretrained(model_id, export=True)
+        model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
         outputs = pipe("My Name is Arthur and I live in Lyon.")
@@ -540,6 +544,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False, compile=False)
+        model.eval()
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         model.half()
@@ -722,6 +727,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForMaskedLM.from_pretrained(model_id, export=True)
+        model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
         outputs = pipe(f"This is a {tokenizer.mask_token}.")
@@ -779,6 +785,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForImageClassification.from_pretrained(model_id, export=True)
+        model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
         outputs = pipe("http://images.cocodataset.org/val2017/000000039769.jpg")
@@ -875,6 +882,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, compile=False)
+        model.eval()
         model.half()
         model.to("cpu")
         model.compile()
@@ -1008,6 +1016,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForAudioClassification.from_pretrained(model_id, export=True)
+        model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
         outputs = pipe([np.random.random(16000)])
@@ -1318,6 +1327,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
+        model.eval()
         processor = get_preprocessor(model_id)
         GenerationConfig.from_pretrained(model_id)
         pipe = pipeline(
