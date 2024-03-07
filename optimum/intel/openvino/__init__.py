@@ -14,9 +14,7 @@
 
 import logging
 
-from transformers.utils import is_accelerate_available
-
-from ..utils.import_utils import is_diffusers_available, is_nncf_available
+from ..utils.import_utils import is_accelerate_available, is_diffusers_available, is_nncf_available
 from .utils import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,

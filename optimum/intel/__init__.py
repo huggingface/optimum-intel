@@ -15,9 +15,10 @@
 import importlib.util
 from typing import TYPE_CHECKING
 
-from transformers.utils import OptionalDependencyNotAvailable, _LazyModule, is_accelerate_available
+from transformers.utils import OptionalDependencyNotAvailable, _LazyModule
 
 from .utils import (
+    is_accelerate_available,
     is_diffusers_available,
     is_ipex_available,
     is_neural_compressor_available,
