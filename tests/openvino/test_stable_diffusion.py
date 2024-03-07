@@ -28,7 +28,6 @@ from diffusers import (
 from diffusers.utils import load_image
 from diffusers.utils.testing_utils import floats_tensor
 from openvino.runtime.ie_api import CompiledModel
-from packaging.version import Version, parse
 from parameterized import parameterized
 from utils_tests import MODEL_NAMES, SEED
 
@@ -46,13 +45,8 @@ from optimum.intel.openvino.modeling_diffusion import (
     OVModelVaeDecoder,
     OVModelVaeEncoder,
 )
-from optimum.onnxruntime import (
-    ORTStableDiffusionImg2ImgPipeline,
-    ORTStableDiffusionInpaintPipeline,
-    ORTStableDiffusionXLImg2ImgPipeline,
-    ORTStableDiffusionXLPipeline,
-)
-from optimum.utils.import_utils import _diffusers_version
+from optimum.intel.utils.import_utils import is_diffusers_version
+from optimum.utils.import_utils import is_onnxruntime_available
 
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -167,7 +161,6 @@ class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
 class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionImg2ImgPipeline
-    ORT_MODEL_CLASS = ORTStableDiffusionImg2ImgPipeline
     TASK = "image-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -298,11 +291,13 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
 class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionInpaintPipeline
-    ORT_MODEL_CLASS = ORTStableDiffusionInpaintPipeline
     TASK = "inpaint"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not is_onnxruntime_available(), "this test requires onnxruntime")
     def test_compare_diffusers_pipeline(self, model_arch: str):
+        from optimum.onnxruntime import ORTStableDiffusionInpaintPipeline
+
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         batch_size, num_images, height, width = 1, 1, 64, 64
@@ -329,7 +324,7 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
         outputs = pipeline(**inputs, latents=latents).images
         self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
-        ort_pipeline = self.ORT_MODEL_CLASS.from_pretrained(model_id, export=True)
+        ort_pipeline = ORTStableDiffusionInpaintPipeline.from_pretrained(model_id, export=True)
         ort_outputs = ort_pipeline(**inputs, latents=latents).images
         self.assertTrue(np.allclose(outputs, ort_outputs, atol=1e-1))
 
@@ -358,7 +353,6 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
 class OVtableDiffusionXLPipelineTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion-xl",)
     MODEL_CLASS = OVStableDiffusionXLPipeline
-    ORT_MODEL_CLASS = ORTStableDiffusionXLPipeline
     PT_MODEL_CLASS = StableDiffusionXLPipeline
     TASK = "text-to-image"
 
@@ -444,7 +438,6 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
 class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion-xl", "stable-diffusion-xl-refiner")
     MODEL_CLASS = OVStableDiffusionXLImg2ImgPipeline
-    ORT_MODEL_CLASS = ORTStableDiffusionXLImg2ImgPipeline
     PT_MODEL_CLASS = StableDiffusionXLImg2ImgPipeline
     TASK = "image-to-image"
 
@@ -489,7 +482,7 @@ class OVLatentConsistencyModelPipelineTest(unittest.TestCase):
     TASK = "text-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @unittest.skipIf(parse(_diffusers_version) <= Version("0.21.4"), "not supported with this diffusers version")
+    @unittest.skipIf(is_diffusers_version("<=", "0.21.4"), "not supported with this diffusers version")
     def test_compare_to_diffusers(self, model_arch: str):
         ov_pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
@@ -532,7 +525,7 @@ class OVLatentConsistencyModelPipelineTest(unittest.TestCase):
         self.assertEqual(pipeline.device.type, ov_pipeline.device)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @unittest.skipIf(parse(_diffusers_version) <= Version("0.21.4"), "not supported with this diffusers version")
+    @unittest.skipIf(is_diffusers_version("<=", "0.21.4"), "not supported with this diffusers version")
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
