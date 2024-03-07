@@ -126,9 +126,10 @@ class IPEXModelTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
         outputs = ipex_model(**tokens)
-        self.assertTrue(
-            torch.allclose(outputs["last_hidden_state"], transformers_outputs["last_hidden_state"], atol=1e-4)
-        )
+        # Compare tensor outputs
+        for output_name in {"logits", "last_hidden_state"}:
+            if output_name in transformers_outputs:
+                self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-4))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):

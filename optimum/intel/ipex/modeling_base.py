@@ -193,7 +193,7 @@ class IPEXModel(OptimizedModel):
             inputs["token_type_ids"] = token_type_ids
 
         outputs = self._call_model(**inputs)
-        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
+        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(last_hidden_state=outputs[0])
 
     def eval(self):
         self.model.eval()
@@ -282,7 +282,7 @@ class IPEXModelForAudioClassification(IPEXModel):
             inputs["attention_mask"] = attention_mask
 
         outputs = self._call_model(**inputs)
-        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(last_hidden_state=outputs[0])
+        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
 
 
 class IPEXModelForQuestionAnswering(IPEXModel):
