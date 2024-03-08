@@ -94,21 +94,43 @@ if _openvino_tokenizers_available:
         _openvino_tokenizers_available = False
 
 if _openvino_tokenizers_available and _openvino_tokenizers_version != "N/A":
-    _compatible_openvino_version = next(
-        (
-            requirement.split("==")[-1]
-            for requirement in importlib_metadata.requires("openvino-tokenizers")
-            if requirement.startswith("openvino==")
-        ),
-        "",
-    )
-    _openvino_tokenizers_available = _compatible_openvino_version == ov_major_version
+    _is_ovt_dev_version = "dev" in _openvino_tokenizers_version
+    _ov_version = importlib_metadata.version("openvino")
+    _is_ov_dev_version = "dev" in _ov_version
+    if _is_ovt_dev_version:
+        _compatible_openvino_major_version, _, _dev_date = _openvino_tokenizers_version.rsplit(".", 2)
+        _compatible_ov_version = _compatible_openvino_major_version + "." + _dev_date
+        _compatible_ovt_version = _ov_version.replace("dev", "0.dev")
+    else:
+        _compatible_ov_version = _openvino_tokenizers_version.rsplit(".", 1)[0]
+        _compatible_ovt_version = _ov_version + ".0"
+
+    _openvino_tokenizers_available = _ov_version == _compatible_ov_version
+
     if not _openvino_tokenizers_available:
+        _update_ov_command = (
+            f"pip install {'--pre' if _is_ovt_dev_version else ''} -U openvino=={_compatible_ov_version} "
+            + (
+                "--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
+                if _is_ovt_dev_version
+                else ""
+            )
+        ).strip()
+        _update_ovt_command = (
+            f"pip install {'--pre' if _is_ov_dev_version else ''} -U openvino-tokenizers=={_compatible_ovt_version} "
+            + (
+                "--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
+                if _is_ov_dev_version
+                else ""
+            )
+        ).strip()
         logger.warning(
             "OpenVINO Tokenizer version is not compatible with OpenVINO version. "
-            f"Installed OpenVINO version: {ov_major_version},"
-            f"OpenVINO Tokenizers requires {_compatible_openvino_version}. "
-            f"OpenVINO Tokenizers models will not be added during export."
+            f"Installed OpenVINO version: {_ov_version}, "
+            f"OpenVINO Tokenizers requires {_compatible_ov_version}. "
+            "OpenVINO Tokenizers models will not be added during export. "
+            f"Update OpenVINO with \n{_update_ov_command}\n"
+            f"Or update OpenVINO Tokenizers with \n{_update_ovt_command}"
         )
 
 _nncf_available = importlib.util.find_spec("nncf") is not None

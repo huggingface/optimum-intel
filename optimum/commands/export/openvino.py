@@ -123,7 +123,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--convert-tokenizer",
         action="store_true",
-        help="[Deprecated]  Add converted tokenizer and detokenizer with OpenVINO Tokenizers.",
+        help="[Deprecated] Add converted tokenizer and detokenizer with OpenVINO Tokenizers.",
     )
 
 

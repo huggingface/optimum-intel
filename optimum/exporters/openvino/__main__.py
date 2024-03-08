@@ -192,12 +192,6 @@ def main_export(
                 f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
             )
 
-    if convert_tokenizer and not is_openvino_tokenizers_available():
-        logger.warning(
-            "`convert_tokenizer` requires openvino-tokenizers, please install it with `pip install optimum-intel[openvino-tokenizers]`"
-        )
-        convert_tokenizer = False
-
     do_gptq_patching = False
     custom_architecture = False
     loading_kwargs = {}
