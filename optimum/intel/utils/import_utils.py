@@ -165,6 +165,16 @@ if _datasets_available:
         _datasets_available = False
 
 
+_accelerate_available = importlib.util.find_spec("accelerate") is not None
+_accelerate_version = "N/A"
+
+if _accelerate_available:
+    try:
+        _accelerate_version = importlib_metadata.version("accelerate")
+    except importlib_metadata.PackageNotFoundError:
+        _accelerate_available = False
+
+
 def is_transformers_available():
     return _transformers_available
 
@@ -207,6 +217,10 @@ def is_timm_available():
 
 def is_datasets_available():
     return _datasets_available
+
+
+def is_accelerate_available():
+    return _accelerate_available
 
 
 # This function was copied from: https://github.com/huggingface/accelerate/blob/874c4967d94badd24f893064cc3bef45f57cadf7/src/accelerate/utils/versions.py#L319
@@ -344,6 +358,11 @@ DATASETS_IMPORT_ERROR = """
 `pip install datasets`. Please note that you may need to restart your runtime after installation.
 """
 
+ACCELERATE_IMPORT_ERROR = """
+{0} requires the accelerate library but it was not found in your environment. You can install it with pip:
+`pip install accelerate`. Please note that you may need to restart your runtime after installation.
+"""
+
 BACKENDS_MAPPING = OrderedDict(
     [
         ("diffusers", (is_diffusers_available, DIFFUSERS_IMPORT_ERROR)),
@@ -353,8 +372,9 @@ BACKENDS_MAPPING = OrderedDict(
         ("neural_compressor", (is_neural_compressor_available, NEURAL_COMPRESSOR_IMPORT_ERROR)),
         (
             "intel_extension_for_transformers",
-            (is_intel_extension_for_transformers_available, NEURAL_COMPRESSOR_IMPORT_ERROR),
+            (is_intel_extension_for_transformers_available, INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR),
         ),
+        ("accelerate", (is_accelerate_available, ACCELERATE_IMPORT_ERROR)),
     ]
 )
 

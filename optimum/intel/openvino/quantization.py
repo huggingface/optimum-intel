@@ -17,7 +17,7 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import nncf
 import openvino
@@ -56,8 +56,7 @@ from .utils import (
 
 
 if is_datasets_available():
-    if TYPE_CHECKING:
-        from datasets import Dataset
+    from datasets import Dataset
 
 register_module(ignored_algorithms=[])(Conv1D)
 
@@ -147,6 +146,7 @@ class OVQuantizer(OptimumQuantizer):
             )
         self.task = task or feature
         self.seed = seed
+        # TODO : deprecate input_names
         self.input_names = None
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
@@ -526,9 +526,15 @@ class OVQuantizer(OptimumQuantizer):
         data_collator: Optional[DataCollator] = None,
     ) -> OVDataLoader:
         data_collator = data_collator if data_collator is not None else default_data_collator
+
+        if not is_datasets_available() or not isinstance(calibration_dataset, Dataset):
+            logger.warning(
+                "`remove_unused_columns` set to `False` as calibration_dataset is not an instance of `datasets.Dataset`"
+            )
+            remove_unused_columns = False
+
         if remove_unused_columns:
             calibration_dataset = self._remove_unused_columns(calibration_dataset)
-        self.input_names = calibration_dataset.column_names
         generator = torch.Generator()
         generator.manual_seed(self.seed)
         sampler = RandomSampler(calibration_dataset, generator=generator)
