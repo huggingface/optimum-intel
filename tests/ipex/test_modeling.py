@@ -284,12 +284,12 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         texts = ["This is a sample", ["This is the first input", "This is the second input"]]
         generation_configs = (
             GenerationConfig(max_new_tokens=4, num_beams=2, do_sample=True),
-            GenerationConfig(max_new_tokens=4, num_beams=4, do_sample=True),       
-            GenerationConfig(max_new_tokens=4, num_beams=8, do_sample=True),       
+            GenerationConfig(max_new_tokens=4, num_beams=4, do_sample=True),
+            GenerationConfig(max_new_tokens=4, num_beams=8, do_sample=True),
             GenerationConfig(max_new_tokens=4, num_beams=32, do_sample=True),
             GenerationConfig(max_new_tokens=4, do_sample=not use_cache, top_p=1.0, top_k=5, penalty_alpha=0.6),
             GenerationConfig(max_new_tokens=4, do_sample=True, top_p=0.9, top_k=0),
-       )
+        )
         for text in texts:
             tokens = tokenizer(text, padding=True, return_tensors="pt")
             for generation_config in generation_configs:
@@ -297,6 +297,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
                 transformers_outputs = trasnformers_model.generate(**tokens, generation_config=generation_config)
                 self.assertIsInstance(outputs, torch.Tensor)
                 self.assertEqual(outputs, transformers_outputs)
+
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
