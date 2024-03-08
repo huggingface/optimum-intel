@@ -275,6 +275,17 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_assisted_decoding(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
+        assistant_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        output = model.generate(**tokens, do_sample=False)
+        output_assisted = model.generate(**tokens, do_sample=False, assistant_model=assistant_model)
+        self.assertTrue(torch.equal(output, output_assisted))
+
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
