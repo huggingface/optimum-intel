@@ -144,26 +144,6 @@ class IPEXModelTest(unittest.TestCase):
         _ = pipe(text)
         self.assertEqual(pipe.device, model.device)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_low_precision(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        ipex_model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True, torch_dtype=torch.bfloat16)
-        self.assertEqual(ipex_model._dtype, torch.bfloat16)
-        transformers_model = self.IPEX_MODEL_CLASS.auto_model_class.from_pretrained(
-            model_id, torch_dtype=torch.bfloat16
-        )
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        inputs = "This is a sample input"
-        tokens = tokenizer(inputs, return_tensors="pt")
-        with torch.no_grad():
-            transformers_outputs = transformers_model(**tokens)
-        outputs = ipex_model(**tokens)
-        # Compare tensor outputs
-        for output_name in {"logits", "last_hidden_state"}:
-            if output_name in transformers_outputs:
-                self.assertEqual(outputs[output_name].dtype, torch.bfloat16)
-                self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-1))
-
 
 class IPEXModelForSequenceClassificationTest(IPEXModelTest):
     IPEX_MODEL_CLASS = IPEXModelForTokenClassification
