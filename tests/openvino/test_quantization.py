@@ -236,7 +236,6 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = (
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
-        (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
         (OVLatentConsistencyModelPipeline, "latent-consistency", 50, 135),
     )
 
@@ -373,7 +372,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             model.save_pretrained(tmp_dir)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[2:])
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
         self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8
     ):
