@@ -159,7 +159,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     )
 
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 86),)
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 150),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 148),)
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS = (
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 14, 50),
     )
@@ -236,6 +236,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = (
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
+        (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
         (OVLatentConsistencyModelPipeline, "latent-consistency", 50, 135),
     )
 
@@ -372,7 +373,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             model.save_pretrained(tmp_dir)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
         self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8
     ):

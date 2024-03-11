@@ -179,8 +179,8 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
             The dataset used for data-aware compression or quantization with NNCF. You can provide your own dataset
-            in a list of string or just use the the one from the list ['wikitext2','c4','c4-new','ptb','ptb-new'] for LLLMs
-            or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for SD models.
+            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new','ptb','ptb-new'] for LLLMs
+            or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models.
         ratio (`float`, defaults to 1.0):
             The ratio between baseline and backup precisions (e.g. 0.9 means 90% of layers quantized to INT4_ASYM
             and the rest to INT8_ASYM).
@@ -243,7 +243,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
             if self.dataset not in llm_datasets + stable_diffusion_datasets:
                 raise ValueError(
                     f"""You have entered a string value for dataset. You can only choose between
-                    {llm_datasets} for LLLMs or {stable_diffusion_datasets} for SD models, but we found {self.dataset}"""
+                    {llm_datasets} for LLLMs or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
                 )
 
         if self.bits not in [4, 8]:
