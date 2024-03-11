@@ -18,10 +18,11 @@ INSTALL_REQUIRE = [
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
-    "accelerate",  # transformers 4.29 require accelerate for PyTorch
+    "onnx",
 ]
 
 TESTS_REQUIRE = [
+    "accelerate",
     "pytest",
     "parameterized",
     "Pillow",
@@ -39,11 +40,11 @@ TESTS_REQUIRE = [
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
 
 EXTRAS_REQUIRE = {
-    "neural-compressor": ["neural-compressor>=2.2.0", "onnx", "onnxruntime<1.15.0"],
-    "openvino": ["openvino>=2023.3", "onnx", "onnxruntime", "nncf>=2.8.1"],
+    "neural-compressor": ["neural-compressor>=2.2.0", "onnxruntime<1.15.0", "accelerate"],
+    "openvino": ["openvino>=2023.3", "nncf>=2.8.1"],
     "openvino-tokenizers": ["openvino-tokenizers[transformers]"],
     "nncf": ["nncf>=2.8.1"],
-    "ipex": ["intel-extension-for-pytorch", "onnx"],
+    "ipex": ["intel-extension-for-pytorch"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,

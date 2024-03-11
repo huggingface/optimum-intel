@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from transformers.utils import OptionalDependencyNotAvailable, _LazyModule
 
 from .utils import (
+    is_accelerate_available,
     is_diffusers_available,
     is_ipex_available,
     is_neural_compressor_available,
@@ -29,6 +30,7 @@ from .version import __version__
 
 _import_structure = {
     "openvino": [],
+    "utils.dummy_openvino_and_nncf_objects": [],
 }
 
 try:
@@ -57,13 +59,19 @@ try:
     if not (is_openvino_available() and is_nncf_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_nncf_objects"] = [
-        "OVQuantizer",
-        "OVTrainer",
-        "OVTrainingArguments",
-    ]
+    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(["OVQuantizer", "OVTrainingArguments"])
 else:
-    _import_structure["openvino"].extend(["OVQuantizer", "OVTrainer", "OVTrainingArguments"])
+    _import_structure["openvino"].extend(["OVQuantizer", "OVTrainingArguments"])
+
+
+try:
+    if not (is_openvino_available() and is_nncf_available() and is_accelerate_available()):
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(["OVTrainer"])
+else:
+    _import_structure["openvino"].extend(["OVTrainer"])
+
 
 try:
     if not (is_openvino_available() and is_diffusers_available()):
@@ -145,6 +153,7 @@ else:
         "INCSeq2SeqTrainer",
         "INCTrainer",
     ]
+
 try:
     if not (is_neural_compressor_available() and is_diffusers_available()):
         raise OptionalDependencyNotAvailable()
@@ -177,13 +186,17 @@ if TYPE_CHECKING:
         if not (is_openvino_available() and is_nncf_available()):
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
-        from .utils.dummy_openvino_and_nncf_objects import (
-            OVQuantizer,
-            OVTrainer,
-            OVTrainingArguments,
-        )
+        from .utils.dummy_openvino_and_nncf_objects import OVQuantizer, OVTrainingArguments
     else:
-        from .openvino import OVQuantizer, OVTrainer, OVTrainingArguments
+        from .openvino import OVQuantizer, OVTrainingArguments
+
+    try:
+        if not (is_openvino_available() and is_nncf_available() and is_accelerate_available()):
+            raise OptionalDependencyNotAvailable()
+    except OptionalDependencyNotAvailable:
+        from .utils.dummy_openvino_and_nncf_objects import OVTrainer
+    else:
+        from .openvino import OVTrainer
 
     try:
         if not (is_openvino_available() and is_diffusers_available()):
