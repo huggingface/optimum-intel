@@ -287,12 +287,13 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             # load the UNet model uncompressed to apply hybrid quantization further
             unet = cls.load_model(unet_path)
             # Apply weights compression to other `components` without dataset
-            q_config_params = quantization_config.__dict__
-            wc_params = {param: value for param, value in q_config_params.items() if param != "dataset"}
-            wc_quantization_config = OVWeightQuantizationConfig.from_dict(wc_params)
+            weight_quantization_params = {
+                param: value for param, value in quantization_config.__dict__.items() if param != "dataset"
+            }
+            weight_quantization_config = OVWeightQuantizationConfig.from_dict(weight_quantization_params)
         else:
-            wc_quantization_config = quantization_config
-            unet = cls.load_model(unet_path, wc_quantization_config)
+            weight_quantization_config = quantization_config
+            unet = cls.load_model(unet_path, weight_quantization_config)
 
         components = {
             "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
@@ -302,7 +303,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         }
 
         for key, value in components.items():
-            components[key] = cls.load_model(value, wc_quantization_config) if value.is_file() else None
+            components[key] = cls.load_model(value, weight_quantization_config) if value.is_file() else None
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
@@ -323,7 +324,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
             from .quantization import _hybrid_quantization
 
-            unet = _hybrid_quantization(sd_model.unet.model, wc_quantization_config, dataset=unet_inputs)
+            unet = _hybrid_quantization(sd_model.unet.model, weight_quantization_config, dataset=unet_inputs)
 
         return cls(
             unet=unet,
