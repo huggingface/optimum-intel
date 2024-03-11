@@ -52,8 +52,8 @@ def patch_model_with_bettertransformer(model):
             _openvino_version.split("-")[0] if is_openvino_version("<=", "2024.0.0-14509") else _openvino_version
         )
         log.warn(
-            COLOR_RED + f"[WARNING] Stateful models are not supported with Transformers {_transformers_version} and "
-            f"OpenVINO {display_version}. For good performance, consider using a nightly OpenVINO build: "
+            COLOR_RED + f"[WARNING] Stateful models are not supported for Llama and GPTBigCode with Transformers "
+            f"{_transformers_version} and OpenVINO {display_version}. For good performance, consider using a nightly OpenVINO build: "
             "https://docs.openvino.ai/2024/get-started/install-openvino.html. For models that do not need transformers "
             "4.38+, it is also an option to downgrade transformers: `pip install transformers==4.37.2`" + COLOR_RESET
         )
