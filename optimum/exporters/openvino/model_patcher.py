@@ -41,7 +41,7 @@ def patch_model_with_bettertransformer(model):
             + COLOR_RESET
         )
 
-    if is_transformers_version(">=", "4.38") and is_openvino_version("<", "2024.1.0-14612"):
+    if getattr(model.config, "model_type") in {"gpt_bigcode", "llama"} and is_transformers_version(">=", "4.38") and is_openvino_version("<", "2024.1.0-14612"):
         log.warn(
             COLOR_RED + f"[WARNING] Stateful models are not supported with Transformers {_transformers_version} and "
             "this OpenVINO version. For good performance, consider using a nightly OpenVINO build: "
