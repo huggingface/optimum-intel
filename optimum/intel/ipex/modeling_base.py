@@ -22,6 +22,8 @@ from typing import Optional, Tuple, Union
 import intel_extension_for_pytorch as ipex
 import torch
 from huggingface_hub import hf_hub_download
+from intel_extension_for_pytorch.cpu._auto_kernel_selection import _enable_tpp
+from intel_extension_for_pytorch.transformers.optimize import get_dummy_input
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -45,12 +47,61 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
-from ..generation.modeling import jit_trace, prepare_jit_inputs
-from ..utils.import_utils import is_torch_version, is_transformers_version
+from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _patch_model
+from ..generation.modeling import prepare_jit_inputs
+from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
 
 
 logger = logging.getLogger(__name__)
+
+
+_IPEX_SUPPORT_MODEL_TYPES = ("llama",)
+
+
+def _is_patched_with_ipex(model, task):
+    if is_ipex_version("<", "2.5.0"):
+        return False
+
+    if isinstance(model, torch.jit.ScriptModule):
+        for node in model.graph.nodes():
+            # Jit will record the codes position so we can check if the node use ipex exporter.
+            if "torch_ipex::rotary_position_embedding" in node.__str__():
+                return True
+        return False
+    else:
+        return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES and task in _IPEX_EXPORTED_TASK
+
+
+def ipex_jit_trace(model, task, use_cache):
+    # Only support torch version >= 2.1.0 to support example_kwarg_inputs in jit.trace
+    if is_torch_version("<", "2.1.0"):
+        raise ImportError("`torch>=2.1.0` is needed to trace your model")
+
+    if _is_patched_with_ipex(model, task):
+        model = _patch_model(model)
+        sample_inputs = get_dummy_input(model, return_dict=True)
+        # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
+        _enable_tpp()
+    else:
+        model = patch_decoder_attention_mask(model)
+        sample_inputs = prepare_jit_inputs(model, task, use_cache)
+
+    model.config.return_dict = False
+
+    model = ipex.optimize(model.eval(), dtype=model.dtype, inplace=True)
+    with torch.no_grad():
+        trace_model = torch.jit.trace(
+            model,
+            example_kwarg_inputs=sample_inputs,
+            strict=False,
+            check_trace=False,
+        )
+        trace_model = torch.jit.freeze(trace_model)
+        trace_model(**sample_inputs)
+        trace_model(**sample_inputs)
+
+    return trace_model
 
 
 class IPEXModel(OptimizedModel):
@@ -58,6 +109,7 @@ class IPEXModel(OptimizedModel):
     export_feature = "feature-extraction"
     base_model_prefix = "ipex_model"
     main_input_name = "input_ids"
+    output_name = "last_hidden_state"
 
     def __init__(
         self,
@@ -73,6 +125,7 @@ class IPEXModel(OptimizedModel):
         self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model.to(self._device)
         self.model_save_dir = model_save_dir
+        self._is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
 
         self.input_names = {
             inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
@@ -116,9 +169,7 @@ class IPEXModel(OptimizedModel):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        model = patch_decoder_attention_mask(model)
-        model = ipex.optimize(model, dtype=torch_dtype, level="O1", auto_kernel_selection=True)
-        traced_model = jit_trace(model, task, use_cache)
+        traced_model = ipex_jit_trace(model, task, use_cache)
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
@@ -135,6 +186,7 @@ class IPEXModel(OptimizedModel):
             cache_dir=cache_dir,
             local_files_only=local_files_only,
             use_cache=use_cache,
+            model_dtype=torch_dtype,
         )
 
     @classmethod
@@ -194,7 +246,12 @@ class IPEXModel(OptimizedModel):
             inputs["token_type_ids"] = token_type_ids
 
         outputs = self._call_model(**inputs)
-        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
+        if isinstance(outputs, dict):
+            model_output = ModelOutput(**outputs)
+        else:
+            model_output = ModelOutput()
+            model_output[self.output_name] = outputs[0]
+        return model_output
 
     def eval(self):
         self.model.eval()
@@ -217,7 +274,7 @@ class IPEXModel(OptimizedModel):
 
     def _call_model(self, *args, **kwargs):
         try:
-            with torch.autocast(self.device.type, self.dtype):
+            with torch.autocast(self.device.type, self.dtype), torch.no_grad():
                 out = self.model(*args, **kwargs)
         except RuntimeError:
             out = self.model(*args, **kwargs)
@@ -234,25 +291,30 @@ class IPEXModel(OptimizedModel):
     def _init_warmup(self):
         # warmup, the first 2 forwards of an IPEX model include some preprocessing steps and
         # the results of the compute are unpredictable
-        use_cache = "past_key_values" in self.input_names
-        dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
-        for _ in range(2):
-            self(**dummy_inputs)
+        # TODO : add warmup for IPEX exported model
+        if not self._is_ipex_exported:
+            use_cache = "past_key_values" in self.input_names
+            dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
+            for _ in range(2):
+                self(**dummy_inputs)
 
 
 class IPEXModelForSequenceClassification(IPEXModel):
     auto_model_class = AutoModelForSequenceClassification
     export_feature = "text-classification"
+    output_name = "logits"
 
 
 class IPEXModelForTokenClassification(IPEXModel):
     auto_model_class = AutoModelForTokenClassification
     export_feature = "token-classification"
+    output_name = "logits"
 
 
 class IPEXModelForMaskedLM(IPEXModel):
     auto_model_class = AutoModelForMaskedLM
     export_feature = "fill-mask"
+    output_name = "logits"
 
 
 class IPEXModelForImageClassification(IPEXModel):
@@ -357,7 +419,14 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
 
-        self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
+        if self._is_ipex_exported:
+            self._reorder_cache = _ipex_reorder_cache
+        else:
+            # Check if _reorder_cache is a static method
+            if isinstance(self.model_cls.__dict__["_reorder_cache"], staticmethod):
+                self._reorder_cache = self.model_cls._reorder_cache
+            else:
+                self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
 
         if is_transformers_version(">=", "4.38.0") and model_type in {"llama", "phi", "persimmon"}:
             self.prepare_inputs_for_generation = _prepare_inputs_for_generation_for_llama
@@ -383,7 +452,25 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         else:
             num_attention_heads = self.normalized_config.num_attention_heads
 
-        if model_type == "bloom":
+        if self._is_ipex_exported:
+            # Indirect access kv cache has a different data layout compared with most transformers model,
+            # see https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/llm.html#indirect-access-kv-cache
+            beam_idx_tmp = torch.zeros(
+                (self.config.max_position_embeddings, input_ids.shape[0]), dtype=torch.long
+            ).contiguous()
+            past_key_values = tuple(
+                [
+                    (
+                        torch.zeros(1, 0, 0, 1, dtype=torch.long).contiguous(),
+                        torch.zeros([1, 1, 1, 1]).contiguous(),
+                        torch.zeros([1, 1, 1, 1]).contiguous(),
+                        beam_idx_tmp,
+                    )
+                    for i in range(num_layers)
+                ]
+            )
+            return past_key_values
+        elif model_type == "bloom":
             shape_key = (batch_size * num_attention_heads, d_k, 0)
             shape_value = (batch_size * num_attention_heads, 0, d_k)
             key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)
@@ -505,3 +592,23 @@ def _prepare_inputs_for_generation_for_llama(
         }
     )
     return model_inputs
+
+
+def _ipex_reorder_cache(
+    past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+) -> Tuple[Tuple[torch.Tensor]]:
+    # Ipex patched model uses indirect access kv cache which has a different shape with other transformers models
+    if len(past_key_values[0]) == 4 and past_key_values[0][0].shape[-1] == 1:
+        for layer_past in past_key_values:
+            layer_past[3][layer_past[0].size(-2) - 1] = beam_idx
+        return past_key_values
+    elif len(past_key_values[0]) == 8:
+        for layer_past in past_key_values:
+            layer_past[3][layer_past[0].size(-2) - 1] = beam_idx
+            layer_past[7][layer_past[0].size(-2) - 1] = beam_idx
+        return past_key_values
+    else:
+        return tuple(
+            tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+            for layer_past in past_key_values
+        )

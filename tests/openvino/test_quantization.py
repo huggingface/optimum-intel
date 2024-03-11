@@ -154,16 +154,16 @@ class OVWeightCompressionTest(unittest.TestCase):
     # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = (
         (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 70, 70),
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 44, 46),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 44, 44),
     )
 
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 64, 365),)
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 388),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 365),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 385),)
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS = (
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 16, 136),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 14, 136),
     )
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = (
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 44, 46),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 44, 44),
     )
 
     LOAD_IN_4_BITS_SCOPE = (
@@ -171,7 +171,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForCausalLM,
             "hf-internal-testing/tiny-random-gpt2",
             dict(bits=4, sym=False, group_size=-1, ratio=0.8),
-            16,
+            14,
         ),
         (
             OVModelForCausalLM,
@@ -182,13 +182,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=32,
                 ignored_scope={"names": ["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]},
             ),
-            6,
+            4,
         ),
         (
             OVModelForCausalLM,
             "hf-internal-testing/tiny-random-gpt2",
             dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
-            22,
+            18,
         ),
         (
             OVModelForCausalLM,
@@ -201,7 +201,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="ptb",
             ),
-            16,
+            14,
         ),
         (
             OVModelForCausalLM,
@@ -215,7 +215,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="ptb",
                 awq=True,
             ),
-            16,
+            14,
         ),
     )
 

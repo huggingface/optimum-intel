@@ -82,7 +82,17 @@ from optimum.intel import OVModelForCausalLM, OVWeightQuantizationConfig
 
 model = OVModelForCausalLM.from_pretrained(
     model_id,
-    export=True,
+    quantization_config=OVWeightQuantizationConfig(bits=4),
+)
+```
+
+You can tune quantization parameters to achieve a better performance accuracy trade-off as follows:
+
+```python
+from optimum.intel import OVModelForCausalLM, OVWeightQuantizationConfig
+
+model = OVModelForCausalLM.from_pretrained(
+    model_id,
     quantization_config=OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, dataset="ptb"),
 ) 
 ```
