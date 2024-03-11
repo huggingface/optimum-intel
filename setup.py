@@ -1,4 +1,6 @@
+import os
 import re
+import subprocess
 
 from setuptools import find_namespace_packages, setup
 
@@ -8,6 +10,18 @@ try:
     filepath = "optimum/intel/version.py"
     with open(filepath) as version_file:
         (__version__,) = re.findall('__version__ = "(.*)"', version_file.read())
+    if __version__.endswith(".dev0"):
+        dev_version_id = "unknown_version"
+        try:
+            repo_root = os.path.dirname(os.path.realpath(__file__))
+            dev_version_id = (
+                subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=repo_root)  # nosec
+                .strip()
+                .decode()
+            )
+        except subprocess.CalledProcessError:
+            pass
+        __version__ = __version__ + "+" + dev_version_id
 except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
