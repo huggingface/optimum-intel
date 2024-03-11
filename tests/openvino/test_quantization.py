@@ -490,6 +490,27 @@ class OVWeightCompressionTest(unittest.TestCase):
                     }
                     save_model_patch.aasert_called_with(saving_params)
 
+    def test_ovmodel_load_large_model_with_additional_quantization_config(self):
+        with unittest.mock.patch("transformers.modeling_utils.ModuleUtilsMixin") as model_mixin_patch:
+            model_mixin_patch.num_parameters.return_value = 2e9
+            with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
+                with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
+                    _ = OVModelForCausalLM.from_pretrained(
+                        MODEL_NAMES["llama"],
+                        export=True,
+                        compile=False,
+                        use_cache=False,
+                        quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, group_size=-1, ratio=0.8),
+                    )
+                    # quantization will be performed later, using load_model
+                    saving_params = {
+                        "model": unittest.mock.ANY,
+                        "path": unittest.mock.ANY,
+                        "compression_option": "fp32",
+                        "compression_ratio": None,
+                    }
+                    save_model_patch.aasert_called_with(saving_params)
+
 
 class OVQuantizerQATest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (("hf-internal-testing/tiny-random-BertForQuestionAnswering",),)
