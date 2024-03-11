@@ -15,9 +15,9 @@
 import logging as log
 
 from optimum.intel.utils.import_utils import (
-    _openvino_version,
     _torch_version,
     _transformers_version,
+    is_openvino_version,
     is_torch_version,
     is_transformers_version,
 )
@@ -41,7 +41,7 @@ def patch_model_with_bettertransformer(model):
             + COLOR_RESET
         )
 
-    if is_transformers_version(">=", "4.38") and _openvino_version < "2024.1.0-14612":
+    if is_transformers_version(">=", "4.38") and is_openvino_version("<", "2024.1.0-14612"):
         log.warn(
             COLOR_RED + f"[WARNING] Stateful models are not supported with Transformers {_transformers_version} and "
             "this OpenVINO version. For good performance, consider using a nightly OpenVINO build: "
