@@ -260,7 +260,7 @@ class OVBaseDecoderModel(OVModel):
             if use_cache:
                 task = task + "-with-past"
 
-        # If load_in_8bit or quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
         if load_in_8bit is None and not quantization_config:
             ov_export_config = None
         else:
