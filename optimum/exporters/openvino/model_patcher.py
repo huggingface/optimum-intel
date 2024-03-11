@@ -15,6 +15,7 @@
 import logging as log
 
 from optimum.intel.utils.import_utils import (
+    _openvino_version,
     _torch_version,
     _transformers_version,
     is_openvino_version,
@@ -41,10 +42,18 @@ def patch_model_with_bettertransformer(model):
             + COLOR_RESET
         )
 
-    if getattr(model.config, "model_type") in {"gpt_bigcode", "llama"} and is_transformers_version(">=", "4.38") and is_openvino_version("<", "2024.1.0-14612"):
+    if (
+        getattr(model.config, "model_type") in {"gpt_bigcode", "llama"}
+        and is_transformers_version(">=", "4.38")
+        and is_openvino_version("<", "2024.1.0-14612")
+    ):
+        # display commit-id only when a nightly/prerelease of OpenVINO is installed.
+        display_version = (
+            _openvino_version.split("-")[0] if is_openvino_version("<=", "2024.0.0-14509") else _openvino_version
+        )
         log.warn(
             COLOR_RED + f"[WARNING] Stateful models are not supported with Transformers {_transformers_version} and "
-            "this OpenVINO version. For good performance, consider using a nightly OpenVINO build: "
+            f"OpenVINO {display_version}. For good performance, consider using a nightly OpenVINO build: "
             "https://docs.openvino.ai/2024/get-started/install-openvino.html. For models that do not need transformers "
             "4.38+, it is also an option to downgrade transformers: `pip install transformers==4.37.2`" + COLOR_RESET
         )
