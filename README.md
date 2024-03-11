@@ -44,6 +44,34 @@ where `extras` can be one or more of `ipex`, `neural-compressor`, `openvino`, `n
 
 # Quick tour
 
+## IPEX
+Below are examples of how to use IPEX model to generate texts.
+### generate
+```diff
+import torch
+from transformers import AutoTokenizer, AutoConfig
+- from transformers import AutoModelForCausalLM
++ from optimum.intel.ipex import IPEXModelForCausalLM
+
+config = AutoConfig.from_pretrained("gpt2")
+model = IPEXModelForCausalLM.from_pretrained(
+  "gpt2",
+  config=config,
+  torch_dtype=torch.bfloat16,
+  export=True,
+)
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+input_sentence = ["Answer the following yes/no question by reasoning step-by-step please. Can you write a whole Haiku in a single tweet?"]
+model_inputs = tokenizer(input_sentence, return_tensors="pt")
+generation_kwargs = dict(max_new_tokens=32, do_sample=False, num_beams=4, num_beam_groups=1, no_repeat_ngram_size=2, use_cache=True)
+
+generated_ids = model.generate(**model_inputs, **generation_kwargs)
+output = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+print(output)
+```
+
+For more details, please refer to the [documentation](https://intel.github.io/intel-extension-for-pytorch/#introduction).
+
 ## Neural Compressor
 
 Dynamic quantization can be used through the Optimum command-line interface:
