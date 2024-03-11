@@ -272,14 +272,6 @@ class IPEXModel(OptimizedModel):
         )
         return self._dtype
 
-    def _call_model(self, *args, **kwargs):
-        try:
-            with torch.autocast(self.device.type, self.dtype), torch.no_grad():
-                out = self.model(*args, **kwargs)
-        except RuntimeError:
-            out = self.model(*args, **kwargs)
-        return out
-
     def to(self, device: Union[torch.device, str]):
         self._device = device if isinstance(device, torch.device) else torch.device(device)
         self.model.to(self._device)
@@ -287,6 +279,14 @@ class IPEXModel(OptimizedModel):
 
     def can_generate(self):
         return isinstance(self, GenerationMixin)
+
+    def _call_model(self, *args, **kwargs):
+        try:
+            with torch.autocast(self.device.type, self.dtype), torch.no_grad():
+                out = self.model(*args, **kwargs)
+        except RuntimeError:
+            out = self.model(*args, **kwargs)
+        return out
 
     def _init_warmup(self):
         # warmup, the first 2 forwards of an IPEX model include some preprocessing steps and
