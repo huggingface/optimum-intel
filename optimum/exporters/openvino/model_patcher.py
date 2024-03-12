@@ -15,21 +15,24 @@
 import logging as log
 
 from optimum.intel.utils.import_utils import (
+    _openvino_version,
     _torch_version,
     _transformers_version,
+    is_openvino_version,
     is_torch_version,
     is_transformers_version,
 )
 
 
 def patch_model_with_bettertransformer(model):
+    COLOR_RED = "\033[1;31m"
+    COLOR_RESET = "\033[0m"
+
     # check that the model has not yet been pathced
     if hasattr(model, "use_bettertransformer") and model.use_bettertransformer is True:
         return model
 
     if is_transformers_version("<", "4.36") or is_torch_version("<", "2.1.1"):
-        COLOR_RED = "\033[1;31m"
-        COLOR_RESET = "\033[0m"
         log.warn(
             COLOR_RED
             + "[WARNING] For good performance with stateful models, transformers>=4.36.2 and PyTorch>=2.1.1 are required. "
@@ -37,6 +40,22 @@ def patch_model_with_bettertransformer(model):
             "Consider upgrading PyTorch and Transformers, for example by running "
             "`pip install --upgrade --upgrade-strategy eager optimum[openvino]`, and export the model again"
             + COLOR_RESET
+        )
+
+    if (
+        getattr(model.config, "model_type") in {"gpt_bigcode", "llama"}
+        and is_transformers_version(">=", "4.38")
+        and is_openvino_version("<", "2024.1.0-14612")
+    ):
+        # display commit-id only when a nightly/prerelease of OpenVINO is installed.
+        display_version = (
+            _openvino_version.split("-")[0] if is_openvino_version("<=", "2024.0.0-14509") else _openvino_version
+        )
+        log.warn(
+            COLOR_RED + f"[WARNING] Stateful models are not supported for Llama and GPTBigCode with Transformers "
+            f"{_transformers_version} and OpenVINO {display_version}. For good performance, consider using a nightly OpenVINO build: "
+            "https://docs.openvino.ai/2024/get-started/install-openvino.html. For models that do not need transformers "
+            "4.38+, it is also an option to downgrade transformers: `pip install transformers==4.37.2`" + COLOR_RESET
         )
 
     # model already has required SDPA implementation
