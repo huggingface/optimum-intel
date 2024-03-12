@@ -20,7 +20,7 @@ from glob import glob
 
 import numpy as np
 from huggingface_hub import model_info
-from openvino.runtime import Type, properties
+from openvino.runtime import Core, Type, properties
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 
@@ -155,3 +155,9 @@ def _print_compiled_model_properties(compiled_model):
                 logger.info(f"  {k}: {value}")
         except Exception:
             logger.error(f"[error] Get property of '{k}' failed")
+    try:
+        logger.info("EXECUTION_DEVICES:")
+        for device in compiled_model.get_property("EXECUTION_DEVICES"):
+            logger.info(f"  {device}: {Core().get_property(device, 'FULL_DEVICE_NAME')}")
+    except Exception:
+        logger.error("[error] Get FULL_DEVICE_NAME failed")
