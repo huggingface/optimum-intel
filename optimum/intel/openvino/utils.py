@@ -99,6 +99,13 @@ _HEAD_TO_AUTOMODELS = {
 }
 
 
+PREDEFINED_SD_DATASETS = {
+    "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
+    "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
+    "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}},
+}
+
+
 def use_external_data_format(num_parameters: int) -> bool:
     """
     Returns whether or not the model requires using external data format for the ONNX export
