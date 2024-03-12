@@ -1,0 +1,67 @@
+name: OpenVINO - Notebooks and Examples Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron:  '14 3 * * 1'  # run weekly: every Monday at 3:14
+  push:
+    paths:
+    - '.github/workflows/test_openvino_notebooks.yml'
+    - '.github/workflows/test_openvino_examples.yml'
+    - 'notebooks/openvino/*'
+    - 'examples/openvino/*'
+  pull_request:
+    paths:
+    - '.github/workflows/test_openvino_notebooks.yml'
+    - '.github/workflows/test_openvino_examples.yml'
+    - 'notebooks/openvino/*'
+    - 'examples/openvino/*'
+
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.10"]
+
+    runs-on: ubuntu-20.04
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Setup Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
+        # ffmpeg, torchaudio and pillow are required for image classification and audio classification pipelines
+        sudo apt-get install ffmpeg
+        # pip install torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
+        pip install ".[tests, openvino]" nbval
+        pip install optimum[openvino] nncf torchaudio datasets==2.4.0 
+        pip install -r notebooks/openvino/requirements.txt
+        pip install -r examples/openvino/image-classification/requirements.txt
+        pip install -r examples/openvino/question-answering/requirements.txt
+        pip install -r examples/openvino/text-classification/requirements.txt
+
+    - run: free -h
+    - run: lscpu
+    - run: pip freeze
+
+    - name: Test with Pytest
+      run: |
+        python -m pytest --nbval-lax notebooks/openvino/optimum_openvino_inference.ipynb  notebooks/openvino/question_answering_quantization.ipynb
+
+    - name: Test examples
+      run: |
+        #python examples/openvino/audio-classification/run_audio_classification.py     --model_name_or_path facebook/wav2vec2-base     --nncf_compression_config examples/openvino/audio-classification/configs/wav2vec2-base-qat.json     --dataset_name superb     --dataset_config_name ks     --max_train_samples 10   --max_eval_samples 2  --output_dir /tmp/qat-wav2vec2-base-ft-keyword-spotting     --overwrite_output_dir     --remove_unused_columns False     --do_train   --learning_rate 3e-5     --max_length_seconds 1     --attention_mask False     --warmup_ratio 0.1     --num_train_epochs 1    --gradient_accumulation_steps 1    --dataloader_num_workers 1     --logging_strategy steps     --logging_steps 1     --evaluation_strategy epoch     --save_strategy epoch     --load_best_model_at_end False    --seed 42
+        TASK_NAME=sst2  &&  python examples/openvino/text-classification/run_glue.py     --model_name_or_path sshleifer/tiny-distilbert-base-cased-distilled-squad     --task_name $TASK_NAME    --max_train_samples 10   --max_eval_samples 2   --output_dir /tmp/qat-bert-base-ft-$TASK_NAME     --overwrite_output_dir     --do_train     --do_eval     --max_seq_length 128     --learning_rate 1e-5     --optim adamw_torch     --num_train_epochs 1     --logging_steps 10     --evaluation_strategy steps     --eval_steps 5     --save_strategy epoch     --seed 42
+        python examples/openvino/question-answering/run_qa.py   --model_name_or_path sshleifer/tiny-distilbert-base-cased-distilled-squad   --dataset_name squad   --do_train   --do_eval     --max_train_samples 10   --max_eval_samples 2   --learning_rate 3e-5   --num_train_epochs 1   --max_seq_length 384   --doc_stride 128   --output_dir /tmp/outputs_squad/   --overwrite_output_dir
+        python examples/openvino/image-classification/run_image_classification.py     --model_name_or_path nateraw/vit-base-beans     --dataset_name beans     --max_train_samples 10   --max_eval_samples 2  --remove_unused_columns False     --do_train  --learning_rate 2e-5     --num_train_epochs 1    --logging_strategy steps     --logging_steps 1     --evaluation_strategy epoch     --save_strategy epoch     --save_total_limit 1     --seed 1337     --output_dir /tmp/beans_outputs/
