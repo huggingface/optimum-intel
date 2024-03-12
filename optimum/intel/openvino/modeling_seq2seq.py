@@ -456,7 +456,7 @@ class OVEncoder:
         if (
             "CACHE_DIR" not in ov_config.keys()
             and not str(self.parent_model.model_save_dir).startswith(gettempdir())
-            and self._device.lower().split(":")[0] == "gpu"
+            and "gpu" in self._device.lower()
         ):
             cache_dir = Path(self.parent_model.model_save_dir).joinpath("model_cache")
             ov_config["CACHE_DIR"] = str(cache_dir)
