@@ -108,7 +108,7 @@ optimum-cli export openvino --model gpt2 --weight-format int8 ov_model
 This type of optimization allows to reduce the memory footprint and inference latency.
 
 
-By default the quantization scheme will be [assymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#symmetric-quantization) you can add `--sym`.
+By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#symmetric-quantization) you can add `--sym`.
 
 For INT4 quantization you can also specify the following arguments :
 * The `--group-size` parameter will define the group size to use for quantization, `-1` it will results in per-column quantization.
