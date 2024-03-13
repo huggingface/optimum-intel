@@ -99,7 +99,7 @@ tokenizer.save_pretrained(save_directory)
 
 ### Weight-only quantization
 
-You can also apply fp16, 8-bit or 4-bit weight compression on the linear and embedding layers when exporting your model with the CLI by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
+You can also apply fp16, 8-bit or 4-bit weight compression on the Linear, Convolutional and Embedding layers when exporting your model with the CLI by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
 
 ```bash
 optimum-cli export openvino --model gpt2 --weight-format int8 ov_model

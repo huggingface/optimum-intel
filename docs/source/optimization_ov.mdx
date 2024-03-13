@@ -25,7 +25,7 @@ Quantization is a technique to reduce the computational and memory costs of runn
 
 ### Weight-only quantization
 
-Quantization can be applied on the model's linear and embedding layers, enabling the loading of large models on memory-limited devices. For example, when applying 8-bit quantization, the resulting model will be x4 smaller than its fp32 counterpart. For 4-bit quantization, the reduction in memory could theoretically reach x8, but is closer to x6 in practice.
+Quantization can be applied on the model's Linear, Convolutional and Embedding layers, enabling the loading of large models on memory-limited devices. For example, when applying 8-bit quantization, the resulting model will be x4 smaller than its fp32 counterpart. For 4-bit quantization, the reduction in memory could theoretically reach x8, but is closer to x6 in practice.
 
 
 #### 8-bit
