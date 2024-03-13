@@ -11,7 +11,7 @@ try:
     with open(filepath) as version_file:
         (__version__,) = re.findall('__version__ = "(.*)"', version_file.read())
     if __version__.endswith(".dev0"):
-        dev_version_id = "unknown_version"
+        dev_version_id = ""
         try:
             repo_root = os.path.dirname(os.path.realpath(__file__))
             dev_version_id = (
@@ -19,9 +19,10 @@ try:
                 .strip()
                 .decode()
             )
+            dev_version_id = "+" + dev_version_id
         except subprocess.CalledProcessError:
             pass
-        __version__ = __version__ + "+" + dev_version_id
+        __version__ = __version__ + dev_version_id
 except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
