@@ -24,7 +24,6 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 from ...intel.utils.import_utils import (
-    is_openvino_tokenizers_available,
     is_optimum_version,
     is_transformers_version,
 )
