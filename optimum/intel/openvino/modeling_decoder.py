@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import logging
 import os
 from pathlib import Path
@@ -100,6 +101,7 @@ class OVBaseDecoderModel(OVModel):
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         if not dynamic_shapes:
@@ -117,6 +119,7 @@ class OVBaseDecoderModel(OVModel):
             dynamic_shapes=False,
             ov_config=ov_config,
             model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
             **kwargs,
         )
 
@@ -224,6 +227,8 @@ class OVBaseDecoderModel(OVModel):
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
 
+        self._save_openvino_config(save_directory)
+
     @classmethod
     def _from_transformers(
         cls,
@@ -255,11 +260,11 @@ class OVBaseDecoderModel(OVModel):
             if use_cache:
                 task = task + "-with-past"
 
-        # If load_in_8bit or quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None or not quantization_config:
-            ov_config = None
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None and not quantization_config:
+            ov_export_config = None
         else:
-            ov_config = OVConfig(dtype="fp32")
+            ov_export_config = OVConfig(dtype="fp32")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
 
@@ -274,7 +279,7 @@ class OVBaseDecoderModel(OVModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
+            ov_config=ov_export_config,
             stateful=stateful,
         )
 
@@ -576,15 +581,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
-        # Give default quantization config if not provided and load_in_8bit=True
-        if load_in_8bit:
-            quantization_config = quantization_config or {"bits": 8}
+        if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
+            quantization_config = _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, quantization_config)
 
-        if isinstance(quantization_config, dict):
-            if quantization_config == {"bits": 4} and config.name_or_path in _DEFAULT_4BIT_CONFIGS:
-                quantization_config = _DEFAULT_4BIT_CONFIGS[config.name_or_path]
-
-            quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
         model = cls.load_model(model_cache_path, quantization_config=None if load_in_4bit else quantization_config)
@@ -603,7 +603,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         enable_compilation = kwargs.pop("compile", True) and not load_in_4bit
         causal_model = init_cls(
-            model=model, config=config, model_save_dir=model_cache_path.parent, compile=enable_compilation, **kwargs
+            model=model,
+            config=config,
+            model_save_dir=model_cache_path.parent,
+            compile=enable_compilation,
+            quantization_config=quantization_config,
+            **kwargs,
         )
 
         if load_in_4bit:
@@ -630,8 +635,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 # from optimum.gptq.utils import get_seqlen
 
                 # seqlen = get_seqlen(causal_model)
-                dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32)
+                nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
+                dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
                 dataset = prepare_dataset(dataset)
+                quantization_config = copy.deepcopy(quantization_config)
                 quantization_config.dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))
 
             _weight_only_quantization(model, quantization_config)

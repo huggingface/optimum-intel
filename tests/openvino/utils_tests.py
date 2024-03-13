@@ -102,12 +102,12 @@ TENSOR_ALIAS_TO_TYPE = {
 SEED = 42
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
-    "bert": (70,),
+    "bert": (68,),
     "roberta": (68,),
     "albert": (84,),
     "vit": (64,),
     "blenderbot": (70,),
-    "gpt2": (46,),
+    "gpt2": (44,),
     "wav2vec2": (34,),
     "distilbert": (66,),
     "t5": (64, 104, 84),
@@ -116,7 +116,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion-xl-refiner": (366, 34, 42, 66),
 }
 
-_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (64, 477)}
+_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (62, 86)}
 
 
 def get_num_quantized_nodes(ov_model):
@@ -127,8 +127,8 @@ def get_num_quantized_nodes(ov_model):
         if "FakeQuantize" in elem.name:
             num_fake_quantize += 1
         for i in range(elem.get_output_size()):
-            if "8" in elem.get_output_element_type(i).get_type_name():
+            if elem.get_output_element_type(i).get_type_name() in ["i8", "u8"]:
                 num_int8 += 1
-            if "4" in elem.get_output_element_type(i).get_type_name():
+            if elem.get_output_element_type(i).get_type_name() in ["i4", "u4"]:
                 num_int4 += 1
     return num_fake_quantize, num_int8, num_int4

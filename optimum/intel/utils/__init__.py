@@ -16,6 +16,7 @@ from .import_utils import (
     _neural_compressor_version,
     _torch_version,
     compare_versions,
+    is_accelerate_available,
     is_diffusers_available,
     is_ipex_available,
     is_neural_compressor_available,

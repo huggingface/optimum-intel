@@ -12,17 +12,20 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import copy
 import inspect
 import logging
 import os
+from collections import deque
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import nncf
 import openvino
 import torch
 import transformers
 from nncf import CompressWeightsMode, IgnoredScope, NNCFConfig, SensitivityMetric
+from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters
 from nncf.torch import create_compressed_model, register_default_init_args, register_module
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
@@ -44,7 +47,7 @@ from ...exporters.openvino.stateful import ensure_export_task_support_stateful, 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import DATASETS_IMPORT_ERROR, is_datasets_available
 from ..utils.modeling_utils import get_model_device
-from .configuration import OVConfig, OVWeightQuantizationConfig
+from .configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     MAX_ONNX_OPSET,
@@ -55,8 +58,7 @@ from .utils import (
 
 
 if is_datasets_available():
-    if TYPE_CHECKING:
-        from datasets import Dataset
+    from datasets import Dataset
 
 register_module(ignored_algorithms=[])(Conv1D)
 
@@ -87,11 +89,14 @@ class InferRequestWrapper:
         self.data_cache = data_cache
 
     def __call__(self, *args, **kwargs):
-        self.data_cache.append(*args)
+        # If __call__ is invoked then self.request must be an instance of CompiledModel
+        signature = inspect.signature(self.request)
+        bound_args = signature.bind(*args, **kwargs).arguments
+        self.data_cache.append(copy.deepcopy(bound_args["inputs"]))
         return self.request(*args, **kwargs)
 
     def infer(self, inputs: Any = None, share_inputs: bool = False):
-        self.data_cache.append(inputs)
+        self.data_cache.append(copy.deepcopy(inputs))
         return self.request.infer(inputs, share_inputs)
 
     def start_async(
@@ -102,7 +107,7 @@ class InferRequestWrapper:
         *,
         shared_memory: Any = None,
     ):
-        self.data_cache.append(inputs)
+        self.data_cache.append(copy.deepcopy(inputs))
         self.request.infer(inputs, share_inputs, share_outputs=True)
 
     def wait(self):
@@ -143,6 +148,7 @@ class OVQuantizer(OptimumQuantizer):
             )
         self.task = task or feature
         self.seed = seed
+        # TODO : deprecate input_names
         self.input_names = None
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
@@ -231,8 +237,11 @@ class OVQuantizer(OptimumQuantizer):
             )
         ov_config = ov_config or quantization_config
 
-        if ov_config is not None and not isinstance(ov_config, OVConfig):
-            raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
+        if ov_config is not None:
+            if not isinstance(ov_config, OVConfig):
+                raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
+            elif ov_config.compression is None:
+                ov_config.compression = DEFAULT_QUANTIZATION_CONFIG
 
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
@@ -351,7 +360,7 @@ class OVQuantizer(OptimumQuantizer):
             logger.info(
                 "No configuration describing the quantization process was provided, a default OVConfig will be generated."
             )
-            ov_config = OVConfig()
+            ov_config = OVConfig(compression=DEFAULT_QUANTIZATION_CONFIG)
         onnx_file_name = (
             ONNX_WEIGHTS_NAME
             if file_name is None and ov_config.save_onnx_model
@@ -519,9 +528,15 @@ class OVQuantizer(OptimumQuantizer):
         data_collator: Optional[DataCollator] = None,
     ) -> OVDataLoader:
         data_collator = data_collator if data_collator is not None else default_data_collator
+
+        if not is_datasets_available() or not isinstance(calibration_dataset, Dataset):
+            logger.warning(
+                "`remove_unused_columns` set to `False` as calibration_dataset is not an instance of `datasets.Dataset`"
+            )
+            remove_unused_columns = False
+
         if remove_unused_columns:
             calibration_dataset = self._remove_unused_columns(calibration_dataset)
-        self.input_names = calibration_dataset.column_names
         generator = torch.Generator()
         generator.manual_seed(self.seed)
         sampler = RandomSampler(calibration_dataset, generator=generator)
@@ -537,7 +552,7 @@ class OVQuantizer(OptimumQuantizer):
 
 def _weight_only_quantization(
     model: openvino.runtime.Model, quantization_config: Union[OVWeightQuantizationConfig, Dict]
-):
+) -> openvino.runtime.Model:
     config = quantization_config
     if isinstance(config, dict):
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
@@ -551,7 +566,8 @@ def _weight_only_quantization(
 
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        dataset = get_dataset(config.dataset, tokenizer, seqlen=32)
+        nsamples = config.num_samples if config.num_samples else 128
+        dataset = get_dataset(config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
         dataset = prepare_dataset(dataset)
 
     sensitivity_metric = None
@@ -577,4 +593,92 @@ def _weight_only_quantization(
         # awq=config.quant_method == "awq", # TODO : remove and add it back once nncf v2.9.0
         ignored_scope=ignored_scope,
         dataset=dataset,
+        # subset_size=config.num_samples if config.num_samples else 128, # TODO : enable from nncf v2.9.0
     )
+
+
+def _get_operation_const_op(operation, const_port_id: int):
+    node = operation.input_value(const_port_id).get_node()
+    queue = deque([node])
+    constant_node = None
+    allowed_propagation_types_list = ["Convert", "FakeQuantize", "Reshape"]
+
+    while len(queue) != 0:
+        curr_node = queue.popleft()
+        if curr_node.get_type_name() == "Constant":
+            constant_node = curr_node
+            break
+        if len(curr_node.inputs()) == 0:
+            break
+        if curr_node.get_type_name() in allowed_propagation_types_list:
+            queue.append(curr_node.input_value(0).get_node())
+
+    return constant_node
+
+
+def _is_embedding(node) -> bool:
+    allowed_types_list = ["f16", "f32", "f64"]
+    const_port_id = 0
+    input_tensor = node.input_value(const_port_id)
+    if input_tensor.get_element_type().get_type_name() in allowed_types_list:
+        const_node = _get_operation_const_op(node, const_port_id)
+        if const_node is not None:
+            return True
+
+    return False
+
+
+def _collect_ops_with_weights(model):
+    ops_with_weights = []
+    for op in model.get_ops():
+        if op.get_type_name() == "MatMul":
+            constant_node_0 = _get_operation_const_op(op, const_port_id=0)
+            constant_node_1 = _get_operation_const_op(op, const_port_id=1)
+            if constant_node_0 or constant_node_1:
+                ops_with_weights.append(op.get_friendly_name())
+        if op.get_type_name() == "Gather" and _is_embedding(op):
+            ops_with_weights.append(op.get_friendly_name())
+
+    return ops_with_weights
+
+
+def _hybrid_quantization(
+    model: openvino.runtime.Model, quantization_config: OVWeightQuantizationConfig, dataset: Dict[str, Any]
+) -> openvino.runtime.Model:
+    """
+    Quantize a model in hybrid mode with NNCF which means that we quantize:
+    weights of MatMul and Embedding layers and activations of other layers.
+    The optimization specifications defined in `quantization_config`.
+
+    Args:
+        model (`openvino.runtime.Model`):
+            The OpenVINO Runtime model for applying hybrid quantization.
+        quantization_config (`OVWeightQuantizationConfig`):
+            The configuration containing the parameters related to quantization.
+        dataset (`Dict[str, Any]`):
+            The dataset used for hybrid quantization.
+    Returns:
+        The OpenVINO Runtime model with applied hybrid quantization.
+    """
+    ops_to_compress = _collect_ops_with_weights(model)
+
+    ignored_scope = quantization_config.ignored_scope if isinstance(quantization_config.ignored_scope, dict) else {}
+    ptq_ignored_scope = nncf.IgnoredScope(**ignored_scope)
+    ptq_ignored_scope.names += ops_to_compress
+
+    wc_quantization_config = copy.deepcopy(quantization_config)
+    wc_quantization_config.ignored_scope = ignored_scope
+    wc_quantization_config.ignored_scope["types"] = ignored_scope.get("types", []) + ["Convolution"]
+    compressed_model = _weight_only_quantization(model, wc_quantization_config)
+
+    subset_size = quantization_config.num_samples if quantization_config.num_samples else 200
+    quantized_model = nncf.quantize(
+        model=compressed_model,
+        calibration_dataset=nncf.Dataset(dataset),
+        model_type=nncf.ModelType.TRANSFORMER,
+        ignored_scope=ptq_ignored_scope,
+        # The SQ algo should be disabled for MatMul nodes because their weights are already compressed
+        advanced_parameters=nncf.AdvancedQuantizationParameters(AdvancedSmoothQuantParameters(matmul=-1)),
+        subset_size=subset_size,
+    )
+    return quantized_model

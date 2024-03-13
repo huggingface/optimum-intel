@@ -38,8 +38,6 @@ save_dir = "ptq_model"
 def preprocess_function(examples, tokenizer):
     return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
 
-# Load the default quantization configuration detailing the quantization we wish to apply
-quantization_config = OVConfig()
 # Instantiate our OVQuantizer using the desired configuration
 quantizer = OVQuantizer.from_pretrained(model)
 # Create the calibration dataset used to perform static quantization
@@ -52,7 +50,6 @@ calibration_dataset = quantizer.get_calibration_dataset(
 )
 # Apply static quantization and export the resulting quantized model to OpenVINO IR format
 quantizer.quantize(
-    quantization_config=quantization_config,
     calibration_dataset=calibration_dataset,
     save_directory=save_dir,
 )
@@ -72,7 +69,28 @@ from optimum.intel import OVModelForCausalLM
 model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
 ```
 
-> **NOTE:** `load_in_8bit` is enabled by default for models larger than 1 billion parameters.
+##  Hybrid quantization
+
+Traditional optimization methods like post-training 8-bit quantization do not work well for Stable Diffusion models and can lead to poor generation results. On the other hand, weight compression does not improve performance significantly when applied to Stable Diffusion models, as the size of activations is comparable to weights.
+The UNet model takes up most of the overall execution time of the pipeline. Thus, optimizing just one model brings substantial benefits in terms of inference speed while keeping acceptable accuracy without fine-tuning. Quantizing the rest of the diffusion pipeline does not significantly improve inference performance but could potentially lead to substantial degradation of accuracy.
+Therefore, the proposal is to apply quantization in *hybrid mode* for the UNet model and weight-only quantization for the rest of the pipeline components. The hybrid mode involves the quantization of weights in MatMul and Embedding layers, and activations of other layers, facilitating accuracy preservation post-optimization while reducing the model size.
+The `quantization_config` is utilized to define optimization parameters for optimizing the Stable Diffusion pipeline. To enable hybrid quantization, specify the quantization dataset in the `quantization_config`. Otherwise, weight-only quantization to a specified data type (8 tr 4 bits) is applied to UNet model.
+
+```python
+from optimum.intel import OVStableDiffusionPipeline, OVWeightQuantizationConfig
+
+model = OVStableDiffusionPipeline.from_pretrained(
+    model_id,
+    export=True,
+    quantization_config=OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions"),
+)
+```
+
+<Tip warning={true}>
+
+`load_in_8bit` is enabled by default for the models larger than 1 billion parameters.
+
+</Tip>
 
 For the 4-bit weight quantization you can use the `quantization_config` to specify the optimization parameters, for example:
 
@@ -81,7 +99,17 @@ from optimum.intel import OVModelForCausalLM, OVWeightQuantizationConfig
 
 model = OVModelForCausalLM.from_pretrained(
     model_id,
-    export=True,
+    quantization_config=OVWeightQuantizationConfig(bits=4),
+)
+```
+
+You can tune quantization parameters to achieve a better performance accuracy trade-off as follows:
+
+```python
+from optimum.intel import OVModelForCausalLM, OVWeightQuantizationConfig
+
+model = OVModelForCausalLM.from_pretrained(
+    model_id,
     quantization_config=OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, dataset="ptb"),
 ) 
 ```
