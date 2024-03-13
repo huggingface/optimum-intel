@@ -230,7 +230,7 @@ class INCQuantizer(OptimumQuantizer):
                     batch_size=batch_size,
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
-                    use_label=False,
+                    use_label=False if "GPTQ" in algo else True,
                 )
             quantization_config.calib_dataloader = calibration_dataloader
 

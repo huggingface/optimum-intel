@@ -205,10 +205,10 @@ class OptimizationTest(INCTestMixin):
         model = AutoModelForCausalLM.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
         calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
             quantization_config = WeightOnlyQuantConfig(weight_dtype="int8")
             q_model = quantizer.quantize(
                 quantization_config=quantization_config,
@@ -220,6 +220,7 @@ class OptimizationTest(INCTestMixin):
             self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
             quantization_config = WeightOnlyQuantConfig(
                 algorithm="GPTQ",
                 weight_dtype="int4_clip",
@@ -235,6 +236,7 @@ class OptimizationTest(INCTestMixin):
             self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
             quantization_config = WeightOnlyQuantConfig(
                 algorithm="AWQ",
                 weight_dtype="int4_clip",
@@ -250,6 +252,7 @@ class OptimizationTest(INCTestMixin):
             self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
             q_model = quantizer.quantize(
                 weight_only=True,  # use RTN quantization method and NF4 weight data type is default.
                 save_directory=tmp_dir,
