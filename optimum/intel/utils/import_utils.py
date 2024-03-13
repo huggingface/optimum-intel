@@ -350,7 +350,7 @@ NEURAL_COMPRESSOR_IMPORT_ERROR = """
 
 INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR = """
 {0} requires the intel-extension-for-transformers library but it was not found in your environment. You can install it with pip:
-`pip install neural-compressor`. Please note that you may need to restart your runtime after installation.
+`pip install intel-extension-for-transformers`. Please note that you may need to restart your runtime after installation.
 """
 
 DATASETS_IMPORT_ERROR = """

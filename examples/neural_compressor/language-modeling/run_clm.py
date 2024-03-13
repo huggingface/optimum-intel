@@ -33,7 +33,6 @@ import evaluate
 import torch
 import transformers
 from datasets import load_dataset
-from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 from neural_compressor import (
     DistillationConfig,
     PostTrainingQuantConfig,
@@ -58,7 +57,10 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 from optimum.intel.neural_compressor import INCModelForCausalLM, INCQuantizer, INCTrainer
+from optimum.intel.utils.import_utils import is_intel_extension_for_transformers_available
 
+if is_intel_extension_for_transformers_available():
+    from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
@@ -626,6 +628,11 @@ def main():
             else:
                 recipes = {}
             if optim_args.quantization_approach == "weight_only":
+                if not is_intel_extension_for_transformers_available():
+                    raise ImportError(
+                        "Didn't find out intel-etension-for-transformers package. "
+                        "Please install packages: pip install intel-etension-for-transformers and pip install peft."
+                    )
                 if optim_args.apply_pruning or optim_args.apply_distillation:
                     raise ValueError("Weight only quantization and pruning or distillation cannot be combined.")
                 quantization_config = WeightOnlyQuantConfig(

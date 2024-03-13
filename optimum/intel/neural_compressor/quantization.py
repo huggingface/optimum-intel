@@ -19,7 +19,7 @@ import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Dict, Optional, TypeAlias, Union
 
 import torch
 from datasets import Dataset, load_dataset
@@ -80,6 +80,9 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.llm.quantization.utils import convert_to_quantized_model
     from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
+    Config: TypeAlias = Union[PostTrainingQuantConfig, WeightOnlyQuantConfig]
+else:
+    Config: TypeAlias = PostTrainingQuantConfig
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +152,7 @@ class INCQuantizer(OptimumQuantizer):
     def quantize(
         self,
         save_directory: Union[str, Path],
-        quantization_config=None,
+        quantization_config: Config = None,
         calibration_dataset: Dataset = None,
         batch_size: int = 8,
         data_collator: Optional[DataCollator] = None,
@@ -162,7 +165,7 @@ class INCQuantizer(OptimumQuantizer):
         Quantize a model given the optimization specifications defined in `quantization_config`.
 
         Args:
-            quantization_config (`PostTrainingQuantConfig`):
+            quantization_config (`Union[PostTrainingQuantConfig, WeightOnlyQuantConfig]`):
                 The configuration containing the parameters related to quantization.
             save_directory (`Union[str, Path]`):
                 The directory where the quantized model should be saved.
@@ -261,8 +264,7 @@ class INCQuantizer(OptimumQuantizer):
                 save_onnx_model = False
 
         if (
-            not weight_only
-            and not isinstance(quantization_config, WeightOnlyQuantConfig)
+            isinstance(quantization_config, PostTrainingQuantConfig)
             and quantization_config.backend == "ipex"
             and is_ipex_version("<", IPEX_MINIMUM_VERSION)
             and "generation" in self.task
@@ -272,7 +274,7 @@ class INCQuantizer(OptimumQuantizer):
                 f"but only version {IPEX_MINIMUM_VERSION} or higher is supported."
             )
 
-        if isinstance(quantization_config, WeightOnlyQuantConfig):
+        if not isinstance(quantization_config, PostTrainingQuantConfig):
             self._quantized_model = convert_to_quantized_model(self._original_model, quantization_config)
             # Save the quantized model
             output_path = save_directory.joinpath(file_name or default_name)

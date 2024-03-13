@@ -202,7 +202,6 @@ class OptimizationTest(INCTestMixin):
 
     def test_weight_only_quantization(self):
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
-        quantization_config = WeightOnlyQuantConfig(weight_dtype="int8")
         model = AutoModelForCausalLM.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
@@ -210,9 +209,49 @@ class OptimizationTest(INCTestMixin):
         calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
+            quantization_config = WeightOnlyQuantConfig(weight_dtype="int8")
+            q_model = quantizer.quantize(
+                quantization_config=quantization_config,
+                save_directory=tmp_dir,
+            )
+            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
+            out = model(inp)[0]
+            q_out = q_model(inp)[0]
+            self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantization_config = WeightOnlyQuantConfig(
+                algorithm="GPTQ",
+                weight_dtype="int4_clip",
+            )
             q_model = quantizer.quantize(
                 quantization_config=quantization_config,
                 calibration_dataset=calibration_dataset,
+                save_directory=tmp_dir,
+            )
+            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
+            out = model(inp)[0]
+            q_out = q_model(inp)[0]
+            self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantization_config = WeightOnlyQuantConfig(
+                algorithm="AWQ",
+                weight_dtype="int4_clip",
+            )
+            q_model = quantizer.quantize(
+                quantization_config=quantization_config,
+                calibration_dataset=calibration_dataset,
+                save_directory=tmp_dir,
+            )
+            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
+            out = model(inp)[0]
+            q_out = q_model(inp)[0]
+            self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            q_model = quantizer.quantize(
+                weight_only=True,  # use RTN quantization method and NF4 weight data type is default.
                 save_directory=tmp_dir,
             )
             inp = torch.tensor([calibration_dataset[0]["input_ids"]])
