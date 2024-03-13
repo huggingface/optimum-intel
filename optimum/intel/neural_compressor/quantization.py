@@ -209,7 +209,7 @@ class INCQuantizer(OptimumQuantizer):
             elif isinstance(quantization_config, WeightOnlyQuantConfig):
                 algo = quantization_config.algorithm
             else:
-                raise ValueError("Weight-only quantization needs a object of WeightOnlyQuantConfig.")
+                raise TypeError(f"For weight-only quantization, `quantization_config` should be an instance of `WeightOnlyQuantConfig`, but got: {type(quantization_config)} instead.")
 
             if calibration_dataset is None and ("GPTQ" in algo or "AWQ" in algo):
                 raise ValueError(
