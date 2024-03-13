@@ -35,7 +35,7 @@ class INCConfig(BaseConfig):
 
     def __init__(
         self,
-        quantization=None,
+        quantization: Optional[Union[Dict, _BaseQuantizationConfig, "WeightOnlyQuantConfig"]] = None,
         pruning: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
         distillation: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
         save_onnx_model: bool = False,
