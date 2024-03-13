@@ -22,11 +22,9 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
+from optimum.exporters.openvino.convert import export_from_model, export_tokenizer
+from optimum.intel.utils.import_utils import is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
-
-
-from ...intel.utils.import_utils import is_transformers_version
-from .convert import export_from_model, export_tokenizer
 
 
 if TYPE_CHECKING:
