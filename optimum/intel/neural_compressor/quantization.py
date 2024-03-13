@@ -19,7 +19,7 @@ import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Dict, Optional, TypeAlias, Union
+from typing import Callable, Dict, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
@@ -81,9 +81,9 @@ if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.llm.quantization.utils import convert_to_quantized_model
     from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
-    Config: TypeAlias = Union[PostTrainingQuantConfig, WeightOnlyQuantConfig]
+    Config = Union[PostTrainingQuantConfig, WeightOnlyQuantConfig]
 else:
-    Config: TypeAlias = PostTrainingQuantConfig
+    Config = PostTrainingQuantConfig
 
 logger = logging.getLogger(__name__)
 
