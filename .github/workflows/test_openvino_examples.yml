@@ -37,7 +37,7 @@ jobs:
     - name: Install dependencies
       run: |
         # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
-        pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+        #pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
         pip install optimum[openvino] nncf
         pip install -r examples/openvino/audio-classification/requirements.txt
         pip install -r examples/openvino/image-classification/requirements.txt
