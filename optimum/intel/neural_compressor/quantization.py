@@ -80,6 +80,7 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.llm.quantization.utils import convert_to_quantized_model
     from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
+
     Config: TypeAlias = Union[PostTrainingQuantConfig, WeightOnlyQuantConfig]
 else:
     Config: TypeAlias = PostTrainingQuantConfig
@@ -212,7 +213,9 @@ class INCQuantizer(OptimumQuantizer):
             elif isinstance(quantization_config, WeightOnlyQuantConfig):
                 algo = quantization_config.algorithm
             else:
-                raise TypeError(f"For weight-only quantization, `quantization_config` should be an instance of `WeightOnlyQuantConfig`, but got: {type(quantization_config)} instead.")
+                raise TypeError(
+                    f"For weight-only quantization, `quantization_config` should be an instance of `WeightOnlyQuantConfig`, but got: {type(quantization_config)} instead."
+                )
 
             if calibration_dataset is None and ("GPTQ" in algo or "AWQ" in algo):
                 raise ValueError(

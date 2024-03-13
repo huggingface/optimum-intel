@@ -59,6 +59,7 @@ from transformers.utils.versions import require_version
 from optimum.intel.neural_compressor import INCModelForCausalLM, INCQuantizer, INCTrainer
 from optimum.intel.utils.import_utils import is_intel_extension_for_transformers_available
 
+
 if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
