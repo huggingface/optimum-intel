@@ -67,7 +67,7 @@ You can tune quantization parameters to achieve a better performance accuracy tr
 quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, dataset="ptb")
 ```
 
-By default the quantization scheme will be [assymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#symmetric-quantization) you can add `sym=True`.
+By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#symmetric-quantization) you can add `sym=True`.
 
 For 4-bit quantization you can also specify the following arguments in the quantization configuration :
 * The `group_size` parameter will define the group size to use for quantization, `-1` it will results in per-column quantization.
