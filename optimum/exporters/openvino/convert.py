@@ -20,7 +20,6 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
-from transformers import T5Tokenizer, T5TokenizerFast
 from transformers.utils import is_tf_available, is_torch_available
 
 from openvino.runtime import PartialShape, save_model
@@ -53,9 +52,6 @@ if is_optimum_version(">=", "1.16.99"):
 
 else:
     from optimum.exporters.onnx.__main__ import _get_submodels_and_onnx_configs
-
-
-UNSUPPORTED_TOKENIZER_CLASSES = (T5Tokenizer, T5TokenizerFast)
 
 
 logger = logging.getLogger(__name__)
@@ -661,10 +657,6 @@ def export_tokenizer(
     suffix: Optional[str] = "",
 ):
     from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME  # avoid circular imports
-
-    if isinstance(tokenizer, UNSUPPORTED_TOKENIZER_CLASSES):
-        logger.info(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
-        return
 
     try:
         from openvino_tokenizers import convert_tokenizer
