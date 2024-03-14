@@ -269,7 +269,9 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         ipex_output = ipex_model.generate(**tokens, do_sample=False)
         ipex_output_assisted = ipex_model.generate(**tokens, do_sample=False, assistant_model=transformers_model)
         transformers_output = transformers_model.generate(**tokens, do_sample=False)
-        transformers_output_assisted = transformers_model.generate(**tokens, do_sample=False, assistant_model=ipex_model)
+        transformers_output_assisted = transformers_model.generate(
+            **tokens, do_sample=False, assistant_model=ipex_model
+        )
         self.assertTrue(torch.equal(ipex_output, ipex_output_assisted))
         self.assertTrue(torch.equal(transformers_output, transformers_output_assisted))
 
