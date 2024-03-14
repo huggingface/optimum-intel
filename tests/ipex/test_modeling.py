@@ -32,7 +32,6 @@ from transformers import (
     set_seed,
 )
 
-from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel import (
     IPEXModel,
     IPEXModelForAudioClassification,
@@ -236,11 +235,8 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             return_tensors="pt",
             return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
         )
-        position_ids = None
-        if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
-            input_shape = tokens["input_ids"].shape
-            position_ids = torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
-        outputs = ipex_model(**tokens, position_ids=position_ids)
+        inputs = ipex_model.prepare_inputs_for_generation(**tokens)
+        outputs = ipex_model(**inputs)
 
         self.assertIsInstance(outputs.logits, torch.Tensor)
         self.assertIsInstance(outputs.past_key_values, (tuple, list))
@@ -267,12 +263,15 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     def test_assisted_decoding(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
-        assistant_model = AutoModelForCausalLM.from_pretrained(model_id)
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        output = model.generate(**tokens, do_sample=False)
-        output_assisted = model.generate(**tokens, do_sample=False, assistant_model=assistant_model)
-        self.assertTrue(torch.equal(output, output_assisted))
+        ipex_output = ipex_model.generate(**tokens, do_sample=False)
+        ipex_output_assisted = ipex_model.generate(**tokens, do_sample=False, assistant_model=transformers_model)
+        transformers_output = transformers_model.generate(**tokens, do_sample=False)
+        transformers_output_assisted = transformers_model.generate(**tokens, do_sample=False, assistant_model=ipex_model)
+        self.assertTrue(torch.equal(ipex_output, ipex_output_assisted))
+        self.assertTrue(torch.equal(transformers_output, transformers_output_assisted))
 
     @parameterized.expand(
         grid_parameters(
