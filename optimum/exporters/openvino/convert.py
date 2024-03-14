@@ -299,7 +299,7 @@ def export_pytorch(
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
 
-    if stateful:
+    if ensure_export_task_support_stateful(config.task):
         # Trigger bettertransformer together with stateful model because OpenVINO HW-dependent transformations expect
         # both of them are applied to demonstrate the best performance.
         # TODO: Consider applying bettertransformer regardless of stateful flag -- requires additional validation.
