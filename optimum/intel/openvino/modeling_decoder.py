@@ -316,7 +316,9 @@ class OVBaseDecoderModel(OVModel):
             shapes[inputs][0] = -1
             input_name = inputs.get_any_name()
             if input_name.startswith("past_key_values"):
-                if len(inputs.partial_shape) == 3 and input_name.endswith("value"):
+                if (
+                    len(inputs.partial_shape) == 3 and input_name.endswith("value")
+                ) or self.config.model_type == "chatglm":
                     shapes[inputs][1] = -1
                 else:
                     shapes[inputs][2] = -1
