@@ -57,7 +57,7 @@ def main_export(
     local_files_only: bool = False,
     use_auth_token: Optional[Union[bool, str]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    custom_onnx_configs: Optional[Dict[str, "OnnxConfig"]] = None,
+    custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
@@ -111,11 +111,11 @@ def main_export(
             when running `transformers-cli login` (stored in `~/.huggingface`).
         model_kwargs (`Optional[Dict[str, Any]]`, defaults to `None`):
             Experimental usage: keyword arguments to pass to the model during
-            the export. This argument should be used along the `custom_onnx_configs` argument
+            the export. This argument should be used along the `custom_export_configs` argument
             in case, for example, the model inputs/outputs are changed (for example, if
             `model_kwargs={"output_attentions": True}` is passed).
-        custom_onnx_configs (`Optional[Dict[str, OnnxConfig]]`, defaults to `None`):
-            Experimental usage: override the default ONNX config used for the given model. This argument may be useful for advanced users that desire a finer-grained control on the export. An example is available [here](https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model).
+        custom_export_configs (`Optional[Dict[str, OnnxConfig]]`, defaults to `None`):
+            Experimental usage: override the default export config used for the given model. This argument may be useful for advanced users that desire a finer-grained control on the export. An example is available [here](https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model).
         fn_get_submodels (`Optional[Callable]`, defaults to `None`):
             Experimental usage: Override the default submodels that are used at the export. This is
             especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
@@ -133,7 +133,7 @@ def main_export(
     ```python
     >>> from optimum.exporters.openvino import main_export
 
-    >>> main_export("gpt2", output="gpt2_onnx/")
+    >>> main_export("gpt2", output="gpt2_ov/")
     ```
     """
 
@@ -199,14 +199,14 @@ def main_export(
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
         elif task not in TasksManager.get_supported_tasks_for_model_type(
-            model_type, exporter="onnx", library_name=library_name
+            model_type, exporter="openvino", library_name=library_name
         ):
             if original_task == "auto":
                 autodetected_message = " (auto-detected)"
             else:
                 autodetected_message = ""
             model_tasks = TasksManager.get_supported_tasks_for_model_type(
-                model_type, exporter="onnx", library_name=library_name
+                model_type, exporter="openvino", library_name=library_name
             )
             raise ValueError(
                 f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the task {task} to be supported in the ONNX export for {model_type}."
@@ -281,7 +281,7 @@ def main_export(
         not custom_architecture
         and library_name != "diffusers"
         and task + "-with-past"
-        in TasksManager.get_supported_tasks_for_model_type(model_type, exporter="onnx", library_name=library_name)
+        in TasksManager.get_supported_tasks_for_model_type(model_type, exporter="openvino", library_name=library_name)
     ):
         # Make -with-past the default if --task was not explicitely specified
         if original_task == "auto":
@@ -312,7 +312,7 @@ def main_export(
         ov_config=ov_config,
         stateful=stateful,
         model_kwargs=model_kwargs,
-        custom_onnx_configs=custom_onnx_configs,
+        custom_export_configs=custom_export_configs,
         fn_get_submodels=fn_get_submodels,
         preprocessors=preprocessors,
         device=device,
