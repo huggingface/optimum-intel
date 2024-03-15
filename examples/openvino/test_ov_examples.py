@@ -17,9 +17,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-
 #os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
 
 SRC_DIRS = [
     os.path.join(os.path.dirname(__file__), dirname)
