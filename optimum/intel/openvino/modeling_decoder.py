@@ -316,7 +316,9 @@ class OVBaseDecoderModel(OVModel):
             shapes[inputs][0] = -1
             input_name = inputs.get_any_name()
             if input_name.startswith("past_key_values"):
-                if len(inputs.partial_shape) == 3 and input_name.endswith("value"):
+                if (
+                    len(inputs.partial_shape) == 3 and input_name.endswith("value")
+                ) or self.config.model_type == "chatglm":
                     shapes[inputs][1] = -1
                 else:
                     shapes[inputs][2] = -1
@@ -635,7 +637,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 # from optimum.gptq.utils import get_seqlen
 
                 # seqlen = get_seqlen(causal_model)
-                dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32)
+                nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
+                dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
                 dataset = prepare_dataset(dataset)
                 quantization_config = copy.deepcopy(quantization_config)
                 quantization_config.dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))

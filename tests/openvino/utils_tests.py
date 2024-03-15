@@ -22,12 +22,14 @@ MODEL_NAMES = {
     "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
     "bert": "hf-internal-testing/tiny-random-bert",
     "bart": "hf-internal-testing/tiny-random-bart",
+    "baichuan2": "katuni4ka/tiny-random-baichuan2",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
     "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "camembert": "hf-internal-testing/tiny-random-camembert",
     "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
+    "chatglm": "katuni4ka/tiny-random-chatglm2",
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
     "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
     "data2vec_vision": "hf-internal-testing/tiny-random-Data2VecVisionModel",
@@ -38,6 +40,7 @@ MODEL_NAMES = {
     "convnext": "hf-internal-testing/tiny-random-convnext",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "electra": "hf-internal-testing/tiny-random-electra",
+    "gemma": "fxmarty/tiny-random-GemmaForCausalLM",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
@@ -55,7 +58,9 @@ MODEL_NAMES = {
     "opt125m": "facebook/opt-125m",
     "marian": "sshleifer/tiny-marian-en-de",
     "mbart": "hf-internal-testing/tiny-random-mbart",
+    "minicpm": "katuni4ka/tiny-random-minicpm",
     "mistral": "echarlaix/tiny-random-mistral",
+    "mixtral": "TitanML/tiny-mixtral",
     "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
     "mobilenet_v1": "google/mobilenet_v1_0.75_192",
     "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
@@ -66,6 +71,8 @@ MODEL_NAMES = {
     "pegasus": "hf-internal-testing/tiny-random-pegasus",
     "pix2struct": "fxmarty/pix2struct-tiny-random",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
+    "qwen": "katuni4ka/tiny-random-qwen",
+    "qwen2": "Qwen/Qwen1.5-0.5B",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
@@ -76,6 +83,7 @@ MODEL_NAMES = {
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
+    "stablelm": "hf-internal-testing/tiny-random-StableLmForCausalLM",
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
     "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",
@@ -116,7 +124,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion-xl-refiner": (366, 34, 42, 66),
 }
 
-_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (62, 477)}
+_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (62, 86)}
 
 
 def get_num_quantized_nodes(ov_model):
@@ -127,8 +135,8 @@ def get_num_quantized_nodes(ov_model):
         if "FakeQuantize" in elem.name:
             num_fake_quantize += 1
         for i in range(elem.get_output_size()):
-            if "8" in elem.get_output_element_type(i).get_type_name():
+            if elem.get_output_element_type(i).get_type_name() in ["i8", "u8"]:
                 num_int8 += 1
-            if "4" in elem.get_output_element_type(i).get_type_name():
+            if elem.get_output_element_type(i).get_type_name() in ["i4", "u4"]:
                 num_int4 += 1
     return num_fake_quantize, num_int8, num_int4
