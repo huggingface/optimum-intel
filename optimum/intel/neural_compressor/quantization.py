@@ -15,6 +15,7 @@
 import copy
 import inspect
 import logging
+import types
 import warnings
 from enum import Enum
 from itertools import chain
@@ -79,6 +80,7 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 
 if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.llm.quantization.utils import convert_to_quantized_model
+    from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
     from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
     Config = Union[PostTrainingQuantConfig, WeightOnlyQuantConfig]
@@ -185,6 +187,9 @@ class INCQuantizer(OptimumQuantizer):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         save_onnx_model = kwargs.pop("save_onnx_model", False)
+        device = kwargs.pop("device", "cpu")
+        use_cpu = True if device == torch.device("cpu") or device == "cpu" else False
+        use_xpu = True if (isinstance(device, torch.device) and device.type == "xpu") or device == "xpu" else False
 
         if save_onnx_model and (isinstance(self._original_model, ORTModel) or weight_only):
             save_onnx_model = False
@@ -217,7 +222,10 @@ class INCQuantizer(OptimumQuantizer):
                     f"For weight-only quantization, `quantization_config` should be an instance of `WeightOnlyQuantConfig`, but got: {type(quantization_config)} instead."
                 )
 
-            if calibration_dataset is None and ("GPTQ" in algo or "AWQ" in algo):
+            if algo not in ["RTN", "GPTQ"]:
+                raise ValueError("Weight-only quantization is only support RTN and GPTQ algorithm now!")
+
+            if calibration_dataset is None and quantization_config.tokenizer is None and ("GPTQ" in algo):
                 raise ValueError(
                     "Weight-only quantization needs a calibration dataset for both GPTQ and AWQ methodologies."
                 )
@@ -278,10 +286,24 @@ class INCQuantizer(OptimumQuantizer):
             )
 
         if not isinstance(quantization_config, PostTrainingQuantConfig):
-            self._quantized_model = convert_to_quantized_model(self._original_model, quantization_config)
+            if use_cpu:
+                # will remove after intel-extension-for-transformers 1.3.3 released
+                quantization_config.device = "cpu"
+                quantization_config.post_init()
+            elif use_xpu:
+                # will remove after intel-extension-for-transformers 1.3.3 released
+                quantization_config.device = "xpu"
+                quantization_config.post_init_xpu()
+            self._quantized_model = convert_to_quantized_model(
+                self._original_model, quantization_config, device=quantization_config.device
+            )
+            # will remove after intel-extension-for-transformers 1.3.3 released
+            if hasattr(quantization_config, "calib_dataloader"):
+                quantization_config.calib_dataloader = None
+            self._quantized_model.quantization_config = quantization_config
+            self._quantized_model.save_pretrained = types.MethodType(save_low_bit, self._quantized_model)
             # Save the quantized model
-            output_path = save_directory.joinpath(file_name or default_name)
-            self._quantized_model.save_pretrained(output_path)
+            self._quantized_model.save_pretrained(save_directory)
         else:
             if isinstance(self._original_model.config, PretrainedConfig):
                 self._original_model.config.backend = quantization_config.backend

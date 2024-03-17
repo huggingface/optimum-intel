@@ -45,7 +45,7 @@ from transformers import (
     set_seed,
 )
 from utils_tests import SEED, INCTestMixin, _generate_dataset
-from optimum.intel.utils.import_utils import is_torch_version
+from optimum.intel.utils.import_utils import is_torch_version, is_intel_extension_for_transformers_available
 
 
 from optimum.intel import (
@@ -60,11 +60,13 @@ from optimum.intel import (
     INCSeq2SeqTrainer,
     INCStableDiffusionPipeline,
 )
-from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
 from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
 from optimum.pipelines import ORT_SUPPORTED_TASKS
 
+if is_intel_extension_for_transformers_available():
+    from optimum.intel.neural_compressor import ITREXAutoModelForCausalLM
+    from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(SEED)
@@ -200,20 +202,24 @@ class OptimizationTest(INCTestMixin):
                 load_ipex_model=True,
             )
 
+    @unittest.skipIf(
+        not is_intel_extension_for_transformers_available(), reason="Intel-extension-for-transformers not available!"
+    )
     def test_weight_only_quantization(self):
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
         model = AutoModelForCausalLM.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
+            calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
             quantization_config = WeightOnlyQuantConfig(weight_dtype="int8")
             q_model = quantizer.quantize(
                 quantization_config=quantization_config,
                 save_directory=tmp_dir,
             )
+            q_model = ITREXAutoModelForCausalLM.from_pretrained(tmp_dir)
             inp = torch.tensor([calibration_dataset[0]["input_ids"]])
             out = model(inp)[0]
             q_out = q_model(inp)[0]
@@ -221,8 +227,14 @@ class OptimizationTest(INCTestMixin):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
+            calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
             quantization_config = WeightOnlyQuantConfig(
                 algorithm="GPTQ",
+                algorithm_args={
+                    "percdamp": 0.01,
+                    "act_order": False,
+                    "scheme": "sym",
+                },
                 weight_dtype="int4_clip",
             )
             q_model = quantizer.quantize(
@@ -230,6 +242,7 @@ class OptimizationTest(INCTestMixin):
                 calibration_dataset=calibration_dataset,
                 save_directory=tmp_dir,
             )
+            q_model = ITREXAutoModelForCausalLM.from_pretrained(tmp_dir)
             inp = torch.tensor([calibration_dataset[0]["input_ids"]])
             out = model(inp)[0]
             q_out = q_model(inp)[0]
@@ -237,26 +250,12 @@ class OptimizationTest(INCTestMixin):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
-            quantization_config = WeightOnlyQuantConfig(
-                algorithm="AWQ",
-                weight_dtype="int4_clip",
-            )
-            q_model = quantizer.quantize(
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-                save_directory=tmp_dir,
-            )
-            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
-            out = model(inp)[0]
-            q_out = q_model(inp)[0]
-            self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
+            calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
             q_model = quantizer.quantize(
                 weight_only=True,  # use RTN quantization method and NF4 weight data type is default.
                 save_directory=tmp_dir,
             )
+            q_model = ITREXAutoModelForCausalLM.from_pretrained(tmp_dir)
             inp = torch.tensor([calibration_dataset[0]["input_ids"]])
             out = model(inp)[0]
             q_out = q_model(inp)[0]

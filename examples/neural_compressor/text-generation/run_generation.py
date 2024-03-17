@@ -368,9 +368,9 @@ def main():
 
     args.length = adjust_length_to_model(
         args.length,
-        max_sequence_length=model.config.max_position_embeddings
-        if hasattr(model.config, "max_position_embeddings")
-        else 0,
+        max_sequence_length=(
+            model.config.max_position_embeddings if hasattr(model.config, "max_position_embeddings") else 0
+        ),
     )
     logger.info(args)
 

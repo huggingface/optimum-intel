@@ -63,6 +63,8 @@ from optimum.intel.utils.import_utils import is_intel_extension_for_transformers
 if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
+    from optimum.intel.neural_compressor import ITREXAutoModelForCausalLM
+
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -147,7 +149,9 @@ class OptimizationArguments:
     )
     quantization_approach: str = field(
         default="dynamic",
-        metadata={"help": "Quantization approach. Supported approach are static, dynamic and aware_training."},
+        metadata={
+            "help": "Quantization approach. Supported approach are static, dynamic aware_training and weight_only."
+        },
     )
     smooth_quant: bool = field(
         default=False,
@@ -200,8 +204,12 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Whether or not to verify the loading of the quantized model."},
     )
+    bits: str = field(
+        default="4",
+        metadata={"help": "Bits number of weight for weight only quantization. 1~8 bits."},
+    )
     weight_dtype: str = field(
-        default="int8",
+        default="int4_clip",
         metadata={"help": "weight dtype for weight only quantization."},
     )
     group_size: int = field(
@@ -218,9 +226,24 @@ class OptimizationArguments:
     )
     quantization_methodology: str = field(
         default="RTN",
-        metadata={
-            "help": "Quantization methodology for weight only quantization. Choose from 'RTN', 'AWQ' and 'GPTQ'."
-        },
+        metadata={"help": "Quantization methodology for weight only quantization. Choose from 'RTN' and 'GPTQ'."},
+    )
+    gptq_percdamp: float = field(
+        default=0.01,
+        metadata={"help": "Percent of the average Hessian diagonal to use for dampening."},
+    )
+    gptq_block_size: int = field(
+        default=128,
+        metadata={"help": "Block size. sub weight matrix size to run GPTQ."},
+    )
+    gptq_nsamples: int = field(default=128, metadata={"help": "Number of calibration data samples."})
+    gptq_use_max_length: bool = field(
+        default=False,
+        metadata={"help": "Set all sequence length to be same length of args.gptq_pad_max_length"},
+    )
+    gptq_pad_max_length: int = field(
+        default=2048,
+        metadata={"help": "Calibration dataset sequence max length, this should align with your model config"},
     )
 
 
@@ -636,11 +659,21 @@ def main():
                     )
                 if optim_args.apply_pruning or optim_args.apply_distillation:
                     raise ValueError("Weight only quantization and pruning or distillation cannot be combined.")
+                if optim_args.quantization_methodology == "GPTQ":
+                    algorithm_args = {
+                        "act_order": False,
+                        "percdamp": optim_args.gptq_percdamp,
+                        "block_size": optim_args.gptq_block_size,
+                        "nsamples": optim_args.gptq_nsamples,
+                        "use_max_length": optim_args.gptq_use_max_length,
+                        "pad_max_length": optim_args.gptq_pad_max_length,
+                    }
                 quantization_config = WeightOnlyQuantConfig(
                     weight_dtype=optim_args.weight_dtype,
                     group_size=optim_args.group_size,
                     scheme=optim_args.weight_only_scheme,
                     algorithm=optim_args.quantization_methodology,
+                    algorithm_args=algorithm_args if optim_args.quantization_methodology == "GPTQ" else None,
                 )
             else:
                 quantization_config = PostTrainingQuantConfig(
@@ -733,17 +766,20 @@ def main():
         quantizer.quantize(
             quantization_config=quantization_config,
             save_directory=training_args.output_dir,
-            calibration_dataset=train_dataset
-            if optim_args.quantization_approach in ["static", "weight_only"]
-            else None,
-            batch_size=1
-            if optim_args.quantization_approach == "weight_only"
-            else training_args.per_device_train_batch_size,
+            calibration_dataset=(
+                train_dataset if optim_args.quantization_approach in ["static", "weight_only"] else None
+            ),
+            batch_size=(
+                1 if optim_args.quantization_approach == "weight_only" else training_args.per_device_train_batch_size
+            ),
         )
         trainer.model = quantizer._quantized_model
 
     if optim_args.apply_quantization and optim_args.verify_loading:
-        loaded_model = INCModelForCausalLM.from_pretrained(training_args.output_dir)
+        if optim_args.quantization_approach == "weight_only":
+            loaded_model = ITREXAutoModelForCausalLM.from_pretrained(training_args.output_dir)
+        else:
+            loaded_model = INCModelForCausalLM.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         with torch.no_grad():
             original_model_outputs = trainer.model(**tokens)

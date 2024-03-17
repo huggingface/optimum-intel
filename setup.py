@@ -34,7 +34,7 @@ TESTS_REQUIRE = [
     "rjieba",
     "timm",
     "invisible-watermark>=0.2.0",
-    "cmake>=3.16",
+    # Will remove after intel-extension-for-transformers 1.3.3 released.
     "intel-extension-for-transformers>=1.3",
     "peft",
     "auto-gptq",

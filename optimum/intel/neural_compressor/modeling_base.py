@@ -43,7 +43,7 @@ from transformers.utils.generic import ContextManagers
 from optimum.intel.generation import BaseModelForCausalLM
 
 from ...modeling_base import OptimizedModel
-from ..utils.import_utils import _torch_version, is_torch_version
+from ..utils.import_utils import _torch_version, is_intel_extension_for_transformers_available, is_torch_version
 from .configuration import INCConfig
 from .utils import WEIGHTS_NAME
 
@@ -61,6 +61,14 @@ MODEL_START_DOCSTRING = r"""
         device (`str`, defaults to `"cpu"`):
             The device type for which the model will be optimized for. The resulting compiled model will contains nodes specific to this device.
 """
+
+
+if is_intel_extension_for_transformers_available():
+    from intel_extension_for_transformers.transformers.modeling import AutoModelForCausalLM as ITREX_WOQ_MODEL
+
+    class ITREXAutoModelForCausalLM(ITREX_WOQ_MODEL):
+        auto_model_class = AutoModelForCausalLM
+        export_feature = "text-generation"
 
 
 class INCModel(OptimizedModel):
