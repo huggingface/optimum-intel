@@ -293,10 +293,12 @@ def export_pytorch(
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
 
-    if ensure_export_task_support_stateful(config.task):
-        # Trigger bettertransformer together with stateful model because OpenVINO HW-dependent transformations expect
-        # both of them are applied to demonstrate the best performance.
-        # TODO: Consider applying bettertransformer regardless of stateful flag -- requires additional validation.
+    task = config.task
+    if getattr(config, "use_past", False):
+        task += "-with-past"
+    if ensure_export_task_support_stateful(task):
+        # Trigger bettertransformer together with text-generation-with-past models because OpenVINO HW-dependent transformations expect
+        # SDPA of them are applied to demonstrate the best performance.
         model = patch_model_with_bettertransformer(model)
         # TODO: Consider unpatching model after export is done in the end of this function.
         #       Now it is left as-is because the model is not expected to be used after call export_pytorch, and
