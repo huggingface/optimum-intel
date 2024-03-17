@@ -1,4 +1,6 @@
+import os
 import re
+import subprocess
 
 from setuptools import find_namespace_packages, setup
 
@@ -8,13 +10,26 @@ try:
     filepath = "optimum/intel/version.py"
     with open(filepath) as version_file:
         (__version__,) = re.findall('__version__ = "(.*)"', version_file.read())
+    if __version__.endswith(".dev0"):
+        dev_version_id = ""
+        try:
+            repo_root = os.path.dirname(os.path.realpath(__file__))
+            dev_version_id = (
+                subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=repo_root)  # nosec
+                .strip()
+                .decode()
+            )
+            dev_version_id = "+" + dev_version_id
+        except subprocess.CalledProcessError:
+            pass
+        __version__ = __version__ + dev_version_id
 except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum~=1.17",
     "transformers>=4.36.0,<4.39.0",
+    "optimum @ git+https://github.com/huggingface/optimum.git#egg=optimum",
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
@@ -38,6 +53,8 @@ TESTS_REQUIRE = [
     "intel-extension-for-transformers>=1.3",
     "peft",
     "auto-gptq",
+    "transformers_stream_generator",
+    "einops",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]

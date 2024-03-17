@@ -32,10 +32,11 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
+from optimum.exporters.utils import _get_submodels_and_export_configs
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
-from ...intel.utils.import_utils import is_nncf_available, is_optimum_version
+from ...intel.utils.import_utils import is_nncf_available
 from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_export_task_support_stateful, ensure_stateful_is_available, patch_stateful
 from .utils import (
@@ -46,13 +47,6 @@ from .utils import (
     get_input_shapes,
     remove_none_from_dummy_inputs,
 )
-
-
-if is_optimum_version(">=", "1.16.99"):
-    from optimum.exporters.onnx.utils import _get_submodels_and_onnx_configs
-
-else:
-    from optimum.exporters.onnx.__main__ import _get_submodels_and_onnx_configs
 
 
 UNSUPPORTED_TOKENIZER_CLASSES = (T5Tokenizer, T5TokenizerFast)
@@ -299,7 +293,7 @@ def export_pytorch(
     logger.info(f"Using framework PyTorch: {torch.__version__}")
     output = Path(output)
 
-    if stateful:
+    if ensure_export_task_support_stateful(config.task):
         # Trigger bettertransformer together with stateful model because OpenVINO HW-dependent transformations expect
         # both of them are applied to demonstrate the best performance.
         # TODO: Consider applying bettertransformer regardless of stateful flag -- requires additional validation.
@@ -418,7 +412,7 @@ def export_pytorch(
 
 
 def export_models(
-    models_and_onnx_configs: Dict[
+    models_and_export_configs: Dict[
         str, Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"], "OnnxConfig"]
     ],
     output_dir: Path,
@@ -434,7 +428,7 @@ def export_models(
     Export the models to OpenVINO IR format
 
     Args:
-        models_and_onnx_configs (Dict[ str, Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"], "OnnxConfig"]):
+        models_and_export_configs (Dict[ str, Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"], "OnnxConfig"]):
         output_dir (Path): output directory for saving models
         opset (Optional[int], optional, Default to None): ONNX export opset
         output_names (Optional[List[str]], optional, Defaults to None): model output names
@@ -459,20 +453,20 @@ def export_models(
 
     outputs = []
 
-    if output_names is not None and len(output_names) != len(models_and_onnx_configs):
+    if output_names is not None and len(output_names) != len(models_and_export_configs):
         raise ValueError(
-            f"Provided custom names {output_names} for the export of {len(models_and_onnx_configs)} models. Please provide the same number of names as models to export."
+            f"Provided custom names {output_names} for the export of {len(models_and_export_configs)} models. Please provide the same number of names as models to export."
         )
 
-    for i, model_name in enumerate(models_and_onnx_configs.keys()):
-        submodel, sub_onnx_config = models_and_onnx_configs[model_name]
+    for i, model_name in enumerate(models_and_export_configs.keys()):
+        submodel, sub_export_config = models_and_export_configs[model_name]
         output_name = output_names[i] if output_names is not None else Path(model_name + ".xml")
         output_path = output_dir / output_name
         output_path.parent.mkdir(parents=True, exist_ok=True)
         outputs.append(
             export(
                 model=submodel,
-                config=sub_onnx_config,
+                config=sub_export_config,
                 output=output_path,
                 opset=opset,
                 device=device,
@@ -495,7 +489,7 @@ def export_from_model(
     stateful: bool = True,
     opset: Optional[int] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    custom_onnx_configs: Optional[Dict[str, "OnnxConfig"]] = None,
+    custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
     preprocessors: List = None,
     device: str = "cpu",
@@ -524,14 +518,14 @@ def export_from_model(
             task = TasksManager._infer_task_from_model_or_model_class(model=model)
         except (ValueError, KeyError) as e:
             raise RuntimeError(
-                f"The model task could not be automatically inferred in `onnx_export_from_model`. Please provide the argument `task` with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+                f"The model task could not be automatically inferred in `export_from_model`. Please provide the argument `task` with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
             )
 
         if (
             not custom_architecture
             and library_name != "diffusers"
             and task + "-with-past"
-            in TasksManager.get_supported_tasks_for_model_type(model_type, "onnx", library_name=library_name)
+            in TasksManager.get_supported_tasks_for_model_type(model_type, "openvino", library_name=library_name)
         ):
             # -with-past is the default.
             task = task + "-with-past"
@@ -541,9 +535,9 @@ def export_from_model(
     stateful = stateful and ensure_export_task_support_stateful(task)
 
     # TODO: support onnx_config.py in the model repo
-    if custom_architecture and custom_onnx_configs is None:
+    if custom_architecture and custom_export_configs is None:
         raise ValueError(
-            f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom onnx configuration was passed as `custom_onnx_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the model type {model_type} to be supported natively in the ONNX export."
+            f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the model type {model_type} to be supported natively in the ONNX export."
         )
 
     if task.startswith("text-generation") and model.config.is_encoder_decoder:
@@ -569,11 +563,11 @@ def export_from_model(
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
 
-    onnx_config, models_and_onnx_configs = _get_submodels_and_onnx_configs(
+    export_config, models_and_export_configs = _get_submodels_and_export_configs(
         model=model,
         task=task,
         monolith=False,
-        custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
+        custom_export_configs=custom_export_configs if custom_export_configs is not None else {},
         custom_architecture=custom_architecture,
         fn_get_submodels=fn_get_submodels,
         preprocessors=preprocessors,
@@ -581,6 +575,7 @@ def export_from_model(
         model_kwargs=model_kwargs,
         _variant="default",
         legacy=False,
+        exporter="openvino",
     )
 
     if ov_config is None:
@@ -612,18 +607,18 @@ def export_from_model(
         model_name_or_path = model.config._name_or_path
         maybe_save_preprocessors(model_name_or_path, output)
 
-        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_onnx_configs.keys()]
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
 
     else:
         # save the subcomponent configuration
-        for model_name in models_and_onnx_configs:
-            subcomponent = models_and_onnx_configs[model_name][0]
+        for model_name in models_and_export_configs:
+            subcomponent = models_and_export_configs[model_name][0]
             if hasattr(subcomponent, "save_config"):
                 subcomponent.save_config(output / model_name)
             elif hasattr(subcomponent, "config") and hasattr(subcomponent.config, "save_pretrained"):
                 subcomponent.config.save_pretrained(output / model_name)
 
-        files_subpaths = [os.path.join(name_dir, OV_XML_FILE_NAME) for name_dir in models_and_onnx_configs]
+        files_subpaths = [os.path.join(name_dir, OV_XML_FILE_NAME) for name_dir in models_and_export_configs]
 
         # Saving the additional components needed to perform inference.
         model.scheduler.save_pretrained(output.joinpath("scheduler"))
@@ -643,7 +638,7 @@ def export_from_model(
         model.save_config(output)
 
     export_models(
-        models_and_onnx_configs=models_and_onnx_configs,
+        models_and_export_configs=models_and_export_configs,
         output_dir=output,
         output_names=files_subpaths,
         input_shapes=input_shapes,
