@@ -287,17 +287,17 @@ class INCQuantizer(OptimumQuantizer):
 
         if not isinstance(quantization_config, PostTrainingQuantConfig):
             if use_cpu:
-                # will remove after intel-extension-for-transformers 1.3.3 released
+                # will remove after intel-extension-for-transformers 1.3.3 release.
                 quantization_config.device = "cpu"
                 quantization_config.post_init()
             elif use_xpu:
-                # will remove after intel-extension-for-transformers 1.3.3 released
+                # will remove after intel-extension-for-transformers 1.3.3 release.
                 quantization_config.device = "xpu"
                 quantization_config.post_init_xpu()
             self._quantized_model = convert_to_quantized_model(
                 self._original_model, quantization_config, device=quantization_config.device
             )
-            # will remove after intel-extension-for-transformers 1.3.3 released
+            # will remove after intel-extension-for-transformers 1.3.3 release.
             if hasattr(quantization_config, "calib_dataloader"):
                 quantization_config.calib_dataloader = None
             self._quantized_model.quantization_config = quantization_config

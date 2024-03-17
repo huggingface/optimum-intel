@@ -49,9 +49,6 @@ TESTS_REQUIRE = [
     "rjieba",
     "timm",
     "invisible-watermark>=0.2.0",
-    # Will remove after intel-extension-for-transformers 1.3.3 released.
-    "intel-extension-for-transformers>=1.3",
-    "peft",
     "auto-gptq",
     "transformers_stream_generator",
     "einops",
@@ -60,7 +57,14 @@ TESTS_REQUIRE = [
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
 
 EXTRAS_REQUIRE = {
-    "neural-compressor": ["neural-compressor>=2.2.0", "onnxruntime<1.15.0", "accelerate"],
+    "neural-compressor": [
+        "neural-compressor>=2.2.0",
+        "onnxruntime<1.15.0",
+        "accelerate",
+        # will remove after intel-extension-for-transformers 1.3.3 release.
+        "intel-extension-for-transformers>=1.3",
+        "peft",
+    ],
     "openvino": ["openvino>=2023.3", "nncf>=2.8.1"],
     "openvino-tokenizers": ["openvino-tokenizers[transformers]"],
     "nncf": ["nncf>=2.8.1"],
