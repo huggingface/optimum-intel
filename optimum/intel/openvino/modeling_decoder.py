@@ -132,7 +132,6 @@ class OVBaseDecoderModel(OVModel):
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
         self._pkv_precision = Type.f32
-        # self.next_beam_idx = None
         self.update_pkv_precision()
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
@@ -335,9 +334,11 @@ class OVBaseDecoderModel(OVModel):
         return NormalizedConfigManager.get_normalized_config_class(self.config.model_type)(self.config)
 
     def compile(self):
-        if self.compiled_model is None:
+        if self.request is None:
             super().compile()
             self.compiled_model = self.request
+            self.request = self.request.create_infer_request()
+
 
     def _make_stateful(self):
         patch_stateful(self.config, self.model)
@@ -464,6 +465,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         infer_context: Optional[List[openvino.runtime.InferRequest]] = None,
         **kwargs,
     ) -> CausalLMOutputWithPast:
+        self.compile()
         inputs = self.prepare_inputs(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -477,9 +479,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             infer_request = past_key_values[1]
         else:
             if infer_context is not None:
-                infer_request = infer_context[
-                    0
-                ]  # Use passed inference request if provided in kwargs, create new one overwise
+                # Use passed inference request if provided in kwargs, create new one overwise
+                infer_request = infer_context[0]  
             else:
                 self.compile()
                 infer_request = self.compiled_model.create_infer_request()
@@ -541,10 +542,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if self.stateful:
             # TODO: Apply it differently based on model type
             # TODO: At least for bloom we need to replicate values for each attention head
-            past_key_values = (
-                (np.array(beam_idx)),
-                past_key_values[1],
-            )  # save beam_idx and infer_request to be used as an input in the next iteration
+            # save beam_idx and infer_request to be used as an input in the next iteration
+            past_key_values = ((np.array(beam_idx)), past_key_values[1])  
             return past_key_values
         else:
             return tuple(
