@@ -30,7 +30,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install cmake>=3.16
+        pip install cmake
         pip install py-cpuinfo
         pip install torch==2.1.0 torchaudio==2.1.0 torchvision==0.16 --extra-index-url https://download.pytorch.org/whl/cpu
         pip install .[neural-compressor,diffusers,tests]

@@ -214,7 +214,7 @@ class INCQuantizer(OptimumQuantizer):
 
             if quantization_config is None:
                 quantization_config = WeightOnlyQuantConfig()
-                algo = ["RTN"]
+                algo = "RTN"
             elif isinstance(quantization_config, WeightOnlyQuantConfig):
                 algo = quantization_config.algorithm
             else:
@@ -223,7 +223,7 @@ class INCQuantizer(OptimumQuantizer):
                 )
 
             if algo not in ["RTN", "GPTQ"]:
-                raise ValueError("Weight-only quantization is only support RTN and GPTQ algorithm now!")
+                raise ValueError(f"Weight-only quantization is only support RTN and GPTQ algorithm now!But got {algo}")
 
             if calibration_dataset is None and quantization_config.tokenizer is None and ("GPTQ" in algo):
                 raise ValueError(
