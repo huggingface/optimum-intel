@@ -17,8 +17,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-#os.environ["CUDA_VISIBLE_DEVICES"] = ""
-
 SRC_DIRS = [
     os.path.join(os.path.dirname(__file__), dirname)
     for dirname in [
@@ -42,7 +40,7 @@ class TestExamples(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_audio_classification.py  
-                --model_name_or_path facebook/wav2vec2-base  
+                --model_name_or_path hf-internal-testing/tiny-random-Wav2Vec2Model  
                 --nncf_compression_config  examples/openvino/audio-classification/configs/wav2vec2-base-qat.json  
                 --dataset_name superb  
                 --dataset_config_name ks  
@@ -99,7 +97,7 @@ class TestExamples(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""  
                 run_glue.py  
-                --model_name_or_path sshleifer/tiny-distilbert-base-cased-distilled-squad  
+                --model_name_or_path hf-internal-testing/tiny-random-DistilBertForSequenceClassification  
                 --task_name sst2  
                 --max_train_samples 10  
                 --max_eval_samples 2   
@@ -125,7 +123,7 @@ class TestExamples(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_qa.py  
-                --model_name_or_path sshleifer/tiny-distilbert-base-cased-distilled-squad  
+                --model_name_or_path hf-internal-testing/tiny-random-DistilBertForQuestionAnswering  
                 --dataset_name squad  
                 --do_train  
                 --do_eval  
