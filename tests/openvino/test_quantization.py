@@ -39,6 +39,7 @@ from transformers import (
 
 from optimum.intel import (
     OVConfig,
+    OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
@@ -157,10 +158,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 44, 44),
     )
 
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 365),)
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 385),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 86),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 148),)
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTO_COMPRESSED_MATMULS = (
-        (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 14, 136),
+        (OVModelForCausalLM, "hf-internal-testing/tiny-random-OPTForCausalLM", 14, 50),
     )
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = (
         (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 44, 44),
@@ -231,6 +232,12 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForFeatureExtraction, "blenderbot"),
         (OVStableDiffusionPipeline, "stable-diffusion"),
         (OVStableDiffusionXLPipeline, "stable-diffusion-xl"),
+    )
+
+    SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = (
+        (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
+        (OVStableDiffusionXLPipeline, "stable-diffusion-xl", 84, 331),
+        (OVLatentConsistencyModelPipeline, "latent-consistency", 50, 135),
     )
 
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
@@ -352,6 +359,38 @@ class OVWeightCompressionTest(unittest.TestCase):
             _, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_ov_int8[i], num_int8)
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
+    def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8):
+        model_id = MODEL_NAMES[model_type]
+        quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", num_samples=2)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
+
+            num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
+            self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
+            self.assertEqual(expected_ov_int8, num_int8)
+            self.assertEqual(0, num_int4)
+
+            model.save_pretrained(tmp_dir)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
+    def test_ovmodel_hybrid_quantization_with_custom_dataset(
+        self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8
+    ):
+        model_id = MODEL_NAMES[model_type]
+        dataset = [
+            "dream rose covered with clean crystal, sharp edges, transparent, beautiful, highly detailed, high render"
+        ]
+        model = model_cls.from_pretrained(
+            model_id,
+            export=True,
+            quantization_config=OVWeightQuantizationConfig(bits=8, dataset=dataset, num_samples=3),
+        )
+        num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
+        self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
+        self.assertEqual(expected_ov_int8, num_int8)
+        self.assertEqual(0, num_int4)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
     @unittest.mock.patch.dict(
         "optimum.intel.openvino.configuration._DEFAULT_4BIT_CONFIGS", {"facebook/opt-125m": DEFAULT_INT4_CONFIG}
@@ -459,36 +498,64 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(0, num_int8)
 
     def test_ovmodel_load_large_model_with_default_compressed_weights(self):
-        with unittest.mock.patch("transformers.modeling_utils.ModuleUtilsMixin") as model_mixin_patch:
-            model_mixin_patch.num_parameters.return_value = 2e9
+        with unittest.mock.patch("torch.nn.Module.parameters") as model_parameters:
+            mock_tensor = unittest.mock.Mock()
+            mock_tensor.numel = lambda: 2000000000
+            mock_tensor.requires_grad = True
+            model_parameters.return_value = [mock_tensor]
             with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
                 with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
                     _ = OVModelForCausalLM.from_pretrained(
                         MODEL_NAMES["llama"], export=True, compile=False, use_cache=False
                     )
-                    saving_params = {
-                        "model": unittest.mock.ANY,
-                        "path": unittest.mock.ANY,
-                        "compression_option": "int8",
-                        "compression_ratio": None,
-                    }
-                    save_model_patch.aasert_called_with(saving_params)
+                    save_model_patch.assert_called_with(
+                        unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(quantization_config={"bits": 8})
+                    )
 
     def test_ovmodel_load_large_model_with_uncompressed_weights(self):
-        with unittest.mock.patch("transformers.modeling_utils.ModuleUtilsMixin") as model_mixin_patch:
-            model_mixin_patch.num_parameters.return_value = 2e9
+        with unittest.mock.patch("torch.nn.Module.parameters") as model_parameters:
+            mock_tensor = unittest.mock.Mock()
+            mock_tensor.numel = lambda: 2000000000
+            mock_tensor.requires_grad = True
+            model_parameters.return_value = [mock_tensor]
             with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
                 with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
                     _ = OVModelForCausalLM.from_pretrained(
                         MODEL_NAMES["llama"], export=True, load_in_8bit=False, compile=False, use_cache=False
                     )
-                    saving_params = {
-                        "model": unittest.mock.ANY,
-                        "path": unittest.mock.ANY,
-                        "compression_option": "fp32",
-                        "compression_ratio": None,
-                    }
-                    save_model_patch.aasert_called_with(saving_params)
+                    save_model_patch.assert_called_with(
+                        unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(dtype="fp32")
+                    )
+
+    def test_ovmodel_load_large_model_with_additional_quantization_config(self):
+        with unittest.mock.patch("torch.nn.Module.parameters") as model_parameters:
+            mock_tensor = unittest.mock.Mock()
+            mock_tensor.numel = lambda: 2000000000
+            mock_tensor.requires_grad = True
+            with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
+                with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
+                    with unittest.mock.patch("nncf.compress_weights") as compress_weights_patch:
+                        _ = OVModelForCausalLM.from_pretrained(
+                            MODEL_NAMES["llama"],
+                            export=True,
+                            compile=False,
+                            use_cache=False,
+                            quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, group_size=-1, ratio=0.8),
+                        )
+                        # quantization will be performed later, using load_model
+                        save_model_patch.assert_called_with(
+                            unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(dtype="fp32")
+                        )
+                        compression_params = {
+                            "mode": nncf.CompressWeightsMode.INT4_SYM,
+                            "ratio": 0.8,
+                            "group_size": -1,
+                            "all_layers": None,
+                            "sensitivity_metric": None,
+                            "dataset": None,
+                            "ignored_scope": None,
+                        }
+                        compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
 
 class OVQuantizerQATest(unittest.TestCase):
