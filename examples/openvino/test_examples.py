@@ -43,7 +43,7 @@ class TestExamples(unittest.TestCase):
             test_args = f"""
                 run_audio_classification.py  
                 --model_name_or_path facebook/wav2vec2-base  
-                --nncf_compression_config audio-classification/configs/wav2vec2-base-qat.json  
+                --nncf_compression_config  examples/openvino/audio-classification/configs/wav2vec2-base-qat.json  
                 --dataset_name superb  
                 --dataset_config_name ks  
                 --max_train_samples 10  
