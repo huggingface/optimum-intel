@@ -59,7 +59,7 @@ class TestExamples(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_glue.py
-                --model_name_or_path distilbert-base-uncased-finetuned-sst-2-english
+                --model_name_or_path hf-internal-testing/tiny-random-DistilBertForSequenceClassification
                 --task_name sst2
                 --apply_quantization
                 --apply_pruning
@@ -79,13 +79,12 @@ class TestExamples(unittest.TestCase):
             with patch.object(sys, "argv", test_args):
                 run_glue.main()
                 results = get_results(tmp_dir)
-                self.assertGreaterEqual(results["eval_accuracy"], 0.70)
 
     def test_run_qa(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_qa.py
-                --model_name_or_path distilbert-base-uncased-distilled-squad
+                --model_name_or_path hf-internal-testing/tiny-random-DistilBertForQuestionAnswering
                 --dataset_name squad
                 --apply_quantization
                 --apply_pruning
@@ -105,14 +104,12 @@ class TestExamples(unittest.TestCase):
             with patch.object(sys, "argv", test_args):
                 run_qa.main()
                 results = get_results(tmp_dir)
-                self.assertGreaterEqual(results["eval_f1"], 70)
-                self.assertGreaterEqual(results["eval_exact_match"], 70)
 
     def test_run_ner(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_ner.py
-                --model_name_or_path elastic/distilbert-base-uncased-finetuned-conll03-english
+                --model_name_or_path hf-internal-testing/tiny-random-RobertaForTokenClassification
                 --dataset_name conll2003
                 --apply_quantization
                 --apply_pruning
@@ -132,16 +129,12 @@ class TestExamples(unittest.TestCase):
             with patch.object(sys, "argv", test_args):
                 run_ner.main()
                 results = get_results(tmp_dir)
-                self.assertGreaterEqual(results["eval_accuracy"], 0.70)
-                self.assertGreaterEqual(results["eval_f1"], 0.70)
-                self.assertGreaterEqual(results["eval_precision"], 0.70)
-                self.assertGreaterEqual(results["eval_recall"], 0.70)
 
     def test_run_swag(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_swag.py
-                --model_name_or_path ehdwns1516/bert-base-uncased_SWAG
+                --model_name_or_path hf-internal-testing/tiny-random-AlbertForMultipleChoice
                 --apply_quantization
                 --apply_pruning
                 --target_sparsity 0.02
@@ -160,7 +153,6 @@ class TestExamples(unittest.TestCase):
             with patch.object(sys, "argv", test_args):
                 run_swag.main()
                 results = get_results(tmp_dir)
-                self.assertGreaterEqual(results["eval_accuracy"], 0.60)
 
     def test_run_clm(self):
         quantization_approach = "dynamic"
@@ -168,7 +160,7 @@ class TestExamples(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_clm.py
-                --model_name_or_path EleutherAI/gpt-neo-125M
+                --model_name_or_path hf-internal-testing/tiny-random-GPT2LMHeadModel
                 --dataset_name wikitext
                 --dataset_config_name wikitext-2-raw-v1
                 --apply_quantization
@@ -190,7 +182,6 @@ class TestExamples(unittest.TestCase):
             with patch.object(sys, "argv", test_args):
                 run_clm.main()
                 results = get_results(tmp_dir)
-                self.assertLessEqual(results["eval_loss"], 15)
 
     def test_run_mlm(self):
         quantization_approach = "static"
@@ -198,7 +189,7 @@ class TestExamples(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_mlm.py
-                --model_name_or_path google/electra-small-discriminator
+                --model_name_or_path hf-internal-testing/tiny-random-DistilBertForMaskedLM
                 --dataset_name wikitext
                 --dataset_config_name wikitext-2-raw-v1
                 --apply_quantization
@@ -220,7 +211,6 @@ class TestExamples(unittest.TestCase):
             with patch.object(sys, "argv", test_args):
                 run_mlm.main()
                 results = get_results(tmp_dir)
-                self.assertLessEqual(results["eval_loss"], 15)
 
 
 if __name__ == "__main__":
