@@ -44,4 +44,4 @@ jobs:
 
     - name: Test examples
       run: |
-        python examples/openvino/test_examples.py
+        python -m pytest examples/openvino/test_examples.py

@@ -73,7 +73,7 @@ class TestExamples(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             test_args = f"""
                 run_image_classification.py
-                --model_name_or_path nateraw/vit-base-beans
+                --model_name_or_path hf-internal-testing/tiny-random-ViTModel
                 --dataset_name beans
                 --max_train_samples 10
                 --max_eval_samples 2
