@@ -1,0 +1,47 @@
+name: INC - Examples Test
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 0 1 * * 1  # run weekly: every Monday at 1am
+  push:
+    paths:
+    - '.github/workflows/test_inc_examples.yml'
+    - 'examples/neural_compressor/*'
+  pull_request:
+    paths:
+    - '.github/workflows/test_inc_examples.yml'
+    - 'examples/neural_compressor/*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.10"]
+
+    runs-on: ubuntu-20.04
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Setup Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        pip install optimum[neural-compressor] pytest==8.0.0
+        pip install -r examples/neural_compressor/text-classification/requirements.txt
+        pip install -r examples/neural_compressor/question-answering/requirements.txt
+        pip install -r examples/neural_compressor/token-classification/requirements.txt
+        pip install -r examples/neural_compressor/language-modeling/requirements.txt
+        pip install -r examples/neural_compressor/multiple-choice/requirements.txt
+
+    - name: Test examples
+      run: |
+        python -m pytest examples/neural_compressor/test_examples.py
