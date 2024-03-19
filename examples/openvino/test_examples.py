@@ -17,6 +17,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+
 SRC_DIRS = [
     os.path.join(os.path.dirname(__file__), dirname)
     for dirname in [
@@ -29,9 +30,9 @@ SRC_DIRS = [
 sys.path.extend(SRC_DIRS)
 
 if SRC_DIRS is not None:
-    import run_image_classification
     import run_audio_classification
     import run_glue
+    import run_image_classification
     import run_qa
 
 
