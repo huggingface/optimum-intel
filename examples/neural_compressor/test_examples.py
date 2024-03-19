@@ -78,7 +78,7 @@ class TestExamples(unittest.TestCase):
 
             with patch.object(sys, "argv", test_args):
                 run_glue.main()
-                results = get_results(tmp_dir)
+                get_results(tmp_dir)
 
     def test_run_qa(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -103,7 +103,7 @@ class TestExamples(unittest.TestCase):
 
             with patch.object(sys, "argv", test_args):
                 run_qa.main()
-                results = get_results(tmp_dir)
+                get_results(tmp_dir)
 
     def test_run_ner(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -128,7 +128,7 @@ class TestExamples(unittest.TestCase):
 
             with patch.object(sys, "argv", test_args):
                 run_ner.main()
-                results = get_results(tmp_dir)
+                get_results(tmp_dir)
 
     def test_run_swag(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -152,7 +152,7 @@ class TestExamples(unittest.TestCase):
 
             with patch.object(sys, "argv", test_args):
                 run_swag.main()
-                results = get_results(tmp_dir)
+                get_results(tmp_dir)
 
     def test_run_clm(self):
         quantization_approach = "dynamic"
@@ -181,7 +181,7 @@ class TestExamples(unittest.TestCase):
 
             with patch.object(sys, "argv", test_args):
                 run_clm.main()
-                results = get_results(tmp_dir)
+                get_results(tmp_dir)
 
     def test_run_mlm(self):
         quantization_approach = "static"
@@ -210,7 +210,7 @@ class TestExamples(unittest.TestCase):
 
             with patch.object(sys, "argv", test_args):
                 run_mlm.main()
-                results = get_results(tmp_dir)
+                get_results(tmp_dir)
 
 
 if __name__ == "__main__":
