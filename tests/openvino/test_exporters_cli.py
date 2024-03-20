@@ -37,6 +37,7 @@ from optimum.intel import (  # noqa
     OVModelForTokenClassification,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
+    OVLatentConsistencyModelPipeline,
 )
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
@@ -76,6 +77,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         "stable-diffusion": 0,  # not supported
         "stable-diffusion-xl": 0,  # not supported
     }
+
+    SUPPORTED_SD_HYBRID_ARCHITECTURES = (
+        ("stable-diffusion", 72, 195),
+        ("stable-diffusion-xl", 84, 331),
+        ("latent-consistency", 50, 135),
+    )
 
     SUPPORTED_4BIT_ARCHITECTURES = (("text-generation-with-past", "opt125m"),)
 
@@ -175,6 +182,20 @@ class OVCLIExportTestCase(unittest.TestCase):
             for i, model in enumerate(models):
                 _, num_int8, _ = get_num_quantized_nodes(model)
                 self.assertEqual(expected_int8[i], num_int8)
+
+    @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
+    def test_exporters_cli_hybrid_quantization(self, model_type: str, exp_num_fq: int, exp_num_int8: int):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} "
+                f"--task {model_type} --dataset laion/filtered-wit --weight-format int8 {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS[model_type]).from_pretrained(tmpdir)
+            num_fq, num_int8, _ = get_num_quantized_nodes(model.unet)
+            self.assertEqual(exp_num_int8, num_int8)
+            self.assertEqual(exp_num_fq, num_fq)
 
     @parameterized.expand(TEST_4BIT_CONFIGURATONS)
     def test_exporters_cli_int4(self, task: str, model_type: str, option: str):
