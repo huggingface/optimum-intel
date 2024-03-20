@@ -54,7 +54,8 @@ from transformers import AutoTokenizer, AutoConfig
 + from optimum.intel.ipex import IPEXModelForCausalLM
 
 config = AutoConfig.from_pretrained("gpt2")
-model = IPEXModelForCausalLM.from_pretrained(
+- model = AutoModelForCausalLM.from_pretrained(
++ model = IPEXModelForCausalLM.from_pretrained(
   "gpt2",
   config=config,
   torch_dtype=torch.bfloat16,
