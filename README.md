@@ -49,15 +49,13 @@ Here is the example of how to use IPEX optimized model to generate texts.
 ### generate
 ```diff
 import torch
-from transformers import AutoTokenizer, AutoConfig
+from transformers import AutoTokenizer
 - from transformers import AutoModelForCausalLM
 + from optimum.intel.ipex import IPEXModelForCausalLM
 
-config = AutoConfig.from_pretrained("gpt2")
 - model = AutoModelForCausalLM.from_pretrained(
 + model = IPEXModelForCausalLM.from_pretrained(
   "gpt2",
-  config=config,
   torch_dtype=torch.bfloat16,
   export=True,
 )
