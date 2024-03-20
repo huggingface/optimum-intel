@@ -114,7 +114,7 @@ class OVConfig(BaseConfig):
         **kwargs,
     ):
         super().__init__()
-        self.compression = compression or DEFAULT_QUANTIZATION_CONFIG
+        self.compression = compression
         self.input_info = input_info
         self.save_onnx_model = save_onnx_model
         self._enable_standard_onnx_export_option()
@@ -167,7 +167,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
 
         bits (`int`, defaults to 8):
             The number of bits to quantize to.
-        sym (`bool`, *optional*, defaults to `False`):
+        sym (`bool`, defaults to `False`):
             Whether to use symetric quantization.
         tokenizer (`str` or `PreTrainedTokenizerBase`, *optional*):
             The tokenizer used to process the dataset. You can pass either:
@@ -177,23 +177,24 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
                     user or organization name, like `dbmdz/bert-base-german-cased`.
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
-        dataset (`Union[List[str]]`, *optional*):
-            The dataset used for data-aware compression. You can provide your own dataset in a list of string or just use the
-            the one from the list ['wikitext2','c4','c4-new','ptb','ptb-new']
-        group_size (`int`, *optional*, defaults to 128):
-            The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
-        ratio (`float`, *optional*, defaults to 1.0):
+        dataset (`str or List[str]`, *optional*):
+            The dataset used for data-aware compression or quantization with NNCF. You can provide your own dataset
+            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new','ptb','ptb-new'] for LLLMs
+            or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models.
+        ratio (`float`, defaults to 1.0):
             The ratio between baseline and backup precisions (e.g. 0.9 means 90% of layers quantized to INT4_ASYM
             and the rest to INT8_ASYM).
+        group_size (`int`, *optional*):
+            The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
         all_layers (`bool`, *optional*):
             Defines how many layers are compressed to 4-bits while the rest are kept in 8-bit presicion.
-        sensitivity_metric (`nncf.SensitivityMetric`, *optional*):
+        sensitivity_metric (`str`, *optional*):
             The sensitivity metric for assigning quantization precision to layers. In order to
             preserve the accuracy of the model, the more sensitive layers receives a higher precision.
-        awq (`bool`, *optional*):
-            Enables AWQ method to unify weight ranges and improve overall model accuracy.
-        ignored_scope (`nncf.IgnoredScope`, *optional*):
+        ignored_scope (`dict`, *optional*):
             An ignored scope that defined the list of model control flow graph nodes to be ignored during quantization.
+        num_samples (`int`, *optional*):
+            The maximum number of samples composing the calibration dataset.
 
     """
 
@@ -202,12 +203,13 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         bits: int = 8,
         sym: bool = False,
         tokenizer: Optional[Any] = None,
-        dataset: Optional[str] = None,
+        dataset: Optional[Union[str, List[str]]] = None,
         ratio: float = 1.0,
         group_size: Optional[int] = None,
         all_layers: Optional[bool] = None,
         sensitivity_metric: Optional[str] = None,
         ignored_scope: Optional[dict] = None,
+        num_samples: Optional[int] = None,
         **kwargs,
     ):
         self.bits = bits
@@ -219,6 +221,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
         self.ignored_scope = ignored_scope
+        self.num_samples = num_samples
         self.quant_method = "default"  # TODO : enable AWQ after nncf v2.9.0 release
         self.post_init()
 
@@ -231,10 +234,16 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
             raise ValueError("`group_size` must be greater than 0 or equal to -1")
         if self.dataset is not None and isinstance(self.dataset, str):
-            if self.dataset not in ["wikitext2", "c4", "c4-new", "ptb", "ptb-new"]:
+            llm_datasets = ["wikitext2", "c4", "c4-new", "ptb", "ptb-new"]
+            stable_diffusion_datasets = [
+                "conceptual_captions",
+                "laion/220k-GPT4Vision-captions-from-LIVIS",
+                "laion/filtered-wit",
+            ]
+            if self.dataset not in llm_datasets + stable_diffusion_datasets:
                 raise ValueError(
                     f"""You have entered a string value for dataset. You can only choose between
-                    ['wikitext2','c4','c4-new','ptb','ptb-new'], but we found {self.dataset}"""
+                    {llm_datasets} for LLLMs or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
                 )
 
         if self.bits not in [4, 8]:

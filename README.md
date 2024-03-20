@@ -10,7 +10,7 @@
 
 Intel [Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) is an open-source library enabling the usage of the most popular compression techniques such as quantization, pruning and knowledge distillation. It supports automatic accuracy-driven tuning strategies in order for users to easily generate quantized model. The users can easily apply static, dynamic and aware-training quantization approaches while giving an expected accuracy criteria. It also supports different weight pruning techniques enabling the creation of pruned model giving a predefined sparsity target.
 
-[OpenVINO](https://docs.openvino.ai/latest/index.html) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators ([see](https://docs.openvino.ai/latest/openvino_docs_OV_UG_supported_plugins_Supported_Devices.html) the full list of supported devices). It is supplied with a set of tools to optimize your models with compression techniques such as quantization, pruning and knowledge distillation. Optimum Intel provides a simple interface to optimize your Transformers and Diffusers models, convert them to the OpenVINO Intermediate Representation (IR) format and run inference using OpenVINO Runtime.
+[OpenVINO](https://docs.openvino.ai) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators ([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices). It is supplied with a set of tools to optimize your models with compression techniques such as quantization, pruning and knowledge distillation. Optimum Intel provides a simple interface to optimize your Transformers and Diffusers models, convert them to the OpenVINO Intermediate Representation (IR) format and run inference using OpenVINO Runtime.
 
 
 ## Installation
@@ -20,7 +20,7 @@ To install the latest release of 🤗 Optimum Intel with the corresponding requi
 | Accelerator                                                                                                      | Installation                                                         |
 |:-----------------------------------------------------------------------------------------------------------------|:---------------------------------------------------------------------|
 | [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) | `pip install --upgrade-strategy eager "optimum[neural-compressor]"`  |
-| [OpenVINO](https://docs.openvino.ai/latest/index.html)                                                           | `pip install --upgrade-strategy eager "optimum[openvino,nncf]"`      |
+| [OpenVINO](https://docs.openvino.ai)                                                                             | `pip install --upgrade-strategy eager "optimum[openvino]"`           |
 | [Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/#introduction)                 | `pip install --upgrade-strategy eager "optimum[ipex]"`               |
 
 The `--upgrade-strategy eager` option is needed to ensure `optimum-intel` is upgraded to the latest version.
@@ -68,11 +68,11 @@ For more details on the supported compression techniques, please refer to the [d
 
 ## OpenVINO
 
-Below are the examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/latest/tmo_introduction.html) framework to accelerate inference.
+Below are examples of how to use OpenVINO and its [NNCF](https://docs.openvino.ai/2024/openvino-workflow/model-optimization-guide/compressing-models-during-training.html) framework to accelerate inference.
 
 #### Export:
 
-It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format with the CLI :
+It is possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
 
 ```plain
 optimum-cli export openvino --model gpt2 ov_model

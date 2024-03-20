@@ -57,6 +57,7 @@ class OVBaseModel(OptimizedModel):
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         self.config = config
@@ -91,6 +92,10 @@ class OVBaseModel(OptimizedModel):
             self.compile()
 
         self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
+
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
 
     @staticmethod
     def load_model(file_name: Union[str, Path], quantization_config: Union[OVWeightQuantizationConfig, Dict] = None):
@@ -143,6 +148,15 @@ class OVBaseModel(OptimizedModel):
         """
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(self.model, dst_path, compress_to_fp16=False)
+
+        self._save_openvino_config(save_directory)
+
+    def _save_openvino_config(self, save_directory: Union[str, Path]):
+        if self._openvino_config is not None:
+            if not isinstance(self._openvino_config.quantization_config.dataset, (str, type(None))):
+                self._openvino_config.quantization_config.dataset = None
+
+            self._openvino_config.save_pretrained(save_directory)
 
     @classmethod
     def _from_pretrained(
@@ -204,12 +218,28 @@ class OVBaseModel(OptimizedModel):
             local_files_only=local_files_only,
         )
 
-        # Give default quantization config if not provided and load_in_8bit=True
-        if load_in_8bit:
-            quantization_config = quantization_config or {"bits": 8}
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         model = cls.load_model(model_cache_path, quantization_config=quantization_config)
-        return cls(model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
+        return cls(
+            model,
+            config=config,
+            model_save_dir=model_cache_path.parent,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _prepare_weight_quantization_config(
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None, load_in_8bit: bool = False
+    ):
+        # Give default quantization config if not provided and load_in_8bit=True
+        if not quantization_config and load_in_8bit:
+            quantization_config = OVWeightQuantizationConfig(bits=8)
+        elif isinstance(quantization_config, dict):
+            quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
+
+        return quantization_config
 
     @staticmethod
     def _cached_file(
@@ -285,8 +315,8 @@ class OVBaseModel(OptimizedModel):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
-        # If load_in_8bit or quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None or not quantization_config:
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None and not quantization_config:
             ov_config = None
         else:
             ov_config = OVConfig(dtype="fp32")
@@ -359,7 +389,7 @@ class OVBaseModel(OptimizedModel):
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
                 and not str(self.model_save_dir).startswith(gettempdir())
-                and self._device.lower() == "gpu"
+                and "gpu" in self._device.lower()
             ):
                 # Set default CACHE_DIR only if it is not set, if the model is not in a temporary directory, and device is GPU
                 cache_dir = Path(self.model_save_dir).joinpath("model_cache")
@@ -417,6 +447,9 @@ class OVBaseModel(OptimizedModel):
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)
         self.request = None
+        return self
+
+    def eval(self):
         return self
 
     def forward(self, *args, **kwargs):

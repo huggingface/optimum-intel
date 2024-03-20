@@ -14,7 +14,7 @@
 
 import logging
 
-from ..utils.import_utils import is_diffusers_available, is_nncf_available
+from ..utils.import_utils import is_accelerate_available, is_diffusers_available, is_nncf_available
 from .utils import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
@@ -37,8 +37,10 @@ if is_nncf_available():
     patch_torch_operators()
 
     from .quantization import OVQuantizer
-    from .trainer import OVTrainer
     from .training_args import OVTrainingArguments
+
+    if is_accelerate_available():
+        from .trainer import OVTrainer
 
 
 from .configuration import OVConfig, OVWeightQuantizationConfig

@@ -1,4 +1,6 @@
+import os
 import re
+import subprocess
 
 from setuptools import find_namespace_packages, setup
 
@@ -8,20 +10,34 @@ try:
     filepath = "optimum/intel/version.py"
     with open(filepath) as version_file:
         (__version__,) = re.findall('__version__ = "(.*)"', version_file.read())
+    if __version__.endswith(".dev0"):
+        dev_version_id = ""
+        try:
+            repo_root = os.path.dirname(os.path.realpath(__file__))
+            dev_version_id = (
+                subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=repo_root)  # nosec
+                .strip()
+                .decode()
+            )
+            dev_version_id = "+" + dev_version_id
+        except subprocess.CalledProcessError:
+            pass
+        __version__ = __version__ + dev_version_id
 except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "optimum~=1.17",
     "transformers>=4.36.0,<4.39.0",
+    "optimum @ git+https://github.com/huggingface/optimum.git#egg=optimum",
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
-    "accelerate",  # transformers 4.29 require accelerate for PyTorch
+    "onnx",
 ]
 
 TESTS_REQUIRE = [
+    "accelerate",
     "pytest",
     "parameterized",
     "Pillow",
@@ -34,24 +50,18 @@ TESTS_REQUIRE = [
     "timm",
     "invisible-watermark>=0.2.0",
     "auto-gptq",
+    "transformers_stream_generator",
+    "einops",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
 
 EXTRAS_REQUIRE = {
-    "neural-compressor": [
-        "neural-compressor>=2.2.0",
-        "onnx",
-        "onnxruntime<1.15.0",
-    ],
-    "openvino": [
-        "openvino>=2023.3",
-        "onnx",
-        "onnxruntime",
-    ],
+    "neural-compressor": ["neural-compressor>=2.2.0", "onnxruntime<1.15.0", "accelerate"],
+    "openvino": ["openvino>=2023.3", "nncf>=2.8.1"],
     "openvino-tokenizers": ["openvino-tokenizers[transformers]"],
     "nncf": ["nncf>=2.8.1"],
-    "ipex": ["intel-extension-for-pytorch", "onnx"],
+    "ipex": ["intel-extension-for-pytorch"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
