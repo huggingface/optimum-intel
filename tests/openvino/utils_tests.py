@@ -84,6 +84,7 @@ MODEL_NAMES = {
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
     "stablelm": "hf-internal-testing/tiny-random-StableLmForCausalLM",
+    "starcoder2": "hf-internal-testing/tiny-random-Starcoder2ForCausalLM",
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
     "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",
