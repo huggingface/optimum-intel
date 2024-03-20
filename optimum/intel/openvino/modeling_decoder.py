@@ -260,11 +260,11 @@ class OVBaseDecoderModel(OVModel):
             if use_cache:
                 task = task + "-with-past"
 
-        # If load_in_8bit or quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None or not quantization_config:
-            ov_config = None
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None and not quantization_config:
+            ov_export_config = None
         else:
-            ov_config = OVConfig(dtype="fp32")
+            ov_export_config = OVConfig(dtype="fp32")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
 
@@ -279,7 +279,7 @@ class OVBaseDecoderModel(OVModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
+            ov_config=ov_export_config,
             stateful=stateful,
         )
 
@@ -316,7 +316,9 @@ class OVBaseDecoderModel(OVModel):
             shapes[inputs][0] = -1
             input_name = inputs.get_any_name()
             if input_name.startswith("past_key_values"):
-                if len(inputs.partial_shape) == 3 and input_name.endswith("value"):
+                if (
+                    len(inputs.partial_shape) == 3 and input_name.endswith("value")
+                ) or self.config.model_type == "chatglm":
                     shapes[inputs][1] = -1
                 else:
                     shapes[inputs][2] = -1
@@ -635,7 +637,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 # from optimum.gptq.utils import get_seqlen
 
                 # seqlen = get_seqlen(causal_model)
-                dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32)
+                nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
+                dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
                 dataset = prepare_dataset(dataset)
                 quantization_config = copy.deepcopy(quantization_config)
                 quantization_config.dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))

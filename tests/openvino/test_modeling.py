@@ -28,6 +28,7 @@ from evaluate import evaluator
 from parameterized import parameterized
 from PIL import Image
 from transformers import (
+    AutoConfig,
     AutoFeatureExtractor,
     AutoModel,
     AutoModelForAudioClassification,
@@ -52,7 +53,6 @@ from transformers import (
 from transformers.onnx.utils import get_preprocessor
 from utils_tests import MODEL_NAMES
 
-from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 from optimum.intel import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
@@ -272,6 +272,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, compile=False)
+        model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
         text = "This restaurant is awesome"
@@ -345,6 +346,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
+        model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
         question = "What's my name?"
@@ -411,6 +413,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForTokenClassification.from_pretrained(model_id, export=True)
+        model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
         outputs = pipe("My Name is Arthur and I live in Lyon.")
@@ -460,6 +463,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForFeatureExtraction.from_pretrained(model_id, export=True)
+        model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
         outputs = pipe("My Name is Arthur and I live in Lyon.")
@@ -473,73 +477,102 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
+        "baichuan2",
         "gpt_bigcode",
         "blenderbot",
         "blenderbot-small",
         "bloom",
+        "chatglm",
         "codegen",
         # "data2vec-text", # TODO : enable when enabled in exporters
+        "gemma",
         "gpt2",
         "gpt_neo",
         "gpt_neox",
         "llama",
         # "llama_gptq",
         "marian",
+        "minicpm",
         "mistral",
+        "mixtral",
         "mpt",
         "opt",
         "pegasus",
+        "qwen",
+        "qwen2",
+        "stablelm",
     )
     GENERATION_LENGTH = 100
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
+    REMOTE_CODE_MODELS = ("chatglm", "minicpm", "baichuan2", "jais", "qwen")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
+        not_stateful = ["gpt_bigcode"]
+        if is_openvino_version("<", "2024.0"):
+            not_stateful.append("mixtral")
+
+        if is_openvino_version("<", "2024.1"):
+            not_stateful.extend(["llama", "gemma"])
 
         if "gptq" in model_arch:
             self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
 
         set_seed(SEED)
-        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+
+        model_kwargs = {}
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {
+                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
+                "trust_remote_code": True,
+            }
+        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.assertEqual(
+            ov_model.stateful, self.IS_SUPPORT_STATEFUL and ov_model.config.model_type not in not_stateful
+        )
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        if model_arch == "qwen":
+            transformers_model.to(torch.float32)
         tokens = tokenizer(
             "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
         )
-        position_ids = None
-        if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
-            input_shape = tokens["input_ids"].shape
-            position_ids = torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
-        ov_outputs = ov_model(**tokens, position_ids=position_ids)
+        ov_outputs = ov_model(**tokens)
 
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         self.assertTrue("past_key_values" in ov_outputs)
         self.assertIsInstance(ov_outputs.past_key_values, tuple)
-
-        is_stateful = ov_model.config.model_type not in {"gpt_bigcode", "llama"} and self.IS_SUPPORT_STATEFUL
+        is_stateful = ov_model.config.model_type not in not_stateful and self.IS_SUPPORT_STATEFUL
         self.assertEqual(ov_model.stateful, is_stateful)
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
-
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
-        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=1e-4))
         del transformers_model
         del ov_model
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
+        model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False, compile=False)
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {
+                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
+                "trust_remote_code": True,
+            }
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, use_cache=False, compile=False, **model_kwargs
+        )
+        model.eval()
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         model.half()
@@ -556,8 +589,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_multiple_inputs(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=False)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        if model_arch == "qwen":
+            self.skipTest("Qwen tokenizer does not support padding")
+        model_kwargs = {}
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {
+                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
+                "trust_remote_code": True,
+            }
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=False, **model_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
         tokens = tokenizer(texts, padding=True, return_tensors="pt")
@@ -722,6 +763,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForMaskedLM.from_pretrained(model_id, export=True)
+        model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
         outputs = pipe(f"This is a {tokenizer.mask_token}.")
@@ -779,6 +821,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForImageClassification.from_pretrained(model_id, export=True)
+        model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
         outputs = pipe("http://images.cocodataset.org/val2017/000000039769.jpg")
@@ -875,6 +918,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, compile=False)
+        model.eval()
         model.half()
         model.to("cpu")
         model.compile()
@@ -1008,6 +1052,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForAudioClassification.from_pretrained(model_id, export=True)
+        model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
         outputs = pipe([np.random.random(16000)])
@@ -1318,6 +1363,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
+        model.eval()
         processor = get_preprocessor(model_id)
         GenerationConfig.from_pretrained(model_id)
         pipe = pipeline(
