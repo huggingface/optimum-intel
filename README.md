@@ -45,7 +45,7 @@ where `extras` can be one or more of `ipex`, `neural-compressor`, `openvino`, `n
 # Quick tour
 
 ## IPEX
-Below are examples of how to use IPEX model to generate texts.
+Here is the example of how to use IPEX optimized model to generate texts.
 ### generate
 ```diff
 import torch
