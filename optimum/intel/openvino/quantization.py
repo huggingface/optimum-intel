@@ -16,6 +16,7 @@ import copy
 import inspect
 import logging
 import os
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
@@ -24,6 +25,7 @@ import openvino
 import torch
 import transformers
 from nncf import CompressWeightsMode, IgnoredScope, NNCFConfig, SensitivityMetric
+from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters
 from nncf.torch import create_compressed_model, register_default_init_args, register_module
 from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
 from nncf.torch.initialization import PTInitializingDataLoader
@@ -348,7 +350,7 @@ class OVQuantizer(OptimumQuantizer):
 
         model_type = self.model.config.model_type.replace("_", "-")
         onnx_config_class = TasksManager.get_exporter_config_constructor(
-            exporter="onnx",
+            exporter="openvino",
             model=self.model,
             task=self.task,
             model_type=model_type,
@@ -550,7 +552,7 @@ class OVQuantizer(OptimumQuantizer):
 
 def _weight_only_quantization(
     model: openvino.runtime.Model, quantization_config: Union[OVWeightQuantizationConfig, Dict]
-):
+) -> openvino.runtime.Model:
     config = quantization_config
     if isinstance(config, dict):
         config = OVWeightQuantizationConfig.from_dict(quantization_config)
@@ -564,7 +566,8 @@ def _weight_only_quantization(
 
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        dataset = get_dataset(config.dataset, tokenizer, seqlen=32)
+        nsamples = config.num_samples if config.num_samples else 128
+        dataset = get_dataset(config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
         dataset = prepare_dataset(dataset)
 
     sensitivity_metric = None
@@ -590,4 +593,92 @@ def _weight_only_quantization(
         # awq=config.quant_method == "awq", # TODO : remove and add it back once nncf v2.9.0
         ignored_scope=ignored_scope,
         dataset=dataset,
+        # subset_size=config.num_samples if config.num_samples else 128, # TODO : enable from nncf v2.9.0
     )
+
+
+def _get_operation_const_op(operation, const_port_id: int):
+    node = operation.input_value(const_port_id).get_node()
+    queue = deque([node])
+    constant_node = None
+    allowed_propagation_types_list = ["Convert", "FakeQuantize", "Reshape"]
+
+    while len(queue) != 0:
+        curr_node = queue.popleft()
+        if curr_node.get_type_name() == "Constant":
+            constant_node = curr_node
+            break
+        if len(curr_node.inputs()) == 0:
+            break
+        if curr_node.get_type_name() in allowed_propagation_types_list:
+            queue.append(curr_node.input_value(0).get_node())
+
+    return constant_node
+
+
+def _is_embedding(node) -> bool:
+    allowed_types_list = ["f16", "f32", "f64"]
+    const_port_id = 0
+    input_tensor = node.input_value(const_port_id)
+    if input_tensor.get_element_type().get_type_name() in allowed_types_list:
+        const_node = _get_operation_const_op(node, const_port_id)
+        if const_node is not None:
+            return True
+
+    return False
+
+
+def _collect_ops_with_weights(model):
+    ops_with_weights = []
+    for op in model.get_ops():
+        if op.get_type_name() == "MatMul":
+            constant_node_0 = _get_operation_const_op(op, const_port_id=0)
+            constant_node_1 = _get_operation_const_op(op, const_port_id=1)
+            if constant_node_0 or constant_node_1:
+                ops_with_weights.append(op.get_friendly_name())
+        if op.get_type_name() == "Gather" and _is_embedding(op):
+            ops_with_weights.append(op.get_friendly_name())
+
+    return ops_with_weights
+
+
+def _hybrid_quantization(
+    model: openvino.runtime.Model, quantization_config: OVWeightQuantizationConfig, dataset: Dict[str, Any]
+) -> openvino.runtime.Model:
+    """
+    Quantize a model in hybrid mode with NNCF which means that we quantize:
+    weights of MatMul and Embedding layers and activations of other layers.
+    The optimization specifications defined in `quantization_config`.
+
+    Args:
+        model (`openvino.runtime.Model`):
+            The OpenVINO Runtime model for applying hybrid quantization.
+        quantization_config (`OVWeightQuantizationConfig`):
+            The configuration containing the parameters related to quantization.
+        dataset (`Dict[str, Any]`):
+            The dataset used for hybrid quantization.
+    Returns:
+        The OpenVINO Runtime model with applied hybrid quantization.
+    """
+    ops_to_compress = _collect_ops_with_weights(model)
+
+    ignored_scope = quantization_config.ignored_scope if isinstance(quantization_config.ignored_scope, dict) else {}
+    ptq_ignored_scope = nncf.IgnoredScope(**ignored_scope)
+    ptq_ignored_scope.names += ops_to_compress
+
+    wc_quantization_config = copy.deepcopy(quantization_config)
+    wc_quantization_config.ignored_scope = ignored_scope
+    wc_quantization_config.ignored_scope["types"] = ignored_scope.get("types", []) + ["Convolution"]
+    compressed_model = _weight_only_quantization(model, wc_quantization_config)
+
+    subset_size = quantization_config.num_samples if quantization_config.num_samples else 200
+    quantized_model = nncf.quantize(
+        model=compressed_model,
+        calibration_dataset=nncf.Dataset(dataset),
+        model_type=nncf.ModelType.TRANSFORMER,
+        ignored_scope=ptq_ignored_scope,
+        # The SQ algo should be disabled for MatMul nodes because their weights are already compressed
+        advanced_parameters=nncf.AdvancedQuantizationParameters(AdvancedSmoothQuantParameters(matmul=-1)),
+        subset_size=subset_size,
+    )
+    return quantized_model

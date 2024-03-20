@@ -314,8 +314,8 @@ class OVBaseModel(OptimizedModel):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
-        # If load_in_8bit or quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None or not quantization_config:
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None and not quantization_config:
             ov_config = None
         else:
             ov_config = OVConfig(dtype="fp32")
@@ -388,7 +388,7 @@ class OVBaseModel(OptimizedModel):
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
                 and not str(self.model_save_dir).startswith(gettempdir())
-                and self._device.lower() == "gpu"
+                and "gpu" in self._device.lower()
             ):
                 # Set default CACHE_DIR only if it is not set, if the model is not in a temporary directory, and device is GPU
                 cache_dir = Path(self.model_save_dir).joinpath("model_cache")
@@ -446,6 +446,9 @@ class OVBaseModel(OptimizedModel):
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)
         self.request = None
+        return self
+
+    def eval(self):
         return self
 
     def forward(self, *args, **kwargs):
