@@ -263,6 +263,44 @@ def main_export(
         **loading_kwargs,
     )
 
+    if (
+        library_name == "diffusers"
+        and ov_config
+        and ov_config.quantization_config
+        and "dataset" in ov_config.quantization_config
+    ):
+        import huggingface_hub
+
+        model_info = huggingface_hub.model_info(model_name_or_path, revision=revision)
+        class_name = model_info.config["diffusers"]["_class_name"]
+        if class_name == "LatentConsistencyModelPipeline":
+            from optimum.intel import OVLatentConsistencyModelPipeline
+
+            model_cls = OVLatentConsistencyModelPipeline
+        elif class_name == "StableDiffusionXLPipeline":
+            from optimum.intel import OVStableDiffusionXLPipeline
+
+            model_cls = OVStableDiffusionXLPipeline
+        elif class_name == "StableDiffusionPipeline":
+            from optimum.intel import OVStableDiffusionPipeline
+
+            model_cls = OVStableDiffusionPipeline
+        else:
+            raise NotImplementedError(f"{class_name} doesn't support quantization in hybrid mode.")
+
+        model = model_cls.from_pretrained(
+            model_id=model_name_or_path,
+            export=True,
+            quantization_config=ov_config.quantization_config,
+            cache_dir=cache_dir,
+            trust_remote_code=trust_remote_code,
+            revision=revision,
+            force_download=force_download,
+            use_auth_token=use_auth_token,
+        )
+        model.save_pretrained(output)
+        return
+
     needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 
     if needs_pad_token_id:

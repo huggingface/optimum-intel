@@ -105,6 +105,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
         help=("The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization."),
     )
     optional_group.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help=(
+            "The dataset used for data-aware compression or quantization with NNCF. "
+            "You can use the one from the list ['wikitext2','c4','c4-new','ptb','ptb-new'] for LLLMs "
+            "or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models."
+        ),
+    )
+    optional_group.add_argument(
         "--disable-stateful",
         action="store_true",
         help=(
@@ -187,6 +197,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 )
                 quantization_config["sym"] = "asym" not in self.args.weight_format
                 quantization_config["group_size"] = 128 if "128" in self.args.weight_format else 64
+            quantization_config["dataset"] = self.args.dataset
             ov_config = OVConfig(quantization_config=quantization_config)
 
         # TODO : add input shapes
