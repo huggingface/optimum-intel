@@ -120,6 +120,7 @@ class OVBaseDecoderModel(OVModel):
         self._original_model = self.model.clone()  # keep original model for serialization
         self._pkv_precision = Type.f32
         self.next_beam_idx = None
+        self.past_len = 0
         self.update_pkv_precision()
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
@@ -356,19 +357,21 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Dict:
-        if self.use_cache and past_key_values is not None:
-            input_ids = input_ids[:, -1:]
 
         batch_size = input_ids.shape[0]
         if self.config.model_type == "bloom":
             batch_size *= self.config.num_attention_heads
 
         inputs = {}
-        past_len = 0
         if not self.stateful:
             if past_key_values is not None:
                 if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
-                    past_len = past_key_values[0][1].shape[-2]
+                    seq_len_dim = -2
+                    if self.config.model_type == "chatglm":
+                        seq_len_dim = 0
+                    elif self.config.model_type == "qwen":
+                        seq_len_dim = 1
+                    self.past_len = past_key_values[0][1].shape[seq_len_dim]
                     if self._pkv_precision == Type.bf16:
                         # numpy does not support bf16, pretending f16, should change to bf16
                         past_key_values = tuple(
@@ -382,13 +385,14 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                             past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
                         )
                 else:
-                    past_len = past_key_values[0].shape[-2]
+                    self.past_len = past_key_values[0].shape[-2]
 
                 # Add the past_key_values to the decoder inputs
                 inputs = dict(zip(self.key_value_input_names, past_key_values))
 
             # Create empty past_key_values for decoder_with_past first generation step
             elif self.use_cache:
+                self.past_len = 0
                 for input_name in self.key_value_input_names:
                     model_inputs = self.model.input(input_name)
                     shape = model_inputs.get_partial_shape()
@@ -411,6 +415,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 # Set initial value for the next beam_idx input that will be used at the current iteration
                 # and will be optionally updated by _reorder_cache at the next iterations if beam_search is used
                 self.next_beam_idx = np.arange(batch_size, dtype=int)
+                self.past_len = 0
 
         inputs["input_ids"] = np.array(input_ids)
         # Add the attention_mask inputs when needed
@@ -419,7 +424,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 attention_mask = np.array(attention_mask)
             else:
                 attention_mask = np.ones(
-                    (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
+                    (input_ids.shape[0], input_ids.shape[1] + self.past_len), dtype=inputs["input_ids"].dtype
                 )
 
         if "attention_mask" in self.input_names:
@@ -470,6 +475,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # the first condition at the function beginning above.
             # It should be something that is not None and it should be True when converted to Boolean.
             past_key_values = ((),)
+            self.past_len += input_ids.shape[1]
 
         if not self.stateful:
             if self.use_cache:
@@ -480,24 +486,38 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     past_key_values = tuple(
                         past_key_values[i : i + self.num_pkv] for i in range(0, len(past_key_values), self.num_pkv)
                     )
+                self.past_len += input_ids.shape[1]
             else:
                 past_key_values = None
+                self.past_len = 0
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
+    # Adapted from transformers.models.llama.modeling_llama.LlamaForCausalLM.prepare_inputs_for_generation
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
         # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
         attention_mask = kwargs.get("attention_mask", None)
         use_cache = kwargs.get("use_cache", None)
 
+        if past_key_values is not None:
+            # Keep only the unprocessed tokens:
+            # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
+            # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
+            # input)
+            if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:
+                input_ids = input_ids[:, -(attention_mask.shape[1] - self.past_len) :]
+            # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
+            # input_ids based on the past_length.
+            elif self.past_len < input_ids.shape[1]:
+                input_ids = input_ids[:, self.past_len:]
+            # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens
         position_ids = kwargs.get("position_ids", None)
-        if attention_mask is not None and position_ids is None:
+        if attention_mask is not None and position_ids is None and "position_ids" in self.input_names:
             # create position_ids on the fly for batch generation
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
             if past_key_values:
-                position_ids = position_ids[:, -1].unsqueeze(-1)
+                position_ids = position_ids[:, -input_ids.shape[1]:]
 
         return {
             "input_ids": input_ids,
@@ -573,10 +593,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         model_type = config.model_type.replace("_", "-")
         if model_type == "bloom":
             init_cls = OVBloomForCausalLM
-        elif model_type == "mpt":
-            init_cls = OVMPTForCausalLM
-        elif model_type == "opt":
-            init_cls = OVOPTForCausalLM
         elif model_type == "gpt-bigcode":
             init_cls = OVGPTBigCodeForCausalLM
         else:
@@ -630,22 +646,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 class OVBloomForCausalLM(OVModelForCausalLM):
     # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM.prepare_inputs_for_generation
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        attention_mask = kwargs.get("attention_mask", None)
-        use_cache = kwargs.get("use_cache", None)
-
         # only last token for input_ids if past is not None
         if past_key_values and not self.stateful:
             # the cache may be in the stardard format (e.g. in contrastive search), convert to bloom's format if needed
             if past_key_values[0][0].shape[0] == input_ids.shape[0]:
                 past_key_values = self._convert_to_bloom_cache(past_key_values)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": use_cache,
-            "position_ids": None,
-            "attention_mask": attention_mask,
-        }
+        
+        return super().prepare_inputs_for_generation(self, input_ids, past_key_values=past_key_values, **kwargs)
 
     # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
     def _reorder_cache(
@@ -710,36 +717,6 @@ class OVBloomForCausalLM(OVModelForCausalLM):
             )
             for layer_past in past_key_value
         )
-
-
-class OVOPTForCausalLM(OVModelForCausalLM):
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        attention_mask = kwargs.get("attention_mask", None)
-        use_cache = kwargs.get("use_cache", None)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": use_cache,
-            "position_ids": None,
-            "attention_mask": attention_mask,
-        }
-
-
-class OVMPTForCausalLM(OVModelForCausalLM):
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        attention_mask = kwargs.get("attention_mask", None)
-        use_cache = kwargs.get("use_cache", None)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": use_cache,
-            "position_ids": None,
-            "attention_mask": attention_mask,
-        }
 
 
 class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
