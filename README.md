@@ -53,12 +53,10 @@ from transformers import AutoTokenizer
 - from transformers import AutoModelForCausalLM
 + from optimum.intel.ipex import IPEXModelForCausalLM
 
-- model = AutoModelForCausalLM.from_pretrained(
-+ model = IPEXModelForCausalLM.from_pretrained(
-  "gpt2",
-  torch_dtype=torch.bfloat16,
-  export=True,
-)
+
+  model_id = "gpt2"
+- model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16)
++ model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16, export=True)
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
 input_sentence = ["Answer the following yes/no question by reasoning step-by-step please. Can you write a whole Haiku in a single tweet?"]
 model_inputs = tokenizer(input_sentence, return_tensors="pt")
