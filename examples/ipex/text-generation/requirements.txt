@@ -1,3 +1,0 @@
-sentencepiece
-protobuf
-torch >= 2.1.0
