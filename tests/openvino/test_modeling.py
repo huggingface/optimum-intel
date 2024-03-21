@@ -524,10 +524,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         model_kwargs = {}
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {
-                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
-                "trust_remote_code": True,
-            }
+            model_kwargs = {"trust_remote_code": True}
+
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
