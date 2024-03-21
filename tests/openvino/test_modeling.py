@@ -501,7 +501,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen",
         "qwen2",
         "stablelm",
-        # "starcoder2", # TODO: enable with next transformers release
+        "starcoder2",
     )
     GENERATION_LENGTH = 100
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
