@@ -71,7 +71,6 @@ from .modeling_base import (  # noqa
     INCModelForSequenceClassification,
     INCModelForTokenClassification,
     INCModelForVision2Seq,
-    INCModelForXLNetLM,
 )
 from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 
@@ -538,49 +537,3 @@ def _apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> t
         q_model = convert(q_model, mapping=q_mapping, inplace=True)
 
     return q_model
-
-
-class IncQuantizedModel(INCModel):
-    @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        warnings.warn(
-            f"The class `{cls.__name__}` has been depreciated and will be removed in optimum-intel v1.12, please use "
-            f"`{cls.__name__.replace('IncQuantized', 'INC')}` instead."
-        )
-        return super().from_pretrained(*args, **kwargs)
-
-
-class IncQuantizedModelForQuestionAnswering(IncQuantizedModel):
-    auto_model_class = AutoModelForQuestionAnswering
-
-
-class IncQuantizedModelForSequenceClassification(IncQuantizedModel):
-    auto_model_class = AutoModelForSequenceClassification
-
-
-class IncQuantizedModelForTokenClassification(IncQuantizedModel):
-    auto_model_class = AutoModelForTokenClassification
-
-
-class IncQuantizedModelForMultipleChoice(IncQuantizedModel):
-    auto_model_class = AutoModelForMultipleChoice
-
-
-class IncQuantizedModelForSeq2SeqLM(IncQuantizedModel):
-    auto_model_class = AutoModelForSeq2SeqLM
-
-
-class IncQuantizedModelForCausalLM(IncQuantizedModel):
-    auto_model_class = AutoModelForCausalLM
-
-
-class IncQuantizedModelForMaskedLM(IncQuantizedModel):
-    auto_model_class = AutoModelForMaskedLM
-
-
-class IncQuantizedModelForXLNetLM(IncQuantizedModel):
-    auto_model_class = XLNetLMHeadModel
-
-
-class IncQuantizedModelForVision2Seq(IncQuantizedModel):
-    auto_model_class = AutoModelForVision2Seq
