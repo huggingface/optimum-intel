@@ -44,30 +44,6 @@ where `extras` can be one or more of `ipex`, `neural-compressor`, `openvino`, `n
 
 # Quick tour
 
-## IPEX
-Here is the example of how to use IPEX optimized model to generate texts.
-### generate
-```diff
-import torch
-from transformers import AutoTokenizer
-- from transformers import AutoModelForCausalLM
-+ from optimum.intel.ipex import IPEXModelForCausalLM
-
-
-  model_id = "gpt2"
-- model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16)
-+ model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16, export=True)
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
-input_sentence = ["Answer the following yes/no question by reasoning step-by-step please. Can you write a whole Haiku in a single tweet?"]
-model_inputs = tokenizer(input_sentence, return_tensors="pt")
-generation_kwargs = dict(max_new_tokens=32, do_sample=False, num_beams=4, num_beam_groups=1, no_repeat_ngram_size=2, use_cache=True)
-
-generated_ids = model.generate(**model_inputs, **generation_kwargs)
-output = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-print(output)
-```
-
-For more details, please refer to the [documentation](https://intel.github.io/intel-extension-for-pytorch/#introduction).
 
 ## Neural Compressor
 
@@ -225,6 +201,33 @@ Quantization aware training (QAT) is applied in order to simulate the effects of
 ```
 
 You can find more examples in the [documentation](https://huggingface.co/docs/optimum/intel/index).
+
+
+## IPEX
+With `export=True`, IPEX model will replace torch linear to ipex linear which prepacks the weights. It will also apply linear fusioin and [IAKV](https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/llm.html#indirect-access-kv-cache) for generation. Finally, jit.trace will be applied to change the model to graph mode.
+Here is the example of how to use IPEX optimized model to generate texts.
+### generate
+```diff
+import torch
+from transformers import AutoTokenizer
+- from transformers import AutoModelForCausalLM
++ from optimum.intel.ipex import IPEXModelForCausalLM
+
+
+  model_id = "gpt2"
+- model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16)
++ model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16, export=True)
+tokenizer = AutoTokenizer.from_pretrained("gpt2")
+input_sentence = ["Answer the following yes/no question by reasoning step-by-step please. Can you write a whole Haiku in a single tweet?"]
+model_inputs = tokenizer(input_sentence, return_tensors="pt")
+generation_kwargs = dict(max_new_tokens=32, do_sample=False, num_beams=4, num_beam_groups=1, no_repeat_ngram_size=2, use_cache=True)
+
+generated_ids = model.generate(**model_inputs, **generation_kwargs)
+output = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+print(output)
+```
+
+For more details, please refer to the [documentation](https://intel.github.io/intel-extension-for-pytorch/#introduction).
 
 
 ## Running the examples
