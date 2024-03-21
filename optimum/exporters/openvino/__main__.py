@@ -247,6 +247,22 @@ def main_export(
 
         GPTQQuantizer.post_init_model = post_init_model
 
+    model = TasksManager.get_model_from_task(
+        task,
+        model_name_or_path,
+        subfolder=subfolder,
+        revision=revision,
+        cache_dir=cache_dir,
+        use_auth_token=use_auth_token,
+        local_files_only=local_files_only,
+        force_download=force_download,
+        trust_remote_code=trust_remote_code,
+        framework=framework,
+        device=device,
+        library_name=library_name,
+        **loading_kwargs,
+    )
+
     # Apply quantization in hybrid mode to Stable Diffusion before export
     if (
         library_name == "diffusers"
@@ -254,19 +270,16 @@ def main_export(
         and ov_config.quantization_config
         and ov_config.quantization_config.get("dataset", None)
     ):
-        import huggingface_hub
-
-        model_info = huggingface_hub.model_info(model_name_or_path, revision=revision)
-        class_name = model_info.config["diffusers"]["_class_name"]
-        if class_name == "LatentConsistencyModelPipeline":
+        class_name =  model.__class__.__name__
+        if "LatentConsistencyModelPipeline" in class_name:
             from optimum.intel import OVLatentConsistencyModelPipeline
 
             model_cls = OVLatentConsistencyModelPipeline
-        elif class_name == "StableDiffusionXLPipeline":
+        elif "StableDiffusionXLPipeline" in class_name:
             from optimum.intel import OVStableDiffusionXLPipeline
 
             model_cls = OVStableDiffusionXLPipeline
-        elif class_name == "StableDiffusionPipeline":
+        elif "StableDiffusionPipeline" in class_name:
             from optimum.intel import OVStableDiffusionPipeline
 
             model_cls = OVStableDiffusionPipeline
@@ -285,22 +298,6 @@ def main_export(
         )
         model.save_pretrained(output)
         return
-
-    model = TasksManager.get_model_from_task(
-        task,
-        model_name_or_path,
-        subfolder=subfolder,
-        revision=revision,
-        cache_dir=cache_dir,
-        use_auth_token=use_auth_token,
-        local_files_only=local_files_only,
-        force_download=force_download,
-        trust_remote_code=trust_remote_code,
-        framework=framework,
-        device=device,
-        library_name=library_name,
-        **loading_kwargs,
-    )
 
     needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 
