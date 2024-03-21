@@ -357,7 +357,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         position_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Dict:
-
         batch_size = input_ids.shape[0]
         if self.config.model_type == "bloom":
             batch_size *= self.config.num_attention_heads
@@ -509,7 +508,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
             # input_ids based on the past_length.
             elif self.past_len < input_ids.shape[1]:
-                input_ids = input_ids[:, self.past_len:]
+                input_ids = input_ids[:, self.past_len :]
             # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens
         position_ids = kwargs.get("position_ids", None)
         if attention_mask is not None and position_ids is None and "position_ids" in self.input_names:
@@ -517,7 +516,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
             if past_key_values:
-                position_ids = position_ids[:, -input_ids.shape[1]:]
+                position_ids = position_ids[:, -input_ids.shape[1] :]
 
         return {
             "input_ids": input_ids,
@@ -651,8 +650,7 @@ class OVBloomForCausalLM(OVModelForCausalLM):
             # the cache may be in the stardard format (e.g. in contrastive search), convert to bloom's format if needed
             if past_key_values[0][0].shape[0] == input_ids.shape[0]:
                 past_key_values = self._convert_to_bloom_cache(past_key_values)
-        
-        return super().prepare_inputs_for_generation(self, input_ids, past_key_values=past_key_values, **kwargs)
+        return super().prepare_inputs_for_generation(input_ids, past_key_values=past_key_values, **kwargs)
 
     # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
     def _reorder_cache(
