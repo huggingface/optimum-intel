@@ -15,7 +15,6 @@
 import copy
 import inspect
 import logging
-import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
@@ -31,18 +30,9 @@ from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForMaskedLM,
-    AutoModelForMultipleChoice,
-    AutoModelForQuestionAnswering,
-    AutoModelForSeq2SeqLM,
-    AutoModelForSequenceClassification,
-    AutoModelForTokenClassification,
-    AutoModelForVision2Seq,
     DataCollator,
     PretrainedConfig,
     PreTrainedModel,
-    XLNetLMHeadModel,
     default_data_collator,
 )
 

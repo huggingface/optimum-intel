@@ -34,7 +34,6 @@ from transformers import (
     AutoModelForVision2Seq,
     GenerationMixin,
     PretrainedConfig,
-    XLNetLMHeadModel,
 )
 from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
