@@ -253,7 +253,6 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         decoder: openvino.runtime.Model,
         decoder_with_past: openvino.runtime.Model = None,
         config: transformers.PretrainedConfig = None,
-        ov_config: Optional[Dict[str, str]] = None,
         **kwargs,
     ):
         super().__init__(
@@ -264,10 +263,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         enable_compilation = kwargs.get("compile", True)
         self.encoder = OVEncoder(self.encoder_model, parent_model=self)
         self.decoder = OVDecoder(self.decoder_model, parent_model=self)
-        self.ov_config = ov_config if ov_config is not None else {}
 
-        if self.ov_config.get("PERFORMANCE_HINT") is None:
-            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
         if self.use_cache:
             self.decoder_with_past = OVDecoder(self.decoder_with_past_model, parent_model=self)
         if enable_compilation:
