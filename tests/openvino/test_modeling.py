@@ -502,6 +502,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen2",
         "stablelm",
         "starcoder2",
+        "phi",
     )
     GENERATION_LENGTH = 100
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
@@ -532,6 +533,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(
             ov_model.stateful, self.IS_SUPPORT_STATEFUL and ov_model.config.model_type not in not_stateful
         )
+        set_seed(SEED)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         if model_arch == "qwen":
