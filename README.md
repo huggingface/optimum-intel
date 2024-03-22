@@ -204,7 +204,7 @@ You can find more examples in the [documentation](https://huggingface.co/docs/op
 
 
 ## IPEX
-With `export=True`, IPEX model will replace torch linear to ipex linear which prepacks the weights. It will also apply linear fusioin and [IAKV](https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/llm.html#indirect-access-kv-cache) for generation. Finally, jit.trace will be applied to change the model to graph mode.
+With `export=True`, IPEX model will replace torch linear to ipex linear which prepacks the weights. It will also apply linear fusion and [IAKV](https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/llm.html#indirect-access-kv-cache) for generation. Finally, jit.trace will be applied to change the model to graph mode.
 Here is the example of how to use IPEX optimized model to generate texts.
 ### generate
 ```diff
