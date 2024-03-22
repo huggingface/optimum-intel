@@ -501,7 +501,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen",
         "qwen2",
         "stablelm",
-        # "starcoder2", # TODO: enable with next transformers release
+        "starcoder2",
         "phi",
     )
     GENERATION_LENGTH = 100
@@ -525,10 +525,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         model_kwargs = {}
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {
-                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
-                "trust_remote_code": True,
-            }
+            model_kwargs = {"trust_remote_code": True}
+
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
@@ -572,6 +570,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "trust_remote_code": True,
             }
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+
+        if model_arch == "qwen":
+            tokenizer._convert_tokens_to_ids = lambda x: 0
+
         model = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=False, compile=False, **model_kwargs
         )
