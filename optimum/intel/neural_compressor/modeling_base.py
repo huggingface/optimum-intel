@@ -35,7 +35,6 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
-    XLNetLMHeadModel,
 )
 from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
@@ -247,11 +246,6 @@ class INCModelForMaskedLM(INCModel):
 class INCModelForVision2Seq(INCModel):
     auto_model_class = AutoModelForVision2Seq
     export_feature = "image-to-text"
-
-
-class INCModelForXLNetLM(INCModel):
-    auto_model_class = XLNetLMHeadModel
-    export_feature = "fill-mask"
 
 
 class INCModelForCausalLM(INCModel, BaseModelForCausalLM):
