@@ -570,6 +570,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "trust_remote_code": True,
             }
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+
+        if model_arch == "qwen":
+            tokenizer._convert_tokens_to_ids = lambda x: 0
+
         model = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=False, compile=False, **model_kwargs
         )
