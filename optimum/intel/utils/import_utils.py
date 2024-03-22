@@ -175,67 +175,48 @@ def _create_pip_update_command(package_name: str, compatible_version: str, is_de
 
 @functools.lru_cache(1)
 def is_openvino_tokenizers_available():
-    _openvino_tokenizers_available = (
-        importlib.util.find_spec("openvino_tokenizers") is not None and _openvino_available
-    )
-    _openvino_tokenizers_version = "N/A"
-    if _openvino_tokenizers_available:
-        try:
-            _openvino_tokenizers_version = importlib_metadata.version("openvino_tokenizers")
-        except importlib_metadata.PackageNotFoundError:
-            return False
+    if not is_openvino_available():
+        return False
 
-    if _openvino_available and _openvino_tokenizers_available and _openvino_tokenizers_version != "N/A":
-        _is_ovt_dev_version = "dev" in _openvino_tokenizers_version
-        try:
-            _ov_version = importlib_metadata.version("openvino")
-        except importlib_metadata.PackageNotFoundError:
-            try:
-                _ov_version = importlib_metadata.version("openvino-nightly")
-            except importlib_metadata.PackageNotFoundError:
-                _ov_version = _openvino_version
-
-        _is_ov_dev_version = "dev" in _ov_version
-        if _is_ovt_dev_version:
-            _compatible_openvino_major_version, _, _dev_date = _openvino_tokenizers_version.rsplit(".", 2)
-            _compatible_ov_version = _compatible_openvino_major_version + "." + _dev_date
-            _compatible_ovt_version = _ov_version.replace("dev", "0.dev")
-        else:
-            _compatible_openvino_major_version = _openvino_tokenizers_version.rsplit(".", 1)[0]
-            _compatible_ov_version = _compatible_openvino_major_version
-            if _is_ov_dev_version:
-                _compatible_ovt_version = _ov_version.replace("dev", "0.dev")
-            else:
-                _compatible_ovt_version = _ov_version + ".0"
-
-        _update_ov_command = _create_pip_update_command(
-            "openvino", _compatible_ov_version, is_dev_version=_is_ovt_dev_version
+    try:
+        import openvino_tokenizers
+    except ImportError:
+        logger.info(
+            "OpenVINO Tokenizers is not available, tokenizer won't be converted. To automatically "
+            "convert tokenizer during OpenVINO model export install OpenVINO Tokenizers.\n"
+            "For PyPI distribution of OpenVINO:\n"
+            "pip install openvino-tokenizers[transformers]\n"
+            "For pre-release OpenVINO version:\n"
+            "pip install --pre -U openvino openvino-tokenizers"
+            "--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly\n"
+            "For archive OpenVINO distribution:\n"
+            "pip install --no-deps openvino-tokenizers\n"
+            "For detailed installation instructions go to "
+            "https://github.com/openvinotoolkit/openvino_tokenizers/tree/master?tab=readme-ov-file#installation"
         )
-        _update_ovt_command = _create_pip_update_command(
-            "openvino-tokenizers", _compatible_ovt_version, is_dev_version=_is_ov_dev_version
+        return False
+
+    try:
+        openvino_tokenizers._get_factory()
+    except RuntimeError as e:
+        tokenizers_version = openvino_tokenizers.__version__
+        if tokenizers_version == "0.0.0.0":
+            tokenizers_version = importlib_metadata.version("openvino_tokenizers") or tokenizers_version
+        logger.warning(
+            "OpenVINO and OpenVINO Tokenizers versions are not binary compatible.\n"
+            f"OpenVINO version:            {_openvino_version}\n"
+            f"OpenVINO Tokenizers version: {tokenizers_version}\n"
+            "First 3 numbers should be the same. Update OpenVINO Tokenizers to compatible version. "
+            "It is recommended to use the same day builds for pre-release version.\n"
+            "For archive installation of OpenVINO try to build OpenVINO Tokenizers from source: "
+            "https://github.com/openvinotoolkit/openvino_tokenizers/tree/master?tab=readme-ov-file"
+            "#build-and-install-from-source\n"
+            f"Error: {e}\n"
+            "Tokenizer won't be converted."
         )
+        return False
 
-        _openvino_tokenizers_available = _ov_version.startswith(_compatible_openvino_major_version)
-
-        if not _openvino_tokenizers_available:
-            logger.warning(
-                "OpenVINO Tokenizers version is not compatible with OpenVINO version. "
-                f"Installed OpenVINO version: {_ov_version}, "
-                f"OpenVINO Tokenizers requires {_compatible_ov_version}. "
-                "OpenVINO Tokenizers models will not be added during export. "
-                f"Update OpenVINO with \n{_update_ov_command}\n"
-                f"Or update OpenVINO Tokenizers with \n{_update_ovt_command}"
-            )
-        elif _ov_version != _compatible_ov_version:
-            logger.info(
-                "OpenVINO Tokenizers version is not aligned with OpenVINO version. "
-                f"Installed OpenVINO version: {_ov_version}, "
-                f"OpenVINO Tokenizers version: {_compatible_ov_version}. "
-                "If you didn't get OpenVINO Tokenizer after model conversion "
-                f"try to align libraries versions with one of two commands:\n{_update_ov_command}\n"
-                f"Or\n{_update_ovt_command}"
-            )
-    return _openvino_tokenizers_available
+    return True
 
 
 def is_nncf_available():
