@@ -204,8 +204,7 @@ You can find more examples in the [documentation](https://huggingface.co/docs/op
 
 
 ## IPEX
-With `export=True`, IPEX model will replace torch linear to ipex linear which prepacks the weights. It will also apply linear fusion and [IAKV](https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/llm.html#indirect-access-kv-cache) for generation. Finally, jit.trace will be applied to change the model to graph mode.
-Here is the example of how to use IPEX optimized model to generate texts.
+To load your IPEX model, you can just replace your `AutoModelForXxx` class with the corresponding `IPEXModelForXxx` class. You can set `export=True` to load a PyTorch checkpoint, export your model via TorchScript and apply IPEX optimizations : both operators optimization (replaced with customized IPEX operators) and graph-level optimization (like operators fusion) will be applied on your model.
 ```diff
   from transformers import AutoTokenizer, pipeline
 - from transformers import AutoModelForCausalLM
