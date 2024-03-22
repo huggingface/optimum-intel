@@ -217,14 +217,10 @@ Here is the example of how to use IPEX optimized model to generate texts.
   model_id = "gpt2"
 - model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16)
 + model = IPEXModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16, export=True)
-tokenizer = AutoTokenizer.from_pretrained("gpt2")
-input_sentence = ["Answer the following yes/no question by reasoning step-by-step please. Can you write a whole Haiku in a single tweet?"]
-model_inputs = tokenizer(input_sentence, return_tensors="pt")
-generation_kwargs = dict(max_new_tokens=32, do_sample=False, num_beams=4, num_beam_groups=1, no_repeat_ngram_size=2, use_cache=True)
+  tokenizer = AutoTokenizer.from_pretrained(model_id)
+  pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+  results = pipe("He's a dreadful magician and")
 
-generated_ids = model.generate(**model_inputs, **generation_kwargs)
-output = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-print(output)
 ```
 
 For more details, please refer to the [documentation](https://intel.github.io/intel-extension-for-pytorch/#introduction).
