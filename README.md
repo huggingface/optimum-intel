@@ -208,7 +208,7 @@ To load your IPEX model, you can just replace your `AutoModelForXxx` class with 
 ```diff
   from transformers import AutoTokenizer, pipeline
 - from transformers import AutoModelForCausalLM
-+ from optimum.intel.ipex import IPEXModelForCausalLM
++ from optimum.intel import IPEXModelForCausalLM
 
 
   model_id = "gpt2"
