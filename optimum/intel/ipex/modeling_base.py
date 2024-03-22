@@ -203,6 +203,9 @@ class IPEXModel(OptimizedModel):
         subfolder: str = "",
         **kwargs,
     ):
+        if not getattr(config, "torchscript", False):
+            raise ValueError("`torchscript` should be set to True to load TorchScript model")
+
         # Load the model from local directory
         if os.path.isdir(model_id):
             model_cache_path = os.path.join(model_id, file_name)
