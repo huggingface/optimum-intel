@@ -44,7 +44,6 @@ where `extras` can be one or more of `ipex`, `neural-compressor`, `openvino`, `n
 
 # Quick tour
 
-
 ## Neural Compressor
 
 Dynamic quantization can be used through the Optimum command-line interface:
