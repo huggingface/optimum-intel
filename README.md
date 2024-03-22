@@ -208,7 +208,6 @@ With `export=True`, IPEX model will replace torch linear to ipex linear which pr
 Here is the example of how to use IPEX optimized model to generate texts.
 ### generate
 ```diff
-  import torch
   from transformers import AutoTokenizer, pipeline
 - from transformers import AutoModelForCausalLM
 + from optimum.intel.ipex import IPEXModelForCausalLM
