@@ -13,8 +13,9 @@
 #  limitations under the License.
 
 import logging as log
+import math
 import types
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
@@ -513,5 +514,264 @@ class BaichuanModelPatcher(DecoderModelPatcher):
     ):
         super().__init__(config, model, model_kwargs)
         # model has first inference buffers initialization
-        if self._model.lm_head.first_flag:
+        if hasattr(self._model.lm_head, "first_flag"):
             self._model(torch.ones((1, 10), dtype=torch.int64), torch.ones((1, 10), dtype=torch.int64))
+
+
+class OlmoOutput(NamedTuple):
+    logits: torch.FloatTensor
+    """
+    A tensor of shape `(batch_size, seq_len, vocab_size)` representing the log probabilities
+    for the next token *before* normalization via (log) softmax.
+    """
+
+    attn_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]]
+    """
+    Attention keys and values from each block.
+    """
+
+    hidden_states: Optional[Tuple[torch.Tensor]]
+    """
+    Hidden states from each block.
+    """
+
+
+def ensure_finite_(x: torch.Tensor, check_neg_inf: bool = True, check_pos_inf: bool = False):
+    """
+    Modify ``x`` in place to replace ``float("-inf")`` with the minimum value of the dtype when ``check_neg_inf``
+    is ``True`` and to replace ``float("inf")`` with the maximum value of the dtype when ``check_pos_inf`` is ``True``.
+    """
+    if check_neg_inf:
+        x.masked_fill_(x == float("-inf"), torch.finfo(x.dtype).min)
+    if check_pos_inf:
+        x.masked_fill_(x == float("inf"), torch.finfo(x.dtype).max)
+
+
+def _olmo_model_forward(
+    self,
+    input_ids: torch.LongTensor,
+    input_embeddings: Optional[torch.FloatTensor] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    attention_bias: Optional[torch.Tensor] = None,
+    past_key_values: Optional[Tuple[Tuple[torch.Tensor, torch.Tensor]]] = None,
+    use_cache: bool = False,
+    last_logits_only: bool = False,
+    output_hidden_states: Optional[bool] = None,
+):
+    output_hidden_states = output_hidden_states if output_hidden_states is not None else False
+
+    if past_key_values:
+        assert len(past_key_values) == self.config.n_layers
+
+    batch_size, seq_len = input_ids.size() if input_embeddings is None else input_embeddings.size()[:2]
+    if past_key_values is None:
+        past_length = 0
+    else:
+        past_length = past_key_values[0][0].size(-2)
+
+    # Get embeddings of input.
+    # shape: (batch_size, seq_len, d_model)
+    x = self.transformer.wte(input_ids) if input_embeddings is None else input_embeddings  # type: ignore
+
+    if not (self.config.alibi or self.config.rope):
+        # Get positional embeddings.
+        # shape: (1, seq_len)
+        pos = torch.arange(past_length, past_length + seq_len, dtype=torch.long, device=x.device).unsqueeze(0)
+        # shape: (1, seq_len, d_model)
+        pos_emb = self.transformer.wpe(pos)  # type: ignore
+        x = pos_emb + x
+
+    # Add input + positional embeddings and apply dropout.
+    # shape: (batch_size, seq_len, d_model)
+    x = self.transformer.emb_drop(x)  # type: ignore
+
+    # Transform the attention mask into what the blocks expect.
+    if attention_mask is not None:
+        # shape: (batch_size, 1, 1, seq_len)
+        attention_mask = attention_mask.to(dtype=torch.float).view(batch_size, -1)[:, None, None, :]
+        attention_mask = (1.0 - attention_mask) * torch.finfo(attention_mask.dtype).min
+
+    # Merge attention mask with attention bias.
+    if attention_bias is not None or attention_mask is not None or self.config.alibi or past_key_values is not None:
+        if attention_bias is None and self.config.alibi:
+            attention_bias = self.get_causal_attention_bias(
+                past_length + seq_len, x.device
+            ) + self.get_alibi_attention_bias(past_length + seq_len, x.device)
+        elif attention_bias is None:
+            attention_bias = self.get_causal_attention_bias(past_length + seq_len, x.device)
+        elif attention_bias.dtype in (torch.int8, torch.bool):
+            attention_bias = attention_bias.to(dtype=torch.float)
+            attention_bias.masked_fill_(attention_bias == 0.0, torch.finfo(attention_bias.dtype).min)
+
+        # Transform to the right shape and data type.
+        mask_len = seq_len
+        if attention_mask is not None:
+            mask_len = attention_mask.shape[-1]
+        elif past_key_values is not None:
+            mask_len = past_key_values[0][0].shape[-2] + seq_len
+        attention_bias = attention_bias[:, :, :mask_len, :mask_len].to(dtype=torch.float)
+
+        # Add in the masking bias.
+        if attention_mask is not None:
+            attention_bias = attention_bias + attention_mask
+            # Might get -infs after adding attention mask, since dtype.min + dtype.min = -inf.
+            # `F.scaled_dot_product_attention()` doesn't handle -inf like you'd expect, instead
+            # it can produce NaNs.
+            ensure_finite_(attention_bias, check_neg_inf=True, check_pos_inf=False)
+
+    attn_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = [] if use_cache else None
+
+    # decoder layers
+    all_hidden_states = []
+
+    # Apply blocks one-by-one.
+    if self.config.block_group_size == 1:
+        for block_idx, block in enumerate(self.transformer.blocks):
+            if output_hidden_states:
+                # add hidden states
+                all_hidden_states.append(x)
+
+            layer_past = None if past_key_values is None else past_key_values[block_idx]
+            # shape: (batch_size, seq_len, d_model)
+            x, cache = block(x, attention_bias=attention_bias, layer_past=layer_past, use_cache=use_cache)
+            if attn_key_values is not None:
+                assert cache is not None
+                attn_key_values.append(cache)
+    else:
+        for group_idx, block_group in enumerate(self.transformer.block_groups):
+            if output_hidden_states:
+                # add hidden states
+                all_hidden_states.append(x)
+
+            layers_past = (
+                None
+                if past_key_values is None
+                else past_key_values[
+                    group_idx * self.config.block_group_size : (group_idx + 1) * self.config.block_group_size
+                ]
+            )
+            x, cache = block_group(x, attention_bias=attention_bias, layers_past=layers_past, use_cache=use_cache)
+            if attn_key_values is not None:
+                assert cache is not None
+                attn_key_values.extend(cache)
+
+    if last_logits_only:
+        # shape: (batch_size, 1, d_model)
+        x = x[:, -1, :].unsqueeze(1)
+
+    # Apply final layer norm.
+    # shape: (batch_size, seq_len or 1, d_model)
+    x = self.transformer.ln_f(x)  # type: ignore
+    if output_hidden_states:
+        # add final hidden state post-final-layernorm, following HuggingFace's convention
+        all_hidden_states.append(x)
+
+    # Get logits.
+    # shape: (batch_size, seq_len or 1, vocab_size)
+    if self.config.weight_tying:
+        logits = F.linear(x, self.transformer.wte.weight, None)  # type: ignore
+    else:
+        logits = self.transformer.ff_out(x)  # type: ignore
+    if self.config.scale_logits:
+        logits.mul_(1 / math.sqrt(self.config.d_model))
+
+    return OlmoOutput(logits=logits, attn_key_values=attn_key_values, hidden_states=tuple(all_hidden_states) if output_hidden_states else None)  # type: ignore[arg-type]
+
+
+def _olmo_causal_attention_bias(seq_len: int, device: torch.device) -> torch.FloatTensor:
+    att_bias = torch.triu(
+        torch.ones(seq_len, seq_len, device=device, dtype=torch.float),
+        diagonal=1,
+    )
+    att_bias.masked_fill_(att_bias == 1, torch.finfo(att_bias.dtype).min)
+    return att_bias.view(1, 1, seq_len, seq_len)  # type: ignore
+
+
+def _olmo_get_causal_attention_bias(self, seq_len: int, device: torch.device) -> torch.Tensor:
+    if hasattr(self, "causal_bias") and self.causal_bias.shape[-1] >= seq_len:
+        return self.causal_bias.to(device)
+    with torch.autocast(device.type, enabled=False):
+        causal_bias = _olmo_causal_attention_bias(seq_len, device)
+        self.register_buffer("causal_bias", causal_bias)
+    return causal_bias
+
+
+def _olmo_alibi_attention_bias(seq_len: int, config, device: torch.device) -> torch.FloatTensor:
+    alibi_bias = torch.arange(1 - seq_len, 1, dtype=torch.float, device=device).view(1, 1, 1, seq_len)
+    """
+    A tensor of shape `(batch_size, seq_len, vocab_size)` representing the log probabilities
+    for the next token *before* normalization via (log) softmax.
+    """
+    # shape: (1, 1, seq_len, seq_len)
+    alibi_bias = alibi_bias - torch.arange(1 - seq_len, 1, dtype=torch.float, device=device).view(1, 1, seq_len, 1)
+    alibi_bias.abs_().mul_(-1)
+
+    # shape: (n_heads,)
+    m = torch.arange(1, config.n_heads + 1, dtype=torch.float, device=device)
+    m.mul_(config.alibi_bias_max / config.n_heads)
+
+    # shape: (1, n_heads, seq_len, seq_len)
+    return alibi_bias * (1.0 / (2 ** m.view(1, config.n_heads, 1, 1)))  # type: ignore
+
+
+def _olmo_get_alibi_attention_bias(self, seq_len: int, device: torch.device) -> torch.Tensor:
+    alibi_bias = getattr(self, "alibi_attention_bias", None)
+    if alibi_bias is not None and alibi_bias.shape[-1] >= seq_len:
+        if alibi_bias.device != device:
+            alibi_bias = alibi_bias.to(device)
+        return alibi_bias
+    with torch.autocast(device.type, enabled=False):
+        alibi_bias = _olmo_alibi_attention_bias(seq_len, self.config, device)
+        self.register_buffer("alibi_attention_bias", alibi_bias)
+    return alibi_bias
+
+
+def _olmo_get_rotary_embedding(self, seq_len: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+    if (
+        hasattr(self, "rope_pos_sin")
+        and hasattr(self, "rope_pos_cos")
+        and self.rope_pos_sin.shape[-2] >= seq_len
+        and self.rope_pos_cos.shape[-2] >= seq_len
+    ):
+        return self.rope_pos_sin.to(device)[:, :, :seq_len, :], self.rope_pos_sin.to(device)[:, :, :seq_len, :]
+
+    with torch.autocast(device.type, enabled=False):
+        dim = self.config.d_model // self.config.n_heads
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2, device=device, dtype=torch.float) / dim))
+        seq = torch.arange(seq_len, device=device, dtype=torch.float)
+        freqs = torch.einsum("i , j -> i j", seq, inv_freq)
+        positions = torch.cat((freqs, freqs), dim=-1)
+        pos_sin, pos_cos = positions.sin()[None, None, :, :], positions.cos()[None, None, :, :]
+
+    self.register_buffer("rope_pos_sin", pos_sin)
+    self.register_buffer("rope_pos_cos", pos_cos)
+    return pos_sin, pos_cos
+
+
+class OLMoModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        # model uses custom cache buffers for storing rotary_embeddings and attention biases.
+        # these objects are nontracable, replace them with standard torch tensors during export
+        self._model.model._orig_forward = self._model.model.forward
+        self._model.model._orig_get_alibi_attention_bias = self._model.model.get_alibi_attention_bias
+        self._model.model.forward = types.MethodType(_olmo_model_forward, self._model.model)
+        self._model.model.get_alibi_attention_bias = types.MethodType(
+            _olmo_get_alibi_attention_bias, self._model.model
+        )
+        self._model.model.get_alibi_attention_bias(self._model.config.max_sequence_length, torch.device("cpu"))
+        self._model.model.get_causal_attention_bias = types.MethodType(
+            _olmo_get_causal_attention_bias, self._model.model
+        )
+        self._model.model.get_causal_attention_bias(self._model.config.max_sequence_length, torch.device("cpu"))
+        for block in self._model.model.transformer.blocks:
+            block.rotary_emb._orig_get_rotary_embedding = block.rotary_emb.get_rotary_embedding
+            block.rotary_emb.get_rotary_embedding = types.MethodType(_olmo_get_rotary_embedding, block.rotary_emb)
+            block.rotary_emb.get_rotary_embedding(self._model.config.max_sequence_length, torch.device("cpu"))
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.model.forward = self._model.model._orig_forward
+        self._model.model.get_alibi_attention_bias = self._model.model._orig_get_alibi_attention_bias
+        for block in self._model.model.transformer.blocks:
+            block.rotary_emb.get_rotary_embedding = block.rotary_emb._orig_get_rotary_embedding
