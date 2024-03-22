@@ -101,6 +101,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {}
+        if self.ov_config.get("PERFORMANCE_HINT") is None:
+            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
 
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
@@ -456,7 +458,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             self._device = device.upper()
             self.clear_requests()
         else:
-            logger.warning(f"device must be of type {str} but got {type(device)} instead")
+            logger.debug(f"device must be of type {str} but got {type(device)} instead")
 
         return self
 
