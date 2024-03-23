@@ -236,7 +236,7 @@ class OptimizationArguments:
         default=128,
         metadata={"help": "Block size. sub weight matrix size to run GPTQ."},
     )
-    gptq_nsamples: int = field(default=128, metadata={"help": "Number of calibration data samples."})
+    num_calibration_samples: int = field(default=128, metadata={"help": "Number of examples to use for the GPTQ calibration step."})
     gptq_use_max_length: bool = field(
         default=False,
         metadata={"help": "Set all sequence length to be same length of args.gptq_pad_max_length"},
