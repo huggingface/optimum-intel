@@ -241,7 +241,7 @@ class OptimizationArguments:
         default=False,
         metadata={"help": "Set all sequence length to be same length of args.gptq_pad_max_length"},
     )
-    gptq_pad_max_length: int = field(
+    pad_max_length: int = field(
         default=2048,
         metadata={"help": "Calibration dataset sequence max length, this should align with your model config"},
     )
