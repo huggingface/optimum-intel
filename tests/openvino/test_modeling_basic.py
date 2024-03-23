@@ -7,7 +7,6 @@ The goal of the test in this file is to test that basic functionality of optimum
 This test is meant to run quickly with tiny test models. More extensive tests are in
 test_modeling.py.
 """
-
 # ruff: noqa
 
 import gc
