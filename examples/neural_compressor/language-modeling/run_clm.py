@@ -230,7 +230,7 @@ class OptimizationArguments:
     )
     gptq_percdamp: float = field(
         default=0.01,
-        metadata={"help": "Percent of the average Hessian diagonal to use for dampening."},
+        metadata={"help": "Percentage of Hessian's diagonal values average, which will be added to Hessian's diagonal to increase numerical stability, used for GPTQ quantization"},
     )
     gptq_block_size: int = field(
         default=128,
