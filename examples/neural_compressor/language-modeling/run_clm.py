@@ -228,7 +228,8 @@ class OptimizationArguments:
         default="RTN",
         metadata={"help": "Quantization methodology for weight only quantization. Choose from 'RTN' and 'GPTQ'."},
     )
-    gptq_percdamp: float = field(
+    damp_percent: float = field(
+
         default=0.01,
         metadata={"help": "Percentage of Hessian's diagonal values average, which will be added to Hessian's diagonal to increase numerical stability, used for GPTQ quantization"},
     )
