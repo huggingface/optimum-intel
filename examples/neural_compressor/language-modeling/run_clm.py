@@ -63,7 +63,6 @@ from optimum.intel.utils.import_utils import is_intel_extension_for_transformers
 if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
-    from optimum.intel.neural_compressor import ITREXAutoModelForCausalLM
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
@@ -777,10 +776,7 @@ def main():
         trainer.model = quantizer._quantized_model
 
     if optim_args.apply_quantization and optim_args.verify_loading:
-        if optim_args.quantization_approach == "weight_only":
-            loaded_model = ITREXAutoModelForCausalLM.from_pretrained(training_args.output_dir)
-        else:
-            loaded_model = INCModelForCausalLM.from_pretrained(training_args.output_dir)
+        loaded_model = INCModelForCausalLM.from_pretrained(training_args.output_dir)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         with torch.no_grad():
             original_model_outputs = trainer.model(**tokens)

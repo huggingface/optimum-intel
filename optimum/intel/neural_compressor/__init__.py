@@ -32,7 +32,3 @@ from .trainer_seq2seq import INCSeq2SeqTrainer
 
 if is_diffusers_available():
     from .modeling_diffusion import INCStableDiffusionPipeline
-
-
-if is_intel_extension_for_transformers_available():
-    from .modeling_base import ITREXAutoModelForCausalLM

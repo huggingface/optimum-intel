@@ -65,7 +65,6 @@ from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassifi
 from optimum.pipelines import ORT_SUPPORTED_TASKS
 
 if is_intel_extension_for_transformers_available():
-    from optimum.intel.neural_compressor import ITREXAutoModelForCausalLM
     from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -244,7 +243,7 @@ class OptimizationTest(INCTestMixin):
                     weight_only=True,  # use RTN quantization method and NF4 weight data type is default.
                     save_directory=tmp_dir,
                 )
-            q_model = ITREXAutoModelForCausalLM.from_pretrained(tmp_dir)
+            q_model = INCModelForCausalLM.from_pretrained(tmp_dir)
             inp = torch.tensor([calibration_dataset[0]["input_ids"]])
             out = model(inp)[0]
             q_out = q_model(inp)[0]

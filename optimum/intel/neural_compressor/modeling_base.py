@@ -65,11 +65,7 @@ MODEL_START_DOCSTRING = r"""
 
 if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.transformers.modeling import AutoModelForCausalLM as ITREX_WOQ_MODEL
-
-    class ITREXAutoModelForCausalLM(ITREX_WOQ_MODEL):
-        auto_model_class = AutoModelForCausalLM
-        export_feature = "text-generation"
-
+    from intel_extension_for_transformers.transformers.utils import WeightOnlyQuantConfig
 
 class INCModel(OptimizedModel):
     auto_model_class = AutoModel
@@ -138,6 +134,31 @@ class INCModel(OptimizedModel):
         model_save_dir = Path(model_cache_path).parent
         inc_config = None
         msg = None
+        try:
+            quantization_config = WeightOnlyQuantConfig.from_pretrained(model_id)
+            if getattr(quantization_config, "algorithm", None) is not None and quantization_config.algorithm.lower() in [
+                    "rtn", "gptq", "awq", "autoaround"
+            ]:
+                if not is_intel_extension_for_transformers_available():
+                    raise ImportError(
+                        "Didn't find out intel-etension-for-transformers package. "
+                        "Please install packages: pip install intel-etension-for-transformers and pip install peft."
+                    )
+                return ITREX_WOQ_MODEL.from_pretrained(
+                    pretrained_model_name_or_path=model_id,
+                    use_auth_token=use_auth_token,
+                    revision=revision,
+                    force_download=force_download,
+                    cache_dir=cache_dir,
+                    local_files_only=local_files_only,
+                    subfolder=subfolder,
+                    trust_remote_code=trust_remote_code,
+                    **kwargs,
+                )
+        except EnvironmentError:
+            msg = (
+                "The model is not quantized with weight-only quantization."
+            )
         try:
             inc_config = INCConfig.from_pretrained(model_id)
             if not is_torch_version("==", inc_config.torch_version):
