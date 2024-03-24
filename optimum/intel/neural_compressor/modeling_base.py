@@ -32,9 +32,9 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
+    GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
-    XLNetLMHeadModel,
 )
 from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
@@ -67,6 +67,7 @@ if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.transformers.modeling import AutoModelForCausalLM as ITREX_WOQ_MODEL
     from intel_extension_for_transformers.transformers.utils import WeightOnlyQuantConfig
 
+
 class INCModel(OptimizedModel):
     auto_model_class = AutoModel
     export_feature = "feature-extraction"
@@ -88,6 +89,7 @@ class INCModel(OptimizedModel):
         self._device = getattr(self.model, "device", None) or torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu"
         )
+        self.generation_config = GenerationConfig.from_model_config(config)
 
         # Registers the INCModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
@@ -136,9 +138,9 @@ class INCModel(OptimizedModel):
         msg = None
         try:
             quantization_config = WeightOnlyQuantConfig.from_pretrained(model_id)
-            if getattr(quantization_config, "algorithm", None) is not None and quantization_config.algorithm.lower() in [
-                    "rtn", "gptq", "awq", "autoaround"
-            ]:
+            if getattr(
+                quantization_config, "algorithm", None
+            ) is not None and quantization_config.algorithm.lower() in ["rtn", "gptq", "awq", "autoaround"]:
                 if not is_intel_extension_for_transformers_available():
                     raise ImportError(
                         "Didn't find out intel-etension-for-transformers package. "
@@ -156,9 +158,7 @@ class INCModel(OptimizedModel):
                     **kwargs,
                 )
         except EnvironmentError:
-            msg = (
-                "The model is not quantized with weight-only quantization."
-            )
+            msg = "The model is not quantized with weight-only quantization."
         try:
             inc_config = INCConfig.from_pretrained(model_id)
             if not is_torch_version("==", inc_config.torch_version):
@@ -274,11 +274,6 @@ class INCModelForMaskedLM(INCModel):
 class INCModelForVision2Seq(INCModel):
     auto_model_class = AutoModelForVision2Seq
     export_feature = "image-to-text"
-
-
-class INCModelForXLNetLM(INCModel):
-    auto_model_class = XLNetLMHeadModel
-    export_feature = "fill-mask"
 
 
 class INCModelForCausalLM(INCModel, BaseModelForCausalLM):

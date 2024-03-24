@@ -137,7 +137,7 @@ class OVModel(OVBaseModel):
             self._device = device.upper()
             self.request = None
         else:
-            logger.warning(f"device must be of type {str} but got {type(device)} instead")
+            logger.debug(f"device must be of type {str} but got {type(device)} instead")
 
         return self
 

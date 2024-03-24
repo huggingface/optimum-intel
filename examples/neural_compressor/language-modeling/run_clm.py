@@ -228,15 +228,18 @@ class OptimizationArguments:
         metadata={"help": "Quantization methodology for weight only quantization. Choose from 'RTN' and 'GPTQ'."},
     )
     damp_percent: float = field(
-
         default=0.01,
-        metadata={"help": "Percentage of Hessian's diagonal values average, which will be added to Hessian's diagonal to increase numerical stability, used for GPTQ quantization"},
+        metadata={
+            "help": "Percentage of Hessian's diagonal values average, which will be added to Hessian's diagonal to increase numerical stability, used for GPTQ quantization"
+        },
     )
     gptq_block_size: int = field(
         default=128,
         metadata={"help": "Block size. sub weight matrix size to run GPTQ."},
     )
-    num_calibration_samples: int = field(default=128, metadata={"help": "Number of examples to use for the GPTQ calibration step."})
+    num_calibration_samples: int = field(
+        default=128, metadata={"help": "Number of examples to use for the GPTQ calibration step."}
+    )
     use_max_length: bool = field(
         default=False,
         metadata={"help": "Set all sequence length to be same length of args.gptq_pad_max_length"},

@@ -1,6 +1,0 @@
-accelerate
-diffusers
-torch~=1.13
-torchvision~=0.14
-nncf
-tomesd @ git+https://github.com/AlexKoff88/tomesd.git@openvino

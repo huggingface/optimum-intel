@@ -64,7 +64,10 @@ class OVBaseModel(OptimizedModel):
         self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
-        self.ov_config = ov_config if ov_config is not None else {"PERFORMANCE_HINT": "LATENCY"}
+        self.ov_config = ov_config if ov_config is not None else {}
+        if self.ov_config.get("PERFORMANCE_HINT") is None:
+            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
+
         self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
 
@@ -446,6 +449,9 @@ class OVBaseModel(OptimizedModel):
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)
         self.request = None
+        return self
+
+    def eval(self):
         return self
 
     def forward(self, *args, **kwargs):
