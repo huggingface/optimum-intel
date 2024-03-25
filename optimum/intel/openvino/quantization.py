@@ -260,7 +260,6 @@ class OVQuantizer(OptimumQuantizer):
             self._quantize_torchmodel(
                 calibration_dataset,
                 save_directory,
-                ov_config,
                 file_name,
                 batch_size,
                 data_collator,
@@ -331,12 +330,12 @@ class OVQuantizer(OptimumQuantizer):
         self,
         calibration_dataset: "Dataset",
         save_directory: Union[str, Path],
-        ov_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         weights_only: bool = False,
+        save_onnx_model: bool = False,
         **kwargs,
     ):
         self._set_task()
@@ -354,15 +353,8 @@ class OVQuantizer(OptimumQuantizer):
             model_type=model_type,
         )
 
-        if ov_config is None:
-            logger.info(
-                "No configuration describing the quantization process was provided, a default OVConfig will be generated."
-            )
-            ov_config = OVConfig()
         onnx_file_name = (
-            ONNX_WEIGHTS_NAME
-            if file_name is None and ov_config.save_onnx_model
-            else Path(ov_file_name).with_suffix(".onnx")
+            ONNX_WEIGHTS_NAME if file_name is None and save_onnx_model else Path(ov_file_name).with_suffix(".onnx")
         )
 
         task = self.task
@@ -416,13 +408,13 @@ class OVQuantizer(OptimumQuantizer):
                 **kwargs,
             )
 
-        model_path = save_directory / (onnx_file_name if ov_config.save_onnx_model else ov_file_name)
+        model_path = save_directory / (onnx_file_name if save_onnx_model else ov_file_name)
         onnx_path = save_directory / onnx_file_name
-        export_fn = export if not ov_config.save_onnx_model else export_pytorch_via_onnx
+        export_fn = export if not save_onnx_model else export_pytorch_via_onnx
         opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = max(opset, MIN_ONNX_QDQ_OPSET)
         export_kwargs = {}
-        if not ov_config.save_onnx_model:
+        if not save_onnx_model:
             export_kwargs = {"stateful": stateful}
 
         _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset, **export_kwargs)
@@ -432,14 +424,12 @@ class OVQuantizer(OptimumQuantizer):
             # Model required second saving for appling weights compression transformations
             self._save_pretrained(model, output_path)
             # if onnx conversion happens as fallback for pytorch conversion, remove onnx model
-            if not ov_config.save_onnx_model:
+            if not save_onnx_model:
                 os.remove(onnx_path)
                 try:
                     os.remove(f"{onnx_path}_data")
                 except FileNotFoundError:
                     pass
-
-        ov_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
