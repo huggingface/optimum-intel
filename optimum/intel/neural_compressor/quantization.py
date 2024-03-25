@@ -143,8 +143,8 @@ class INCQuantizer(OptimumQuantizer):
 
     def quantize(
         self,
+        quantization_config: Config,
         save_directory: Union[str, Path],
-        quantization_config: Config = None,
         calibration_dataset: Dataset = None,
         batch_size: int = 8,
         data_collator: Optional[DataCollator] = None,
