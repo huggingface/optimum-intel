@@ -86,10 +86,13 @@ class InferRequestWrapper:
     Wrapper class for OV InferRequest or CompiledModel objects that collects inputs which they were called with to
     a list.
     """
-    def __init__(self,
-                 request: Union[openvino.InferRequest, openvino.CompiledModel],
-                 collected_inputs: List = None,
-                 apply_caching: bool = False):
+
+    def __init__(
+        self,
+        request: Union[openvino.InferRequest, openvino.CompiledModel],
+        collected_inputs: List = None,
+        apply_caching: bool = False,
+    ):
         """
         Args:
             request (`Union[openvino.InferRequest, openvino.CompiledModel]`):

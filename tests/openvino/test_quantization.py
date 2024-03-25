@@ -696,8 +696,9 @@ class InferRequestWrapperTest(unittest.TestCase):
         processor = AutoProcessor.from_pretrained(model_id)
 
         calibration_data = []
-        ov_model.decoder_with_past.request = InferRequestWrapper(ov_model.decoder_with_past.request, calibration_data,
-                                                                 apply_caching=apply_caching)
+        ov_model.decoder_with_past.request = InferRequestWrapper(
+            ov_model.decoder_with_past.request, calibration_data, apply_caching=apply_caching
+        )
         for _ in range(2):
             input_features = self._generate_random_audio_data(processor)
             ov_model.generate(input_features)
