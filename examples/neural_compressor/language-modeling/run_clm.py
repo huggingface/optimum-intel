@@ -665,11 +665,11 @@ def main():
                 if optim_args.quantization_methodology == "GPTQ":
                     algorithm_args = {
                         "act_order": False,
-                        "percdamp": optim_args.gptq_percdamp,
+                        "percdamp": optim_args.damp_percent,
                         "block_size": optim_args.gptq_block_size,
-                        "nsamples": optim_args.gptq_nsamples,
-                        "use_max_length": optim_args.gptq_use_max_length,
-                        "pad_max_length": optim_args.gptq_pad_max_length,
+                        "nsamples": optim_args.num_calibration_samples,
+                        "use_max_length": optim_args.use_max_length,
+                        "pad_max_length": optim_args.pad_max_length,
                     }
                 quantization_config = WeightOnlyQuantConfig(
                     weight_dtype=optim_args.weight_dtype,
