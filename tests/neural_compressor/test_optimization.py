@@ -240,8 +240,9 @@ class OptimizationTest(INCTestMixin):
                 )
             else:
                 q_model = quantizer.quantize(
-                    weight_only=True,  # use RTN quantization method and NF4 weight data type is default.
+                    quantization_config=None,
                     save_directory=tmp_dir,
+                    weight_only=True,  # use RTN quantization method and NF4 weight data type is default.
                 )
             q_model = INCModelForCausalLM.from_pretrained(tmp_dir)
             inp = torch.tensor([calibration_dataset[0]["input_ids"]])
