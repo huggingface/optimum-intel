@@ -18,7 +18,7 @@ import logging
 import os
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple, Union, List
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import nncf
 import openvino
