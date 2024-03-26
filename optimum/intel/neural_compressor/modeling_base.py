@@ -32,9 +32,9 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
+    GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
-    XLNetLMHeadModel,
 )
 from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
@@ -84,6 +84,7 @@ class INCModel(OptimizedModel):
         self._device = getattr(self.model, "device", None) or torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu"
         )
+        self.generation_config = GenerationConfig.from_model_config(config)
 
         # Registers the INCModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
@@ -245,11 +246,6 @@ class INCModelForMaskedLM(INCModel):
 class INCModelForVision2Seq(INCModel):
     auto_model_class = AutoModelForVision2Seq
     export_feature = "image-to-text"
-
-
-class INCModelForXLNetLM(INCModel):
-    auto_model_class = XLNetLMHeadModel
-    export_feature = "fill-mask"
 
 
 class INCModelForCausalLM(INCModel, BaseModelForCausalLM):
