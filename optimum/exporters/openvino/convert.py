@@ -345,7 +345,7 @@ def export_pytorch(
                     input_dict = dict(zip(keys, tuple_input))
                     kwargs[input_name] = input_dict
                 outputs = patched_forward(*args, **kwargs)
-                return tuple(outputs.values())
+                return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs.values()])
 
             patcher.patched_forward = ts_patched_forward
 

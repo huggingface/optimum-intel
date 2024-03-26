@@ -50,7 +50,7 @@ def main_export(
     device: str = "cpu",
     framework: Optional[str] = None,
     cache_dir: Optional[str] = None,
-    trust_remote_code: bool = False,
+    trust_remote_code: bool = None,
     pad_token_id: Optional[int] = None,
     subfolder: str = "",
     revision: str = "main",
@@ -203,6 +203,8 @@ def main_export(
         do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
         model_type = config.model_type.replace("_", "-")
 
+        if model_type in {"falcon", "mpt"} and trust_remote_code:
+            trust_remote_code = False
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
         elif task not in TasksManager.get_supported_tasks_for_model_type(
