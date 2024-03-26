@@ -178,7 +178,7 @@ class INCQuantizer(OptimumQuantizer):
         save_onnx_model = kwargs.pop("save_onnx_model", False)
         device = kwargs.pop("device", "cpu")
         use_cpu = True if device == torch.device("cpu") or device == "cpu" else False
-        use_xpu = True if (isinstance(device, torch.device) and device.type == "xpu") or device == "xpu" else False
+        use_xpu = device == torch.device("xpu") or device == "xpu"
 
         if save_onnx_model and (isinstance(self._original_model, ORTModel) or weight_only):
             save_onnx_model = False
