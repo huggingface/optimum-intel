@@ -176,7 +176,7 @@ class IPEXModel(OptimizedModel):
         config.torchscript = True
         config.torch_dtype = torch_dtype
 
-        return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache)
+        return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
 
     @classmethod
     def _from_pretrained(
