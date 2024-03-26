@@ -116,9 +116,14 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--disable-convert-tokenizer",
+        action="store_true",
+        help="Do not add converted tokenizer and detokenizer OpenVINO models.",
+    )
+    optional_group.add_argument(
         "--convert-tokenizer",
         action="store_true",
-        help="Add converted tokenizer and detokenizer with OpenVINO Tokenizers",
+        help="[Deprecated] Add converted tokenizer and detokenizer with OpenVINO Tokenizers.",
     )
 
 
@@ -189,6 +194,9 @@ class OVExportCommand(BaseOptimumCLICommand):
                 quantization_config["group_size"] = 128 if "128" in self.args.weight_format else 64
             ov_config = OVConfig(quantization_config=quantization_config)
 
+        if self.args.convert_tokenizer:
+            logger.warning("`--convert-tokenizer` option is deprecated. Tokenizer will be converted by default.")
+
         # TODO : add input shapes
         main_export(
             model_name_or_path=self.args.model,
@@ -200,6 +208,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             pad_token_id=self.args.pad_token_id,
             ov_config=ov_config,
             stateful=not self.args.disable_stateful,
-            convert_tokenizer=self.args.convert_tokenizer,
+            convert_tokenizer=not self.args.disable_convert_tokenizer,
             # **input_shapes,
         )

@@ -65,7 +65,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
-        "t5": 0,  # failed internal sentencepiece check - no <s> token in the vocab
+        "t5": 0,  # no .model file in the repository
         "albert": 0,  # not supported yet
         "distilbert": 1,  # no detokenizer
         "roberta": 2,
@@ -122,7 +122,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_tokenizers(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             output = subprocess.check_output(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --convert-tokenizer --task {task} {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
                 shell=True,
                 stderr=subprocess.STDOUT,
             ).decode()
