@@ -520,6 +520,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         use_cache = kwargs.get("use_cache", None)
 
         if past_key_values is not None:
+            if not self.stateful:
+                self.past_len = past_key_values[0][0].shape[2]
             # Keep only the unprocessed tokens:
             # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
             # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
