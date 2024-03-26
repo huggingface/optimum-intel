@@ -192,6 +192,11 @@ class IPEXModel(OptimizedModel):
         subfolder: str = "",
         **kwargs,
     ):
+        if not getattr(config, "torchscript", False):
+            raise ValueError(
+                "`config.torchscript` should be set to `True`, if your model is not a TorchScript model and needs to be traced please set `export=True` when loading it with `.from_pretrained()`"
+            )
+
         # Load the model from local directory
         if os.path.isdir(model_id):
             model_cache_path = os.path.join(model_id, file_name)
