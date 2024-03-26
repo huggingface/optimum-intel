@@ -67,6 +67,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {}
+
+        if self.ov_config.get("PERFORMANCE_HINT") is None:
+            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
+
         self.preprocessors = kwargs.get("preprocessors", [])
 
         if self.is_dynamic:

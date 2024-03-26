@@ -285,7 +285,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
                 self.decoder_with_past._device = self._device
             self.clear_requests()
         else:
-            logger.warning(f"device must be of type {str} but got {type(device)} instead")
+            logger.debug(f"device must be of type {str} but got {type(device)} instead")
 
         return self
 
