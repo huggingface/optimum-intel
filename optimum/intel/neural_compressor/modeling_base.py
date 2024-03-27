@@ -43,7 +43,12 @@ from transformers.utils.generic import ContextManagers
 from optimum.intel.generation import BaseModelForCausalLM
 
 from ...modeling_base import OptimizedModel
-from ..utils.import_utils import _torch_version, is_intel_extension_for_transformers_available, is_torch_version
+from ..utils.import_utils import (
+    _torch_version,
+    is_intel_extension_for_transformers_available,
+    is_torch_version,
+    requires_backends,
+)
 from .configuration import INCConfig
 from .utils import WEIGHTS_NAME
 
@@ -137,15 +142,11 @@ class INCModel(OptimizedModel):
         inc_config = None
         msg = None
         try:
+            requires_backends(cls, ["intel_extension_for_transformers"])
             quantization_config = WeightOnlyQuantConfig.from_pretrained(model_id)
             if getattr(
                 quantization_config, "algorithm", None
             ) is not None and quantization_config.algorithm.lower() in ["rtn", "gptq", "awq", "autoaround"]:
-                if not is_intel_extension_for_transformers_available():
-                    raise ImportError(
-                        "Didn't find out intel-etension-for-transformers package. "
-                        "Please install packages: pip install intel-etension-for-transformers and pip install peft."
-                    )
                 return ITREX_WOQ_MODEL.from_pretrained(
                     pretrained_model_name_or_path=model_id,
                     use_auth_token=use_auth_token,

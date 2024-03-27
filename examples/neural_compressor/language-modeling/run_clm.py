@@ -57,7 +57,10 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 from optimum.intel.neural_compressor import INCModelForCausalLM, INCQuantizer, INCTrainer
-from optimum.intel.utils.import_utils import is_intel_extension_for_transformers_available
+from optimum.intel.utils.import_utils import (
+    INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR,
+    is_intel_extension_for_transformers_available,
+)
 
 
 if is_intel_extension_for_transformers_available():
@@ -656,10 +659,7 @@ def main():
                 recipes = {}
             if optim_args.quantization_approach == "weight_only":
                 if not is_intel_extension_for_transformers_available():
-                    raise ImportError(
-                        "Didn't find out intel-etension-for-transformers package. "
-                        "Please install packages: pip install intel-etension-for-transformers and pip install peft."
-                    )
+                    raise ImportError(INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR.format("WeightOnly quantization"))
                 if optim_args.apply_pruning or optim_args.apply_distillation:
                     raise ValueError("Weight only quantization and pruning or distillation cannot be combined.")
                 if optim_args.quantization_methodology == "GPTQ":
