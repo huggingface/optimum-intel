@@ -50,10 +50,12 @@ from ..utils.import_utils import (
     _intel_extension_for_transformers_version,
     _ipex_version,
     _neural_compressor_version,
+    _torch_version,
     is_intel_extension_for_transformers_available,
     is_intel_extension_for_transformers_version,
     is_ipex_version,
     is_neural_compressor_version,
+    is_torch_version,
 )
 from .configuration import INCConfig
 from .modeling_base import (  # noqa
@@ -70,18 +72,24 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 
 
 if is_intel_extension_for_transformers_available():
-    from intel_extension_for_transformers.llm.quantization.utils import convert_to_quantized_model
-    from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
-    from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
-
-    Config = Union[PostTrainingQuantConfig, WeightOnlyQuantConfig]
-
     INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION = "1.3.2"
     if is_intel_extension_for_transformers_version("!=", INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION):
         raise ImportError(
             f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_intel_extension_for_transformers_version}, "
             f"but only version {INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION} is supported."
         )
+    TORCH_VERSION = "2.1.0"
+    if is_torch_version("!=", TORCH_VERSION):
+        raise ImportError(
+            f"Found an incompatible version of `torch`. Found version {_torch_version}, "
+            f"but only version {TORCH_VERSION} is supported."
+        )
+
+    from intel_extension_for_transformers.llm.quantization.utils import convert_to_quantized_model
+    from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
+    from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
+
+    Config = Union[PostTrainingQuantConfig, WeightOnlyQuantConfig]
 else:
     Config = PostTrainingQuantConfig
 
