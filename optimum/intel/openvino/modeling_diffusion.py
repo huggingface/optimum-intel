@@ -321,7 +321,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             if not isinstance(sd_model, supported_pipelines):
                 raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
 
-            nsamples = quantization_config.num_samples if quantization_config.num_samples else 200
+            nsamples = quantization_config.subset_size if quantization_config.subset_size else 200
             unet_inputs = sd_model._prepare_unet_inputs(quantization_config.dataset, nsamples)
 
             from .quantization import _hybrid_quantization

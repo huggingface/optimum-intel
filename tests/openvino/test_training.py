@@ -45,14 +45,14 @@ from transformers.trainer_utils import EvalPrediction, TrainOutput
 from transformers.utils import WEIGHTS_NAME
 
 from optimum.intel.openvino import OVTrainingArguments
-from optimum.intel.openvino.configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
+from optimum.intel.openvino.configuration import OVConfig
 from optimum.intel.openvino.modeling import (
     OVModel,
     OVModelForAudioClassification,
     OVModelForImageClassification,
     OVModelForSequenceClassification,
 )
-from optimum.intel.openvino.trainer import OVTrainer
+from optimum.intel.openvino.trainer import DEFAULT_QUANTIZATION_CONFIG, OVTrainer
 from optimum.intel.openvino.utils import OV_XML_FILE_NAME
 
 

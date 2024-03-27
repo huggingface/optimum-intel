@@ -36,6 +36,7 @@ from transformers import (
     TrainingArguments,
     default_data_collator,
 )
+from transformers.utils.quantization_config import QuantizationMethod
 
 from optimum.intel import (
     OVConfig,
@@ -54,6 +55,7 @@ from optimum.intel import (
     OVStableDiffusionXLPipeline,
     OVQuantizer,
     OVTrainer,
+    OVQuantizationConfig,
     OVWeightQuantizationConfig,
 )
 
@@ -97,7 +99,9 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=10,
                 dataset_split="train",
             )
-            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, file_name=file_name)
+            quantization_config = OVQuantizationConfig(dataset=calibration_dataset)
+            ov_config = OVConfig(quantization_config=quantization_config)
+            quantizer.quantize(save_directory=tmp_dir, ov_config=ov_config, file_name=file_name)
             model = model_cls.from_pretrained(tmp_dir, file_name=file_name)
 
             # TODO: uncomment once move to a newer version of NNCF which has some fixes (addmm, baddmm)
@@ -133,7 +137,9 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=10,
                 dataset_split="train",
             )
-            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
+            quantization_config = OVQuantizationConfig(dataset=calibration_dataset)
+            ov_config = OVConfig(quantization_config=quantization_config)
+            quantizer.quantize(save_directory=tmp_dir, ov_config=ov_config)
 
             model = model_cls.from_pretrained(tmp_dir)
 
@@ -209,7 +215,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="ptb",
-                awq=True,
+                quant_method=QuantizationMethod.AWQ,
             ),
             14,
         ),
@@ -250,7 +256,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 tokenizer.pad_token = tokenizer.eos_token
 
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-            quantizer.quantize(save_directory=tmp_dir, weights_only=True)
+            quantizer.quantize(save_directory=tmp_dir)
             model = model_cls.from_pretrained(tmp_dir)
 
             _, num_int8, _ = get_num_quantized_nodes(model)
@@ -271,7 +277,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 tokenizer.pad_token = tokenizer.eos_token
 
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-            quantizer.quantize(save_directory=tmp_dir, weights_only=True)
+            quantizer.quantize(save_directory=tmp_dir)
             model = model_cls.from_pretrained(tmp_dir)
 
             _, num_int8, _ = get_num_quantized_nodes(model)
@@ -296,7 +302,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             ov_config = OVConfig(quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, ratio=0.8))
             quantizer.quantize(
                 save_directory=tmp_dir,
-                weights_only=True,
                 ov_config=ov_config,
             )
             model = model_cls.from_pretrained(tmp_dir)
@@ -321,7 +326,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 tokenizer.pad_token = tokenizer.eos_token
 
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
-            quantizer.quantize(save_directory=tmp_dir, weights_only=True)
+            quantizer.quantize(save_directory=tmp_dir)
             model = model_cls.from_pretrained(tmp_dir)
 
             _, num_int8, _ = get_num_quantized_nodes(model)
@@ -353,7 +358,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8):
         model_id = MODEL_NAMES[model_type]
-        quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", num_samples=2)
+        quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", subset_size=2)
         with tempfile.TemporaryDirectory() as tmp_dir:
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
 
@@ -375,7 +380,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         model = model_cls.from_pretrained(
             model_id,
             export=True,
-            quantization_config=OVWeightQuantizationConfig(bits=8, dataset=dataset, num_samples=3),
+            quantization_config=OVWeightQuantizationConfig(bits=8, dataset=dataset, subset_size=3),
         )
         num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
         self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
@@ -411,6 +416,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         self, model_cls, model_id, quantization_config, expected_ov_int4
     ):
         with tempfile.TemporaryDirectory() as tmp_dir:
+            quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
@@ -570,7 +576,9 @@ class OVQuantizerQATest(unittest.TestCase):
                 num_samples=10,
                 dataset_split="test",
             )
-            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
+            quantization_config = OVQuantizationConfig(dataset=calibration_dataset)
+            ov_config = OVConfig(quantization_config=quantization_config)
+            quantizer.quantize(save_directory=tmp_dir, ov_config=ov_config)
 
             # Test that inference on quantized model works
             model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
@@ -603,7 +611,9 @@ class OVQuantizerQATest(unittest.TestCase):
                 num_samples=10,
                 dataset_split="test",
             )
-            quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset)
+            quantization_config = OVQuantizationConfig(dataset=calibration_dataset)
+            ov_config = OVConfig(quantization_config=quantization_config)
+            quantizer.quantize(save_directory=tmp_dir, ov_config=ov_config)
 
             # Test that inference on quantized model works
             model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)

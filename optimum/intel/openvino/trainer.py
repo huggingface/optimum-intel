@@ -89,7 +89,7 @@ from optimum.exporters.onnx import OnnxConfig
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_transformers_version
-from .configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
+from .configuration import OVConfig
 from .quantization import OVDataLoader
 from .training_args import OVTrainingArguments
 from .utils import (
@@ -134,6 +134,25 @@ logger.setLevel(logging.INFO)
 # NNCF Error to be shown on stdout
 # set_log_level(logging.ERROR)
 NNCF_LOG_FILE_NAME = "nncf_output.log"
+
+
+DEFAULT_QUANTIZATION_CONFIG = {
+    "algorithm": "quantization",
+    "preset": "mixed",
+    "overflow_fix": "disable",
+    "initializer": {
+        "range": {"num_init_samples": 300, "type": "mean_min_max"},
+        "batchnorm_adaptation": {"num_bn_adaptation_samples": 0},
+    },
+    "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
+    "ignored_scopes": [
+        "{re}.*Embedding.*",
+        "{re}.*add___.*",
+        "{re}.*layer_norm_.*",
+        "{re}.*matmul_1",
+        "{re}.*__truediv__.*",
+    ],
+}
 
 
 def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Union[str, io.BytesIO], opset: int = None):
@@ -228,6 +247,16 @@ class OVTrainer(Trainer):
         if self.ov_config is not None:
             if self.ov_config.compression is None:
                 self.ov_config.compression = DEFAULT_QUANTIZATION_CONFIG
+            if (
+                isinstance(self.ov_config.compression, dict)
+                and "algorithm" in self.ov_config.compression
+                and self.ov_config.compression["algorithm"] == "quantization"
+            ):
+                self.ov_config.compression["export_to_onnx_standard_ops"] = self.ov_config.save_onnx_model
+            elif isinstance(self.ov_config.compression, list):
+                for i, algo_config in enumerate(self.ov_config.compression):
+                    if algo_config["algorithm"] == "quantization":
+                        self.ov_config.compression[i]["export_to_onnx_standard_ops"] = self.ov_config.save_onnx_model
 
             if self.args.do_train:
                 self._set_task()

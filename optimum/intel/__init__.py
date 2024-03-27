@@ -123,6 +123,7 @@ else:
             "OVModelForSpeechSeq2Seq",
             "OVModelForSequenceClassification",
             "OVModelForTokenClassification",
+            "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVConfig",
         ]
@@ -241,6 +242,7 @@ if TYPE_CHECKING:
             OVModelForSequenceClassification,
             OVModelForSpeechSeq2Seq,
             OVModelForTokenClassification,
+            OVQuantizationConfig,
             OVWeightQuantizationConfig,
         )
 
