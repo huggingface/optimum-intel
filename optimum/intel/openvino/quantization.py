@@ -24,10 +24,9 @@ import nncf
 import openvino
 import torch
 import transformers
-from nncf import CompressWeightsMode, IgnoredScope, NNCFConfig, SensitivityMetric
+from nncf import CompressWeightsMode, IgnoredScope, SensitivityMetric
 from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters
-from nncf.torch import create_compressed_model, register_default_init_args, register_module
-from nncf.torch.dynamic_graph.io_handling import wrap_nncf_model_inputs_with_objwalk
+from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, Tensor
@@ -47,7 +46,7 @@ from ...exporters.openvino.stateful import ensure_export_task_support_stateful, 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import DATASETS_IMPORT_ERROR, is_datasets_available
 from ..utils.modeling_utils import get_model_device
-from .configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig, OVWeightQuantizationConfig
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     MAX_ONNX_OPSET,
@@ -240,8 +239,6 @@ class OVQuantizer(OptimumQuantizer):
         if ov_config is not None:
             if not isinstance(ov_config, OVConfig):
                 raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
-            elif ov_config.compression is None:
-                ov_config.compression = DEFAULT_QUANTIZATION_CONFIG
 
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
@@ -263,7 +260,6 @@ class OVQuantizer(OptimumQuantizer):
             self._quantize_torchmodel(
                 calibration_dataset,
                 save_directory,
-                ov_config,
                 file_name,
                 batch_size,
                 data_collator,
@@ -319,7 +315,7 @@ class OVQuantizer(OptimumQuantizer):
             calibration_dataloader = data_cache
 
         # Actual model quantization
-        quantization_dataset = nncf.Dataset(calibration_dataloader, lambda x: x)
+        quantization_dataset = nncf.Dataset(calibration_dataloader)
         quantized_model = nncf.quantize(
             self.model.model,
             quantization_dataset,
@@ -334,12 +330,13 @@ class OVQuantizer(OptimumQuantizer):
         self,
         calibration_dataset: "Dataset",
         save_directory: Union[str, Path],
-        ov_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         weights_only: bool = False,
+        save_onnx_model: bool = False,
+        **kwargs,
     ):
         self._set_task()
         save_directory = Path(save_directory)
@@ -356,15 +353,8 @@ class OVQuantizer(OptimumQuantizer):
             model_type=model_type,
         )
 
-        if ov_config is None:
-            logger.info(
-                "No configuration describing the quantization process was provided, a default OVConfig will be generated."
-            )
-            ov_config = OVConfig(compression=DEFAULT_QUANTIZATION_CONFIG)
         onnx_file_name = (
-            ONNX_WEIGHTS_NAME
-            if file_name is None and ov_config.save_onnx_model
-            else Path(ov_file_name).with_suffix(".onnx")
+            ONNX_WEIGHTS_NAME if file_name is None and save_onnx_model else Path(ov_file_name).with_suffix(".onnx")
         )
 
         task = self.task
@@ -398,7 +388,7 @@ class OVQuantizer(OptimumQuantizer):
             if stateful:
                 logger.warn(
                     "Quantization algorithm does not support optimized stateful models. "
-                    "The original model without optimization will be quantized and export."
+                    "The original model without optimization will be quantized and exported."
                 )
                 stateful = False
 
@@ -409,39 +399,37 @@ class OVQuantizer(OptimumQuantizer):
                 data_collator=data_collator,
             )
 
-            model_inputs = next(iter(calibration_dataloader))
-            ov_config.add_input_info(model_inputs)
-            nncf_config = NNCFConfig.from_dict(ov_config.__dict__)
-            nncf_config = register_default_init_args(nncf_config, calibration_dataloader)
-            controller, model = create_compressed_model(
-                model, nncf_config, wrap_inputs_fn=wrap_nncf_model_inputs_with_objwalk
+            quantization_dataset = nncf.Dataset(calibration_dataloader)
+            model = nncf.quantize(
+                model,
+                quantization_dataset,
+                model_type=nncf.ModelType.TRANSFORMER if not kwargs.get("model_type") else kwargs.get("model_type"),
+                fast_bias_correction=kwargs.get("fast_bias_correction", True),
+                **kwargs,
             )
-            model = controller.strip(do_copy=False)
 
-        model_path = save_directory / (onnx_file_name if ov_config.save_onnx_model else ov_file_name)
+        model_path = save_directory / (onnx_file_name if save_onnx_model else ov_file_name)
         onnx_path = save_directory / onnx_file_name
-        export_fn = export if not ov_config.save_onnx_model else export_pytorch_via_onnx
+        export_fn = export if not save_onnx_model else export_pytorch_via_onnx
         opset = min(onnx_config.DEFAULT_ONNX_OPSET, MAX_ONNX_OPSET)
         opset = max(opset, MIN_ONNX_QDQ_OPSET)
-        kwargs = {}
-        if not ov_config.save_onnx_model:
-            kwargs = {"stateful": stateful}
+        export_kwargs = {}
+        if not save_onnx_model:
+            export_kwargs = {"stateful": stateful}
 
-        _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset, **kwargs)
+        _, _, is_onnx = export_fn(model=model, config=onnx_config, output=model_path, opset=opset, **export_kwargs)
         if is_onnx:
             # Load and save the compressed model
             model = core.read_model(onnx_path)
             # Model required second saving for appling weights compression transformations
             self._save_pretrained(model, output_path)
             # if onnx conversion happens as fallback for pytorch conversion, remove onnx model
-            if not ov_config.save_onnx_model:
+            if not save_onnx_model:
                 os.remove(onnx_path)
                 try:
                     os.remove(f"{onnx_path}_data")
                 except FileNotFoundError:
                     pass
-
-        ov_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):

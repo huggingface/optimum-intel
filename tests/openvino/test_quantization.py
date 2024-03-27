@@ -57,7 +57,6 @@ from optimum.intel import (
     OVWeightQuantizationConfig,
 )
 
-from optimum.intel.openvino.configuration import INT8_WEIGHT_COMPRESSION_CONFIG, DEFAULT_QUANTIZATION_CONFIG
 from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version
 from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
@@ -109,10 +108,6 @@ class OVQuantizerTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
-
-            # Verify that that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertEqual(DEFAULT_QUANTIZATION_CONFIG, loaded_config.to_dict()["compression"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
@@ -264,10 +259,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
-
-            # Verify that that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertIsNotNone(loaded_config)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_ovmodel_8bit_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
