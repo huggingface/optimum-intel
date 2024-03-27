@@ -263,6 +263,42 @@ def main_export(
         **loading_kwargs,
     )
 
+    # Apply quantization in hybrid mode to Stable Diffusion before export
+    if (
+        library_name == "diffusers"
+        and ov_config
+        and ov_config.quantization_config
+        and ov_config.quantization_config.get("dataset", None)
+    ):
+        class_name =  model.__class__.__name__
+        if "LatentConsistencyModelPipeline" in class_name:
+            from optimum.intel import OVLatentConsistencyModelPipeline
+
+            model_cls = OVLatentConsistencyModelPipeline
+        elif "StableDiffusionXLPipeline" in class_name:
+            from optimum.intel import OVStableDiffusionXLPipeline
+
+            model_cls = OVStableDiffusionXLPipeline
+        elif "StableDiffusionPipeline" in class_name:
+            from optimum.intel import OVStableDiffusionPipeline
+
+            model_cls = OVStableDiffusionPipeline
+        else:
+            raise NotImplementedError(f"{class_name} doesn't support quantization in hybrid mode.")
+
+        model = model_cls.from_pretrained(
+            model_id=model_name_or_path,
+            export=True,
+            quantization_config=ov_config.quantization_config,
+            cache_dir=cache_dir,
+            trust_remote_code=trust_remote_code,
+            revision=revision,
+            force_download=force_download,
+            use_auth_token=use_auth_token,
+        )
+        model.save_pretrained(output)
+        return
+
     needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 
     if needs_pad_token_id:
