@@ -13,68 +13,17 @@
 #  limitations under the License.
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
+import datasets
+import nncf
 import torch
+from nncf.quantization.advanced_parameters import OverflowFix
 from transformers import PretrainedConfig
-from transformers.utils.quantization_config import QuantizationConfigMixin
+from transformers.utils.quantization_config import QuantizationConfigMixin, QuantizationMethod
 
 from optimum.configuration_utils import BaseConfig
-
-
-DEFAULT_QUANTIZATION_CONFIG = {
-    "algorithm": "quantization",
-    "preset": "mixed",
-    "overflow_fix": "disable",
-    "initializer": {
-        "range": {"num_init_samples": 300, "type": "mean_min_max"},
-        "batchnorm_adaptation": {"num_bn_adaptation_samples": 0},
-    },
-    "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
-    "ignored_scopes": [
-        "{re}.*Embedding.*",
-        "{re}.*add___.*",
-        "{re}.*layer_norm_.*",
-        "{re}.*matmul_1",
-        "{re}.*__truediv__.*",
-    ],
-}
-
-INT8_WEIGHT_COMPRESSION_CONFIG = {
-    "algorithm": "quantization",
-    "weights": {
-        "mode": "symmetric",
-        "bits": 8,
-        "target_scopes": [
-            "{re}.*Embedding.*",
-            "{re}.*matmul_.*",
-            "{re}.*addmm_.*",
-            "{re}.*baddmm_.*",
-            "{re}.*linear_.*",
-        ],
-        "ignored_scopes": [
-            "{re}.*conv_*",
-        ],
-    },
-    "activations": {
-        "ignored_scopes": [
-            "{re}.*add___.*",
-            "{re}.*__radd___.*",
-            "{re}.*layer_norm_.*",
-            "{re}.*__truediv__.*",
-            "{re}.*__mul___.*",
-            "{re}.*__rmul___.*",
-            "{re}.*tanh_.*",
-            "{re}.*pow_.*",
-            "{re}.*matmul_.*",
-            "{re}.*addmm_.*",
-            "{re}.*baddmm_.*",
-            "{re}.*linear_.*",
-            "{re}.*conv_.*",
-        ],
-    },
-    "overflow_fix": "disable",
-}
 
 
 _DEFAULT_4BIT_CONFIGS = {
@@ -100,31 +49,55 @@ _DEFAULT_4BIT_CONFIGS = {
 }
 
 
+@dataclass
+class OVQuantizationConfigBase(QuantizationConfigMixin):
+    def __init__(
+        self,
+        dataset: Optional[Union[str, List[str], nncf.Dataset, datasets.Dataset]] = None,
+        ignored_scope: Optional[Union[dict, nncf.IgnoredScope]] = None,
+        subset_size: Optional[int] = None,
+    ):
+        self.dataset = dataset
+        self.ignored_scope = ignored_scope
+        self.subset_size = subset_size
+
+    def post_init(self):
+        if self.dataset is not None and isinstance(self.dataset, str):
+            llm_datasets = ["wikitext2", "c4", "c4-new", "ptb", "ptb-new"]
+            stable_diffusion_datasets = [
+                "conceptual_captions",
+                "laion/220k-GPT4Vision-captions-from-LIVIS",
+                "laion/filtered-wit",
+            ]
+            if self.dataset not in llm_datasets + stable_diffusion_datasets:
+                raise ValueError(
+                    f"""You have entered a string value for dataset. You can only choose between
+                    {llm_datasets} for LLLMs or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
+                )
+
+
 class OVConfig(BaseConfig):
     CONFIG_NAME = "openvino_config.json"
     FULL_CONFIGURATION_FILE = "openvino_config.json"
 
     def __init__(
         self,
-        compression: Union[List[Dict], Dict, None] = None,
         input_info: Optional[List] = None,
         save_onnx_model: bool = False,
-        quantization_config: Optional[Union[QuantizationConfigMixin, Dict]] = None,
+        quantization_config: Optional[Union[Dict, OVQuantizationConfigBase]] = None,
         dtype: Optional[str] = None,
         **kwargs,
     ):
         super().__init__()
-        self.compression = compression
         self.input_info = input_info
         self.save_onnx_model = save_onnx_model
-        self._enable_standard_onnx_export_option()
         self.optimum_version = kwargs.pop("optimum_version", None)
-        self.quantization_config = quantization_config or {}
+        self.quantization_config = quantization_config
+        self.compression = None  # A backward-compatability field for training-time compression parameters
 
-        if isinstance(quantization_config, QuantizationConfigMixin):
-            bits = self.quantization_config.bits
-        else:
-            bits = self.quantization_config.get("bits", None)
+        bits = (
+            self.quantization_config.bits if isinstance(self.quantization_config, OVWeightQuantizationConfig) else None
+        )
         self.dtype = "int" + str(bits) if isinstance(bits, int) else dtype
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
@@ -137,28 +110,21 @@ class OVConfig(BaseConfig):
             for name, value in model_inputs.items()
         ]
 
-    def save_pretrained(self, *args, **kwargs):
-        super().save_pretrained(*args, **kwargs)
+    def to_dict(self) -> Dict[str, Any]:
+        # Parent to_dict() implementation does not support quantization_config being None
+        if self.quantization_config is None:
+            self.quantization_config = OVQuantizationConfigBase()
+        result = super().to_dict()
+        del result["quantization_config"]
+        return result
 
-    def _enable_standard_onnx_export_option(self):
-        # This method depends on self.save_onnx_model.
-        # save_onnx_model is defaulted to false so that the final model output is
-        # in OpenVINO IR to realize performance benefit in OpenVINO runtime.
-        # True value of save_onnx_model will save a model in onnx format.
-        if (
-            isinstance(self.compression, dict)
-            and "algorithm" in self.compression
-            and self.compression["algorithm"] == "quantization"
-        ):
-            self.compression["export_to_onnx_standard_ops"] = self.save_onnx_model
-        elif isinstance(self.compression, list):
-            for i, algo_config in enumerate(self.compression):
-                if algo_config["algorithm"] == "quantization":
-                    self.compression[i]["export_to_onnx_standard_ops"] = self.save_onnx_model
+
+class OVQuantizationMethod(str, Enum):
+    DEFAULT = "default"
 
 
 @dataclass
-class OVWeightQuantizationConfig(QuantizationConfigMixin):
+class OVWeightQuantizationConfig(OVQuantizationConfigBase):
     """
     This is a wrapper class about all possible attributes and features that you can play with a model that has been
     loaded using `optimum-intel` api for quantization with NNCF.
@@ -168,7 +134,7 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         bits (`int`, defaults to 8):
             The number of bits to quantize to.
         sym (`bool`, defaults to `False`):
-            Whether to use symetric quantization.
+            Whether to use symmetric quantization.
         tokenizer (`str` or `PreTrainedTokenizerBase`, *optional*):
             The tokenizer used to process the dataset. You can pass either:
                 - A custom tokenizer object.
@@ -187,64 +153,52 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
         group_size (`int`, *optional*):
             The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
         all_layers (`bool`, *optional*):
-            Defines how many layers are compressed to 4-bits while the rest are kept in 8-bit presicion.
+            Defines how many layers are compressed to 4-bits while the rest are kept in 8-bit precision.
         sensitivity_metric (`str`, *optional*):
             The sensitivity metric for assigning quantization precision to layers. In order to
             preserve the accuracy of the model, the more sensitive layers receives a higher precision.
         ignored_scope (`dict`, *optional*):
             An ignored scope that defined the list of model control flow graph nodes to be ignored during quantization.
-        num_samples (`int`, *optional*):
+        subset_size (`int`, *optional*):
             The maximum number of samples composing the calibration dataset.
 
     """
 
     def __init__(
         self,
+        dataset: Optional[Union[str, List[str], nncf.Dataset, datasets.Dataset]] = None,
         bits: int = 8,
+        ignored_scope: Optional[Union[dict, nncf.IgnoredScope]] = None,
         sym: bool = False,
         tokenizer: Optional[Any] = None,
-        dataset: Optional[Union[str, List[str]]] = None,
         ratio: float = 1.0,
         group_size: Optional[int] = None,
         all_layers: Optional[bool] = None,
         sensitivity_metric: Optional[str] = None,
-        ignored_scope: Optional[dict] = None,
-        num_samples: Optional[int] = None,
-        **kwargs,
+        subset_size: Optional[int] = None,
+        quant_method: Optional[Union[QuantizationMethod, OVQuantizationMethod]] = OVQuantizationMethod.DEFAULT,
     ):
+        super().__init__(dataset, ignored_scope, subset_size)
         self.bits = bits
         self.sym = sym
         self.tokenizer = tokenizer
-        self.dataset = dataset
         self.group_size = group_size or (-1 if bits == 8 else 128)
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
-        self.ignored_scope = ignored_scope
-        self.num_samples = num_samples
-        self.quant_method = "default"  # TODO : enable AWQ after nncf v2.9.0 release
+        self.subset_size = subset_size
+        self.quant_method = quant_method
         self.post_init()
 
     def post_init(self):
         r"""
         Safety checker that arguments are correct
         """
+        super().post_init()
         if self.ratio is not None and not (0 <= self.ratio <= 1):
             raise ValueError("`ratio` must between 0 and 1.")
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
             raise ValueError("`group_size` must be greater than 0 or equal to -1")
-        if self.dataset is not None and isinstance(self.dataset, str):
-            llm_datasets = ["wikitext2", "c4", "c4-new", "ptb", "ptb-new"]
-            stable_diffusion_datasets = [
-                "conceptual_captions",
-                "laion/220k-GPT4Vision-captions-from-LIVIS",
-                "laion/filtered-wit",
-            ]
-            if self.dataset not in llm_datasets + stable_diffusion_datasets:
-                raise ValueError(
-                    f"""You have entered a string value for dataset. You can only choose between
-                    {llm_datasets} for LLLMs or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
-                )
 
         if self.bits not in [4, 8]:
             raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
@@ -258,6 +212,37 @@ class OVWeightQuantizationConfig(QuantizationConfigMixin):
                 raise ValueError(
                     f"For 8-bit quantization, `group_size` is expected to be set to -1, but was set to {self.group_size}"
                 )
+
+
+@dataclass
+class OVQuantizationConfig(OVQuantizationConfigBase):
+    def __init__(
+        self,
+        dataset: Union[str, List[str], nncf.Dataset, datasets.Dataset],
+        ignored_scope: Optional[nncf.IgnoredScope] = None,
+        subset_size: Optional[int] = 300,
+        preset: nncf.QuantizationPreset = nncf.QuantizationPreset.MIXED,
+        model_type: nncf.ModelType = nncf.ModelType.TRANSFORMER,
+        fast_bias_correction: bool = True,
+        overflow_fix: OverflowFix = OverflowFix.DISABLE,
+    ):
+        super().__init__(dataset, ignored_scope, subset_size)
+        self.preset = preset
+        self.model_type = model_type
+        self.fast_bias_correction = fast_bias_correction
+        self.overflow_fix = overflow_fix
+        self.post_init()
+
+    def post_init(self):
+        """
+        Safety checker that arguments are correct
+        """
+        super().post_init()
+        # if self.dataset is None:
+        #     raise ValueError(
+        #         "`dataset` is needed to compute the activations range during the calibration step and was not provided."
+        #         " In case you only want to apply quantization on the weights, please set `weights_only=True`."
+        #     )
 
 
 def _check_default_4bit_configs(config: PretrainedConfig):

@@ -616,7 +616,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 # from optimum.gptq.utils import get_seqlen
 
                 # seqlen = get_seqlen(causal_model)
-                nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
+                nsamples = quantization_config.subset_size if quantization_config.subset_size else 128
                 dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
                 dataset = prepare_dataset(dataset)
                 quantization_config = copy.deepcopy(quantization_config)
