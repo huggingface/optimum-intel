@@ -51,7 +51,7 @@ build_doc_docker_image:
 doc: build_doc_docker_image
 	@test -n "$(BUILD_DIR)" || (echo "BUILD_DIR is empty." ; exit 1)
 	@test -n "$(VERSION)" || (echo "VERSION is empty." ; exit 1)
-	docker run -v $(CURRENT_DIR):/doc_folder --workdir=/doc_folder doc_maker \
+	docker run -v $(CURRENT_DIR):/doc_folder --workdir=/doc_folder --env CI=$(CI) doc_maker \
 	doc-builder build optimum.intel /optimum-intel/docs/source/ \
 		--repo_name optimum-intel \
 		--build_dir $(BUILD_DIR) \
