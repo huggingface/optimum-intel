@@ -43,7 +43,12 @@ from transformers.utils.generic import ContextManagers
 from optimum.intel.generation import BaseModelForCausalLM
 
 from ...modeling_base import OptimizedModel
-from ..utils.import_utils import _torch_version, is_torch_version
+from ..utils.import_utils import (
+    _torch_version,
+    is_intel_extension_for_transformers_available,
+    is_torch_version,
+    requires_backends,
+)
 from .configuration import INCConfig
 from .utils import WEIGHTS_NAME
 
@@ -61,6 +66,11 @@ MODEL_START_DOCSTRING = r"""
         device (`str`, defaults to `"cpu"`):
             The device type for which the model will be optimized for. The resulting compiled model will contains nodes specific to this device.
 """
+
+
+if is_intel_extension_for_transformers_available():
+    from intel_extension_for_transformers.transformers.modeling import AutoModelForCausalLM as ITREX_WOQ_MODEL
+    from intel_extension_for_transformers.transformers.utils import WeightOnlyQuantConfig
 
 
 class INCModel(OptimizedModel):
@@ -131,6 +141,25 @@ class INCModel(OptimizedModel):
         model_save_dir = Path(model_cache_path).parent
         inc_config = None
         msg = None
+        try:
+            requires_backends(cls, ["intel_extension_for_transformers"])
+            quantization_config = WeightOnlyQuantConfig.from_pretrained(model_id)
+            if getattr(
+                quantization_config, "algorithm", None
+            ) is not None and quantization_config.algorithm.lower() in ["rtn", "gptq", "awq", "autoaround"]:
+                return ITREX_WOQ_MODEL.from_pretrained(
+                    pretrained_model_name_or_path=model_id,
+                    use_auth_token=use_auth_token,
+                    revision=revision,
+                    force_download=force_download,
+                    cache_dir=cache_dir,
+                    local_files_only=local_files_only,
+                    subfolder=subfolder,
+                    trust_remote_code=trust_remote_code,
+                    **kwargs,
+                )
+        except EnvironmentError:
+            msg = "The model is not quantized with weight-only quantization."
         try:
             inc_config = INCConfig.from_pretrained(model_id)
             if not is_torch_version("==", inc_config.torch_version):
