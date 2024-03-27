@@ -47,9 +47,11 @@ from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME
 from ..utils.import_utils import (
+    _intel_extension_for_transformers_version,
     _ipex_version,
     _neural_compressor_version,
     is_intel_extension_for_transformers_available,
+    is_intel_extension_for_transformers_version,
     is_ipex_version,
     is_neural_compressor_version,
 )
@@ -73,6 +75,13 @@ if is_intel_extension_for_transformers_available():
     from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
     Config = Union[PostTrainingQuantConfig, WeightOnlyQuantConfig]
+
+    INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION = "1.3.2"
+    if is_intel_extension_for_transformers_version("!=", INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION):
+        raise ImportError(
+            f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_intel_extension_for_transformers_version}, "
+            f"but only version {INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION} is supported."
+        )
 else:
     Config = PostTrainingQuantConfig
 
