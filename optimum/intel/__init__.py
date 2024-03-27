@@ -121,6 +121,7 @@ else:
             "OVModelForQuestionAnswering",
             "OVModelForSeq2SeqLM",
             "OVModelForSpeechSeq2Seq",
+            "OVModelForVision2Seq",
             "OVModelForSequenceClassification",
             "OVModelForTokenClassification",
             "OVWeightQuantizationConfig",

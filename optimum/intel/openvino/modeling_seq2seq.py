@@ -27,6 +27,7 @@ from openvino.runtime import Core
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
+    AutoModelForVision2Seq,
     AutoModelForSpeechSeq2Seq,
     Pix2StructForConditionalGeneration,
     WhisperForConditionalGeneration,
@@ -577,6 +578,74 @@ class OVDecoder:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
                 _print_compiled_model_properties(compiled_model)
 
+
+class OVModelForVision2Seq(OVModelForSeq2SeqLM):
+    auto_model_class = AutoModelForVision2Seq
+    main_input_name = "pixel_values"
+    export_feature = "image-to-text"
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.BoolTensor] = None,
+        past_key_values=None,
+        head_mask=None,
+        decoder_head_mask=None,
+        cross_attn_head_mask=None,
+        use_cache=None,
+        encoder_outputs=None,
+        **kwargs,
+    ) -> Dict:
+        if decoder_attention_mask is None:
+            decoder_attention_mask = torch.ones_like(input_ids).to(input_ids.device)
+
+        return {
+            "pixel_values": pixel_values,
+            "decoder_input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "encoder_outputs": encoder_outputs,
+            "attention_mask": attention_mask,
+            "decoder_attention_mask": decoder_attention_mask,
+            "head_mask": head_mask,
+            "decoder_head_mask": decoder_head_mask,
+            "cross_attn_head_mask": cross_attn_head_mask,
+            "use_cache": use_cache,
+        }
+
+    def forward(
+        self,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        decoder_input_ids: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.BoolTensor] = None,
+        encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        **kwargs,
+    ) -> Seq2SeqLMOutput:
+        return super().forward(
+            input_ids=pixel_values,
+            attention_mask=attention_mask,
+            decoder_input_ids=decoder_input_ids,
+            decoder_attention_mask=decoder_attention_mask,
+            encoder_outputs=encoder_outputs,
+            past_key_values=past_key_values,
+            **kwargs,
+        )
+
+    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            shapes[inputs][0] = batch_size if not is_decoder else -1
+            if is_decoder:
+                if inputs.get_any_name().startswith("past_key_values"):
+                    shapes[inputs][2] = -1
+                elif not inputs.get_any_name().startswith("encoder"):
+                    shapes[inputs][1] = -1
+        model.reshape(shapes)
+        return model
 
 @add_start_docstrings(
     """
