@@ -61,9 +61,6 @@ EXTRAS_REQUIRE = {
         "neural-compressor>=2.2.0",
         "onnxruntime<1.15.0",
         "accelerate",
-        # will remove after intel-extension-for-transformers 1.3.3 release.
-        "intel-extension-for-transformers>=1.3",
-        "peft",
     ],
     "openvino": ["openvino>=2023.3", "nncf>=2.8.1"],
     "openvino-tokenizers": ["openvino-tokenizers[transformers]"],
