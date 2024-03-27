@@ -27,8 +27,8 @@ from openvino.runtime import Core
 from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
-    AutoModelForVision2Seq,
     AutoModelForSpeechSeq2Seq,
+    AutoModelForVision2Seq,
     Pix2StructForConditionalGeneration,
     WhisperForConditionalGeneration,
 )
@@ -162,6 +162,23 @@ PIX2STRUCT_MODEL_DOCSTRING = r"""
             `(batch_size, num_heads, decoder_sequence_length, embed_size_per_head)` and 2 additional tensors of shape
             `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
 """
+
+VISION_ENCODER_DECODER_SEQ2SEQ_MODEL_DOCSTRING = r"""
+    Args:
+        pixel_values (`torch.FloatTensor`):
+            Features extracted from an Image. This tensor should be of shape
+            `(batch_size, num_channels, height, width)`.
+        decoder_input_ids (`torch.LongTensor`):
+            Indices of decoder input sequence tokens in the vocabulary of shape `(batch_size, decoder_sequence_length)`.
+        encoder_outputs (`torch.FloatTensor`):
+            The encoder `last_hidden_state` of shape `(batch_size, encoder_sequence_length, hidden_size)`.
+        past_key_values (`tuple(tuple(torch.FloatTensor), *optional*, defaults to `None`)`
+            Contains the precomputed key and value hidden states of the attention blocks used to speed up decoding.
+            The tuple is of length `config.n_layers` with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, decoder_sequence_length, embed_size_per_head)` and 2 additional tensors of shape
+            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+"""
+
 _PROCESSOR_FOR_DOC = "AutoProcessor"
 
 PIX2STRUCT_EXAMPLE = r"""
@@ -233,6 +250,50 @@ AUTOMATIC_SPEECH_RECOGNITION_EXAMPLE = r"""
 
     >>> ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     >>> pred = speech_recognition(ds[0]["audio"]["array"])
+    ```
+"""
+
+IMAGE_TO_TEXT_EXAMPLE = r"""
+    Example of text generation:
+
+    ```python
+    >>> from transformers import {processor_class}, {tokenizer_class}
+    >>> from optimum.onnxruntime import {model_class}
+    >>> from PIL import Image
+    >>> import requests
+
+
+    >>> processor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> tokenizer = {tokenizer_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+
+    >>> url = "https://fki.tic.heia-fr.ch/static/img/a01-122-02-00.jpg"
+    >>> image = Image.open(requests.get(url, stream=True).raw)
+    >>> inputs = processor(image, return_tensors="pt")
+
+    >>> gen_tokens = model.generate(**inputs)
+    >>> outputs = tokenizer.batch_decode(gen_tokens, skip_special_tokens=True)
+
+    ```
+
+    Example using `transformers.pipeline`:
+
+    ```python
+    >>> from transformers import {processor_class}, {tokenizer_class}, pipeline
+    >>> from optimum.onnxruntime import {model_class}
+    >>> from PIL import Image
+    >>> import requests
+
+
+    >>> processor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> tokenizer = {tokenizer_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+
+    >>> url = "https://fki.tic.heia-fr.ch/static/img/a01-122-02-00.jpg"
+    >>> image = Image.open(requests.get(url, stream=True).raw)
+
+    >>> image_to_text = pipeline("image-to-text", model=model, tokenizer=tokenizer, feature_extractor=processor, image_processor=processor)
+    >>> pred = image_to_text(image)
     ```
 """
 
@@ -579,10 +640,28 @@ class OVDecoder:
                 _print_compiled_model_properties(compiled_model)
 
 
+@add_start_docstrings(
+    """
+    VisionEncoderDecoder Sequence-to-sequence model with a language modeling head for OpenVINO inference.
+    """,
+    INPUTS_DOCSTRING,
+)
 class OVModelForVision2Seq(OVModelForSeq2SeqLM):
     auto_model_class = AutoModelForVision2Seq
     main_input_name = "pixel_values"
     export_feature = "image-to-text"
+
+    def __init__(
+        self,
+        encoder: openvino.runtime.Model,
+        decoder: openvino.runtime.Model,
+        decoder_with_past: openvino.runtime.Model = None,
+        config: transformers.PretrainedConfig = None,
+        **kwargs,
+    ):
+        if config.decoder.model_type == "gpt2":
+            self.no_cross_attention_cache = True
+        super().__init__(encoder, decoder, decoder_with_past, config, **kwargs)
 
     def prepare_inputs_for_generation(
         self,
@@ -614,6 +693,15 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
             "use_cache": use_cache,
         }
 
+    @add_start_docstrings_to_model_forward(
+        VISION_ENCODER_DECODER_SEQ2SEQ_MODEL_DOCSTRING
+        + IMAGE_TO_TEXT_EXAMPLE.format(
+            processor_class=_PROCESSOR_FOR_DOC,
+            tokenizer_class=_TOKENIZER_FOR_DOC,
+            model_class="OVModelForVision2Seq",
+            checkpoint="microsoft/trocr-small-handwritten",
+        )
+    )
     def forward(
         self,
         pixel_values: Optional[torch.FloatTensor] = None,
@@ -646,6 +734,7 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
                     shapes[inputs][1] = -1
         model.reshape(shapes)
         return model
+
 
 @add_start_docstrings(
     """
