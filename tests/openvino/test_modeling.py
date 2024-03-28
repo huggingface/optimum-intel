@@ -116,6 +116,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+        self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "LATENCY")
         loaded_model_outputs = loaded_model(**tokens)
 
         # Test specifying ov_config with throughput hint and manual cache dir
@@ -134,7 +137,10 @@ class OVModelIntegrationTest(unittest.TestCase):
             folder_contents = os.listdir(tmpdirname)
             self.assertTrue(OV_XML_FILE_NAME in folder_contents)
             self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
-            model = OVModelForSequenceClassification.from_pretrained(tmpdirname)
+            model = OVModelForSequenceClassification.from_pretrained(tmpdirname, ov_config={"NUM_STREAMS": 2})
+            # Test that PERFORMANCE_HINT is set to LATENCY by default even with ov_config provided
+            self.assertEqual(model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+            self.assertEqual(model.request.get_property("PERFORMANCE_HINT"), "LATENCY")
 
         outputs = model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
@@ -150,6 +156,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         tokens = tokenizer("This is a sample input", return_tensors="pt")
         loaded_model = OVModelForCausalLM.from_pretrained(model_id, use_cache=use_cache)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+        self.assertEqual(loaded_model.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY")
         loaded_model_outputs = loaded_model(**tokens)
 
         with tempfile.TemporaryDirectory() as tmpdirname:
@@ -172,6 +181,11 @@ class OVModelIntegrationTest(unittest.TestCase):
         loaded_model = OVModelForSeq2SeqLM.from_pretrained(self.OV_SEQ2SEQ_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_model.config, PretrainedConfig)
         loaded_model.to("cpu")
+        loaded_model.compile()
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_model.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+        self.assertEqual(loaded_model.decoder.request.get_compiled_model().get_property("PERFORMANCE_HINT"), "LATENCY")
+
         loaded_model_outputs = loaded_model.generate(**tokens)
 
         with tempfile.TemporaryDirectory() as tmpdirname:
@@ -192,6 +206,10 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_load_from_hub_and_save_stable_diffusion_model(self):
         loaded_pipeline = OVStableDiffusionPipeline.from_pretrained(self.OV_DIFFUSION_MODEL_ID, compile=False)
         self.assertIsInstance(loaded_pipeline.config, Dict)
+        # Test that PERFORMANCE_HINT is set to LATENCY by default
+        self.assertEqual(loaded_pipeline.ov_config.get("PERFORMANCE_HINT"), "LATENCY")
+        loaded_pipeline.compile()
+        self.assertEqual(loaded_pipeline.unet.request.get_property("PERFORMANCE_HINT"), "LATENCY")
         batch_size, height, width = 2, 16, 16
         np.random.seed(0)
         inputs = {
@@ -501,6 +519,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen",
         "qwen2",
         "stablelm",
+        "starcoder2",
+        "phi",
     )
     GENERATION_LENGTH = 100
     IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
@@ -523,16 +543,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         model_kwargs = {}
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {
-                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
-                "trust_remote_code": True,
-            }
+            model_kwargs = {"trust_remote_code": True}
+
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
         self.assertEqual(
             ov_model.stateful, self.IS_SUPPORT_STATEFUL and ov_model.config.model_type not in not_stateful
         )
+        set_seed(SEED)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         if model_arch == "qwen":
@@ -636,6 +655,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "trust_remote_code": True,
             }
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+
+        if model_arch == "qwen":
+            tokenizer._convert_tokens_to_ids = lambda x: 0
+
         model = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=False, compile=False, **model_kwargs
         )

@@ -323,6 +323,7 @@ def main_export(
         fn_get_submodels=fn_get_submodels,
         preprocessors=preprocessors,
         device=device,
+        trust_remote_code=trust_remote_code,
         **kwargs_shapes,
     )
 

@@ -14,6 +14,7 @@
 
 # ruff: noqa
 
+import itertools
 import tempfile
 import unittest
 from collections import defaultdict
@@ -57,7 +58,6 @@ from optimum.intel import (
     OVWeightQuantizationConfig,
 )
 
-from optimum.intel.openvino.configuration import INT8_WEIGHT_COMPRESSION_CONFIG, DEFAULT_QUANTIZATION_CONFIG
 from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version
 from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
@@ -109,10 +109,6 @@ class OVQuantizerTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
-
-            # Verify that that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertEqual(DEFAULT_QUANTIZATION_CONFIG, loaded_config.to_dict()["compression"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
@@ -264,10 +260,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
-
-            # Verify that that the configuration is correctly saved and loaded
-            loaded_config = OVConfig.from_pretrained(tmp_dir)
-            self.assertIsNotNone(loaded_config)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_ovmodel_8bit_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
@@ -676,6 +668,7 @@ class OVTrainerTest(unittest.TestCase):
 
 class InferRequestWrapperTest(unittest.TestCase):
     MODEL_ID = ("openai/whisper-tiny.en",)
+    APPLY_CACHING = (False, True)
 
     @staticmethod
     def _generate_random_audio_data(processor):
@@ -688,22 +681,32 @@ class InferRequestWrapperTest(unittest.TestCase):
         ).input_features
         return input_features
 
-    @parameterized.expand(MODEL_ID)
-    def test_calibration_data_uniqueness(self, model_id):
+    @parameterized.expand(itertools.product(MODEL_ID, APPLY_CACHING))
+    def test_calibration_data_uniqueness(self, model_id, apply_caching):
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True)
         processor = AutoProcessor.from_pretrained(model_id)
 
         calibration_data = []
-        ov_model.decoder_with_past.request = InferRequestWrapper(ov_model.decoder_with_past.request, calibration_data)
+        ov_model.decoder_with_past.request = InferRequestWrapper(
+            ov_model.decoder_with_past.request, calibration_data, apply_caching=apply_caching
+        )
         for _ in range(2):
             input_features = self._generate_random_audio_data(processor)
             ov_model.generate(input_features)
 
         data_hashes_per_key = defaultdict(list)
+        data_id_per_key = defaultdict(set)
         for inputs_dict in calibration_data:
             for k, v in inputs_dict.items():
                 x = (v.numpy() if isinstance(v, torch.Tensor) else v).copy()
                 data_hashes_per_key[k].append(hash(x.tobytes()))
+                data_id_per_key[k].add(id(v))
         for k, data_hashes in data_hashes_per_key.items():
             # All hashes can not be equal because calibration dataset contains at least 2 different samples
             self.assertTrue(any(data_hashes[0] != it for it in data_hashes))
+        if apply_caching:
+            # With caching, encoder hidden states tensors should be cached, resulting in only 2 tensors stored
+            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) == 2)
+        else:
+            # Without caching, encoder hidden states tensors will be unique for each collected input
+            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) > 2)

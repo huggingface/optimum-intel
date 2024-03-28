@@ -70,22 +70,6 @@ TEXT_GENERATION_EXAMPLE = r"""
     ```
 """
 
-_SUPPORTED_ARCHITECTURES = {
-    "bart",
-    "blenderbot",
-    "blenderbot-small",
-    "bloom",
-    "codegen",
-    "gpt2",
-    "gpt-bigcode",
-    "gpt-neo",
-    "gpt-neox",
-    "llama",
-    "marian",
-    "opt",
-    "pegasus",
-}
-
 
 @add_start_docstrings(
     """
@@ -247,11 +231,6 @@ class OVBaseDecoderModel(OVModel):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-        if config.model_type.replace("_", "-") not in _SUPPORTED_ARCHITECTURES:
-            logger.warning(
-                f"This architecture : {config.model_type} was not validated, only :{', '.join(_SUPPORTED_ARCHITECTURES)} architectures were "
-                "validated, use at your own risk."
-            )
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
