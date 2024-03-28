@@ -247,16 +247,12 @@ def is_openvino_tokenizers_available():
             )
             if is_nightly:
                 message += "pip uninstall -y openvino-nightly && "
-            message += (
-                "pip install --force-reinstall openvino openvino-tokenizers\n"
-            )
+            message += "pip install --force-reinstall openvino openvino-tokenizers\n"
             if is_nightly:
                 message += (
                     "openvino-nightly package will be deprecated in the future - use pre-release drops instead. "
                 )
-            message += (
-                "To update both OpenVINO and OpenVINO Tokenizers to the latest pre-release version perform:\n"
-            )
+            message += "To update both OpenVINO and OpenVINO Tokenizers to the latest pre-release version perform:\n"
             if is_nightly:
                 message += "pip uninstall -y openvino-nightly && "
             message += (
