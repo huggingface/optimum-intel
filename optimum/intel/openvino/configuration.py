@@ -54,10 +54,12 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
     def __init__(
         self,
         dataset: Optional[Union[str, List[str], nncf.Dataset, datasets.Dataset]] = None,
-        ignored_scope: Optional[Union[dict, nncf.IgnoredScope]] = None,
+        ignored_scope: Optional[dict] = None,
         subset_size: Optional[int] = None,
     ):
         self.dataset = dataset
+        if ignored_scope is None:
+            ignored_scope = {}
         self.ignored_scope = ignored_scope
         self.subset_size = subset_size
 
@@ -168,7 +170,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self,
         dataset: Optional[Union[str, List[str], nncf.Dataset, datasets.Dataset]] = None,
         bits: int = 8,
-        ignored_scope: Optional[Union[dict, nncf.IgnoredScope]] = None,
+        ignored_scope: Optional[dict] = None,
         sym: bool = False,
         tokenizer: Optional[Any] = None,
         ratio: float = 1.0,
@@ -219,7 +221,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
         dataset: Union[str, List[str], nncf.Dataset, datasets.Dataset],
-        ignored_scope: Optional[nncf.IgnoredScope] = None,
+        ignored_scope: Optional[dict] = None,
         subset_size: Optional[int] = 300,
         preset: nncf.QuantizationPreset = nncf.QuantizationPreset.MIXED,
         model_type: nncf.ModelType = nncf.ModelType.TRANSFORMER,

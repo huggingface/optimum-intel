@@ -283,12 +283,14 @@ class OVQuantizer(OptimumQuantizer):
             else:
                 quantization_dataset = nncf.Dataset(calibration_dataloader)
 
+        ignored_scope = IgnoredScope(**quantization_config.ignored_scope)
+
         # Actual model quantization
         quantized_model = nncf.quantize(
             self.model.model,
             quantization_dataset,
             subset_size=quantization_config.subset_size,
-            ignored_scope=quantization_config.ignored_scope,
+            ignored_scope=ignored_scope,
             model_type=quantization_config.model_type,
             preset=quantization_config.preset,
             fast_bias_correction=quantization_config.fast_bias_correction,
@@ -374,11 +376,13 @@ class OVQuantizer(OptimumQuantizer):
                     data_collator=data_collator,
                 )
                 quantization_dataset = nncf.Dataset(calibration_dataloader)
+
+            ignored_scope = IgnoredScope(**quantization_config.ignored_scope)
             model = nncf.quantize(
                 model,
                 quantization_dataset,
                 subset_size=quantization_config.subset_size,
-                ignored_scope=quantization_config.ignored_scope,
+                ignored_scope=ignored_scope,
                 model_type=quantization_config.model_type,
                 preset=quantization_config.preset,
                 fast_bias_correction=quantization_config.fast_bias_correction,
@@ -487,7 +491,7 @@ class OVQuantizer(OptimumQuantizer):
 
     def _get_calibration_dataloader(
         self,
-        calibration_dataset: Union[Dataset, nncf.Dataset],
+        calibration_dataset: "Dataset",
         batch_size: int,
         remove_unused_columns: bool,
         data_collator: Optional[DataCollator] = None,
@@ -539,9 +543,7 @@ def _weight_only_quantization(
     if isinstance(config.sensitivity_metric, str):
         sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
 
-    ignored_scope = None
-    if isinstance(config.ignored_scope, dict):
-        ignored_scope = IgnoredScope(**config.ignored_scope)
+    ignored_scope = IgnoredScope(**config.ignored_scope)
 
     if config.bits == 8:
         mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
@@ -555,10 +557,10 @@ def _weight_only_quantization(
         group_size=config.group_size,
         all_layers=config.all_layers,
         sensitivity_metric=sensitivity_metric,
-        # awq=config.quant_method == QuantizationMethod.AWQ,
+        # awq=config.quant_method == QuantizationMethod.AWQ, # TODO : remove and add it back once nncf 2.9.0
         ignored_scope=ignored_scope,
         dataset=dataset,
-        # subset_size=config.subset_size if config.subset_size else 128,
+        # subset_size=config.subset_size if config.subset_size else 128, # TODO : remove and add it back once nncf 2.9.0
     )
 
 
@@ -627,13 +629,14 @@ def _hybrid_quantization(
     """
     ops_to_compress = _collect_ops_with_weights(model)
 
-    ignored_scope = quantization_config.ignored_scope if isinstance(quantization_config.ignored_scope, dict) else {}
-    ptq_ignored_scope = nncf.IgnoredScope(**ignored_scope)
+    ignored_scope = IgnoredScope(**quantization_config.ignored_scope)
+    ptq_ignored_scope = copy.deepcopy(ignored_scope)
     ptq_ignored_scope.names += ops_to_compress
 
     wc_quantization_config = copy.deepcopy(quantization_config)
-    wc_quantization_config.ignored_scope = ignored_scope
-    wc_quantization_config.ignored_scope["types"] = ignored_scope.get("types", []) + ["Convolution"]
+    wc_quantization_config.ignored_scope["types"] = wc_quantization_config.ignored_scope.get("types", []) + [
+        "Convolution"
+    ]
     compressed_model = _weight_only_quantization(model, wc_quantization_config)
 
     subset_size = quantization_config.subset_size if quantization_config.subset_size else 200
