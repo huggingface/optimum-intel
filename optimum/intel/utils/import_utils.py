@@ -246,6 +246,11 @@ def is_openvino_tokenizers_available():
                 "https://github.com/openvinotoolkit/openvino_tokenizers/tree/master?tab=readme-ov-file"
                 "#build-and-install-from-source"
             )
+            if sys.platform == "linux":
+                message += (
+                    "\nThe PyPI version of OpenVINO Tokenizers is built on CentOS and may not be compatible with other "
+                    "Linux distributions; rebuild OpenVINO Tokenizers from source."
+                )
         else:
             message += "It is recommended to use the same day builds for pre-release version. "
             if is_nightly:
