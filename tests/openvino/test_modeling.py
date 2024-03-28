@@ -544,11 +544,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
-        #self.assertTrue("past_key_values" in ov_outputs)
-        #self.assertIsInstance(ov_outputs.past_key_values, tuple)
+        # self.assertTrue("past_key_values" in ov_outputs)
+        # self.assertIsInstance(ov_outputs.past_key_values, tuple)
         is_stateful = ov_model.config.model_type not in not_stateful and self.IS_SUPPORT_STATEFUL
         self.assertEqual(ov_model.stateful, is_stateful)
-        #if is_stateful:
+        # if is_stateful:
         #    self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
@@ -571,7 +571,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         if "gptq" in model_arch:
             self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
-        if model_arch in ["chatglm","baichuan2"]:
+        if model_arch in ["chatglm", "baichuan2"]:
             self.skipTest("Models " + model_id + "doesn't support concurrent execution in AutoModelForCausalLM")
 
         set_seed(SEED)
@@ -599,15 +599,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         def run_ov_model(tokens, transformers_model, ov_model):
             # global ov_model, transformers_model
-            #position_ids = None
-            #if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
+            # position_ids = None
+            # if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
             #    input_shape = tokens["input_ids"].shape
             #    position_ids = (
             #        torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
             #    )
             set_seed(SEED)
             ov_outputs = ov_model(**tokens)
-            
+
             self.assertTrue("logits" in ov_outputs)
             self.assertIsInstance(ov_outputs.logits, torch.Tensor)
             # self.assertTrue("past_key_values" in ov_outputs)
@@ -618,7 +618,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 transformers_outputs = transformers_model(**tokens)
             # Compare tensor outputs
             self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
-            #self.assertTrue(False)
+            # self.assertTrue(False)
 
         run_on_multiple_threads(run_ov_model, tokens_list, (transformers_model, ov_model))
 
@@ -661,7 +661,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
                 "trust_remote_code": True,
             }
-                
+
         model = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=False, compile=False, **model_kwargs
         )
@@ -673,7 +673,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         def run_ov_model(input_text, model):
             # Tokenizer is not supposed to be shared by multiple threads
-            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
             pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
             outputs = pipe(input_text, max_length=30)
             self.assertEqual(pipe.device, model.device)

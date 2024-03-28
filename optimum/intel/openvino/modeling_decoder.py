@@ -346,7 +346,6 @@ class OVBaseDecoderModel(OVModel):
             self.compiled_model = self.request
             self.request = self.request.create_infer_request()
 
-
     def _make_stateful(self):
         patch_stateful(self.config, self.model)
         self.stateful = True
@@ -487,7 +486,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         else:
             if infer_context is not None:
                 # Use passed inference request if provided in kwargs, create new one overwise
-                infer_request = infer_context[0]  
+                infer_request = infer_context[0]
             else:
                 self.compile()
                 infer_request = self.compiled_model.create_infer_request()
@@ -550,7 +549,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # TODO: Apply it differently based on model type
             # TODO: At least for bloom we need to replicate values for each attention head
             # save beam_idx and infer_request to be used as an input in the next iteration
-            past_key_values = ((np.array(beam_idx)), past_key_values[1])  
+            past_key_values = ((np.array(beam_idx)), past_key_values[1])
             return past_key_values
         else:
             return tuple(
