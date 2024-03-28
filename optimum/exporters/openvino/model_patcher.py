@@ -60,7 +60,7 @@ def patch_model_with_bettertransformer(model):
         )
 
     if (
-        getattr(model.config, "model_type") in {"gpt_bigcode", "llama"}
+        getattr(model.config, "model_type") in {"gpt_bigcode", "llama", "gemma"}
         and is_transformers_version(">=", "4.38")
         and is_openvino_version("<", "2024.1.0-14612")
     ):
@@ -69,10 +69,11 @@ def patch_model_with_bettertransformer(model):
             _openvino_version.split("-")[0] if is_openvino_version("<=", "2024.0.0-14509") else _openvino_version
         )
         log.warn(
-            COLOR_RED + f"[WARNING] Stateful models are not supported for Llama and GPTBigCode with Transformers "
+            COLOR_RED
+            + f"[WARNING] Stateful models are not supported for Llama, Gemma and GPTBigCode with Transformers "
             f"{_transformers_version} and OpenVINO {display_version}. For good performance, consider using a nightly OpenVINO build: "
-            "https://docs.openvino.ai/2024/get-started/install-openvino.html. For models that do not need transformers "
-            "4.38+, it is also an option to downgrade transformers: `pip install transformers==4.37.2`" + COLOR_RESET
+            "https://docs.openvino.ai/2024/get-started/install-openvino.html. For gpt-bigcode and llama models, "
+            "it is also an option to downgrade transformers: `pip install transformers==4.37.2`" + COLOR_RESET
         )
 
     # model already has required SDPA implementation
@@ -482,7 +483,11 @@ class QwenModelPatcher(DecoderModelPatcher):
         model.config.bf16 = False
         model.config.fp16 = False
         if self.original_fp16 or self.original_bf16:
-            model.to(torch.float32)
+            # GPTQ models does to support casting to dtype
+            try:
+                model.to(torch.float32)
+            except Exception:
+                pass
         model.transformer.rotary_emb(2048)
 
     def __enter__(self):

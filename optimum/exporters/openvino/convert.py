@@ -489,6 +489,7 @@ def export_from_model(
     fn_get_submodels: Optional[Callable] = None,
     preprocessors: List = None,
     device: str = "cpu",
+    trust_remote_code: bool = False,
     **kwargs_shapes,
 ):
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
@@ -601,7 +602,7 @@ def export_from_model(
             generation_config.save_pretrained(output)
 
         model_name_or_path = model.config._name_or_path
-        maybe_save_preprocessors(model_name_or_path, output)
+        maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
 
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
 
