@@ -15,6 +15,7 @@
 from typing import Dict, Optional, Union
 
 from neural_compressor.config import DistillationConfig, WeightPruningConfig, _BaseQuantizationConfig
+from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
@@ -89,3 +90,65 @@ class INCConfig(BaseConfig):
                 # "loss_weights": criterion.loss_weights,
             }
         return config
+
+
+@dataclass
+class INCWeightQuantizationConfig(QuantizationConfigMixin):
+    """
+    Args:
+        bits (`int`, defaults to 8):
+            The number of bits to quantize to.
+        sym (`bool`, defaults to `False`):
+            Whether to use symetric quantization.
+        tokenizer (`str` or `PreTrainedTokenizerBase`, *optional*):
+            The tokenizer used to process the dataset. You can pass either:
+                - A custom tokenizer object.
+                - A string, the *model id* of a predefined tokenizer hosted inside a model repo on huggingface.co.
+                    Valid model ids can be located at the root-level, like `bert-base-uncased`, or namespaced under a
+                    user or organization name, like `dbmdz/bert-base-german-cased`.
+                - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
+                    using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
+        group_size (`int`, *optional*):
+            The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
+        num_samples (`int`, *optional*):
+            The maximum number of samples composing the calibration dataset.
+        damp_percent (`float`, defaults to 0.1):
+            The percent of the average Hessian diagonal to use for dampening. Recommended value is 0.1.
+
+    """
+
+    def __init__(
+        self,
+        bits: int = 8,
+        sym: bool = False,
+        tokenizer: Optional[Any] = None,
+        dataset: Optional[Union[str, List[str]]] = None,
+        group_size: Optional[int] = None,
+        num_samples: Optional[int] = None,
+        damp_percent: float = 0.1,
+        quant_method: str = "default",
+        **kwargs,
+    ):
+        self.bits = bits
+        self.sym = sym
+        self.tokenizer = tokenizer
+        self.dataset = dataset
+        self.group_size = group_size or (-1 if bits == 8 else 128)
+        self.num_samples = num_samples
+        self.quant_method = quant_method
+        self.damp_percent = damp_percent if self.quant_method == "gptq" else None
+
+        self.post_init()
+
+    def post_init(self):
+        if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
+            raise ValueError(f"`group_size` must be greater than 0 or equal to -1 got {self.group_size}")
+
+        if self.bits not in [4, 8]:
+            raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
+
+        supported_methodologies = {"rtn", "gptq", "awq", "autoaround"}
+        if self.quant_method not in supported_methodologies:
+            raise ValueError(
+                f"Unsupported quantization methodology {self.quant_method}, only {supported_methodologies} are currently supported"
+            )
