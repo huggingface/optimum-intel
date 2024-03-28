@@ -483,7 +483,11 @@ class QwenModelPatcher(DecoderModelPatcher):
         model.config.bf16 = False
         model.config.fp16 = False
         if self.original_fp16 or self.original_bf16:
-            model.to(torch.float32)
+            # GPTQ models does to support casting to dtype
+            try:
+                model.to(torch.float32)
+            except Exception:
+                pass
         model.transformer.rotary_emb(2048)
 
     def __enter__(self):

@@ -18,7 +18,7 @@ import logging
 import os
 from collections import deque
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import nncf
 import openvino
@@ -81,21 +81,62 @@ class OVDataLoader(PTInitializingDataLoader):
 
 
 class InferRequestWrapper:
-    def __init__(self, request, data_cache=None):
+    """
+    Wrapper class for OV InferRequest or CompiledModel objects that collects inputs which they were called with to
+    a list.
+    """
+
+    def __init__(
+        self,
+        request: Union[openvino.InferRequest, openvino.CompiledModel],
+        collected_inputs: List = None,
+        apply_caching: bool = False,
+    ):
+        """
+        Args:
+            request (`Union[openvino.InferRequest, openvino.CompiledModel]`):
+                Infer request instance to wrap. May also be an instance of CompiledModel.
+            collected_inputs (`List`, *optional*):
+                List where collected inputs will be stored. If None, an empty list will be created
+                at self.collected_inputs.
+            apply_caching (`bool`, defaults to False):
+                Whether to apply data caching. May improve memory footprint, but results in slight performance overhead
+                due to tensor hash computation.
+        """
         self.request = request
-        if data_cache is None:
-            data_cache = []
-        self.data_cache = data_cache
+        self.collected_inputs = [] if collected_inputs is None else collected_inputs
+        self.apply_caching = apply_caching
+        self.tensor_cache = {}
+
+    def collect_inputs(self, inputs):
+        if not self.apply_caching or not isinstance(inputs, dict):
+            self.collected_inputs.append(copy.deepcopy(inputs))
+            return
+
+        copied_inputs = {}
+        for k, v in inputs.items():
+            data = v
+            if isinstance(data, openvino.Tensor):
+                data = data.data
+            if isinstance(data, torch.Tensor):
+                data = data.cpu().numpy()
+            data_hash = hash(data.tobytes())
+
+            # Avoid data copying if tensor contains data encountered earlier
+            if data_hash not in self.tensor_cache:
+                self.tensor_cache[data_hash] = copy.deepcopy(v)
+            copied_inputs[k] = self.tensor_cache[data_hash]
+        self.collected_inputs.append(copied_inputs)
 
     def __call__(self, *args, **kwargs):
         # If __call__ is invoked then self.request must be an instance of CompiledModel
         signature = inspect.signature(self.request)
         bound_args = signature.bind(*args, **kwargs).arguments
-        self.data_cache.append(copy.deepcopy(bound_args["inputs"]))
+        self.collect_inputs(bound_args["inputs"])
         return self.request(*args, **kwargs)
 
     def infer(self, inputs: Any = None, share_inputs: bool = False):
-        self.data_cache.append(copy.deepcopy(inputs))
+        self.collect_inputs(inputs)
         return self.request.infer(inputs, share_inputs)
 
     def start_async(
@@ -106,7 +147,7 @@ class InferRequestWrapper:
         *,
         shared_memory: Any = None,
     ):
-        self.data_cache.append(copy.deepcopy(inputs))
+        self.collect_inputs(inputs)
         self.request.infer(inputs, share_inputs, share_outputs=True)
 
     def wait(self):
@@ -269,28 +310,26 @@ class OVQuantizer(OptimumQuantizer):
                 # Prefetch past_key_values
                 self.model.update_pkv_precision(True)
                 self.model.compile()
-                data_cache = []
+                collected_inputs = []
 
-                self.model.request = InferRequestWrapper(self.model.request, data_cache)
+                self.model.request = InferRequestWrapper(self.model.request, collected_inputs)
                 try:
                     for data in calibration_dataloader:
                         self.model.generate(**data, max_new_tokens=1)
-                        if len(data_cache) >= quantization_config.subset_size:
+                        if len(collected_inputs) >= quantization_config.subset_size:
                             break
                 finally:
                     self.model.request = self.model.request.request
-                quantization_dataset = nncf.Dataset(data_cache)
+                quantization_dataset = nncf.Dataset(collected_inputs)
             else:
                 quantization_dataset = nncf.Dataset(calibration_dataloader)
-
-        ignored_scope = IgnoredScope(**quantization_config.ignored_scope)
 
         # Actual model quantization
         quantized_model = nncf.quantize(
             self.model.model,
             quantization_dataset,
             subset_size=quantization_config.subset_size,
-            ignored_scope=ignored_scope,
+            ignored_scope=quantization_config.ignored_scope,
             model_type=quantization_config.model_type,
             preset=quantization_config.preset,
             fast_bias_correction=quantization_config.fast_bias_correction,
@@ -376,13 +415,11 @@ class OVQuantizer(OptimumQuantizer):
                     data_collator=data_collator,
                 )
                 quantization_dataset = nncf.Dataset(calibration_dataloader)
-
-            ignored_scope = IgnoredScope(**quantization_config.ignored_scope)
             model = nncf.quantize(
                 model,
                 quantization_dataset,
                 subset_size=quantization_config.subset_size,
-                ignored_scope=ignored_scope,
+                ignored_scope=quantization_config.ignored_scope,
                 model_type=quantization_config.model_type,
                 preset=quantization_config.preset,
                 fast_bias_correction=quantization_config.fast_bias_correction,
@@ -491,7 +528,7 @@ class OVQuantizer(OptimumQuantizer):
 
     def _get_calibration_dataloader(
         self,
-        calibration_dataset: "Dataset",
+        calibration_dataset: Union[Dataset, nncf.Dataset],
         batch_size: int,
         remove_unused_columns: bool,
         data_collator: Optional[DataCollator] = None,
@@ -543,7 +580,9 @@ def _weight_only_quantization(
     if isinstance(config.sensitivity_metric, str):
         sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
 
-    ignored_scope = IgnoredScope(**config.ignored_scope)
+    ignored_scope = None
+    if isinstance(config.ignored_scope, dict):
+        ignored_scope = IgnoredScope(**config.ignored_scope)
 
     if config.bits == 8:
         mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
@@ -557,10 +596,10 @@ def _weight_only_quantization(
         group_size=config.group_size,
         all_layers=config.all_layers,
         sensitivity_metric=sensitivity_metric,
-        # awq=config.quant_method == QuantizationMethod.AWQ, # TODO : remove and add it back once nncf 2.9.0
+        # awq=config.quant_method == QuantizationMethod.AWQ,
         ignored_scope=ignored_scope,
         dataset=dataset,
-        # subset_size=config.subset_size if config.subset_size else 128, # TODO : remove and add it back once nncf 2.9.0
+        # subset_size=config.subset_size if config.subset_size else 128,
     )
 
 
@@ -629,14 +668,13 @@ def _hybrid_quantization(
     """
     ops_to_compress = _collect_ops_with_weights(model)
 
-    ignored_scope = IgnoredScope(**quantization_config.ignored_scope)
-    ptq_ignored_scope = copy.deepcopy(ignored_scope)
+    ignored_scope = quantization_config.ignored_scope if isinstance(quantization_config.ignored_scope, dict) else {}
+    ptq_ignored_scope = nncf.IgnoredScope(**ignored_scope)
     ptq_ignored_scope.names += ops_to_compress
 
     wc_quantization_config = copy.deepcopy(quantization_config)
-    wc_quantization_config.ignored_scope["types"] = wc_quantization_config.ignored_scope.get("types", []) + [
-        "Convolution"
-    ]
+    wc_quantization_config.ignored_scope = ignored_scope
+    wc_quantization_config.ignored_scope["types"] = ignored_scope.get("types", []) + ["Convolution"]
     compressed_model = _weight_only_quantization(model, wc_quantization_config)
 
     subset_size = quantization_config.subset_size if quantization_config.subset_size else 200

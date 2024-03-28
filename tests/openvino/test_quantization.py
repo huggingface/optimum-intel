@@ -14,6 +14,7 @@
 
 # ruff: noqa
 
+import itertools
 import tempfile
 import unittest
 from collections import defaultdict
@@ -677,6 +678,7 @@ class OVTrainerTest(unittest.TestCase):
 
 class InferRequestWrapperTest(unittest.TestCase):
     MODEL_ID = ("openai/whisper-tiny.en",)
+    APPLY_CACHING = (False, True)
 
     @staticmethod
     def _generate_random_audio_data(processor):
@@ -689,22 +691,32 @@ class InferRequestWrapperTest(unittest.TestCase):
         ).input_features
         return input_features
 
-    @parameterized.expand(MODEL_ID)
-    def test_calibration_data_uniqueness(self, model_id):
+    @parameterized.expand(itertools.product(MODEL_ID, APPLY_CACHING))
+    def test_calibration_data_uniqueness(self, model_id, apply_caching):
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True)
         processor = AutoProcessor.from_pretrained(model_id)
 
         calibration_data = []
-        ov_model.decoder_with_past.request = InferRequestWrapper(ov_model.decoder_with_past.request, calibration_data)
+        ov_model.decoder_with_past.request = InferRequestWrapper(
+            ov_model.decoder_with_past.request, calibration_data, apply_caching=apply_caching
+        )
         for _ in range(2):
             input_features = self._generate_random_audio_data(processor)
             ov_model.generate(input_features)
 
         data_hashes_per_key = defaultdict(list)
+        data_id_per_key = defaultdict(set)
         for inputs_dict in calibration_data:
             for k, v in inputs_dict.items():
                 x = (v.numpy() if isinstance(v, torch.Tensor) else v).copy()
                 data_hashes_per_key[k].append(hash(x.tobytes()))
+                data_id_per_key[k].add(id(v))
         for k, data_hashes in data_hashes_per_key.items():
             # All hashes can not be equal because calibration dataset contains at least 2 different samples
             self.assertTrue(any(data_hashes[0] != it for it in data_hashes))
+        if apply_caching:
+            # With caching, encoder hidden states tensors should be cached, resulting in only 2 tensors stored
+            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) == 2)
+        else:
+            # Without caching, encoder hidden states tensors will be unique for each collected input
+            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) > 2)
