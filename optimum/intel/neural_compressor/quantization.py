@@ -47,6 +47,7 @@ from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME
 from ..utils.import_utils import (
+    INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR,
     _intel_extension_for_transformers_version,
     _ipex_version,
     _neural_compressor_version,
@@ -78,26 +79,17 @@ if is_intel_extension_for_transformers_available():
             f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_intel_extension_for_transformers_version}, "
             f"but only version {INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION} is supported."
         )
-    TORCH_VERSION = "2.1.0"
-    if is_torch_version("!=", TORCH_VERSION):
-        raise ImportError(
-            f"Found an incompatible version of `torch`. Found version {_torch_version}, "
-            f"but only version {TORCH_VERSION} is supported."
-        )
-
     from intel_extension_for_transformers.llm.quantization.utils import convert_to_quantized_model
     from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
     from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
-    Config = Union[PostTrainingQuantConfig, WeightOnlyQuantConfig]
-else:
-    Config = PostTrainingQuantConfig
 
 logger = logging.getLogger(__name__)
 
 NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
 NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION = "2.3.0"
 IPEX_MINIMUM_VERSION = "2.1.0"
+_ITREX_TORCH_VERSION = "2.1.0"
 
 if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
     raise ImportError(
@@ -160,7 +152,7 @@ class INCQuantizer(OptimumQuantizer):
 
     def quantize(
         self,
-        quantization_config: Config,
+        quantization_config: Union["PostTrainingQuantConfig", "WeightOnlyQuantConfig"],
         save_directory: Union[str, Path],
         calibration_dataset: Dataset = None,
         batch_size: int = 8,
@@ -213,9 +205,12 @@ class INCQuantizer(OptimumQuantizer):
                     f"but only version {NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION} or higher supports weight-only quantization."
                 )
             if not is_intel_extension_for_transformers_available():
+                raise ImportError(INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR.format("Weight only quantization"))
+
+            if is_torch_version("!=", _ITREX_TORCH_VERSION):
                 raise ImportError(
-                    "Didn't find out intel-etension-for-transformers package. "
-                    "Please install packages: pip install intel-etension-for-transformers and pip install peft."
+                    f"Found an incompatible version of `torch`. Found version {_torch_version}, "
+                    f"but only version {_ITREX_TORCH_VERSION} is supported."
                 )
 
             if quantization_config is None:
