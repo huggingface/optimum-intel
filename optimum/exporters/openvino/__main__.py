@@ -13,35 +13,32 @@
 #  limitations under the License.
 
 import logging
-import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import __main__ as optimum_main
-from optimum.exporters.onnx.base import OnnxConfig, OnnxConfigWithPast
-from optimum.utils import DEFAULT_DUMMY_SHAPES
-from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
+from optimum.exporters.onnx.base import OnnxConfig
+from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
+from optimum.utils.save_utils import maybe_load_preprocessors
 
-from ...intel.utils.import_utils import is_nncf_available, is_optimum_version, is_transformers_version
-from .convert import export_models
+from ...intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
+from .convert import export_from_model, export_tokenizer
 
 
-if is_optimum_version(">=", "1.16.0"):
-    from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-else:
-    # Copied from https://github.com/huggingface/optimum/blob/main/optimum/exporters/onnx/constants.py
-    SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED = [
-        "bart",
-        "whisper",
-    ]
+if TYPE_CHECKING:
+    from optimum.intel.openvino.configuration import OVConfig
 
-OV_XML_FILE_NAME = "openvino_model.xml"
+_COMPRESSION_OPTIONS = {
+    "int8": {"bits": 8},
+    "int4_sym_g128": {"bits": 4, "sym": True, "group_size": 128},
+    "int4_asym_g128": {"bits": 4, "sym": False, "group_size": 128},
+    "int4_sym_g64": {"bits": 4, "sym": True, "group_size": 64},
+    "int4_asym_g64": {"bits": 4, "sym": False, "group_size": 64},
+}
 
-_MAX_UNCOMPRESSED_SIZE = 1e9
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +58,14 @@ def main_export(
     local_files_only: bool = False,
     use_auth_token: Optional[Union[bool, str]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    custom_onnx_configs: Optional[Dict[str, "OnnxConfig"]] = None,
+    custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
     compression_option: Optional[str] = None,
     compression_ratio: Optional[float] = None,
+    ov_config: "OVConfig" = None,
+    stateful: bool = True,
+    convert_tokenizer: bool = False,
+    library_name: Optional[str] = None,
     **kwargs_shapes,
 ):
     """
@@ -111,11 +112,11 @@ def main_export(
             when running `transformers-cli login` (stored in `~/.huggingface`).
         model_kwargs (`Optional[Dict[str, Any]]`, defaults to `None`):
             Experimental usage: keyword arguments to pass to the model during
-            the export. This argument should be used along the `custom_onnx_configs` argument
+            the export. This argument should be used along the `custom_export_configs` argument
             in case, for example, the model inputs/outputs are changed (for example, if
             `model_kwargs={"output_attentions": True}` is passed).
-        custom_onnx_configs (`Optional[Dict[str, OnnxConfig]]`, defaults to `None`):
-            Experimental usage: override the default ONNX config used for the given model. This argument may be useful for advanced users that desire a finer-grained control on the export. An example is available [here](https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model).
+        custom_export_configs (`Optional[Dict[str, OnnxConfig]]`, defaults to `None`):
+            Experimental usage: override the default export config used for the given model. This argument may be useful for advanced users that desire a finer-grained control on the export. An example is available [here](https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model).
         fn_get_submodels (`Optional[Callable]`, defaults to `None`):
             Experimental usage: Override the default submodels that are used at the export. This is
             especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
@@ -124,6 +125,8 @@ def main_export(
             `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point, `f32` - means no compression.
         compression_ratio (`Optional[float]`, defaults to `None`):
             Compression ratio between primary and backup precision (only relevant to INT4).
+        stateful (`bool`, defaults to `True`):
+            Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
         **kwargs_shapes (`Dict`):
             Shapes to use during inference. This argument allows to override the default shapes used during the ONNX export.
 
@@ -131,40 +134,94 @@ def main_export(
     ```python
     >>> from optimum.exporters.openvino import main_export
 
-    >>> main_export("gpt2", output="gpt2_onnx/")
+    >>> main_export("gpt2", output="gpt2_ov/")
     ```
     """
-    if (
-        compression_option is not None
-        and compression_option != "fp16"
-        and compression_option != "fp32"
-        and not is_nncf_available()
-    ):
-        raise ImportError(
-            f"Compression of the weights to {compression_option} requires nncf, please install it with `pip install nncf`"
+
+    if compression_option is not None:
+        logger.warning(
+            "The `compression_option` argument is deprecated and will be removed in optimum-intel v1.17.0. "
+            "Please, pass an `ov_config` argument instead `OVConfig(..., quantization_config=quantization_config)`."
         )
 
-    model_kwargs = model_kwargs or {}
+    if compression_ratio is not None:
+        logger.warning(
+            "The `compression_ratio` argument is deprecated and will be removed in optimum-intel v1.17.0. "
+            "Please, pass an `ov_config` argument instead `OVConfig(quantization_config={ratio=compression_ratio})`."
+        )
 
-    output = Path(output)
-    if not output.exists():
-        output.mkdir(parents=True)
+    if ov_config is None and compression_option is not None:
+        from ...intel.openvino.configuration import OVConfig
+
+        if compression_option == "fp16":
+            ov_config = OVConfig(dtype="fp16")
+        elif compression_option != "fp32":
+            q_config = _COMPRESSION_OPTIONS[compression_option] if compression_option in _COMPRESSION_OPTIONS else {}
+            q_config["ratio"] = compression_ratio or 1.0
+            ov_config = OVConfig(quantization_config=q_config)
 
     original_task = task
     task = TasksManager.map_from_synonym(task)
+    framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
+    library_name = TasksManager.infer_library_from_model(
+        model_name_or_path, subfolder=subfolder, library_name=library_name
+    )
+
+    if task == "auto":
+        try:
+            task = TasksManager.infer_task_from_model(model_name_or_path)
+        except KeyError as e:
+            raise KeyError(
+                f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+            )
+        except RequestsConnectionError as e:
+            raise RequestsConnectionError(
+                f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+            )
+
+    if convert_tokenizer and not is_openvino_tokenizers_available():
+        logger.warning(
+            "`convert_tokenizer` requires openvino-tokenizers, please install it with `pip install optimum-intel[openvino-tokenizers]`"
+        )
+        convert_tokenizer = False
+
+    do_gptq_patching = False
+    custom_architecture = False
+    loading_kwargs = {}
+    if library_name == "transformers":
+        config = AutoConfig.from_pretrained(
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            use_auth_token=use_auth_token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+        )
+        quantization_config = getattr(config, "quantization_config", None)
+        do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
+        model_type = config.model_type.replace("_", "-")
+
+        if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
+            custom_architecture = True
+        elif task not in TasksManager.get_supported_tasks_for_model_type(
+            model_type, exporter="openvino", library_name=library_name
+        ):
+            if original_task == "auto":
+                autodetected_message = " (auto-detected)"
+            else:
+                autodetected_message = ""
+            model_tasks = TasksManager.get_supported_tasks_for_model_type(
+                model_type, exporter="openvino", library_name=library_name
+            )
+            raise ValueError(
+                f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the task {task} to be supported in the ONNX export for {model_type}."
+            )
+        if is_transformers_version(">=", "4.36") and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED:
+            loading_kwargs["attn_implementation"] = "eager"
 
     # Patch the modules to export of GPTQ models w/o GPU
-    do_gptq_patching = False
-    try:
-        config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
-        model_type = config.model_type.replace("_", "-")
-        config_dict = config.to_dict()
-        quantization_config = config_dict.get("quantization_config", None)
-        do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
-    except Exception:
-        model_type = None
-        pass
-
     if do_gptq_patching:
         import torch
 
@@ -190,31 +247,6 @@ def main_export(
 
         GPTQQuantizer.post_init_model = post_init_model
 
-    framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
-
-    # get the shapes to be used to generate dummy inputs
-    input_shapes = {}
-    for input_name in DEFAULT_DUMMY_SHAPES.keys():
-        input_shapes[input_name] = (
-            kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
-        )
-
-    if task == "auto":
-        try:
-            task = TasksManager.infer_task_from_model(model_name_or_path)
-        except KeyError as e:
-            raise KeyError(
-                f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
-        except RequestsConnectionError as e:
-            raise RequestsConnectionError(
-                f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
-
-    loading_kwargs = {}
-    if is_transformers_version(">=", "4.36") and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED:
-        loading_kwargs["attn_implementation"] = "eager"
-
     model = TasksManager.get_model_from_task(
         task,
         model_name_or_path,
@@ -227,40 +259,39 @@ def main_export(
         trust_remote_code=trust_remote_code,
         framework=framework,
         device=device,
+        library_name=library_name,
         **loading_kwargs,
     )
 
-    custom_architecture = False
-    is_stable_diffusion = "stable-diffusion" in task
-    model_type = "stable-diffusion" if is_stable_diffusion else model.config.model_type.replace("_", "-")
+    needs_pad_token_id = task == "text-classification" and getattr(model.config, "pad_token_id", None) is None
 
-    if not is_stable_diffusion:
-        if model_type in TasksManager._UNSUPPORTED_CLI_MODEL_TYPE:
-            raise ValueError(
-                f"{model_type} is not supported yet. Only {TasksManager._SUPPORTED_CLI_MODEL_TYPE} are supported. "
-                f"If you want to support {model_type} please propose a PR or open up an issue."
-            )
-        if model.config.model_type.replace("-", "_") not in TasksManager.get_supported_model_type_for_task(
-            task, exporter="onnx"
-        ):
-            custom_architecture = True
+    if needs_pad_token_id:
+        if pad_token_id is not None:
+            model.config.pad_token_id = pad_token_id
+        else:
+            tok = AutoTokenizer.from_pretrained(model_name_or_path)
+            pad_token_id = getattr(tok, "pad_token_id", None)
+            if pad_token_id is None:
+                raise ValueError(
+                    "Could not infer the pad token id, which is needed in this case, please provide it with the --pad_token_id argument"
+                )
+            model.config.pad_token_id = pad_token_id
 
-    if custom_architecture and custom_onnx_configs is None:
-        raise ValueError(
-            "Trying to export a model with a custom architecture, but no custom onnx configuration was passed as `custom_onnx_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models."
-        )
-
-    if custom_architecture and original_task == "auto":
-        raise ValueError(
-            f'Automatic task detection is not supported with custom architectures. Please specify the `task` argument. Suggestion: task="{task}" (or task="{task}-with-past" if the model is decoder-based and supports KV cache)'
-        )
+    if "stable-diffusion" in task:
+        model_type = "stable-diffusion"
+    elif hasattr(model.config, "export_model_type"):
+        model_type = model.config.export_model_type.replace("_", "-")
+    else:
+        model_type = model.config.model_type.replace("_", "-")
 
     if (
         not custom_architecture
-        and not is_stable_diffusion
-        and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(model_type, "onnx")
+        and library_name != "diffusers"
+        and task + "-with-past"
+        in TasksManager.get_supported_tasks_for_model_type(model_type, exporter="openvino", library_name=library_name)
     ):
-        if original_task == "auto":  # Make -with-past the default if --task was not explicitely specified
+        # Make -with-past the default if --task was not explicitely specified
+        if original_task == "auto":
             task = task + "-with-past"
         else:
             logger.info(
@@ -281,100 +312,44 @@ def main_export(
         model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
 
-    onnx_config, models_and_onnx_configs = optimum_main._get_submodels_and_onnx_configs(
+    export_from_model(
         model=model,
+        output=output,
         task=task,
-        monolith=False,
-        custom_onnx_configs=custom_onnx_configs if custom_onnx_configs is not None else {},
-        custom_architecture=custom_architecture,
+        ov_config=ov_config,
+        stateful=stateful,
+        model_kwargs=model_kwargs,
+        custom_export_configs=custom_export_configs,
         fn_get_submodels=fn_get_submodels,
         preprocessors=preprocessors,
-        _variant="default",
-        legacy=False,
+        device=device,
+        trust_remote_code=trust_remote_code,
+        **kwargs_shapes,
     )
 
-    if compression_option is None:
-        num_parameters = model.num_parameters() if not is_stable_diffusion else model.unet.num_parameters()
-        if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
-            if is_nncf_available():
-                compression_option = "int8"
-                logger.info("The model weights will be quantized to int8.")
-            else:
-                logger.warning(
-                    "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
-                    "please install it with `pip install nncf`"
-                )
-
-    if not is_stable_diffusion:
-        needs_pad_token_id = (
-            isinstance(onnx_config, OnnxConfigWithPast)
-            and getattr(model.config, "pad_token_id", None) is None
-            and task in ["text-classification"]
-        )
-        if needs_pad_token_id:
-            if pad_token_id is not None:
-                model.config.pad_token_id = pad_token_id
-            else:
-                try:
-                    tok = AutoTokenizer.from_pretrained(model_name_or_path)
-                    model.config.pad_token_id = tok.pad_token_id
-                except Exception:
-                    raise ValueError(
-                        "Could not infer the pad token id, which is needed in this case, please provide it with the --pad_token_id argument"
-                    )
-        # Saving the model config and preprocessor as this is needed sometimes.
-        model.config.save_pretrained(output)
-        generation_config = getattr(model, "generation_config", None)
-        if generation_config is not None:
-            generation_config.save_pretrained(output)
-        maybe_save_preprocessors(model_name_or_path, output)
-
-        if model.config.is_encoder_decoder and task.startswith("text-generation"):
-            raise ValueError(
-                f"model.config.is_encoder_decoder is True and task is `{task}`, which are incompatible. If the task was auto-inferred, please fill a bug report"
-                f"at https://github.com/huggingface/optimum, if --task was explicitely passed, make sure you selected the right task for the model,"
-                f" referring to `optimum.exporters.tasks.TaskManager`'s `_TASKS_TO_AUTOMODELS`."
+    if convert_tokenizer:
+        if library_name != "diffusers":
+            tokenizer = next(
+                (preprocessor for preprocessor in preprocessors if isinstance(preprocessor, PreTrainedTokenizerBase)),
+                None,
             )
 
-        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_onnx_configs.keys()]
-    else:
-        # save the subcomponent configuration
-        for model_name in models_and_onnx_configs:
-            subcomponent = models_and_onnx_configs[model_name][0]
-            if hasattr(subcomponent, "save_config"):
-                subcomponent.save_config(output / model_name)
-            elif hasattr(subcomponent, "config") and hasattr(subcomponent.config, "save_pretrained"):
-                subcomponent.config.save_pretrained(output / model_name)
+            if tokenizer is not None:
+                try:
+                    export_tokenizer(tokenizer, output)
+                except Exception as exception:
+                    logger.warning(
+                        "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
+                        f"models won't be generated. Exception: {exception}"
+                    )
+        else:
+            tokenizer = getattr(model, "tokenizer", None)
+            if tokenizer is not None:
+                export_tokenizer(tokenizer, output)
 
-        files_subpaths = [os.path.join(name_dir, OV_XML_FILE_NAME) for name_dir in models_and_onnx_configs]
-
-        # Saving the additional components needed to perform inference.
-        model.scheduler.save_pretrained(output.joinpath("scheduler"))
-
-        feature_extractor = getattr(model, "feature_extractor", None)
-        if feature_extractor is not None:
-            feature_extractor.save_pretrained(output.joinpath("feature_extractor"))
-
-        tokenizer = getattr(model, "tokenizer", None)
-        if tokenizer is not None:
-            tokenizer.save_pretrained(output.joinpath("tokenizer"))
-
-        tokenizer_2 = getattr(model, "tokenizer_2", None)
-        if tokenizer_2 is not None:
-            tokenizer_2.save_pretrained(output.joinpath("tokenizer_2"))
-
-        model.save_config(output)
-
-    export_models(
-        models_and_onnx_configs=models_and_onnx_configs,
-        output_dir=output,
-        output_names=files_subpaths,
-        input_shapes=input_shapes,
-        device=device,
-        compression_option=compression_option,
-        compression_ratio=compression_ratio,
-        model_kwargs=model_kwargs,
-    )
+            tokenizer_2 = getattr(model, "tokenizer_2", None)
+            if tokenizer_2 is not None:
+                export_tokenizer(tokenizer_2, output, suffix="_2")
 
     # Unpatch modules after GPTQ export
     if do_gptq_patching:

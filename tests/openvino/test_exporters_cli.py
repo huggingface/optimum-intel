@@ -13,6 +13,7 @@
 # limitations under the License.
 import subprocess
 import unittest
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from parameterized import parameterized
@@ -38,6 +39,7 @@ from optimum.intel import (  # noqa
     OVStableDiffusionXLPipeline,
 )
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
+from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
 
 
 class OVCLIExportTestCase(unittest.TestCase):
@@ -61,6 +63,19 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("stable-diffusion-xl", "stable-diffusion-xl"),
         ("stable-diffusion-xl", "stable-diffusion-xl-refiner"),
     )
+    EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
+        "gpt2": 2,
+        "t5": 0,  # failed internal sentencepiece check - no <s> token in the vocab
+        "albert": 0,  # not supported yet
+        "distilbert": 1,  # no detokenizer
+        "roberta": 2,
+        "vit": 0,  # no tokenizer for image model
+        "wav2vec2": 0,  # no tokenizer
+        "bert": 1,  # no detokenizer
+        "blenderbot": 2,
+        "stable-diffusion": 0,  # not supported
+        "stable-diffusion-xl": 0,  # not supported
+    }
 
     SUPPORTED_4BIT_ARCHITECTURES = (("text-generation-with-past", "opt125m"),)
 
@@ -97,6 +112,32 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+
+    @parameterized.expand(
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if not arch[0].endswith("-with-past") and not arch[1].endswith("-refiner")
+    )
+    @unittest.skipIf(not is_openvino_tokenizers_available(), reason="OpenVINO Tokenizers not available")
+    def test_exporters_cli_tokenizers(self, task: str, model_type: str):
+        with TemporaryDirectory() as tmpdir:
+            output = subprocess.check_output(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --convert-tokenizer --task {task} {tmpdir}",
+                shell=True,
+                stderr=subprocess.STDOUT,
+            ).decode()
+            save_dir = Path(tmpdir)
+            number_of_tokenizers = sum("tokenizer" in file for file in map(str, save_dir.rglob("*.xml")))
+            self.assertEqual(
+                self.EXPECTED_NUMBER_OF_TOKENIZER_MODELS[model_type],
+                number_of_tokenizers,
+                f"OVT: {is_openvino_tokenizers_available() }",
+            )
+
+            if number_of_tokenizers == 1:
+                self.assertTrue("Detokenizer is not supported, convert tokenizer only." in output, output)
+            elif number_of_tokenizers == 0 and task not in ("image-classification", "audio-classification"):
+                self.assertTrue(("OpenVINO Tokenizer export for" in output and "is not supported." in output), output)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):
@@ -150,3 +191,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             _, num_int8, num_int4 = get_num_quantized_nodes(model)
             self.assertEqual(expected_int8, num_int8)
             self.assertEqual(expected_int4, num_int4)
+
+    def test_exporters_cli_help(self):
+        subprocess.run(
+            "optimum-cli export openvino --help",
+            shell=True,
+            check=True,
+        )

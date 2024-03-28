@@ -22,21 +22,18 @@ import openvino
 from huggingface_hub import hf_hub_download
 from openvino import Core, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from transformers import PretrainedConfig
+from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
+from transformers.generation import GenerationMixin
 
 from optimum.exporters.onnx import OnnxConfig
 from optimum.modeling_base import OptimizedModel
 
 from ...exporters.openvino import export, main_export
-from ..utils.import_utils import is_nncf_available, is_transformers_version
+from ..utils.import_utils import is_nncf_available
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, _print_compiled_model_properties
 
-
-if is_transformers_version("<", "4.25.0"):
-    from transformers.generation_utils import GenerationMixin
-else:
-    from transformers.generation import GenerationMixin
 
 core = Core()
 
@@ -60,13 +57,17 @@ class OVBaseModel(OptimizedModel):
         dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         self.config = config
         self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
-        self.ov_config = ov_config if ov_config is not None else {"PERFORMANCE_HINT": "LATENCY"}
+        self.ov_config = ov_config if ov_config is not None else {}
+        if self.ov_config.get("PERFORMANCE_HINT") is None:
+            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
+
         self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
 
@@ -92,15 +93,14 @@ class OVBaseModel(OptimizedModel):
         if enable_compilation:
             self.compile()
 
-        if is_transformers_version("<=", "4.25.1"):
-            self.generation_config = None
-        else:
-            from transformers import GenerationConfig
+        self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
-            self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
 
     @staticmethod
-    def load_model(file_name: Union[str, Path], load_in_8bit: bool = False):
+    def load_model(file_name: Union[str, Path], quantization_config: Union[OVWeightQuantizationConfig, Dict] = None):
         """
         Loads the model.
 
@@ -127,14 +127,15 @@ class OVBaseModel(OptimizedModel):
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
 
-        if load_in_8bit:
+        if quantization_config:
             if not is_nncf_available():
                 raise ImportError(
                     "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
                 )
-            import nncf
 
-            model = nncf.compress_weights(model)
+            from optimum.intel.openvino.quantization import _weight_only_quantization
+
+            model = _weight_only_quantization(model, quantization_config)
 
         return model
 
@@ -150,6 +151,15 @@ class OVBaseModel(OptimizedModel):
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(self.model, dst_path, compress_to_fp16=False)
 
+        self._save_openvino_config(save_directory)
+
+    def _save_openvino_config(self, save_directory: Union[str, Path]):
+        if self._openvino_config is not None:
+            if not isinstance(self._openvino_config.quantization_config.dataset, (str, type(None))):
+                self._openvino_config.quantization_config.dataset = None
+
+            self._openvino_config.save_pretrained(save_directory)
+
     @classmethod
     def _from_pretrained(
         cls,
@@ -164,6 +174,7 @@ class OVBaseModel(OptimizedModel):
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         """
@@ -186,13 +197,14 @@ class OVBaseModel(OptimizedModel):
             force_download (`bool`, defaults to `False`):
                 Whether or not to force the (re-)download of the model weights and configuration files, overriding the
                 cached versions if they exist.
-            file_name(`str`, *optional*):
+            file_name (`str`, *optional*):
                 The file name of the model to load. Overwrites the default file name and allows one to load the model
                 with a different name.
-            local_files_only(`bool`, *optional*, defaults to `False`):
+            local_files_only (`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
+            load_in_8bit (`bool`, *optional*, defaults to `False`):
+                Whether or not to apply 8-bit weight quantization.
         """
-
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
@@ -207,8 +219,29 @@ class OVBaseModel(OptimizedModel):
             subfolder=subfolder,
             local_files_only=local_files_only,
         )
-        model = cls.load_model(model_cache_path, load_in_8bit=load_in_8bit)
-        return cls(model, config=config, model_save_dir=model_cache_path.parent, **kwargs)
+
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+
+        model = cls.load_model(model_cache_path, quantization_config=quantization_config)
+        return cls(
+            model,
+            config=config,
+            model_save_dir=model_cache_path.parent,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _prepare_weight_quantization_config(
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None, load_in_8bit: bool = False
+    ):
+        # Give default quantization config if not provided and load_in_8bit=True
+        if not quantization_config and load_in_8bit:
+            quantization_config = OVWeightQuantizationConfig(bits=8)
+        elif isinstance(quantization_config, dict):
+            quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
+
+        return quantization_config
 
     @staticmethod
     def _cached_file(
@@ -227,7 +260,7 @@ class OVBaseModel(OptimizedModel):
             model_cache_path = model_path / file_name
         else:
             file_name = Path(file_name)
-            if file_name.suffix != "onnx":
+            if file_name.suffix != ".onnx":
                 model_file_names = [file_name.with_suffix(".bin"), file_name]
             else:
                 model_file_names = [file_name]
@@ -260,6 +293,7 @@ class OVBaseModel(OptimizedModel):
         task: Optional[str] = None,
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         """
@@ -283,9 +317,11 @@ class OVBaseModel(OptimizedModel):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
-        compression_option = None
-        if load_in_8bit is not None:
-            compression_option = "int8" if load_in_8bit else "fp32"
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None and not quantization_config:
+            ov_config = None
+        else:
+            ov_config = OVConfig(dtype="fp32")
 
         main_export(
             model_name_or_path=model_id,
@@ -298,11 +334,17 @@ class OVBaseModel(OptimizedModel):
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
-            compression_option=compression_option,
+            ov_config=ov_config,
         )
 
         config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(model_id=save_dir_path, config=config, load_in_8bit=False, **kwargs)
+        return cls._from_pretrained(
+            model_id=save_dir_path,
+            config=config,
+            load_in_8bit=load_in_8bit,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
 
     @classmethod
     def _to_load(
@@ -315,6 +357,7 @@ class OVBaseModel(OptimizedModel):
         force_download: bool = False,
         cache_dir: Optional[str] = None,
         local_files_only: bool = False,
+        stateful: bool = False,
         **kwargs,
     ):
         save_dir = TemporaryDirectory()
@@ -326,6 +369,7 @@ class OVBaseModel(OptimizedModel):
             config=onnx_config,
             opset=onnx_config.DEFAULT_ONNX_OPSET,
             output=save_dir_path / OV_XML_FILE_NAME,
+            stateful=stateful,
         )
 
         return cls._from_pretrained(
@@ -344,8 +388,12 @@ class OVBaseModel(OptimizedModel):
         if self.request is None:
             logger.info(f"Compiling the model to {self._device} ...")
             ov_config = {**self.ov_config}
-            if "CACHE_DIR" not in self.ov_config.keys() and not str(self.model_save_dir).startswith(gettempdir()):
-                # Set default CACHE_DIR only if it is not set, and if the model is not in a temporary directory
+            if (
+                "CACHE_DIR" not in self.ov_config.keys()
+                and not str(self.model_save_dir).startswith(gettempdir())
+                and "gpu" in self._device.lower()
+            ):
+                # Set default CACHE_DIR only if it is not set, if the model is not in a temporary directory, and device is GPU
                 cache_dir = Path(self.model_save_dir).joinpath("model_cache")
                 ov_config["CACHE_DIR"] = str(cache_dir)
                 logger.info(f"Setting OpenVINO CACHE_DIR to {str(cache_dir)}")
@@ -401,6 +449,9 @@ class OVBaseModel(OptimizedModel):
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)
         self.request = None
+        return self
+
+    def eval(self):
         return self
 
     def forward(self, *args, **kwargs):

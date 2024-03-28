@@ -20,7 +20,7 @@ from glob import glob
 
 import numpy as np
 from huggingface_hub import model_info
-from openvino.runtime import Type, properties
+from openvino.runtime import Core, Type, properties
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 
@@ -30,6 +30,9 @@ OV_XML_FILE_NAME = "openvino_model.xml"
 OV_ENCODER_NAME = "openvino_encoder_model.xml"
 OV_DECODER_NAME = "openvino_decoder_model.xml"
 OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
+
+OV_TOKENIZER_NAME = "openvino_tokenizer{}.xml"
+OV_DETOKENIZER_NAME = "openvino_detokenizer{}.xml"
 
 ONNX_WEIGHTS_NAME = "model.onnx"
 ONNX_ENCODER_NAME = "encoder_model.onnx"
@@ -96,6 +99,13 @@ _HEAD_TO_AUTOMODELS = {
 }
 
 
+PREDEFINED_SD_DATASETS = {
+    "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
+    "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
+    "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}},
+}
+
+
 def use_external_data_format(num_parameters: int) -> bool:
     """
     Returns whether or not the model requires using external data format for the ONNX export
@@ -133,12 +143,21 @@ def _print_compiled_model_properties(compiled_model):
     skip_keys = {"SUPPORTED_METRICS", "SUPPORTED_CONFIG_KEYS", supported_properties}
     keys = set(compiled_model.get_property(supported_properties)) - skip_keys
     for k in keys:
-        value = compiled_model.get_property(k)
-        if k == properties.device.properties():
-            for device_key in value.keys():
-                logger.info(f"  {device_key}:")
-                for k2, value2 in value.get(device_key).items():
-                    if k2 not in skip_keys:
-                        logger.info(f"    {k2}: {value2}")
-        else:
-            logger.info(f"  {k}: {value}")
+        try:
+            value = compiled_model.get_property(k)
+            if k == properties.device.properties():
+                for device_key in value.keys():
+                    logger.info(f"  {device_key}:")
+                    for k2, value2 in value.get(device_key).items():
+                        if k2 not in skip_keys:
+                            logger.info(f"    {k2}: {value2}")
+            else:
+                logger.info(f"  {k}: {value}")
+        except Exception:
+            logger.error(f"[error] Get property of '{k}' failed")
+    try:
+        logger.info("EXECUTION_DEVICES:")
+        for device in compiled_model.get_property("EXECUTION_DEVICES"):
+            logger.info(f"  {device}: {Core().get_property(device, 'FULL_DEVICE_NAME')}")
+    except Exception:
+        logger.error("[error] Get FULL_DEVICE_NAME failed")

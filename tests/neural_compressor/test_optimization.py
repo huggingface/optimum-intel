@@ -17,7 +17,9 @@
 
 import os
 import tempfile
+import copy
 
+import unittest
 import evaluate
 import numpy as np
 import torch
@@ -43,6 +45,8 @@ from transformers import (
     set_seed,
 )
 from utils_tests import SEED, INCTestMixin, _generate_dataset
+from optimum.intel.utils.import_utils import is_torch_version, is_intel_extension_for_transformers_available
+
 
 from optimum.intel import (
     INCConfig,
@@ -60,6 +64,8 @@ from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
 from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
 from optimum.pipelines import ORT_SUPPORTED_TASKS
 
+if is_intel_extension_for_transformers_available():
+    from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(SEED)
@@ -79,6 +85,13 @@ class OptimizationTest(INCTestMixin):
     TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
         "hf-internal-testing/tiny-random-BloomForCausalLM",
         "hf-internal-testing/tiny-random-GPTNeoForCausalLM",
+    )
+
+    WEIGHT_ONLY_CONFIG = (
+        (False, "RTN", "int4_clip"),
+        (False, "GPTQ", "int4_clip"),
+        (False, "RTN", "int8"),
+        (True, "", ""),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_DYNAMIC)
@@ -163,6 +176,7 @@ class OptimizationTest(INCTestMixin):
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    @unittest.skipIf(is_torch_version(">=", "2.2.0"), "compatibility issue with torch 2.2.0 and IPEX latest version")
     def test_ipex_static_quantization_with_smoothquant(self, task, model_name, expected_quantized_matmuls):
         recipes = {"smooth_quant": True, "smooth_quant_args": {"alpha": 0.5}}
         num_samples = 10
@@ -190,88 +204,47 @@ class OptimizationTest(INCTestMixin):
                 is_static=True,
                 load_onnx_model=False,
                 num_samples=num_samples,
+                load_inc_model=False,
+                load_ipex_model=True,
             )
 
-    def test_weight_only_quantization(self):
+    @parameterized.expand(WEIGHT_ONLY_CONFIG)
+    @unittest.skipIf(
+        not is_intel_extension_for_transformers_available(), reason="Intel-extension-for-transformers not available!"
+    )
+    def test_weight_only_quantization(self, no_config, algo, weight_dtype):
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
-        op_type_dict = {
-            ".*": {
-                "weight": {
-                    "bits": 8,
-                    "group_size": -1,
-                    "scheme": "sym",
-                    "algorithm": "RTN",
-                },
-            },
-        }
-        quantization_config = PostTrainingQuantConfig(approach="weight_only", op_type_dict=op_type_dict)
         model = AutoModelForCausalLM.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        quantizer = INCQuantizer.from_pretrained(model, task="text-generation")
+        quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
         calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer.quantize(
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-                save_directory=tmp_dir,
-                weight_only=True,
-            )
-            q_model = AutoModelForCausalLM.from_pretrained(tmp_dir)
-            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
-            out = model(inp)[0]
-            q_out = q_model(inp)[0]
-            self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
-
-        op_type_dict = {
-            ".*": {
-                "weight": {
-                    "bits": 8,
-                    "group_size": -1,
-                    "scheme": "sym",
-                    "algorithm": "AWQ",
-                },
-            },
-        }
-        quantization_config = PostTrainingQuantConfig(approach="weight_only", op_type_dict=op_type_dict)
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer.quantize(
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-                save_directory=tmp_dir,
-                weight_only=True,
-            )
-            q_model = AutoModelForCausalLM.from_pretrained(tmp_dir)
-            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
-            out = model(inp)[0]
-            q_out = q_model(inp)[0]
-            self.assertTrue(torch.all(torch.isclose(out, q_out, atol=6e-1)))
-
-        op_type_dict = {
-            ".*": {
-                "weight": {
-                    "bits": 8,
-                    "group_size": -1,
-                    "scheme": "sym",
-                    "algorithm": "GPTQ",
-                },
-            },
-        }
-        recipes = {"gptq_args": {"pad_max_length": len(calibration_dataset[0]["input_ids"])}}
-        quantization_config = PostTrainingQuantConfig(
-            approach="weight_only", op_type_dict=op_type_dict, recipes=recipes
-        )
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer.quantize(
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-                save_directory=tmp_dir,
-                weight_only=True,
-            )
-            q_model = AutoModelForCausalLM.from_pretrained(tmp_dir)
+            if not no_config:
+                if algo == "GPTQ":
+                    algorithm_args = {
+                        "percdamp": 0.01,
+                        "act_order": False,
+                        "scheme": "sym",
+                    }
+                quantization_config = WeightOnlyQuantConfig(
+                    algorithm=algo,
+                    algorithm_args=algorithm_args if algo == "GPTQ" else None,
+                    weight_dtype=weight_dtype,
+                )
+                q_model = quantizer.quantize(
+                    quantization_config=quantization_config,
+                    calibration_dataset=calibration_dataset if algo == "GPTQ" else None,
+                    save_directory=tmp_dir,
+                )
+            else:
+                q_model = quantizer.quantize(
+                    quantization_config=None,
+                    save_directory=tmp_dir,
+                    weight_only=True,  # use RTN quantization method and NF4 weight data type is default.
+                )
+            q_model = INCModelForCausalLM.from_pretrained(tmp_dir)
             inp = torch.tensor([calibration_dataset[0]["input_ids"]])
             out = model(inp)[0]
             q_out = q_model(inp)[0]

@@ -12,52 +12,16 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import logging
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Dict, Optional, Union
 
-from transformers import AutoModelForCausalLM, PretrainedConfig
-from transformers.file_utils import add_start_docstrings
+import warnings
 
-from optimum.intel.generation import BaseModelForCausalLM
-
-from .modeling_base import MODEL_START_DOCSTRING, INCModel
+from .modeling_base import INCModelForCausalLM
 
 
-logger = logging.getLogger(__name__)
-
-
-@add_start_docstrings(
-    """
-    Neural-compressor Model with a causal language modeling head on top (linear layer with weights tied to the input
-    embeddings).
-    """,
-    MODEL_START_DOCSTRING,
-)
-class INCModelForCausalLM(INCModel, BaseModelForCausalLM):
-    auto_model_class = AutoModelForCausalLM
-    export_feature = "text-generation"
-    forward = BaseModelForCausalLM.forward
-    generate = BaseModelForCausalLM.generate
-    can_generate = BaseModelForCausalLM.can_generate
-
-    def __init__(
-        self,
-        model,
-        config: PretrainedConfig = None,
-        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
-        q_config: Dict = None,
-        inc_config: Dict = None,
-        use_cache: bool = True,
-        **kwargs,
-    ):
-        super(INCModelForCausalLM, self).__init__(
-            model=model,
-            config=config,
-            model_save_dir=model_save_dir,
-            q_config=q_config,
-            inc_config=inc_config,
-            use_cache=use_cache,
-            **kwargs,
-        )
+class INCModelForCausalLM(INCModelForCausalLM):
+    # warning at import time
+    warnings.warn(
+        "Importing `INCModelForCausalLM` from `optimum/intel/neural_compressor/modeling_decoder.py` is deprecated and will "
+        "be removed in a future verson of optimum-intel. Import as `from optimum.intel.neural_compressor import INCModelForCausalLM instead.",
+        FutureWarning,
+    )

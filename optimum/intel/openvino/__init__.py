@@ -11,10 +11,18 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+
 import logging
 
-from ..utils.import_utils import is_diffusers_available, is_nncf_available
-from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
+from ..utils.import_utils import is_accelerate_available, is_diffusers_available, is_nncf_available
+from .utils import (
+    OV_DECODER_NAME,
+    OV_DECODER_WITH_PAST_NAME,
+    OV_DETOKENIZER_NAME,
+    OV_ENCODER_NAME,
+    OV_TOKENIZER_NAME,
+    OV_XML_FILE_NAME,
+)
 
 
 if is_nncf_available():
@@ -28,11 +36,14 @@ if is_nncf_available():
 
     patch_torch_operators()
 
-    from .configuration import OVConfig
     from .quantization import OVQuantizer
-    from .trainer import OVTrainer
     from .training_args import OVTrainingArguments
 
+    if is_accelerate_available():
+        from .trainer import OVTrainer
+
+
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,

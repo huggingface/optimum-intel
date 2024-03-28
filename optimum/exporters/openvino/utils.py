@@ -30,6 +30,7 @@ if is_diffusers_available():
 
 
 OV_XML_FILE_NAME = "openvino_model.xml"
+_MAX_UNCOMPRESSED_SIZE = 1e9
 
 
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):

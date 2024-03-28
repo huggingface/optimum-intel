@@ -24,6 +24,7 @@ from neural_compressor.utils.pytorch import load
 from transformers import (
     AutoConfig,
     AutoModel,
+    AutoModelForCausalLM,
     AutoModelForMaskedLM,
     AutoModelForMultipleChoice,
     AutoModelForQuestionAnswering,
@@ -31,17 +32,23 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     AutoModelForVision2Seq,
+    GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
-    XLNetLMHeadModel,
 )
 from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
-from transformers.utils import is_ipex_available
 from transformers.utils.generic import ContextManagers
 
+from optimum.intel.generation import BaseModelForCausalLM
+
 from ...modeling_base import OptimizedModel
-from ..utils.import_utils import _torch_version, is_torch_version
+from ..utils.import_utils import (
+    _torch_version,
+    is_intel_extension_for_transformers_available,
+    is_torch_version,
+    requires_backends,
+)
 from .configuration import INCConfig
 from .utils import WEIGHTS_NAME
 
@@ -59,6 +66,11 @@ MODEL_START_DOCSTRING = r"""
         device (`str`, defaults to `"cpu"`):
             The device type for which the model will be optimized for. The resulting compiled model will contains nodes specific to this device.
 """
+
+
+if is_intel_extension_for_transformers_available():
+    from intel_extension_for_transformers.transformers.modeling import AutoModelForCausalLM as ITREX_WOQ_MODEL
+    from intel_extension_for_transformers.transformers.utils import WeightOnlyQuantConfig
 
 
 class INCModel(OptimizedModel):
@@ -82,17 +94,7 @@ class INCModel(OptimizedModel):
         self._device = getattr(self.model, "device", None) or torch.device(
             "cuda:0" if torch.cuda.is_available() else "cpu"
         )
-
-        if getattr(self.config, "backend", None) == "ipex":
-            if not is_ipex_available():
-                raise ImportError(
-                    "Intel PyTorch Extensions was not found, please make sure you've installed the package or run `pip install intel-extension-for-pytorch`"
-                )
-            # Need import intel_extension_for_pytorch for ipex model
-            import intel_extension_for_pytorch as ipex
-
-            # Just to avoid to change by ruff.
-            logger.info("intel_extension_for_pytorch version is " + ipex.__version__)
+        self.generation_config = GenerationConfig.from_model_config(config)
 
         # Registers the INCModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
@@ -140,6 +142,25 @@ class INCModel(OptimizedModel):
         inc_config = None
         msg = None
         try:
+            requires_backends(cls, ["intel_extension_for_transformers"])
+            quantization_config = WeightOnlyQuantConfig.from_pretrained(model_id)
+            if getattr(
+                quantization_config, "algorithm", None
+            ) is not None and quantization_config.algorithm.lower() in ["rtn", "gptq", "awq", "autoaround"]:
+                return ITREX_WOQ_MODEL.from_pretrained(
+                    pretrained_model_name_or_path=model_id,
+                    use_auth_token=use_auth_token,
+                    revision=revision,
+                    force_download=force_download,
+                    cache_dir=cache_dir,
+                    local_files_only=local_files_only,
+                    subfolder=subfolder,
+                    trust_remote_code=trust_remote_code,
+                    **kwargs,
+                )
+        except EnvironmentError:
+            msg = "The model is not quantized with weight-only quantization."
+        try:
             inc_config = INCConfig.from_pretrained(model_id)
             if not is_torch_version("==", inc_config.torch_version):
                 msg = f"Quantized model was obtained with torch version {inc_config.torch_version} but {_torch_version} was found."
@@ -150,8 +171,9 @@ class INCModel(OptimizedModel):
             )
 
         if getattr(config, "backend", None) == "ipex" or getattr(config, "torchscript", False):
-            # NOTE: Will improve to use load function when Intel Neural Compressor next 2.1 release.
-            # load(model_cache_path)
+            logger.warning(
+                f"Using `{cls.__name__}` to load a TorchScript model will be deprecated in v1.15.0, to load your model please use `{cls.__name__.replace('INC', 'IPEX')}` instead."
+            )
             model = torch.jit.load(model_cache_path)
             model = torch.jit.freeze(model.eval())
             return cls(model, config=config, model_save_dir=model_save_dir, inc_config=inc_config, **kwargs)
@@ -159,8 +181,8 @@ class INCModel(OptimizedModel):
         model_class = _get_model_class(config, cls.auto_model_class._model_mapping)
         # Load the state dictionary of the model to verify whether the model to get the quantization config
         state_dict = torch.load(model_cache_path, map_location="cpu")
-        q_config = state_dict.get("best_configure", None)
 
+        q_config = state_dict.get("best_configure", None)
         if q_config is None:
             model = model_class.from_pretrained(model_save_dir)
         else:
@@ -255,6 +277,29 @@ class INCModelForVision2Seq(INCModel):
     export_feature = "image-to-text"
 
 
-class INCModelForXLNetLM(INCModel):
-    auto_model_class = XLNetLMHeadModel
-    export_feature = "fill-mask"
+class INCModelForCausalLM(INCModel, BaseModelForCausalLM):
+    auto_model_class = AutoModelForCausalLM
+    export_feature = "text-generation"
+    forward = BaseModelForCausalLM.forward
+    generate = BaseModelForCausalLM.generate
+    can_generate = BaseModelForCausalLM.can_generate
+
+    def __init__(
+        self,
+        model,
+        config: PretrainedConfig = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        q_config: Dict = None,
+        inc_config: Dict = None,
+        use_cache: bool = True,
+        **kwargs,
+    ):
+        super(INCModelForCausalLM, self).__init__(
+            model=model,
+            config=config,
+            model_save_dir=model_save_dir,
+            q_config=q_config,
+            inc_config=inc_config,
+            use_cache=use_cache,
+            **kwargs,
+        )

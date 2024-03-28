@@ -16,6 +16,7 @@ import importlib
 import logging
 import os
 import shutil
+from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
 from typing import Any, Dict, List, Optional, Union
@@ -28,6 +29,7 @@ from diffusers import (
     LMSDiscreteScheduler,
     PNDMScheduler,
     StableDiffusionPipeline,
+    StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
 )
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
@@ -53,9 +55,16 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
-from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, _print_compiled_model_properties
+from .utils import (
+    ONNX_WEIGHTS_NAME,
+    OV_TO_NP_TYPE,
+    OV_XML_FILE_NAME,
+    PREDEFINED_SD_DATASETS,
+    _print_compiled_model_properties,
+)
 
 
 core = Core()
@@ -85,15 +94,27 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         compile: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         self._internal_dict = config
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = ov_config if ov_config is not None else {}
-        self._model_save_dir = (
-            Path(model_save_dir.name) if isinstance(model_save_dir, TemporaryDirectory) else model_save_dir
-        )
+        if self.ov_config.get("PERFORMANCE_HINT") is None:
+            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
+
+        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
+        # would end-up removing the directory containing the underlying OpenVINO model
+        self._model_save_dir_tempdirectory_instance = None
+        if isinstance(model_save_dir, TemporaryDirectory):
+            self._model_save_dir_tempdirectory_instance = model_save_dir
+            self._model_save_dir = Path(model_save_dir.name)
+        elif isinstance(model_save_dir, str):
+            self._model_save_dir = Path(model_save_dir)
+        else:
+            self._model_save_dir = model_save_dir
+
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
         self.unet = OVModelUnet(unet, self)
         self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
@@ -138,6 +159,10 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
         self._internal_dict.pop("vae", None)
 
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
@@ -175,6 +200,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         if self.tokenizer_2 is not None:
             self.tokenizer_2.save_pretrained(save_directory / "tokenizer_2")
 
+        self._save_openvino_config(save_directory)
+
     @classmethod
     def _from_pretrained(
         cls,
@@ -192,6 +219,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         from_onnx: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         load_in_8bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
@@ -254,9 +282,20 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 else:
                     kwargs[name] = load_method(new_model_save_dir)
 
-        unet = cls.load_model(
-            new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name, load_in_8bit=load_in_8bit
-        )
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+
+        unet_path = new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name
+        if quantization_config is not None and quantization_config.dataset is not None:
+            # load the UNet model uncompressed to apply hybrid quantization further
+            unet = cls.load_model(unet_path)
+            # Apply weights compression to other `components` without dataset
+            weight_quantization_params = {
+                param: value for param, value in quantization_config.__dict__.items() if param != "dataset"
+            }
+            weight_quantization_config = OVWeightQuantizationConfig.from_dict(weight_quantization_params)
+        else:
+            weight_quantization_config = quantization_config
+            unet = cls.load_model(unet_path, weight_quantization_config)
 
         components = {
             "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
@@ -266,12 +305,93 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         }
 
         for key, value in components.items():
-            components[key] = cls.load_model(value, load_in_8bit=load_in_8bit) if value.is_file() else None
+            components[key] = cls.load_model(value, weight_quantization_config) if value.is_file() else None
 
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
-        return cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
+        if quantization_config is not None and quantization_config.dataset is not None:
+            sd_model = cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
+
+            supported_pipelines = (
+                OVStableDiffusionPipeline,
+                OVStableDiffusionXLPipeline,
+                OVLatentConsistencyModelPipeline,
+            )
+            if not isinstance(sd_model, supported_pipelines):
+                raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
+
+            nsamples = quantization_config.num_samples if quantization_config.num_samples else 200
+            unet_inputs = sd_model._prepare_unet_inputs(quantization_config.dataset, nsamples)
+
+            from .quantization import _hybrid_quantization
+
+            unet = _hybrid_quantization(sd_model.unet.model, weight_quantization_config, dataset=unet_inputs)
+
+        return cls(
+            unet=unet,
+            config=config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **components,
+            **kwargs,
+        )
+
+    def _prepare_unet_inputs(
+        self,
+        dataset: Union[str, List[Any]],
+        num_samples: int,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        seed: Optional[int] = 42,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        self.compile()
+
+        size = self.unet.config.get("sample_size", 64) * self.vae_scale_factor
+        height = height or min(size, 512)
+        width = width or min(size, 512)
+
+        if isinstance(dataset, str):
+            dataset = deepcopy(dataset)
+            available_datasets = PREDEFINED_SD_DATASETS.keys()
+            if dataset not in available_datasets:
+                raise ValueError(
+                    f"""You have entered a string value for dataset. You can only choose between
+                    {list(available_datasets)}, but the {dataset} was found"""
+                )
+
+            from datasets import load_dataset
+
+            dataset_metadata = PREDEFINED_SD_DATASETS[dataset]
+            dataset = load_dataset(dataset, split=dataset_metadata["split"], streaming=True).shuffle(seed=seed)
+            input_names = dataset_metadata["inputs"]
+            dataset = dataset.select_columns(list(input_names.values()))
+
+            def transform_fn(data_item):
+                return {inp_name: data_item[column] for inp_name, column in input_names.items()}
+
+        else:
+
+            def transform_fn(data_item):
+                return data_item if isinstance(data_item, (list, dict)) else [data_item]
+
+        from .quantization import InferRequestWrapper
+
+        calibration_data = []
+        self.unet.request = InferRequestWrapper(self.unet.request, calibration_data)
+
+        for inputs in dataset:
+            inputs = transform_fn(inputs)
+            if isinstance(inputs, dict):
+                self.__call__(**inputs, height=height, width=width)
+            else:
+                self.__call__(*inputs, height=height, width=width)
+            if len(calibration_data) > num_samples:
+                break
+
+        self.unet.request = self.unet.request.request
+        return calibration_data[:num_samples]
 
     @classmethod
     def _from_transformers(
@@ -286,16 +406,19 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         tokenizer: Optional["CLIPTokenizer"] = None,
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
-        load_in_8bit: Optional[bool] = None,
         tokenizer_2: Optional["CLIPTokenizer"] = None,
+        load_in_8bit: Optional[bool] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
-        compression_option = None
-        if load_in_8bit is not None:
-            compression_option = "int8" if load_in_8bit else "fp32"
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None and not quantization_config:
+            ov_config = None
+        else:
+            ov_config = OVConfig(dtype="fp32")
 
         main_export(
             model_name_or_path=model_id,
@@ -308,7 +431,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             use_auth_token=use_auth_token,
             local_files_only=local_files_only,
             force_download=force_download,
-            compression_option=compression_option,
+            ov_config=ov_config,
         )
 
         return cls._from_pretrained(
@@ -325,13 +448,18 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             tokenizer_2=tokenizer_2,
             scheduler=scheduler,
             feature_extractor=feature_extractor,
-            load_in_8bit=False,
+            load_in_8bit=load_in_8bit,
+            quantization_config=quantization_config,
             **kwargs,
         )
 
     def to(self, device: str):
-        self._device = device.upper()
-        self.clear_requests()
+        if isinstance(device, str):
+            self._device = device.upper()
+            self.clear_requests()
+        else:
+            logger.debug(f"device must be of type {str} but got {type(device)} instead")
+
         return self
 
     @property
@@ -537,11 +665,16 @@ class OVModelPart:
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
         config_path = self._model_dir / model_name / self.CONFIG_NAME
         self.config = self.parent_model._dict_from_json_file(config_path) if config_path.is_file() else {}
-        if "CACHE_DIR" not in self.ov_config.keys() and not str(self._model_dir).startswith(gettempdir()):
-            self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
     def _compile(self):
         if self.request is None:
+            if (
+                "CACHE_DIR" not in self.ov_config.keys()
+                and not str(self._model_dir).startswith(gettempdir())
+                and self.device.lower().split(":")[0] == "gpu"
+            ):
+                self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
+
             logger.info(f"Compiling the {self._model_name} to {self.device} ...")
             self.request = core.compile_model(self.model, self.device, self.ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
@@ -894,6 +1027,8 @@ class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusi
 
 
 class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLImg2ImgPipelineMixin):
+    auto_model_class = StableDiffusionXLImg2ImgPipeline
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
