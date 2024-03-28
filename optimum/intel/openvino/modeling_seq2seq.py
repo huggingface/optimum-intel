@@ -258,7 +258,7 @@ IMAGE_TO_TEXT_EXAMPLE = r"""
 
     ```python
     >>> from transformers import {processor_class}, {tokenizer_class}
-    >>> from optimum.onnxruntime import {model_class}
+    >>> from optimum.intel import {model_class}
     >>> from PIL import Image
     >>> import requests
 
@@ -280,7 +280,7 @@ IMAGE_TO_TEXT_EXAMPLE = r"""
 
     ```python
     >>> from transformers import {processor_class}, {tokenizer_class}, pipeline
-    >>> from optimum.onnxruntime import {model_class}
+    >>> from optimum.intel import {model_class}
     >>> from PIL import Image
     >>> import requests
 
