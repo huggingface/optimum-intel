@@ -195,21 +195,10 @@ def is_openvino_tokenizers_available():
     try:
         import openvino_tokenizers
     except ImportError:
-        ov_major_version = _openvino_version.split("-")[0]
         logger.info(
-            "OpenVINO Tokenizers is not available, tokenizer won't be converted. To automatically "
-            "convert tokenizer during OpenVINO model export install OpenVINO Tokenizers.\n"
-            "For PyPI distribution of OpenVINO:\n"
-            "pip install openvino-tokenizers[transformers]\n"
-            "For pre-release OpenVINO version:\n"
-            "pip install --pre -U openvino openvino-tokenizers"
-            "--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly\n"
-            "If you using archive OpenVINO distribution install release, nightly version or build from source:\n"
-            f"Release: pip install --no-deps openvino-tokenizers~={ov_major_version}\n"
-            f"Nightly: pip install --pre openvino-tokenizers~={ov_major_version}.0.dev --extra-index-url "
-            f"https://storage.openvinotoolkit.org/simple/wheels/nightly\n"
-            "Build from source instructions: https://github.com/openvinotoolkit/openvino_tokenizers"
-            "?tab=readme-ov-file#build-and-install-from-source\n"
+            "OpenVINO Tokenizers is not available, tokenizer won't be converted. To deploy models in production "
+            "with C++ code, please follow installation instructions: "
+            "https://github.com/openvinotoolkit/openvino_tokenizers?tab=readme-ov-file#installation\n"
         )
         return False
 
@@ -226,7 +215,7 @@ def is_openvino_tokenizers_available():
 
     try:
         openvino_tokenizers._get_factory()
-    except RuntimeError as e:
+    except RuntimeError:
         tokenizers_version = openvino_tokenizers.__version__
 
         if tokenizers_version == "0.0.0.0":
@@ -252,25 +241,27 @@ def is_openvino_tokenizers_available():
                     "Linux distributions; rebuild OpenVINO Tokenizers from source."
                 )
         else:
-            message += "It is recommended to use the same day builds for pre-release version. "
-            if is_nightly:
-                message += (
-                    "openvino-nightly package detected - use nightly drops from PyPI Simple "
-                    "Repo (PEP 503) implementation on AWS S3 instead. "
-                )
-            message += "To update both OpenVINO and OpenVINO Tokenizers to release version perform:\n"
+            message += (
+                "It is recommended to use the same day builds for pre-release version. "
+                "To install both OpenVINO and OpenVINO Tokenizers release version perform:\n"
+            )
             if is_nightly:
                 message += "pip uninstall -y openvino-nightly && "
             message += (
                 "pip install --force-reinstall openvino openvino-tokenizers\n"
-                "To update both OpenVINO and OpenVINO Tokenizers to nightly version perform:\n"
+            )
+            if is_nightly:
+                message += (
+                    "openvino-nightly package will be deprecated in the future - use pre-release drops instead. "
+                )
+            message += (
+                "To update both OpenVINO and OpenVINO Tokenizers to the latest pre-release version perform:\n"
             )
             if is_nightly:
                 message += "pip uninstall -y openvino-nightly && "
             message += (
                 "pip install --pre -U openvino openvino-tokenizers "
                 "--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly\n"
-                f"Error: {e}\n"
                 "Tokenizer won't be converted."
             )
         logger.warning(message)
