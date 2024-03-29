@@ -1446,17 +1446,6 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_model_is_reshapable(self, model_arch: str):
-        model_id = MODEL_NAMES[model_arch]
-        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True, compile=False)
-        ov_model.reshape(5, -1)
-        ov_model.compile()
-        models = [ov_model.encoder.model, ov_model.decoder.model, ov_model.decoder_with_past.model]
-        for model in models:
-            for inp_tensor in model.inputs:
-                inp_tensor.partial_shape[0] == 5
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
@@ -1499,8 +1488,10 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline_image_to_text(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
+        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True, compile=False)
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
+        ov_model.reshape(1, -1)
+        ov_model.compile()
 
         # Speech recogition generation
         pipe = pipeline(
@@ -1510,7 +1501,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
             feature_extractor=feature_extractor,
         )
         data = self._get_sample_image()
-        outputs = pipe(data)
+        outputs = pipe(data, max_new_tokens=3)
         self.assertEqual(pipe.device, ov_model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
 

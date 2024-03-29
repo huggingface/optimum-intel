@@ -242,6 +242,7 @@ if TYPE_CHECKING:
             OVModelForSequenceClassification,
             OVModelForSpeechSeq2Seq,
             OVModelForTokenClassification,
+            OVModelForVision2Seq,
             OVWeightQuantizationConfig,
         )
 
