@@ -383,7 +383,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             # Create empty past_key_values for decoder_with_past first generation step
             elif self.use_cache:
-                past_len = 0
                 for input_name in self.key_value_input_names:
                     model_inputs = self.model.input(input_name)
                     shape = model_inputs.get_partial_shape()
