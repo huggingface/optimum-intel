@@ -80,7 +80,7 @@ MODEL_NAMES = {
     "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
     "mt5": "stas/mt5-tiny-random",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
-    "phi": "hf-internal-testing/tiny-random-PhiForCausalLM",
+    "phi": "echarlaix/tiny-random-PhiForCausalLM",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
     "roformer": "hf-internal-testing/tiny-random-roformer",
