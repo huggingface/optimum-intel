@@ -13,7 +13,7 @@
 #  limitations under the License.
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from neural_compressor.config import DistillationConfig, WeightPruningConfig, _BaseQuantizationConfig
 from transformers.utils.quantization_config import QuantizationConfigMixin
