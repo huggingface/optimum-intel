@@ -71,7 +71,7 @@ MODEL_NAMES = {
     "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
     "pegasus": "hf-internal-testing/tiny-random-pegasus",
     "pix2struct": "fxmarty/pix2struct-tiny-random",
-    "phi": "hf-internal-testing/tiny-random-PhiForCausalLM",
+    "phi": "Xenova/tiny-random-PhiForCausalLM",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "katuni4ka/tiny-random-qwen",
     "qwen2": "Qwen/Qwen1.5-0.5B",
