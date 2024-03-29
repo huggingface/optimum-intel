@@ -120,7 +120,7 @@ class OVBaseDecoderModel(OVModel):
         self._original_model = self.model.clone()  # keep original model for serialization
         self._pkv_precision = Type.f32
         self.next_beam_idx = None
-        self.past_len = 0
+        self._past_length = 0
         self.update_pkv_precision()
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
@@ -365,12 +365,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if not self.stateful:
             if past_key_values is not None:
                 if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
-                    seq_len_dim = -2
-                    if self.config.model_type == "chatglm":
-                        seq_len_dim = 0
-                    elif self.config.model_type == "qwen":
-                        seq_len_dim = 1
-                    self.past_len = past_key_values[0][1].shape[seq_len_dim]
                     if self._pkv_precision == Type.bf16:
                         # numpy does not support bf16, pretending f16, should change to bf16
                         past_key_values = tuple(
@@ -383,15 +377,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                         past_key_values = tuple(
                             past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
                         )
-                else:
-                    self.past_len = past_key_values[0].shape[-2]
 
                 # Add the past_key_values to the decoder inputs
                 inputs = dict(zip(self.key_value_input_names, past_key_values))
 
             # Create empty past_key_values for decoder_with_past first generation step
             elif self.use_cache:
-                self.past_len = 0
+                past_len = 0
                 for input_name in self.key_value_input_names:
                     model_inputs = self.model.input(input_name)
                     shape = model_inputs.get_partial_shape()
@@ -414,7 +406,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 # Set initial value for the next beam_idx input that will be used at the current iteration
                 # and will be optionally updated by _reorder_cache at the next iterations if beam_search is used
                 self.next_beam_idx = np.arange(batch_size, dtype=int)
-                self.past_len = 0
+                self._past_length = 0
+        past_len = self._get_past_length(past_key_values)
 
         inputs["input_ids"] = np.array(input_ids)
         # Add the attention_mask inputs when needed
@@ -423,7 +416,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 attention_mask = np.array(attention_mask)
             else:
                 attention_mask = np.ones(
-                    (input_ids.shape[0], input_ids.shape[1] + self.past_len), dtype=inputs["input_ids"].dtype
+                    (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
                 )
 
         if "attention_mask" in self.input_names:
@@ -436,7 +429,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
                 if past_key_values:
-                    position_ids = np.expand_dims(position_ids[:, -1], axis=-1)
+                    position_ids = np.expand_dims(position_ids[:, -input_ids.shape[1] :], axis=-1)
 
             inputs["position_ids"] = position_ids
 
@@ -474,7 +467,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # the first condition at the function beginning above.
             # It should be something that is not None and it should be True when converted to Boolean.
             past_key_values = ((),)
-            self.past_len += input_ids.shape[1]
+            self._past_length += input_ids.shape[1]
 
         if not self.stateful:
             if self.use_cache:
@@ -485,10 +478,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     past_key_values = tuple(
                         past_key_values[i : i + self.num_pkv] for i in range(0, len(past_key_values), self.num_pkv)
                     )
-                self.past_len += input_ids.shape[1]
             else:
                 past_key_values = None
-                self.past_len = 0
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
@@ -499,16 +490,17 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         use_cache = kwargs.get("use_cache", None)
 
         if past_key_values is not None:
+            past_len = self._get_past_length(past_key_values)
             # Keep only the unprocessed tokens:
             # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
             # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
             # input)
             if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:
-                input_ids = input_ids[:, -(attention_mask.shape[1] - self.past_len) :]
+                input_ids = input_ids[:, -(attention_mask.shape[1] - past_len) :]
             # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
             # input_ids based on the past_length.
-            elif self.past_len < input_ids.shape[1]:
-                input_ids = input_ids[:, self.past_len :]
+            elif past_len < input_ids.shape[1]:
+                input_ids = input_ids[:, past_len:]
             # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens
         position_ids = kwargs.get("position_ids", None)
         if attention_mask is not None and position_ids is None and "position_ids" in self.input_names:
@@ -525,6 +517,24 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             "position_ids": position_ids,
             "attention_mask": attention_mask,
         }
+
+    def _get_past_length(self, past_key_values=None):
+        if past_key_values is None:
+            return 0
+        if self.stateful:
+            return self._past_length
+        if self.config.model_type in MULTI_QUERY_ATTN_MODELS:
+            return past_key_values[0].shape[-2]
+        seq_length_dim = -2
+        if self.config.model_type == "chatglm":
+            seq_length_dim = 0
+        elif self.config.model_type == "qwen":
+            seq_length_dim = 1
+        # input is tuple of pairs
+        if isinstance(past_key_values[0], (tuple, list)):
+            return past_key_values[0][1].shape[seq_length_dim]
+        # past key values comes after flattening
+        return past_key_values[1].shape[seq_length_dim]
 
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
     def _reorder_cache(
