@@ -30,6 +30,7 @@ from PIL import Image
 from transformers import (
     AutoConfig,
     AutoFeatureExtractor,
+    AutoImageProcessor,
     AutoModel,
     AutoModelForAudioClassification,
     AutoModelForAudioFrameClassification,
@@ -43,6 +44,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForSpeechSeq2Seq,
     AutoModelForTokenClassification,
+    AutoModelForVision2Seq,
     AutoTokenizer,
     GenerationConfig,
     Pix2StructForConditionalGeneration,
@@ -68,6 +70,7 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
+    OVModelForVision2Seq,
     OVStableDiffusionPipeline,
 )
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
@@ -1401,4 +1404,105 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
 
         del pipe
         del model
+        gc.collect()
+
+
+class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr", "donut"]
+
+    GENERATION_LENGTH = 100
+    SPEEDUP_CACHE = 1.1
+
+    def _get_sample_image(self):
+        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        image = Image.open(requests.get(url, stream=True).raw)
+        return image
+
+    def _get_preprocessors(self, model_id):
+        image_processor = AutoImageProcessor.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        return image_processor, tokenizer
+
+    def test_load_vanilla_transformers_which_is_not_supported(self):
+        with self.assertRaises(Exception) as context:
+            _ = OVModelForVision2Seq.from_pretrained(MODEL_NAMES["bert"], export=True)
+
+        self.assertIn("only supports the tasks", str(context.exception))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_generate_utils(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
+        feature_extractor, tokenizer = self._get_preprocessors(model_id)
+
+        data = self._get_sample_image()
+        features = feature_extractor(data, return_tensors="pt")
+
+        outputs = model.generate(inputs=features["pixel_values"])
+        res = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        self.assertIsInstance(res[0], str)
+
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
+
+        self.assertIsInstance(ov_model.encoder, OVEncoder)
+
+        self.assertIsInstance(ov_model.decoder, OVDecoder)
+        self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
+
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        set_seed(SEED)
+        transformers_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        feature_extractor, tokenizer = self._get_preprocessors(model_id)
+
+        data = self._get_sample_image()
+
+        start_token = "<s>"
+        decoder_start_token_id = tokenizer.encode(start_token)[0]
+
+        extra_inputs = [{}, {}]
+
+        for extra_inps in extra_inputs:
+            features = feature_extractor(data, return_tensors="pt")
+            decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
+
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**features, **decoder_inputs, **extra_inps, use_cache=True)
+            input_type = "pt"
+            features = feature_extractor(data, return_tensors=input_type)
+            ov_outputs = ov_model(**features, **decoder_inputs, **extra_inps)
+
+            self.assertTrue("logits" in ov_outputs)
+
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
+
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline_image_to_text(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True, compile=False)
+        feature_extractor, tokenizer = self._get_preprocessors(model_id)
+        ov_model.reshape(1, -1)
+        ov_model.compile()
+
+        # Speech recogition generation
+        pipe = pipeline(
+            "image-to-text",
+            model=ov_model,
+            tokenizer=tokenizer,
+            feature_extractor=feature_extractor,
+        )
+        data = self._get_sample_image()
+        outputs = pipe(data, max_new_tokens=3)
+        self.assertEqual(pipe.device, ov_model.device)
+        self.assertIsInstance(outputs[0]["generated_text"], str)
+
         gc.collect()
