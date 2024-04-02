@@ -632,6 +632,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         outputs = model.generate(**tokens, generation_config=generation_config)
         self.assertIsInstance(outputs, torch.Tensor)
         self.assertEqual(outputs.shape[0], 3)
+        # test that generation result is reproducible
+        outputs2 = model.generate(**tokens, generation_config=generation_config)
+        self.assertIsInstance(outputs2, torch.Tensor)
+        self.assertEqual(outputs2.shape[0], 3)
+        self.assertTrue(torch.allclose(outputs2, outputs))
         del model
         gc.collect()
 
