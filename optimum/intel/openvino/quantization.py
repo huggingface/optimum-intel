@@ -209,6 +209,7 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        **kwargs,
     ):
         """
         Quantize a model given the optimization specifications defined in `quantization_config`.
@@ -263,7 +264,8 @@ class OVQuantizer(OptimumQuantizer):
             logger.warning("`quantization_config` was not provided, a default weight quantization will be applied")
 
         if isinstance(self.model, OVBaseModel):
-            self._quantize_ovbasemodel(ov_config, save_directory, batch_size, data_collator, remove_unused_columns)
+            self._quantize_ovbasemodel(ov_config, save_directory, batch_size, data_collator, remove_unused_columns,
+                                       **kwargs)
 
         elif isinstance(self.model, torch.nn.Module):
             logger.warning(
@@ -283,6 +285,7 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        **kwargs,
     ):
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
@@ -334,6 +337,7 @@ class OVQuantizer(OptimumQuantizer):
             preset=quantization_config.preset,
             fast_bias_correction=quantization_config.fast_bias_correction,
             advanced_parameters=nncf.AdvancedQuantizationParameters(overflow_fix=quantization_config.overflow_fix),
+            **kwargs,
         )
         self.model.model = quantized_model
         self.model.save_pretrained(save_directory)
@@ -346,6 +350,7 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        **kwargs,
     ):
         self._set_task()
         save_directory = Path(save_directory)
@@ -424,6 +429,7 @@ class OVQuantizer(OptimumQuantizer):
                 preset=quantization_config.preset,
                 fast_bias_correction=quantization_config.fast_bias_correction,
                 advanced_parameters=nncf.AdvancedQuantizationParameters(overflow_fix=quantization_config.overflow_fix),
+                **kwargs,
             )
 
         model_path = save_directory / (onnx_file_name if save_onnx_model else ov_file_name)

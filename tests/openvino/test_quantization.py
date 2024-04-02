@@ -19,11 +19,13 @@ import tempfile
 import unittest
 from collections import defaultdict
 from functools import partial
+from typing import List
 
 import evaluate
 import numpy as np
 import torch
 from datasets import load_dataset
+from nncf.quantization.advanced_parameters import OverflowFix
 from parameterized import parameterized
 import openvino.runtime as ov
 import nncf
@@ -59,6 +61,7 @@ from optimum.intel import (
     OVQuantizationConfig,
     OVWeightQuantizationConfig,
 )
+from optimum.intel.openvino.configuration import OVQuantizationMethod, OVQuantizationConfigBase
 
 from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version
@@ -674,6 +677,145 @@ class OVTrainerTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
+
+
+class OVQuantizationConfigTest(unittest.TestCase):
+    QUANTIZATION_CONFIGS = (
+        (
+            None,
+            [],
+        ),
+        (
+            OVWeightQuantizationConfig(),
+            []
+        ),
+        (
+            OVWeightQuantizationConfig(
+                bits=8,
+                sym=True,
+            ),
+            []
+        ),
+        (
+            {
+                "bits": 8,
+                "sym": True,
+            },
+            []
+        ),
+        (
+            OVWeightQuantizationConfig(
+                dataset="wikitext",
+                bits=4,
+                ignored_scope={"names": ["op_name"]},
+                sym=False,
+                tokenizer="dbmdz/bert-base-german-cased",
+                ratio=1.0,
+                group_size=128,
+                all_layers=True,
+                sensitivity_metric="mean_activation_magnitude",
+                subset_size=100,
+                quant_method=OVQuantizationMethod.DEFAULT,
+            ),
+            []
+        ),
+        (
+            OVWeightQuantizationConfig(
+                dataset=["wikitext", "c4"]
+            ),
+            []
+        ),
+        (
+            OVWeightQuantizationConfig(
+                dataset=load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+            ),
+            ["dataset"]
+        ),
+        (
+            OVWeightQuantizationConfig(
+                dataset=nncf.Dataset([np.zeros((1, 10))])
+            ),
+            ["dataset"]
+        ),
+        (
+            OVWeightQuantizationConfig(
+                tokenizer=AutoTokenizer.from_pretrained("dbmdz/bert-base-german-cased")
+            ),
+            ["tokenizer"]
+        ),
+        (
+            OVQuantizationConfig(
+                dataset="wikitext"
+            ),
+            []
+        ),
+        (
+            {
+                "dataset": "wikitext"
+            },
+            []
+        ),
+        (
+            OVQuantizationConfig(
+                dataset="wikitext",
+                ignored_scope={"names": ["op_name"]},
+                subset_size=100,
+                preset=nncf.QuantizationPreset.MIXED,
+                model_type=nncf.ModelType.TRANSFORMER,
+                fast_bias_correction=True,
+                overflow_fix=OverflowFix.DISABLE
+            ),
+            []
+        ),
+        (
+            OVQuantizationConfig(
+                dataset=["wikitext", "c4"]
+            ),
+            []
+        ),
+        (
+            OVQuantizationConfig(
+                dataset=load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+            ),
+            ["dataset"]
+        ),
+        (
+            OVQuantizationConfig(
+                dataset=nncf.Dataset([np.zeros((1, 10))])
+            ),
+            ["dataset"]
+        ),
+    )
+
+    @parameterized.expand(QUANTIZATION_CONFIGS)
+    def test_config_serialization(self, quantization_config: OVQuantizationConfigBase, non_equal_property_names: List[str]):
+        def str_to_enum(enum_cls, value):
+            for k, v in enum_cls.__members__.items():
+                if getattr(enum_cls, k).value == value:
+                    return v
+            raise ValueError(f"Could not convert string {value} to enum value of type {enum_cls}")
+
+        ov_config = OVConfig(quantization_config=quantization_config)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ov_config.save_pretrained(tmp_dir)
+            loaded_ov_config = OVConfig.from_pretrained(tmp_dir)
+
+            if quantization_config is None:
+                self.assertEqual(loaded_ov_config.quantization_config, None)
+                return
+            for key, value in loaded_ov_config.quantization_config.items():
+                initial_value = quantization_config[key] if isinstance(quantization_config, dict) else getattr(ov_config.quantization_config, key)
+                if key == "preset" or key == "overflow_fix":
+                    # TODO: remove once NNCF is updated to 2.10
+                    self.assertTrue(isinstance(value, str))
+                    if key == "preset":
+                        value = str_to_enum(nncf.QuantizationPreset, value)
+                    else:
+                        value = str_to_enum(OverflowFix, value)
+                if key in non_equal_property_names:
+                    self.assertNotEqual(value, initial_value)
+                else:
+                    self.assertEqual(value, initial_value)
 
 
 class InferRequestWrapperTest(unittest.TestCase):

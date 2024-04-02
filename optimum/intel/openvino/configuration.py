@@ -11,10 +11,11 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
+import json
+import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Iterable, Tuple
 
 import datasets
 import nncf
@@ -24,6 +25,8 @@ from transformers import PretrainedConfig
 from transformers.utils.quantization_config import QuantizationConfigMixin, QuantizationMethod
 
 from optimum.configuration_utils import BaseConfig
+
+logger = logging.getLogger(__name__)
 
 
 _DEFAULT_4BIT_CONFIGS = {
@@ -49,6 +52,32 @@ _DEFAULT_4BIT_CONFIGS = {
 }
 
 
+class replace_properties_values:
+    def __init__(self, obj, property_names, property_values):
+        self.obj = obj
+        self.property_names = property_names
+        self.new_property_values = property_values
+        self.old_property_values = [None] * len(property_names)
+        for i, property_name in enumerate(self.property_names):
+            self.old_property_values[i] = getattr(obj, property_name)
+
+    def __enter__(self):
+        for property_name, new_property_value in zip(self.property_names, self.new_property_values):
+            setattr(self.obj, property_name, new_property_value)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        for property_name, old_property_value in zip(self.property_names, self.old_property_values):
+            setattr(self.obj, property_name, old_property_value)
+
+
+def is_serializable(obj):
+    try:
+        json.dumps(obj)
+        return True
+    except:
+        return False
+
+
 @dataclass
 class OVQuantizationConfigBase(QuantizationConfigMixin):
     def __init__(
@@ -65,7 +94,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
 
     def post_init(self):
         if self.dataset is not None and isinstance(self.dataset, str):
-            llm_datasets = ["wikitext2", "c4", "c4-new", "ptb", "ptb-new"]
+            llm_datasets = ["wikitext", "c4", "c4-new", "ptb", "ptb-new"]
             stable_diffusion_datasets = [
                 "conceptual_captions",
                 "laion/220k-GPT4Vision-captions-from-LIVIS",
@@ -76,6 +105,16 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                     f"""You have entered a string value for dataset. You can only choose between
                     {llm_datasets} for LLLMs or {stable_diffusion_datasets} for diffusion models, but we found {self.dataset}"""
                 )
+
+    def to_dict_without_properties(self, property_names: Union[List[str], Tuple[str]]) -> Dict[str, Any]:
+        with replace_properties_values(self, property_names, [None] * len(property_names)):
+            result = super().to_dict()
+        return result
+
+    def to_dict(self) -> Dict[str, Any]:
+        if not is_serializable(self.dataset):
+            return self.to_dict_without_properties(("dataset",))
+        return super().to_dict()
 
 
 class OVConfig(BaseConfig):
@@ -112,13 +151,21 @@ class OVConfig(BaseConfig):
             for name, value in model_inputs.items()
         ]
 
-    def to_dict(self) -> Dict[str, Any]:
-        # Parent to_dict() implementation does not support quantization_config being None
+    def to_dict_safe(self, to_diff_dict: bool = False) -> Dict[str, Any]:
         if self.quantization_config is None:
-            self.quantization_config = OVQuantizationConfigBase()
-        result = super().to_dict()
-        del result["quantization_config"]
+            # Parent to_dict() implementation does not support quantization_config being None
+            with replace_properties_values(self, ("quantization_config",), (OVQuantizationConfigBase(),)):
+                result = super().to_diff_dict() if to_diff_dict else super().to_dict()
+                del result["quantization_config"]
+        else:
+            result = super().to_diff_dict() if to_diff_dict else super().to_dict()
         return result
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.to_dict_safe(to_diff_dict=False)
+
+    def to_diff_dict(self) -> Dict[str, Any]:
+        return self.to_dict_safe(to_diff_dict=True)
 
 
 class OVQuantizationMethod(str, Enum):
@@ -147,7 +194,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
             The dataset used for data-aware compression or quantization with NNCF. You can provide your own dataset
-            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new','ptb','ptb-new'] for LLLMs
+            in a list of strings or just use the one from the list ['wikitext','c4','c4-new','ptb','ptb-new'] for LLLMs
             or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models.
         ratio (`float`, defaults to 1.0):
             The ratio between baseline and backup precisions (e.g. 0.9 means 90% of layers quantized to INT4_ASYM
@@ -165,7 +212,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             The maximum number of samples composing the calibration dataset.
 
     """
-
     def __init__(
         self,
         dataset: Optional[Union[str, List[str], nncf.Dataset, datasets.Dataset]] = None,
@@ -215,6 +261,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     f"For 8-bit quantization, `group_size` is expected to be set to -1, but was set to {self.group_size}"
                 )
 
+    def to_dict(self) -> Dict[str, Any]:
+        if not is_serializable(self.tokenizer):
+            return self.to_dict_without_properties(("tokenizer",))
+        return super().to_dict()
+
 
 @dataclass
 class OVQuantizationConfig(OVQuantizationConfigBase):
@@ -228,6 +279,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         fast_bias_correction: bool = True,
         overflow_fix: OverflowFix = OverflowFix.DISABLE,
     ):
+
         super().__init__(dataset, ignored_scope, subset_size)
         self.preset = preset
         self.model_type = model_type
@@ -240,11 +292,17 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         Safety checker that arguments are correct
         """
         super().post_init()
+
         # if self.dataset is None:
         #     raise ValueError(
         #         "`dataset` is needed to compute the activations range during the calibration step and was not provided."
         #         " In case you only want to apply quantization on the weights, please set `weights_only=True`."
         #     )
+
+    def to_dict(self) -> Dict[str, Any]:
+        # TODO: remove once NNCF is updated to 2.10
+        with replace_properties_values(self, ("overflow_fix", "preset"), (self.overflow_fix.value, self.preset.value)):
+            return super().to_dict()
 
 
 def _check_default_4bit_configs(config: PretrainedConfig):
