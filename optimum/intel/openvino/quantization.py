@@ -266,8 +266,9 @@ class OVQuantizer(OptimumQuantizer):
             logger.warning("`quantization_config` was not provided, a default weight quantization will be applied")
 
         if isinstance(self.model, OVBaseModel):
-            self._quantize_ovbasemodel(ov_config, save_directory, batch_size, data_collator, remove_unused_columns,
-                                       **kwargs)
+            self._quantize_ovbasemodel(
+                ov_config, save_directory, batch_size, data_collator, remove_unused_columns, **kwargs
+            )
 
         elif isinstance(self.model, torch.nn.Module):
             logger.warning(
@@ -692,7 +693,8 @@ def _hybrid_quantization(
         ignored_scope=ptq_ignored_scope,
         # SQ algo should be disabled for MatMul nodes because their weights are already compressed
         advanced_parameters=nncf.AdvancedQuantizationParameters(
-            smooth_quant_alphas=AdvancedSmoothQuantParameters(matmul=-1)),
+            smooth_quant_alphas=AdvancedSmoothQuantParameters(matmul=-1)
+        ),
         subset_size=subset_size,
     )
     return quantized_model

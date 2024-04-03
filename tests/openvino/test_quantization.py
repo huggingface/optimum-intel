@@ -699,23 +699,20 @@ class OVQuantizationConfigTest(unittest.TestCase):
             None,
             [],
         ),
-        (
-            OVWeightQuantizationConfig(),
-            []
-        ),
+        (OVWeightQuantizationConfig(), []),
         (
             OVWeightQuantizationConfig(
                 bits=8,
                 sym=True,
             ),
-            []
+            [],
         ),
         (
             {
                 "bits": 8,
                 "sym": True,
             },
-            []
+            [],
         ),
         (
             OVWeightQuantizationConfig(
@@ -731,50 +728,18 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 subset_size=100,
                 quant_method=OVQuantizationMethod.DEFAULT,
             ),
-            ["ignored_scope"]
+            ["ignored_scope"],
         ),
+        (OVWeightQuantizationConfig(dataset=["wikitext", "c4"]), []),
+        (OVWeightQuantizationConfig(dataset=load_dataset("wikitext", "wikitext-2-raw-v1", split="test")), ["dataset"]),
+        (OVWeightQuantizationConfig(dataset=nncf.Dataset([np.zeros((1, 10))])), ["dataset"]),
         (
-            OVWeightQuantizationConfig(
-                dataset=["wikitext", "c4"]
-            ),
-            []
+            OVWeightQuantizationConfig(tokenizer=AutoTokenizer.from_pretrained("dbmdz/bert-base-german-cased")),
+            ["tokenizer"],
         ),
-        (
-            OVWeightQuantizationConfig(
-                dataset=load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-            ),
-            ["dataset"]
-        ),
-        (
-            OVWeightQuantizationConfig(
-                dataset=nncf.Dataset([np.zeros((1, 10))])
-            ),
-            ["dataset"]
-        ),
-        (
-            OVWeightQuantizationConfig(
-                tokenizer=AutoTokenizer.from_pretrained("dbmdz/bert-base-german-cased")
-            ),
-            ["tokenizer"]
-        ),
-        (
-            OVWeightQuantizationConfig(
-                ignored_scope=nncf.IgnoredScope(names=["op_name"])
-            ),
-            ["ignored_scope"]
-        ),
-        (
-            OVQuantizationConfig(
-                dataset="wikitext"
-            ),
-            []
-        ),
-        (
-            {
-                "dataset": "wikitext"
-            },
-            []
-        ),
+        (OVWeightQuantizationConfig(ignored_scope=nncf.IgnoredScope(names=["op_name"])), ["ignored_scope"]),
+        (OVQuantizationConfig(dataset="wikitext"), []),
+        ({"dataset": "wikitext"}, []),
         (
             OVQuantizationConfig(
                 dataset="wikitext",
@@ -783,39 +748,23 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 preset=nncf.QuantizationPreset.MIXED,
                 model_type=nncf.ModelType.TRANSFORMER,
                 fast_bias_correction=True,
-                overflow_fix=OverflowFix.DISABLE
+                overflow_fix=OverflowFix.DISABLE,
             ),
-            ["ignored_scope"]
+            ["ignored_scope"],
         ),
+        (OVQuantizationConfig(dataset=["wikitext", "c4"]), []),
+        (OVQuantizationConfig(dataset=load_dataset("wikitext", "wikitext-2-raw-v1", split="test")), ["dataset"]),
+        (OVQuantizationConfig(dataset=nncf.Dataset([np.zeros((1, 10))])), ["dataset"]),
         (
-            OVQuantizationConfig(
-                dataset=["wikitext", "c4"]
-            ),
-            []
-        ),
-        (
-            OVQuantizationConfig(
-                dataset=load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-            ),
-            ["dataset"]
-        ),
-        (
-            OVQuantizationConfig(
-                dataset=nncf.Dataset([np.zeros((1, 10))])
-            ),
-            ["dataset"]
-        ),
-        (
-            OVQuantizationConfig(
-                dataset=["wikitext", "c4"],
-                ignored_scope=nncf.IgnoredScope(names=["op_name"])
-            ),
-            ["ignored_scope"]
+            OVQuantizationConfig(dataset=["wikitext", "c4"], ignored_scope=nncf.IgnoredScope(names=["op_name"])),
+            ["ignored_scope"],
         ),
     )
 
     @parameterized.expand(QUANTIZATION_CONFIGS)
-    def test_config_serialization(self, quantization_config: OVQuantizationConfigBase, non_equal_property_names: List[str]):
+    def test_config_serialization(
+        self, quantization_config: OVQuantizationConfigBase, non_equal_property_names: List[str]
+    ):
         def str_to_enum(enum_cls, value):
             for k, v in enum_cls.__members__.items():
                 if getattr(enum_cls, k).value == value:
@@ -831,7 +780,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 self.assertEqual(loaded_ov_config.quantization_config, None)
                 return
             for key, value in loaded_ov_config.quantization_config.items():
-                initial_value = quantization_config[key] if isinstance(quantization_config, dict) else getattr(ov_config.quantization_config, key)
+                initial_value = (
+                    quantization_config[key]
+                    if isinstance(quantization_config, dict)
+                    else getattr(ov_config.quantization_config, key)
+                )
                 if key == "preset" or key == "overflow_fix":
                     # TODO: remove once NNCF is updated to 2.10
                     if getattr(quantization_config, key) is not None:

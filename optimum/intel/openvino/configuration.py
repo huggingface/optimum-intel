@@ -14,7 +14,7 @@
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import datasets
 import nncf
@@ -53,6 +53,7 @@ class replace_properties_values:
     """
     A context manager for temporarily overriding an object's properties
     """
+
     def __init__(self, obj, property_names, property_values):
         self.obj = obj
         self.property_names = property_names
@@ -83,6 +84,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
     """
     Base configuration class for quantization parameters
     """
+
     def __init__(
         self,
         dataset: Optional[Union[str, List[str], nncf.Dataset, datasets.Dataset]] = None,
@@ -107,11 +109,15 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
 
     def post_init(self):
         if not (self.dataset is None or isinstance(self.dataset, (str, list, nncf.Dataset, datasets.Dataset))):
-            raise ValueError("Dataset must be a instance of either string, list of strings, nncf.Dataset or "
-                             f"dataset.Dataset, but found {type(self.dataset)}")
-        if not(self.ignored_scope is None or isinstance(self.ignored_scope, nncf.IgnoredScope)):
-            raise ValueError("Ignored scope must be a instance of either dict, or nncf.IgnoredScope but found "
-                             f"{type(self.dataset)}")
+            raise ValueError(
+                "Dataset must be a instance of either string, list of strings, nncf.Dataset or "
+                f"dataset.Dataset, but found {type(self.dataset)}"
+            )
+        if not (self.ignored_scope is None or isinstance(self.ignored_scope, nncf.IgnoredScope)):
+            raise ValueError(
+                "Ignored scope must be a instance of either dict, or nncf.IgnoredScope but found "
+                f"{type(self.dataset)}"
+            )
 
     def to_dict_without_properties(self, property_names: Union[List[str], Tuple[str]]) -> Dict[str, Any]:
         """
@@ -124,8 +130,12 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
     def to_dict(self) -> Dict[str, Any]:
         properties_to_omit = [] if is_serializable(self.dataset) else ["dataset"]
         if isinstance(self.ignored_scope, nncf.IgnoredScope):
-            ignored_scope_as_dict = dict(names=self.ignored_scope.names, types=self.ignored_scope.types,
-                                         patterns=self.ignored_scope.patterns, validate=self.ignored_scope.validate)
+            ignored_scope_as_dict = dict(
+                names=self.ignored_scope.names,
+                types=self.ignored_scope.types,
+                patterns=self.ignored_scope.patterns,
+                validate=self.ignored_scope.validate,
+            )
             with replace_properties_values(self, ["ignored_scope"], [ignored_scope_as_dict]):
                 return self.to_dict_without_properties(properties_to_omit)
         return self.to_dict_without_properties(properties_to_omit)
@@ -227,6 +237,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Weight compression method to apply.
 
     """
+
     def __init__(
         self,
         bits: int = 8,
