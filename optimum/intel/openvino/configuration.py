@@ -83,12 +83,12 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
     def __init__(
         self,
         dataset: Optional[Union[str, List[str], nncf.Dataset, datasets.Dataset]] = None,
-        ignored_scope: Optional[dict] = None,
+        ignored_scope: Optional[Union[dict, nncf.IgnoredScope]] = None,
         subset_size: Optional[int] = None,
     ):
         self.dataset = dataset
-        if ignored_scope is None:
-            ignored_scope = {}
+        if isinstance(ignored_scope, dict):
+            ignored_scope = nncf.IgnoredScope(**ignored_scope)
         self.ignored_scope = ignored_scope
         self.subset_size = subset_size
 
@@ -112,9 +112,13 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         return result
 
     def to_dict(self) -> Dict[str, Any]:
-        if not is_serializable(self.dataset):
-            return self.to_dict_without_properties(("dataset",))
-        return super().to_dict()
+        properties_to_omit = [] if is_serializable(self.dataset) else ["dataset"]
+        if isinstance(self.ignored_scope, nncf.IgnoredScope):
+            ignored_scope_as_dict = dict(names=self.ignored_scope.names, types=self.ignored_scope.types,
+                                         patterns=self.ignored_scope.patterns, validate=self.ignored_scope.validate)
+            with replace_properties_values(self, ["ignored_scope"], [ignored_scope_as_dict]):
+                return self.to_dict_without_properties(properties_to_omit)
+        return self.to_dict_without_properties(properties_to_omit)
 
 
 class OVConfig(BaseConfig):
@@ -216,7 +220,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self,
         dataset: Optional[Union[str, List[str], nncf.Dataset, datasets.Dataset]] = None,
         bits: int = 8,
-        ignored_scope: Optional[dict] = None,
+        ignored_scope: Optional[Union[dict, nncf.IgnoredScope]] = None,
         sym: bool = False,
         tokenizer: Optional[Any] = None,
         ratio: float = 1.0,
@@ -272,7 +276,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
         dataset: Union[str, List[str], nncf.Dataset, datasets.Dataset],
-        ignored_scope: Optional[dict] = None,
+        ignored_scope: Optional[Union[dict, nncf.IgnoredScope]] = None,
         subset_size: Optional[int] = 300,
         preset: nncf.QuantizationPreset = nncf.QuantizationPreset.MIXED,
         model_type: nncf.ModelType = nncf.ModelType.TRANSFORMER,

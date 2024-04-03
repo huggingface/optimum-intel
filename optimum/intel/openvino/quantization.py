@@ -586,10 +586,6 @@ def _weight_only_quantization(
     if isinstance(config.sensitivity_metric, str):
         sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
 
-    ignored_scope = None
-    if isinstance(config.ignored_scope, dict):
-        ignored_scope = IgnoredScope(**config.ignored_scope)
-
     if config.bits == 8:
         mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
     else:
@@ -603,7 +599,7 @@ def _weight_only_quantization(
         all_layers=config.all_layers,
         sensitivity_metric=sensitivity_metric,
         # awq=config.quant_method == QuantizationMethod.AWQ,
-        ignored_scope=ignored_scope,
+        ignored_scope=config.ignored_scope,
         dataset=dataset,
         # subset_size=config.subset_size if config.subset_size else 128,
     )
@@ -674,13 +670,14 @@ def _hybrid_quantization(
     """
     ops_to_compress = _collect_ops_with_weights(model)
 
-    ignored_scope = quantization_config.ignored_scope if isinstance(quantization_config.ignored_scope, dict) else {}
-    ptq_ignored_scope = nncf.IgnoredScope(**ignored_scope)
+    ignored_scope: Union[nncf.IgnoredScope, None] = quantization_config.ignored_scope
+    ignored_scope = ignored_scope or nncf.IgnoredScope()
+    ptq_ignored_scope = copy.deepcopy(ignored_scope)
     ptq_ignored_scope.names += ops_to_compress
 
     wc_quantization_config = copy.deepcopy(quantization_config)
     wc_quantization_config.ignored_scope = ignored_scope
-    wc_quantization_config.ignored_scope["types"] = ignored_scope.get("types", []) + ["Convolution"]
+    wc_quantization_config.ignored_scope.types.append("Convolution")
     compressed_model = _weight_only_quantization(model, wc_quantization_config)
 
     subset_size = quantization_config.subset_size if quantization_config.subset_size else 200

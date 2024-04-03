@@ -554,7 +554,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                             "all_layers": None,
                             "sensitivity_metric": None,
                             "dataset": None,
-                            "ignored_scope": nncf.IgnoredScope(),
+                            "ignored_scope": None,
                         }
                         compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
@@ -717,7 +717,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 subset_size=100,
                 quant_method=OVQuantizationMethod.DEFAULT,
             ),
-            []
+            ["ignored_scope"]
         ),
         (
             OVWeightQuantizationConfig(
@@ -744,6 +744,12 @@ class OVQuantizationConfigTest(unittest.TestCase):
             ["tokenizer"]
         ),
         (
+            OVWeightQuantizationConfig(
+                ignored_scope=nncf.IgnoredScope(names=["op_name"])
+            ),
+            ["ignored_scope"]
+        ),
+        (
             OVQuantizationConfig(
                 dataset="wikitext"
             ),
@@ -765,7 +771,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 fast_bias_correction=True,
                 overflow_fix=OverflowFix.DISABLE
             ),
-            []
+            ["ignored_scope"]
         ),
         (
             OVQuantizationConfig(
@@ -784,6 +790,13 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 dataset=nncf.Dataset([np.zeros((1, 10))])
             ),
             ["dataset"]
+        ),
+        (
+            OVQuantizationConfig(
+                dataset=["wikitext", "c4"],
+                ignored_scope=nncf.IgnoredScope(names=["op_name"])
+            ),
+            ["ignored_scope"]
         ),
     )
 
