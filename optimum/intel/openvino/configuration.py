@@ -130,13 +130,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
     def to_dict(self) -> Dict[str, Any]:
         properties_to_omit = [] if is_serializable(self.dataset) else ["dataset"]
         if isinstance(self.ignored_scope, nncf.IgnoredScope):
-            ignored_scope_as_dict = {
-                "names": self.ignored_scope.names,
-                "types": self.ignored_scope.types,
-                "patterns": self.ignored_scope.patterns,
-                "validate": self.ignored_scope.validate,
-            }
-            with replace_properties_values(self, ["ignored_scope"], [ignored_scope_as_dict]):
+            with replace_properties_values(self, ["ignored_scope"], [self.ignored_scope.__dict__]):
                 return self.to_dict_without_properties(properties_to_omit)
         return self.to_dict_without_properties(properties_to_omit)
 
