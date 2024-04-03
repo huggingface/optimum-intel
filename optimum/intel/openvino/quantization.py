@@ -24,7 +24,7 @@ import nncf
 import openvino
 import torch
 import transformers
-from nncf import CompressWeightsMode, IgnoredScope, SensitivityMetric
+from nncf import CompressWeightsMode, SensitivityMetric
 from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters
 from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
@@ -217,7 +217,7 @@ class OVQuantizer(OptimumQuantizer):
         Args:
             save_directory (`Union[str, Path]`):
                 The directory where the quantized model should be saved.
-            quantization_config (`OVConfig`, *optional*):
+            ov_config (`OVConfig`, *optional*):
                 The configuration containing the parameters related to quantization.
             file_name (`str`, *optional*):
                 The model file name to use when saving the model. Overwrites the default file name `"model.onnx"`.
@@ -236,7 +236,8 @@ class OVQuantizer(OptimumQuantizer):
         >>> # or
         >>> model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
         >>> quantizer = OVQuantizer.from_pretrained(model, task="text-classification")
-        >>> quantizer.quantize(calibration_dataset=calibration_dataset, save_directory="./quantized_model")
+        >>> ov_config = OVConfig(quantization_config=OVQuantizationConfig(dataset=calibration_dataset))
+        >>> quantizer.quantize(ov_config=ov_config, save_directory="./quantized_model")
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
 
@@ -245,7 +246,8 @@ class OVQuantizer(OptimumQuantizer):
         >>> from transformers import AutoModelForCausalLM
         >>> model = AutoModelForCausalLM.from_pretrained("databricks/dolly-v2-3b")
         >>> quantizer = OVQuantizer.from_pretrained(model, task="text-generation")
-        >>> quantizer.quantize(save_directory="./quantized_model", weights_only=True)
+        >>> ov_config = OVConfig(quantization_config=OVWeightQuantizationConfig(bits=8, sym=True))
+        >>> quantizer.quantize(ov_config=ov_config, save_directory="./quantized_model")
         >>> optimized_model = OVModelForCausalLM.from_pretrained("./quantized_model")
         ```
         """
@@ -455,6 +457,8 @@ class OVQuantizer(OptimumQuantizer):
                 except FileNotFoundError:
                     pass
 
+        ov_config.save_pretrained(save_directory)
+
     @staticmethod
     def _save_pretrained(model: openvino.runtime.Model, output_path: str):
         compress_quantize_weights_transformation(model)
@@ -534,7 +538,7 @@ class OVQuantizer(OptimumQuantizer):
 
     def _get_calibration_dataloader(
         self,
-        calibration_dataset: Union[Dataset, nncf.Dataset],
+        calibration_dataset: "Dataset",
         batch_size: int,
         remove_unused_columns: bool,
         data_collator: Optional[DataCollator] = None,
@@ -598,10 +602,10 @@ def _weight_only_quantization(
         group_size=config.group_size,
         all_layers=config.all_layers,
         sensitivity_metric=sensitivity_metric,
-        # awq=config.quant_method == QuantizationMethod.AWQ,
+        # awq=config.quant_method == QuantizationMethod.AWQ,    # TODO : enable from nncf v2.9.0
         ignored_scope=config.ignored_scope,
         dataset=dataset,
-        # subset_size=config.subset_size if config.subset_size else 128,
+        # subset_size=config.subset_size if config.subset_size else 128,    # TODO : enable from nncf v2.9.0
     )
 
 
@@ -686,8 +690,9 @@ def _hybrid_quantization(
         calibration_dataset=nncf.Dataset(dataset),
         model_type=nncf.ModelType.TRANSFORMER,
         ignored_scope=ptq_ignored_scope,
-        # The SQ algo should be disabled for MatMul nodes because their weights are already compressed
-        advanced_parameters=nncf.AdvancedQuantizationParameters(AdvancedSmoothQuantParameters(matmul=-1)),
+        # SQ algo should be disabled for MatMul nodes because their weights are already compressed
+        advanced_parameters=nncf.AdvancedQuantizationParameters(
+            smooth_quant_alphas=AdvancedSmoothQuantParameters(matmul=-1)),
         subset_size=subset_size,
     )
     return quantized_model

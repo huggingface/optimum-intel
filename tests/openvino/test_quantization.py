@@ -18,6 +18,7 @@ import itertools
 import tempfile
 import unittest
 from collections import defaultdict
+from enum import Enum
 from functools import partial
 from typing import List
 
@@ -116,6 +117,10 @@ class OVQuantizerTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
+
+            # Verify that the configuration is correctly saved and loaded
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
@@ -269,6 +274,15 @@ class OVWeightCompressionTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
+
+            # Verify that the configuration is correctly saved and loaded
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            original_config_as_dict = OVWeightQuantizationConfig(bits=8, sym=True).to_dict()
+            for k in original_config_as_dict.keys():
+                v = original_config_as_dict[k]
+                if isinstance(v, Enum):
+                    original_config_as_dict[k] = v.value
+            self.assertEqual(original_config_as_dict, loaded_config.quantization_config)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     def test_ovmodel_8bit_weight_compression(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
@@ -820,11 +834,12 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 initial_value = quantization_config[key] if isinstance(quantization_config, dict) else getattr(ov_config.quantization_config, key)
                 if key == "preset" or key == "overflow_fix":
                     # TODO: remove once NNCF is updated to 2.10
-                    self.assertTrue(isinstance(value, str))
-                    if key == "preset":
-                        value = str_to_enum(nncf.QuantizationPreset, value)
-                    else:
-                        value = str_to_enum(OverflowFix, value)
+                    if getattr(quantization_config, key) is not None:
+                        self.assertTrue(isinstance(value, str))
+                        if key == "preset":
+                            value = str_to_enum(nncf.QuantizationPreset, value)
+                        else:
+                            value = str_to_enum(OverflowFix, value)
                 if key in non_equal_property_names:
                     self.assertNotEqual(value, initial_value)
                 else:
