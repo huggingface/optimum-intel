@@ -161,7 +161,7 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
-        from ...exporters.openvino.__main__ import main_export
+        from ...exporters.openvino.__main__ import main_export, get_relevant_task, export_optimized_diffusion_model
         from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, OVConfig
 
         if self.args.fp16:
@@ -208,11 +208,22 @@ class OVExportCommand(BaseOptimumCLICommand):
             quantization_config["dataset"] = self.args.dataset
             ov_config = OVConfig(quantization_config=quantization_config)
 
+        library_name = TasksManager.infer_library_from_model(self.args.model)
+        task = get_relevant_task(self.args.task, self.args.model)
+        saved_dir = self.args.output
+
+        if library_name == "diffusers" and ov_config and ov_config.quantization_config.get("dataset"):
+            import tempfile
+            from copy import deepcopy
+            saved_dir = tempfile.mkdtemp()
+            quantization_config = deepcopy(ov_config.quantization_config)
+            ov_config.quantization_config = {}
+
         # TODO : add input shapes
         main_export(
             model_name_or_path=self.args.model,
-            output=self.args.output,
-            task=self.args.task,
+            output=saved_dir,
+            task=task,
             framework=self.args.framework,
             cache_dir=self.args.cache_dir,
             trust_remote_code=self.args.trust_remote_code,
@@ -223,3 +234,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             library_name=self.args.library
             # **input_shapes,
         )
+
+        if saved_dir != self.args.output:
+            export_optimized_diffusion_model(saved_dir, self.args.output, task, quantization_config)
