@@ -160,6 +160,10 @@ class OVQuantizerTest(unittest.TestCase):
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
 
+            # Verify that the configuration is correctly saved and loaded
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config)
+
 
 class OVWeightCompressionTest(unittest.TestCase):
     # TODO : add models
@@ -305,6 +309,10 @@ class OVWeightCompressionTest(unittest.TestCase):
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
 
+            # Verify that the configuration is correctly saved and loaded
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(OVWeightQuantizationConfig(bits=8, sym=True).to_dict(), loaded_config.quantization_config)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS)
     def test_ovmodel_4bit_weight_compression(self, model_cls, model_name, expected_int8, expected_int4):
         task = model_cls.export_feature
@@ -332,6 +340,10 @@ class OVWeightCompressionTest(unittest.TestCase):
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
 
+            # Verify that the configuration is correctly saved and loaded
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
     @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
     def test_ovmodel_8bit_weight_compression_stateful(self, model_cls, model_id, expected_pt_int8, expected_ov_int8):
@@ -353,6 +365,10 @@ class OVWeightCompressionTest(unittest.TestCase):
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
             self.assertTrue("logits" in outputs)
+
+            # Verify that the configuration is correctly saved and loaded
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(OVWeightQuantizationConfig(bits=8, sym=True).to_dict(), loaded_config.quantization_config)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_compressed_weights(self, model_cls, model_type):
@@ -611,6 +627,10 @@ class OVQuantizerQATest(unittest.TestCase):
             except RuntimeError:
                 self.fail("Loading BERT QA model a second time failed")
 
+            # Verify that the configuration is correctly saved and loaded
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_ovmodel_static_quantization(self, model_name):
         def preprocess_function(examples, tokenizer):
@@ -645,6 +665,10 @@ class OVQuantizerQATest(unittest.TestCase):
                 model = OVModelForQuestionAnswering.from_pretrained(tmp_dir)
             except RuntimeError:
                 self.fail("Loading BERT QA model a second time failed")
+
+            # Verify that the configuration is correctly saved and loaded
+            loaded_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config)
 
 
 class OVTrainerTest(unittest.TestCase):

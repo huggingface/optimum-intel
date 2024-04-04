@@ -218,10 +218,11 @@ class OVQuantizer(OptimumQuantizer):
             save_directory (`Union[str, Path]`):
                 The directory where the quantized model should be saved.
             ov_config (`OVConfig`, *optional*):
-                The configuration containing the parameters related to quantization.
+                The configuration containing the parameters related to quantization. If not provided, 8-bit symmetric
+                weight-only quantization will be applied.
             file_name (`str`, *optional*):
                 The model file name to use when saving the model. Overwrites the default file name `"model.onnx"`.
-            batch_size (`int`, defaults to 8):
+            batch_size (`int`, defaults to 1):
                 The number of calibration samples to load per batch.
             data_collator (`DataCollator`, *optional*):
                 The function to use to form a batch from a list of elements of the calibration dataset.
@@ -251,6 +252,17 @@ class OVQuantizer(OptimumQuantizer):
         >>> optimized_model = OVModelForCausalLM.from_pretrained("./quantized_model")
         ```
         """
+        if "calibration_dataset" in kwargs:
+            raise ValueError(
+                "`calibration_dataset` argument is deprecated. Please provide calibration dataset "
+                "with `ov_config.quantization_config.dataset`."
+            )
+        if "weights_only" in kwargs:
+            raise ValueError(
+                "`weights_only` argument is deprecated. Please provide `ov_config.quantization_config` "
+                "as an instance of OVWeightQuantizationConfig for weight-only compression."
+            )
+
         if save_directory is None:
             # TODO : can be set to self.model.config.name_or_path for OVModels when not provided
             raise ValueError("`save_directory` needs to be specified")
@@ -263,7 +275,7 @@ class OVQuantizer(OptimumQuantizer):
         quantization_config = ov_config.quantization_config
         if quantization_config is None:
             ov_config.quantization_config = OVWeightQuantizationConfig(bits=8, sym=True)
-            logger.warning("`quantization_config` was not provided, a default weight quantization will be applied")
+            logger.info("`quantization_config` was not provided, 8-bit symmetric weight quantization will be applied.")
 
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
@@ -276,7 +288,7 @@ class OVQuantizer(OptimumQuantizer):
                 "To convert a PyTorch model to OpenVINO, you can set `export=True` when loading your model as `OVModelForXxx.from_pretrained(..., export=True)`"
             )
             self._quantize_torchmodel(
-                ov_config, save_directory, file_name, batch_size, data_collator, remove_unused_columns
+                ov_config, save_directory, file_name, batch_size, data_collator, remove_unused_columns, **kwargs
             )
         else:
             raise TypeError(f"Unsupported model type: {type(self.model)}")
@@ -297,6 +309,7 @@ class OVQuantizer(OptimumQuantizer):
         if isinstance(quantization_config, OVWeightQuantizationConfig):
             _weight_only_quantization(self.model.model, quantization_config)
             self.model.save_pretrained(save_directory)
+            ov_config.save_pretrained(save_directory)
             return
         if not isinstance(quantization_config, OVQuantizationConfig):
             raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
@@ -344,6 +357,7 @@ class OVQuantizer(OptimumQuantizer):
         )
         self.model.model = quantized_model
         self.model.save_pretrained(save_directory)
+        ov_config.save_pretrained(save_directory)
 
     def _quantize_torchmodel(
         self,
@@ -391,18 +405,24 @@ class OVQuantizer(OptimumQuantizer):
 
         quantization_config = ov_config.quantization_config
         if isinstance(quantization_config, OVWeightQuantizationConfig):
-            if stateful:
-                # patch model before weight compression
-                model = patch_model_with_bettertransformer(model)
+            dataset = quantization_config.dataset
+            if not isinstance(dataset, nncf.Dataset):
+                if dataset is not None:
+                    raise ValueError(
+                        "Please provide `dataset` for weight compression as an instance of `nncf.Dataset`."
+                    )
+                if stateful:
+                    # patch model before weight compression
+                    model = patch_model_with_bettertransformer(model)
 
-            dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
-            device = get_model_device(model)
-            dummy_inputs = tree_map(
-                lambda value: value.to(device) if isinstance(value, torch.Tensor) else value, dummy_inputs
-            )
-            check_dummy_inputs_are_allowed(model, dummy_inputs)
-
-            nncf.compress_weights(model, dataset=nncf.Dataset([dummy_inputs]))
+                dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+                device = get_model_device(model)
+                dummy_inputs = tree_map(
+                    lambda value: value.to(device) if isinstance(value, torch.Tensor) else value, dummy_inputs
+                )
+                check_dummy_inputs_are_allowed(model, dummy_inputs)
+                dataset = nncf.Dataset([dummy_inputs])
+            nncf.compress_weights(model, dataset=dataset)
         else:
             if not isinstance(quantization_config, OVQuantizationConfig):
                 raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")

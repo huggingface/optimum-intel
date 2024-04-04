@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import json
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -25,6 +26,8 @@ from transformers.utils.quantization_config import QuantizationConfigMixin, Quan
 
 from optimum.configuration_utils import BaseConfig
 
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_4BIT_CONFIGS = {
     "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 32, "ratio": 0.5},
@@ -92,7 +95,6 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         subset_size: Optional[int] = None,
     ):
         """
-
         Args:
             dataset (`str or List[str] or nncf.Dataset or datasets.Dataset`, *optional*):
                  The dataset used for data-aware weight compression or quantization with NNCF.
@@ -121,8 +123,10 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
 
     def to_dict_without_properties(self, property_names: Union[List[str], Tuple[str]]) -> Dict[str, Any]:
         """
-        Call to_dict() with given properties overwritten with None. Useful for hiding non-serializable properties.
+        Calls to_dict() with given properties overwritten with None. Useful for hiding non-serializable properties.
         """
+        if len(property_names) == 0:
+            return super().to_dict()
         with replace_properties_values(self, property_names, [None] * len(property_names)):
             result = super().to_dict()
         return result
@@ -143,7 +147,7 @@ class OVConfig(BaseConfig):
         self,
         input_info: Optional[List] = None,
         save_onnx_model: bool = False,
-        quantization_config: Optional[Union[Dict, OVQuantizationConfigBase]] = None,
+        quantization_config: Optional[Union[dict, OVQuantizationConfigBase]] = None,
         dtype: Optional[str] = None,
         **kwargs,
     ):
@@ -153,6 +157,13 @@ class OVConfig(BaseConfig):
         self.optimum_version = kwargs.pop("optimum_version", None)
         self.quantization_config = quantization_config
         self.compression = None  # A backward-compatability field for training-time compression parameters
+
+        if isinstance(self.quantization_config, dict):
+            # Config is loaded as dict during deserialization
+            logger.info(
+                "`quantization_config` was provided as a dict, in this form it can't be used for quantization. "
+                "Please provide config as an instance of OVWeightQuantizationConfig or OVQuantizationConfig"
+            )
 
         bits = (
             self.quantization_config.bits if isinstance(self.quantization_config, OVWeightQuantizationConfig) else None
@@ -194,8 +205,8 @@ class OVQuantizationMethod(str, Enum):
 class OVWeightQuantizationConfig(OVQuantizationConfigBase):
     """
     This is a wrapper class about all possible attributes and features that you can play with a model that has been
-    loaded using `optimum-intel` api for weights compression with NNCF.
-
+    loaded using `optimum-intel` api for weight-only quantization with NNCF. For full model quantization please see
+    OVQuantizationConfig.
     Args:
         bits (`int`, defaults to 8):
             The number of bits to quantize to.
@@ -229,7 +240,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             The maximum number of samples composing the calibration dataset.
         quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
             Weight compression method to apply.
-
     """
 
     def __init__(
@@ -316,6 +326,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         """
         Configuration class containing parameters related to model quantization with NNCF. Compared to weight
         compression, during quantization both weights and activations are converted to lower precision.
+        For weight-only model quantization please see OVWeightQuantizationConfig.
         Args:
             dataset (`str or List[str] or nncf.Dataset or datasets.Dataset`):
                  A dataset used for quantization parameters calibration. Required parameter.
@@ -356,7 +367,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             )
 
     def to_dict(self) -> Dict[str, Any]:
-        # TODO: remove once NNCF is updated to 2.10
+        # TODO: remove code below once NNCF is updated to 2.10
         overflow_fix_value = None if self.overflow_fix is None else self.overflow_fix.value
         preset_value = None if self.preset is None else self.preset.value
         with replace_properties_values(self, ("overflow_fix", "preset"), (overflow_fix_value, preset_value)):
