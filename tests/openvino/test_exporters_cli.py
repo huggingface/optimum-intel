@@ -129,16 +129,12 @@ class OVCLIExportTestCase(unittest.TestCase):
                 self.assertTrue(
                     "OpenVINO Tokenizers is not available." in output
                     or "OpenVINO and OpenVINO Tokenizers versions are not binary compatible." in output,
-                    msg=output
+                    msg=output,
                 )
                 return
 
             number_of_tokenizers = sum("tokenizer" in file for file in map(str, Path(tmpdir).rglob("*.xml")))
-            self.assertEqual(
-                self.EXPECTED_NUMBER_OF_TOKENIZER_MODELS[model_type],
-                number_of_tokenizers,
-                output
-            )
+            self.assertEqual(self.EXPECTED_NUMBER_OF_TOKENIZER_MODELS[model_type], number_of_tokenizers, output)
 
             if number_of_tokenizers == 1:
                 self.assertTrue("Detokenizer is not supported, convert tokenizer only." in output, output)
