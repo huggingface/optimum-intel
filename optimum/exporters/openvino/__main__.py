@@ -343,6 +343,8 @@ def main_export(
             tokenizer_2 = getattr(model, "tokenizer_2", None)
             if tokenizer_2 is not None:
                 export_tokenizer(tokenizer_2, output, suffix="_2")
+    elif convert_tokenizer and not is_openvino_tokenizers_available():
+        logger.warning("Tokenizer won't be converted.")
 
     # Unpatch modules after GPTQ export
     if do_gptq_patching:

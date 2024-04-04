@@ -170,33 +170,14 @@ def is_openvino_available():
     return _openvino_available
 
 
-def _create_pip_update_command(package_name: str, compatible_version: str, is_dev_version: bool = False) -> str:
-    return " ".join(
-        filter(
-            None,
-            (
-                "pip install",
-                "--pre" if is_dev_version else "",
-                "-U",
-                f"{package_name}=={compatible_version}",
-                "--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
-                if is_dev_version
-                else "",
-            ),
-        )
-    )
-
-
 @functools.lru_cache(1)
 def is_openvino_tokenizers_available():
     if not is_openvino_available():
         return False
 
-    try:
-        import openvino_tokenizers
-    except ImportError:
+    if importlib.util.find_spec("openvino_tokenizers") is None:
         logger.info(
-            "OpenVINO Tokenizers is not available, tokenizer won't be converted. To deploy models in production "
+            "OpenVINO Tokenizers is not available. To deploy models in production "
             "with C++ code, please follow installation instructions: "
             "https://github.com/openvinotoolkit/openvino_tokenizers?tab=readme-ov-file#installation\n"
         )
@@ -204,16 +185,17 @@ def is_openvino_tokenizers_available():
 
     try:
         pip_metadata_version = importlib_metadata.version("openvino")
-        is_nightly = False
     except importlib_metadata.PackageNotFoundError:
-        try:
-            pip_metadata_version = importlib_metadata.version("openvino-nightly")
-            is_nightly = True
-        except importlib_metadata.PackageNotFoundError:
-            pip_metadata_version = False
-            is_nightly = False
+        pip_metadata_version = False
+    try:
+        pip_metadata_version = importlib_metadata.version("openvino-nightly")
+        is_nightly = True
+    except importlib_metadata.PackageNotFoundError:
+        is_nightly = False
 
     try:
+        import openvino_tokenizers
+
         openvino_tokenizers._get_factory()
     except RuntimeError:
         tokenizers_version = openvino_tokenizers.__version__
@@ -257,8 +239,7 @@ def is_openvino_tokenizers_available():
                 message += "pip uninstall -y openvino-nightly && "
             message += (
                 "pip install --pre -U openvino openvino-tokenizers "
-                "--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly\n"
-                "Tokenizer won't be converted."
+                "--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
             )
         logger.warning(message)
         return False

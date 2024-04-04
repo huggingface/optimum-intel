@@ -118,7 +118,6 @@ class OVCLIExportTestCase(unittest.TestCase):
         for arch in SUPPORTED_ARCHITECTURES
         if not arch[0].endswith("-with-past") and not arch[1].endswith("-refiner")
     )
-    @unittest.skipIf(not is_openvino_tokenizers_available(), reason="OpenVINO Tokenizers not available")
     def test_exporters_cli_tokenizers(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             output = subprocess.check_output(
@@ -126,12 +125,19 @@ class OVCLIExportTestCase(unittest.TestCase):
                 shell=True,
                 stderr=subprocess.STDOUT,
             ).decode()
-            save_dir = Path(tmpdir)
-            number_of_tokenizers = sum("tokenizer" in file for file in map(str, save_dir.rglob("*.xml")))
+            if not is_openvino_tokenizers_available():
+                self.assertTrue(
+                    "OpenVINO Tokenizers is not available." in output
+                    or "OpenVINO and OpenVINO Tokenizers versions are not binary compatible." in output,
+                    msg=output
+                )
+                return
+
+            number_of_tokenizers = sum("tokenizer" in file for file in map(str, Path(tmpdir).rglob("*.xml")))
             self.assertEqual(
                 self.EXPECTED_NUMBER_OF_TOKENIZER_MODELS[model_type],
                 number_of_tokenizers,
-                f"OVT: {is_openvino_tokenizers_available() }",
+                output
             )
 
             if number_of_tokenizers == 1:
