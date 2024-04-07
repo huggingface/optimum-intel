@@ -11,13 +11,13 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
-from transformers import SequenceFeatureExtractor
+from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer
 from transformers import pipeline as transformers_pipeline
 from transformers.feature_extraction_utils import PreTrainedFeatureExtractor
-from transformers.onnx.utils import get_preprocessor
 from transformers.pipelines import (
     AudioClassificationPipeline,
     FillMaskPipeline,
@@ -34,8 +34,6 @@ from transformers.utils import (
     is_torch_available,
     logging,
 )
-
-from optimum.utils.file_utils import find_files_matching_pattern
 
 
 if is_ipex_available():
@@ -99,13 +97,11 @@ if is_ipex_available():
 def load_ipex_model(
     model,
     targeted_task,
-    load_tokenizer,
-    tokenizer,
-    load_feature_extractor,
-    feature_extractor,
     SUPPORTED_TASKS,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    **kwargs,
 ):
+    export = kwargs.pop("export", True)
     if model_kwargs is None:
         model_kwargs = {}
 
@@ -116,44 +112,25 @@ def load_ipex_model(
         model = ipex_model_class.from_pretrained(model_id, export=True)
     elif isinstance(model, str):
         model_id = model
-        ipex_file = find_files_matching_pattern(
-            model,
-            ".+?.pt",
-            glob_pattern="**/*.pt",
-            subfolder=model_kwargs.pop("subfolder", None),
-            use_auth_token=model_kwargs.pop("token", None),
-            revision=model_kwargs.pop("revision", "main"),
-        )
-        export = len(ipex_file) == 0
+        try:
+            config = AutoConfig.from_pretrained(model)
+            torchscript = getattr(config, "torchscript", None)
+            export = False if torchscript else export
+        except RuntimeError:
+            logger.warning(
+                "config file not found, please pass `export` to decide whether we should export this model. `export` defaullt to True"
+            )
+
         model = ipex_model_class.from_pretrained(model, export=export, **model_kwargs)
     elif isinstance(model, IPEXModel):
-        if tokenizer is None and load_tokenizer:
-            for preprocessor in model.preprocessors:
-                if isinstance(preprocessor, (PreTrainedTokenizer, PreTrainedTokenizerFast)):
-                    tokenizer = preprocessor
-                    break
-            if tokenizer is None:
-                raise ValueError(
-                    "Could not automatically find a tokenizer for the IPEXModel, you must pass a tokenizer explictly"
-                )
-        if feature_extractor is None and load_feature_extractor:
-            for preprocessor in model.preprocessors:
-                if isinstance(preprocessor, SequenceFeatureExtractor):
-                    feature_extractor = preprocessor
-                    break
-            if feature_extractor is None:
-                raise ValueError(
-                    "Could not automatically find a feature extractor for the IPEXModel, you must pass a "
-                    "feature_extractor explictly"
-                )
         model_id = None
     else:
         raise ValueError(
-            f"""Model {model} is not supported. Please provide a valid model either as string or IPEXModel.
+            f"""Model {model} is not supported. Please provide a valid model name or path or a IPEXModel.
             You can also provide non model then a default one will be used"""
         )
 
-    return model, model_id, tokenizer, feature_extractor
+    return model, model_id
 
 
 MAPPING_LOADING_FUNC = {
@@ -294,21 +271,12 @@ def pipeline(
 
     # Load the correct model if possible
     # Infer the framework from the model if not already defined
-    model, model_id, tokenizer, feature_extractor = MAPPING_LOADING_FUNC[accelerator](
-        model,
-        task,
-        load_tokenizer,
-        tokenizer,
-        load_feature_extractor,
-        feature_extractor,
-        IPEX_SUPPORTED_TASKS,
-        model_kwargs,
-    )
+    model, model_id = MAPPING_LOADING_FUNC[accelerator](model, task, supported_tasks, model_kwargs, **kwargs)
 
-    if tokenizer is None and load_tokenizer:
-        tokenizer = get_preprocessor(model_id)
-    if feature_extractor is None and load_feature_extractor:
-        feature_extractor = get_preprocessor(model_id)
+    if load_tokenizer and model_id and tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+    if load_feature_extractor and model_id and feature_extractor is None:
+        feature_extractor = AutoFeatureExtractor.from_pretrained(model_id)
 
     if torch_dtype is not None:
         kwargs["torch_dtype"] = torch_dtype
@@ -317,6 +285,7 @@ def pipeline(
         task,
         model=model,
         tokenizer=tokenizer,
+        feature_extractor=feature_extractor,
         use_fast=use_fast,
         **kwargs,
     )
