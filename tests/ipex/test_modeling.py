@@ -103,6 +103,7 @@ class Timer(object):
 
 
 class IPEXModelTest(unittest.TestCase):
+    IPEX_MODEL_CLASS = IPEXModel
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
@@ -114,8 +115,6 @@ class IPEXModelTest(unittest.TestCase):
         "squeezebert",
         "xlm",
     )
-
-    IPEX_MODEL_CLASS = IPEXModel
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -150,11 +149,11 @@ class IPEXModelTest(unittest.TestCase):
 
 
 class IPEXModelForSequenceClassificationTest(IPEXModelTest):
-    IPEX_MODEL_CLASS = IPEXModelForTokenClassification
+    IPEX_MODEL_CLASS = IPEXModelForSequenceClassification
 
 
 class IPEXModelForTokenClassificationTest(IPEXModelTest):
-    IPEX_MODEL_CLASS = IPEXModelForSequenceClassification
+    IPEX_MODEL_CLASS = IPEXModelForTokenClassification
 
 
 class IPEXModelForMaskedLMTest(IPEXModelTest):
@@ -162,6 +161,7 @@ class IPEXModelForMaskedLMTest(IPEXModelTest):
 
 
 class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
+    IPEX_MODEL_CLASS = IPEXModelForQuestionAnswering
     SUPPORTED_ARCHITECTURES = (
         "bert",
         "distilbert",
@@ -202,6 +202,7 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
 
 
 class IPEXModelForCausalLMTest(unittest.TestCase):
+    IPEX_MODEL_CLASS = IPEXModelForCausalLM
     SUPPORTED_ARCHITECTURES = (
         "bart",
         "gpt_bigcode",
@@ -382,6 +383,7 @@ class IPEXModelForAudioClassificationTest(unittest.TestCase):
 
 
 class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
+    IPEX_MODEL_CLASS = IPEXModelForImageClassification
     SUPPORTED_ARCHITECTURES = (
         "beit",
         # "levit",
@@ -391,7 +393,6 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         "resnet",
         "vit",
     )
-    IPEX_MODEL_CLASS = IPEXModelForImageClassification
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
