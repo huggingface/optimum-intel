@@ -252,7 +252,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=False)
+        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
