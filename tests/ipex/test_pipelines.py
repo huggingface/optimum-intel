@@ -41,7 +41,7 @@ class PipelinesIntegrationTest(unittest.TestCase):
     @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
     def test_text_generation_pipeline_inference(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        inputs = "DeepSpeed is a machine learning framework for deep neural networks and deep reinforcement learning. It is written in C++ and is available for Linux, Mac OS X,"
+        inputs = "Describe a real-world application of AI."
         transformers_text_generator = transformers_pipeline("text-generation", model_id)
         ipex_text_generator = ipex_pipeline("text-generation", model_id, accelerator="ipex")
         with torch.inference_mode():

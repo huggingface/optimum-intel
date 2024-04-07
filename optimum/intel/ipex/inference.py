@@ -97,6 +97,10 @@ class inference_mode:
             jit (`boolean = False`, *optional*):
                 Enable jit to accelerate inference speed
         """
+        logger.warning(
+            "`inference_mode` is deprecated and will be removed in v1.18.0. Use `pipeline` to load and export your model to TorchScript instead."
+        )
+
         if not is_ipex_available():
             raise ImportError(IPEX_NOT_AVAILABLE_ERROR_MSG)
 
