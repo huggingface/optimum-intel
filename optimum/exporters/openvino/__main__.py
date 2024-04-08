@@ -230,7 +230,7 @@ def main_export(
             logger.warning(
                 "Model type `{model_type}` export for task `{task}` is not supported for loading with `trust_remote_code=True`"
                 "using default export configuration, `trust_remote_code` will be disabled. "
-                "Please provide custon export config if you want load model with remote code."
+                "Please provide custom export config if you want load model with remote code."
             )
             trust_remote_code = False
 
