@@ -536,9 +536,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "phi",
         "internlm2",
         "orion",
+        "falcon",
     )
     GENERATION_LENGTH = 100
-    IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
     REMOTE_CODE_MODELS = ("chatglm", "minicpm", "baichuan2", "jais", "qwen", "internlm2", "olmo", "orion")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -563,35 +563,59 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-        self.assertEqual(
-            ov_model.stateful, self.IS_SUPPORT_STATEFUL and ov_model.config.model_type not in not_stateful
-        )
-        set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        self.assertEqual(ov_model.stateful, ov_model.config.model_type not in not_stateful)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
-        if model_arch == "qwen":
-            transformers_model.to(torch.float32)
-        tokens = tokenizer(
-            "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
-        )
-        ov_outputs = ov_model(**tokens)
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
 
+        ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         self.assertTrue("past_key_values" in ov_outputs)
         self.assertIsInstance(ov_outputs.past_key_values, tuple)
-        is_stateful = ov_model.config.model_type not in not_stateful and self.IS_SUPPORT_STATEFUL
+        is_stateful = ov_model.config.model_type not in not_stateful
         self.assertEqual(ov_model.stateful, is_stateful)
         if is_stateful:
             self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+
+        set_seed(SEED)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        if model_arch == "qwen":
+            transformers_model.to(torch.float32)
+
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=1e-4))
+
+        # Qwen tokenizer does not support padding
+        if model_arch == "qwen":
+            return
+
+        # Compare batched generation.
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        tokenizer.padding_side = "left"
+        tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+        gen_config = GenerationConfig(
+            max_new_tokens=30,
+            min_new_tokens=30,
+            num_beams=3,
+            do_sample=False,
+            eos_token_id=None,
+        )
+
+        ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
+        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+        self.assertTrue(torch.allclose(ov_outputs, transformers_outputs))
+
         del transformers_model
         del ov_model
         gc.collect()
+
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
@@ -625,37 +649,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @pytest.mark.run_slow
-    @slow
-    def test_multiple_inputs(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        set_seed(SEED)
-        if model_arch == "qwen":
-            self.skipTest("Qwen tokenizer does not support padding")
-        model_kwargs = {}
-        if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {
-                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
-                "trust_remote_code": True,
-            }
-        model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=False, **model_kwargs)
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
-        tokenizer.pad_token = tokenizer.eos_token
-        texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
-        tokens = tokenizer(texts, padding=True, return_tensors="pt")
-        generation_config = GenerationConfig(encoder_no_repeat_ngram_size=0, max_new_tokens=20, num_beams=2)
-        outputs = model.generate(**tokens, generation_config=generation_config)
-        self.assertIsInstance(outputs, torch.Tensor)
-        self.assertEqual(outputs.shape[0], 3)
-        # test that generation result is reproducible
-        outputs2 = model.generate(**tokens, generation_config=generation_config)
-        self.assertIsInstance(outputs2, torch.Tensor)
-        self.assertEqual(outputs2.shape[0], 3)
-        self.assertTrue(torch.allclose(outputs2, outputs))
-        del model
-        gc.collect()
-
     def test_model_and_decoder_same_device(self):
         model_id = MODEL_NAMES["gpt2"]
         model = OVModelForCausalLM.from_pretrained(model_id, export=True)
@@ -681,12 +674,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
-        if self.IS_SUPPORT_STATEFUL:
-            model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
-            outputs_model_stateful = model_stateful.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
-            )
-            self.assertTrue(torch.equal(outputs_model_without_pkv, outputs_model_stateful))
+        model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
+        outputs_model_stateful = model_stateful.generate(
+            **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+        )
+        self.assertTrue(torch.equal(outputs_model_without_pkv, outputs_model_stateful))
 
         del model_with_pkv
         del model_without_pkv
