@@ -35,7 +35,7 @@ jobs:
         pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
     - name: Test with Pytest
       run: |
-        pytest tests/openvino/ --ignore test_modeling_basic
+        pytest tests/openvino/ --ignore test_modeling_basic --durations=0
     - name: Test openvino-nightly
       run: |
         pip uninstall -y openvino
