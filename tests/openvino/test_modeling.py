@@ -616,7 +616,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
-
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
