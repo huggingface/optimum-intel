@@ -626,6 +626,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_multiple_inputs(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
