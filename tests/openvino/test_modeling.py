@@ -20,6 +20,7 @@ import unittest
 from typing import Dict
 
 import numpy as np
+import pytest
 import requests
 import timm
 import torch
@@ -53,6 +54,7 @@ from transformers import (
     set_seed,
 )
 from transformers.onnx.utils import get_preprocessor
+from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES
 
 from optimum.intel import (
@@ -364,6 +366,8 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
@@ -379,6 +383,8 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    @pytest.mark.run_slow
+    @slow
     def test_metric(self):
         model_id = "distilbert-base-cased-distilled-squad"
         set_seed(SEED)
@@ -431,6 +437,8 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForTokenClassification.from_pretrained(model_id, export=True)
@@ -481,6 +489,8 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForFeatureExtraction.from_pretrained(model_id, export=True)
@@ -851,6 +861,8 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForImageClassification.from_pretrained(model_id, export=True)
@@ -981,6 +993,8 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
@@ -1438,6 +1452,8 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         self.assertIn("only supports the tasks", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_generate_utils(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
