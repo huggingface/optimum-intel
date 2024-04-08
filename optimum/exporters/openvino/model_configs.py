@@ -74,7 +74,7 @@ register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_e
 
 
 @register_in_tasks_manager("baichuan", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class BaichaunOpenVINOConfig(TextDecoderOnnxConfig):
+class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_layers="num_hidden_layers", num_attention_heads="num_attention_heads", hidden_size="hidden_size"
@@ -395,6 +395,24 @@ class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     "starcoder2", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 class Starcoder2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager("internlm2", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager("orion", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)

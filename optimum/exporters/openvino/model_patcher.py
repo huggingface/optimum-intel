@@ -513,5 +513,5 @@ class BaichuanModelPatcher(DecoderModelPatcher):
     ):
         super().__init__(config, model, model_kwargs)
         # model has first inference buffers initialization
-        if self._model.lm_head.first_flag:
+        if hasattr(self._model.lm_head, "first_flag"):
             self._model(torch.ones((1, 10), dtype=torch.int64), torch.ones((1, 10), dtype=torch.int64))
