@@ -592,8 +592,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "qwen":
             return
 
-        # Compare batched generation.
-        tokenizer.pad_token_id = tokenizer.eos_token_id
+        if model_arch != "chatglm":
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+        # Compare batched generation
         tokenizer.padding_side = "left"
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
         ov_model.generation_config.eos_token_id = None
