@@ -499,10 +499,9 @@ class QwenModelPatcher(DecoderModelPatcher):
             # For performance, using constant tril to generate causal_mask
             block.attn.register_buffer(
                 "bias",
-                torch.tril(
-                    torch.ones((max_positions, max_positions),
-                               dtype=torch.bool)
-                ).view(1, 1, max_positions, max_positions),
+                torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
+                    1, 1, max_positions, max_positions
+                ),
                 persistent=False,
             )
             block.attn.forward = types.MethodType(_qwen_attention_forward, block.attn)
