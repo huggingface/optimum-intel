@@ -80,7 +80,6 @@ from transformers.utils import (
     is_accelerate_available,
     is_apex_available,
     is_sagemaker_mp_enabled,
-    is_torch_xla_available,
     logging,
 )
 
@@ -100,6 +99,11 @@ from .utils import (
     use_external_data_format,
 )
 
+
+if is_transformers_version(">=", "4.39.0"):
+    from transformers.utils import is_torch_xla_available
+else:
+    from transformers.utils import is_torch_tpu_available as is_torch_xla_available
 
 if is_accelerate_available():
     from accelerate import __version__ as accelerate_version
