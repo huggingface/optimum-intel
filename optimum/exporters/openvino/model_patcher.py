@@ -300,7 +300,6 @@ def _update_causal_mask(self, attention_mask, input_tensor, cache_position):
     dtype, device = input_tensor.dtype, input_tensor.device
     min_dtype = torch.finfo(dtype).min
 
-    # workaround CVS-137270
     if dtype == torch.float32 or dtype == torch.float:
         min_dtype = torch.finfo(torch.bfloat16).min
 
@@ -357,6 +356,15 @@ def _update_causal_mask(self, attention_mask, input_tensor, cache_position):
 
 
 class GemmaModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+        self.original_update_causal_mask = model.model._update_causal_mask
+
     def __enter__(self):
         super().__enter__()
 
@@ -369,26 +377,30 @@ class GemmaModelPatcher(DecoderModelPatcher):
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
                 )
 
-        self._model.model.original_update_causal_mask = self._model.model._update_causal_mask
         self._model.model._update_causal_mask = types.MethodType(_update_causal_mask, self._model.model)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        self._model.model._update_causal_mask = self._model.model.original_update_causal_mask
-        del self._model.model.original_update_causal_mask
+        self._model.model._update_causal_mask = self.original_update_causal_mask
 
 
 class LlamaModelPatcher(DecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Dict[str, Any],
+    ):
+        super().__init__(config, model, model_kwargs)
+        self.original_update_causal_mask = model.model._update_causal_mask
+
     def __enter__(self):
         super().__enter__()
-
-        self._model.model.original_update_causal_mask = self._model.model._update_causal_mask
         self._model.model._update_causal_mask = types.MethodType(_update_causal_mask, self._model.model)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        self._model.model._update_causal_mask = self._model.model.original_update_causal_mask
-        del self._model.model.original_update_causal_mask
+        self._model.model._update_causal_mask = self.original_update_causal_mask
 
 
 SUPPORT_SDPA = is_torch_version(">", "2.1.0")
