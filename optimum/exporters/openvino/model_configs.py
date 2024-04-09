@@ -274,6 +274,7 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
     ) -> "ModelPatcher":
         return GemmaModelPatcher(self, model, model_kwargs=model_kwargs)
 
+
 @register_in_tasks_manager(
     "llama",
     *[

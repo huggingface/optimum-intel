@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
+from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import is_tf_available
 
@@ -287,6 +288,7 @@ class ChatGLMModelPatcher(DecoderModelPatcher):
         for block in self._model.transformer.encoder.layers:
             block.self_attention.core_attention.forward = block.self_attention.core_attention._orig_forward
 
+
 # transformers/models/llama/modeling_llama.py
 # transformers/models/gemma/modeling_gemma.py
 def _update_causal_mask(self, attention_mask, input_tensor, cache_position):
@@ -300,7 +302,6 @@ def _update_causal_mask(self, attention_mask, input_tensor, cache_position):
 
     # workaround CVS-137270
     if dtype == torch.float32 or dtype == torch.float:
-        print("use torch.finfo(torch.bfloat16).min as WA for issue CVS-137270")
         min_dtype = torch.finfo(torch.bfloat16).min
 
     sequence_length = input_tensor.shape[1]
@@ -353,6 +354,7 @@ def _update_causal_mask(self, attention_mask, input_tensor, cache_position):
             causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
 
     return causal_mask
+
 
 class GemmaModelPatcher(DecoderModelPatcher):
     def __enter__(self):
