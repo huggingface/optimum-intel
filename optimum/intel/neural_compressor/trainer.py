@@ -62,7 +62,6 @@ from transformers.utils import (
     is_accelerate_available,
     is_apex_available,
     is_sagemaker_mp_enabled,
-    is_torch_xla_available,
     logging,
 )
 
@@ -71,6 +70,12 @@ from optimum.exporters import TasksManager
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
 from ..utils.import_utils import is_neural_compressor_version, is_transformers_version
 from .configuration import INCConfig
+
+
+if is_transformers_version(">=", "4.39.0"):
+    from transformers.utils import is_torch_xla_available
+else:
+    from transformers.utils import is_torch_tpu_available as is_torch_xla_available
 
 
 if is_accelerate_available():
