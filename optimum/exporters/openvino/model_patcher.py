@@ -288,19 +288,24 @@ class ChatGLMModelPatcher(DecoderModelPatcher):
             block.self_attention.core_attention.forward = block.self_attention.core_attention._orig_forward
 
 
-def _gemma_update_causal_mask(self, attention_mask, input_tensor, cache_position):
+# adopted from
+# https://github.com/huggingface/transformers/blob/v4.39.3/src/transformers/models/gemma/modeling_gemma.py#L965
+# https://github.com/huggingface/transformers/blob/v4.39.3/src/transformers/models/llama/modeling_llama.py#L1058
+def _llama_gemma_update_causal_mask(self, attention_mask, input_tensor, cache_position, **kwargs):
     from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 
+    # for compatibility with https://github.com/huggingface/transformers/pull/30047
+    current_length = kwargs.get("current_length", cache_position[-1])
     dtype, device = input_tensor.dtype, input_tensor.device
+
+    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
+    # during execution on platforms with default lower precision (bfloat16, float16)
     min_dtype = torch.finfo(torch.float16).min
-    print(min_dtype)
     sequence_length = input_tensor.shape[1]
     if hasattr(getattr(self.layers[0], "self_attn", {}), "past_key_value"):  # static cache
         target_length = self.config.max_position_embeddings
     else:  # dynamic cache
-        target_length = (
-            attention_mask.shape[-1] if isinstance(attention_mask, torch.Tensor) else cache_position[-1] + 1
-        )
+        target_length = attention_mask.shape[-1] if isinstance(attention_mask, torch.Tensor) else current_length + 1
 
     causal_mask = torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
     if sequence_length != 1:
@@ -344,10 +349,12 @@ class GemmaModelPatcher(DecoderModelPatcher):
         super().__enter__()
 
         # gemma has some accuracy issues with bf16 with transformers >= 4.39
-        # fill causal mask in slightly different way for avoid overflow
+        # fill causal mask in slightly different way for avoid overflow on some platforms
         if is_transformers_version(">=", "4.39.0"):
             self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
-            self._model.model._update_causal_mask = types.MethodType(_gemma_update_causal_mask, self._model.model)
+            self._model.model._update_causal_mask = types.MethodType(
+                _llama_gemma_update_causal_mask, self._model.model
+            )
 
         # init inv_freq for torchscript tracing
         # https://github.com/huggingface/transformers/blob/ed74d97871468f3a4695ede50abdc0b55717a84d/src/transformers/models/gemma/modeling_gemma.py#L108
@@ -357,6 +364,24 @@ class GemmaModelPatcher(DecoderModelPatcher):
                 layer.self_attn.rotary_emb.inv_freq = 1.0 / (
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
                 )
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model.model, "_orig_update_causal_mask"):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+
+
+class LlamaModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        # llama has some accuracy issues with bf16 with transformers >= 4.39
+        # fill causal mask in slightly different way for avoid overflow on some platforms
+        if is_transformers_version(">=", "4.39.0"):
+            self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
+            self._model.model._update_causal_mask = types.MethodType(
+                _llama_gemma_update_causal_mask, self._model.model
+            )
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
