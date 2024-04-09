@@ -19,7 +19,7 @@ from packaging import version
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
-from optimum.exporters.onnx.model_configs import GemmaOnnxConfig
+from optimum.exporters.onnx.model_configs import GemmaOnnxConfig, LlamaOnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -34,6 +34,7 @@ from .model_patcher import (
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
     GemmaModelPatcher,
+    LlamaModelPatcher,
     MixtralModelPatcher,
     QwenModelPatcher,
 )
@@ -272,6 +273,23 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return GemmaModelPatcher(self, model, model_kwargs=model_kwargs)
+
+@register_in_tasks_manager(
+    "llama",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class LlamaOpenVINOConfig(LlamaOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return LlamaModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
