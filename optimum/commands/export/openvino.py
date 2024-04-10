@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Optional
 
 from ...exporters import TasksManager
 from ..base import BaseOptimumCLICommand, CommandInfo
+from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
 
 
 logger = logging.getLogger(__name__)
@@ -209,31 +210,51 @@ class OVExportCommand(BaseOptimumCLICommand):
             ov_config = OVConfig(quantization_config=quantization_config)
 
         library_name = TasksManager.infer_library_from_model(self.args.model)
-        task = get_relevant_task(self.args.task, self.args.model)
-        saved_dir = self.args.output
 
         if library_name == "diffusers" and ov_config and ov_config.quantization_config.get("dataset"):
-            import tempfile
-            from copy import deepcopy
-            saved_dir = tempfile.mkdtemp()
-            quantization_config = deepcopy(ov_config.quantization_config)
-            ov_config.quantization_config = {}
 
-        # TODO : add input shapes
-        main_export(
-            model_name_or_path=self.args.model,
-            output=saved_dir,
-            task=task,
-            framework=self.args.framework,
-            cache_dir=self.args.cache_dir,
-            trust_remote_code=self.args.trust_remote_code,
-            pad_token_id=self.args.pad_token_id,
-            ov_config=ov_config,
-            stateful=not self.args.disable_stateful,
-            convert_tokenizer=self.args.convert_tokenizer,
-            library_name=self.args.library
-            # **input_shapes,
-        )
+            if not is_diffusers_available():
+                raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
 
-        if saved_dir != self.args.output:
-            export_optimized_diffusion_model(saved_dir, self.args.output, task, quantization_config)
+            from diffusers import DiffusionPipeline
+
+            diffusers_config = DiffusionPipeline.load_config(self.args.model)
+            class_name = diffusers_config.get("_class_name", None)
+
+            if class_name == "LatentConsistencyModelPipeline":
+
+                from optimum.intel import OVLatentConsistencyModelPipeline
+
+                model_cls = OVLatentConsistencyModelPipeline
+
+            elif class_name == "StableDiffusionXLPipeline":
+
+                from optimum.intel import OVStableDiffusionXLPipeline
+
+                model_cls = OVStableDiffusionXLPipeline
+            elif class_name == "StableDiffusionPipeline":
+                from optimum.intel import OVStableDiffusionPipeline
+
+                model_cls = OVStableDiffusionPipeline
+            else:
+                raise NotImplementedError(f"Quantization in hybrid mode isn't supported for class {class_name}.")
+
+            model = model_cls.from_pretrained(self.args.model, export=True, quantization_config=ov_config.quantization_config)
+            model.save_pretrained(self.args.output)
+
+        else:
+            # TODO : add input shapes
+            main_export(
+                model_name_or_path=self.args.model,
+                output=self.args.output,
+                task=self.args.task,
+                framework=self.args.framework,
+                cache_dir=self.args.cache_dir,
+                trust_remote_code=self.args.trust_remote_code,
+                pad_token_id=self.args.pad_token_id,
+                ov_config=ov_config,
+                stateful=not self.args.disable_stateful,
+                convert_tokenizer=self.args.convert_tokenizer,
+                library_name=library_name,
+                # **input_shapes,
+            )
