@@ -52,7 +52,7 @@ _DEFAULT_4BIT_CONFIGS = {
 }
 
 
-class replace_properties_values:
+class _replace_properties_values:
     """
     A context manager for temporarily overriding an object's properties
     """
@@ -74,7 +74,7 @@ class replace_properties_values:
             setattr(self.obj, property_name, old_property_value)
 
 
-def is_serializable(obj):
+def _is_serializable(obj):
     try:
         json.dumps(obj)
         return True
@@ -92,7 +92,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         self,
         dataset: Optional[Union[str, List[str], nncf.Dataset, datasets.Dataset]] = None,
         ignored_scope: Optional[Union[dict, nncf.IgnoredScope]] = None,
-        subset_size: Optional[int] = None,
+        num_samples: Optional[int] = None,
     ):
         """
         Args:
@@ -100,14 +100,14 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                  The dataset used for data-aware weight compression or quantization with NNCF.
             ignored_scope (`dict or nncf.IgnoredScope`, *optional*):
                 An ignored scope that defines the list of model nodes to be ignored during quantization.
-            subset_size (`int`, *optional*):
+            num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
         """
         self.dataset = dataset
         if isinstance(ignored_scope, dict):
             ignored_scope = nncf.IgnoredScope(**ignored_scope)
         self.ignored_scope = ignored_scope
-        self.subset_size = subset_size
+        self.num_samples = num_samples
 
     def post_init(self):
         if not (self.dataset is None or isinstance(self.dataset, (str, list, nncf.Dataset, datasets.Dataset))):
@@ -121,22 +121,22 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                 f"{type(self.dataset)}"
             )
 
-    def to_dict_without_properties(self, property_names: Union[List[str], Tuple[str]]) -> Dict[str, Any]:
+    def _to_dict_without_properties(self, property_names: Union[List[str], Tuple[str]]) -> Dict[str, Any]:
         """
         Calls to_dict() with given properties overwritten with None. Useful for hiding non-serializable properties.
         """
         if len(property_names) == 0:
             return super().to_dict()
-        with replace_properties_values(self, property_names, [None] * len(property_names)):
+        with _replace_properties_values(self, property_names, [None] * len(property_names)):
             result = super().to_dict()
         return result
 
     def to_dict(self) -> Dict[str, Any]:
-        properties_to_omit = [] if is_serializable(self.dataset) else ["dataset"]
+        properties_to_omit = [] if _is_serializable(self.dataset) else ["dataset"]
         if isinstance(self.ignored_scope, nncf.IgnoredScope):
-            with replace_properties_values(self, ["ignored_scope"], [self.ignored_scope.__dict__]):
-                return self.to_dict_without_properties(properties_to_omit)
-        return self.to_dict_without_properties(properties_to_omit)
+            with _replace_properties_values(self, ["ignored_scope"], [self.ignored_scope.__dict__]):
+                return self._to_dict_without_properties(properties_to_omit)
+        return self._to_dict_without_properties(properties_to_omit)
 
 
 class OVConfig(BaseConfig):
@@ -180,10 +180,10 @@ class OVConfig(BaseConfig):
             for name, value in model_inputs.items()
         ]
 
-    def to_dict_safe(self, to_diff_dict: bool = False) -> Dict[str, Any]:
+    def _to_dict_safe(self, to_diff_dict: bool = False) -> Dict[str, Any]:
         if self.quantization_config is None:
             # Parent to_dict() implementation does not support quantization_config being None
-            with replace_properties_values(self, ("quantization_config",), (OVQuantizationConfigBase(),)):
+            with _replace_properties_values(self, ("quantization_config",), (OVQuantizationConfigBase(),)):
                 result = super().to_diff_dict() if to_diff_dict else super().to_dict()
                 del result["quantization_config"]
         else:
@@ -191,10 +191,10 @@ class OVConfig(BaseConfig):
         return result
 
     def to_dict(self) -> Dict[str, Any]:
-        return self.to_dict_safe(to_diff_dict=False)
+        return self._to_dict_safe(to_diff_dict=False)
 
     def to_diff_dict(self) -> Dict[str, Any]:
-        return self.to_dict_safe(to_diff_dict=True)
+        return self._to_dict_safe(to_diff_dict=True)
 
 
 class OVQuantizationMethod(str, Enum):
@@ -236,7 +236,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             preserve the accuracy of the model, the more sensitive layers receives a higher precision.
         ignored_scope (`dict`, *optional*):
             An ignored scope that defined the list of model control flow graph nodes to be ignored during quantization.
-        subset_size (`int`, *optional*):
+        num_samples (`int`, *optional*):
             The maximum number of samples composing the calibration dataset.
         quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
             Weight compression method to apply.
@@ -253,11 +253,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         all_layers: Optional[bool] = None,
         sensitivity_metric: Optional[str] = None,
         ignored_scope: Optional[Union[dict, nncf.IgnoredScope]] = None,
-        subset_size: Optional[int] = None,
+        num_samples: Optional[int] = None,
         quant_method: Optional[Union[QuantizationMethod, OVQuantizationMethod]] = OVQuantizationMethod.DEFAULT,
         **kwargs,
     ):
-        super().__init__(dataset, ignored_scope, subset_size)
+        super().__init__(dataset, ignored_scope, num_samples)
         self.bits = bits
         self.sym = sym
         self.tokenizer = tokenizer
@@ -265,7 +265,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
-        self.subset_size = subset_size
         self.quant_method = quant_method
         self.post_init()
 
@@ -305,8 +304,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 )
 
     def to_dict(self) -> Dict[str, Any]:
-        if not is_serializable(self.tokenizer):
-            return self.to_dict_without_properties(("tokenizer",))
+        if not _is_serializable(self.tokenizer):
+            return self._to_dict_without_properties(("tokenizer",))
         return super().to_dict()
 
 
@@ -316,7 +315,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         self,
         dataset: Union[str, List[str], nncf.Dataset, datasets.Dataset],
         ignored_scope: Optional[Union[dict, nncf.IgnoredScope]] = None,
-        subset_size: Optional[int] = 300,
+        num_samples: Optional[int] = 300,
         preset: nncf.QuantizationPreset = None,
         model_type: nncf.ModelType = nncf.ModelType.TRANSFORMER,
         fast_bias_correction: bool = True,
@@ -332,7 +331,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                  A dataset used for quantization parameters calibration. Required parameter.
             ignored_scope (`dict or nncf.IgnoredScope`, *optional*):
                 An ignored scope that defines the list of model nodes to be ignored during quantization.
-            subset_size (`int`, *optional*):
+            num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
             preset (`nncf.QuantizationPreset`, *optional*):
                 A preset controls the quantization mode (symmetric and asymmetric).
@@ -345,10 +344,10 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 Model type is needed to specify additional patterns in the model. Supported only `transformer` now.
             fast_bias_correction (`bool`, defaults to True):
                 Whether to apply fast or full bias correction algorithm.
-            overflow_fix (`bool`, default to OverflowFix.DISABLE):
+            overflow_fix (`nncf.OverflowFix`, default to OverflowFix.DISABLE):
                 Parameter for controlling overflow fix setting.
         """
-        super().__init__(dataset, ignored_scope, subset_size)
+        super().__init__(dataset, ignored_scope, num_samples)
         self.preset = preset
         self.model_type = model_type
         self.fast_bias_correction = fast_bias_correction
@@ -370,7 +369,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         # TODO: remove code below once NNCF is updated to 2.10
         overflow_fix_value = None if self.overflow_fix is None else self.overflow_fix.value
         preset_value = None if self.preset is None else self.preset.value
-        with replace_properties_values(self, ("overflow_fix", "preset"), (overflow_fix_value, preset_value)):
+        with _replace_properties_values(self, ("overflow_fix", "preset"), (overflow_fix_value, preset_value)):
             return super().to_dict()
 
 

@@ -392,7 +392,7 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8):
         model_id = MODEL_NAMES[model_type]
-        quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", subset_size=2)
+        quantization_config = OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions", num_samples=2)
         with tempfile.TemporaryDirectory() as tmp_dir:
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
 
@@ -414,7 +414,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         model = model_cls.from_pretrained(
             model_id,
             export=True,
-            quantization_config=OVWeightQuantizationConfig(bits=8, dataset=dataset, subset_size=3),
+            quantization_config=OVWeightQuantizationConfig(bits=8, dataset=dataset, num_samples=3),
         )
         num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
         self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
@@ -749,7 +749,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 group_size=128,
                 all_layers=True,
                 sensitivity_metric="mean_activation_magnitude",
-                subset_size=100,
+                num_samples=100,
                 quant_method=OVQuantizationMethod.DEFAULT,
             ),
             ["ignored_scope"],
@@ -768,7 +768,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
             OVQuantizationConfig(
                 dataset="wikitext",
                 ignored_scope={"names": ["op_name"]},
-                subset_size=100,
+                num_samples=100,
                 preset=nncf.QuantizationPreset.MIXED,
                 model_type=nncf.ModelType.TRANSFORMER,
                 fast_bias_correction=True,

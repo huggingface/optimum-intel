@@ -209,6 +209,7 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
+        weights_only: bool = None,
         **kwargs,
     ):
         """
@@ -228,6 +229,10 @@ class OVQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether to remove the columns unused by the model forward method.
+            weights_only (`bool`, *optional*):
+                Being deprecated.
+                Compress weights to integer precision (8-bit by default) while keeping activations
+                floating-point. Fits best for LLM footprint reduction and performance acceleration.
 
         Examples:
         ```python
@@ -257,9 +262,9 @@ class OVQuantizer(OptimumQuantizer):
                 "`calibration_dataset` argument is deprecated. Please provide calibration dataset "
                 "with `ov_config.quantization_config.dataset`."
             )
-        if "weights_only" in kwargs:
-            raise ValueError(
-                "`weights_only` argument is deprecated. Please provide `ov_config.quantization_config` "
+        if weights_only is not None:
+            logger.warning(
+                "`weights_only` argument is deprecated. In the future please provide `ov_config.quantization_config` "
                 "as an instance of OVWeightQuantizationConfig for weight-only compression."
             )
 
@@ -274,8 +279,14 @@ class OVQuantizer(OptimumQuantizer):
                 raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
         quantization_config = ov_config.quantization_config
         if quantization_config is None:
-            ov_config.quantization_config = OVWeightQuantizationConfig(bits=8, sym=True)
-            logger.info("`quantization_config` was not provided, 8-bit symmetric weight quantization will be applied.")
+            if weights_only is None or weights_only is True:
+                if weights_only is None:
+                    logger.info(
+                        "`quantization_config` was not provided, 8-bit symmetric weight quantization will be applied."
+                    )
+                ov_config.quantization_config = OVWeightQuantizationConfig(bits=8, sym=True)
+            else:
+                ov_config.quantization_config = OVQuantizationConfig()
 
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
@@ -335,7 +346,7 @@ class OVQuantizer(OptimumQuantizer):
                 try:
                     for data in calibration_dataloader:
                         self.model.generate(**data, max_new_tokens=1)
-                        if len(collected_inputs) >= quantization_config.subset_size:
+                        if len(collected_inputs) >= quantization_config.num_samples:
                             break
                 finally:
                     self.model.request = self.model.request.request
@@ -347,7 +358,7 @@ class OVQuantizer(OptimumQuantizer):
         quantized_model = nncf.quantize(
             self.model.model,
             quantization_dataset,
-            subset_size=quantization_config.subset_size,
+            subset_size=quantization_config.num_samples,
             ignored_scope=quantization_config.ignored_scope,
             model_type=quantization_config.model_type,
             preset=quantization_config.preset,
@@ -446,7 +457,7 @@ class OVQuantizer(OptimumQuantizer):
             model = nncf.quantize(
                 model,
                 quantization_dataset,
-                subset_size=quantization_config.subset_size,
+                subset_size=quantization_config.num_samples,
                 ignored_scope=quantization_config.ignored_scope,
                 model_type=quantization_config.model_type,
                 preset=quantization_config.preset,
@@ -603,7 +614,7 @@ def _weight_only_quantization(
 
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        nsamples = config.subset_size if config.subset_size else 128
+        nsamples = config.num_samples if config.num_samples else 128
         dataset = get_dataset(config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
         dataset = prepare_dataset(dataset)
 
@@ -626,7 +637,7 @@ def _weight_only_quantization(
         # awq=config.quant_method == QuantizationMethod.AWQ,    # TODO : enable from nncf v2.9.0
         ignored_scope=config.ignored_scope,
         dataset=dataset,
-        # subset_size=config.subset_size if config.subset_size else 128,    # TODO : enable from nncf v2.9.0
+        # subset_size=config.num_samples if config.num_samples else 128,    # TODO : enable from nncf v2.9.0
     )
 
 
@@ -705,7 +716,7 @@ def _hybrid_quantization(
     wc_quantization_config.ignored_scope.types.append("Convolution")
     compressed_model = _weight_only_quantization(model, wc_quantization_config)
 
-    subset_size = quantization_config.subset_size if quantization_config.subset_size else 200
+    subset_size = quantization_config.num_samples if quantization_config.num_samples else 200
     quantized_model = nncf.quantize(
         model=compressed_model,
         calibration_dataset=nncf.Dataset(dataset),
