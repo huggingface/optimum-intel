@@ -42,6 +42,7 @@ MODEL_NAMES = {
     "donut": "fxmarty/tiny-doc-qa-vision-encoder-decoder",
     "electra": "hf-internal-testing/tiny-random-electra",
     "gemma": "fxmarty/tiny-random-GemmaForCausalLM",
+    "falcon": "fxmarty/really-tiny-falcon-testing",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
