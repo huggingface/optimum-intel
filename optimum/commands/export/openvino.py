@@ -161,7 +161,7 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
-        from ...exporters.openvino.__main__ import main_export, get_relevant_task, export_optimized_diffusion_model
+        from ...exporters.openvino.__main__ import main_export
         from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, OVConfig
 
         if self.args.fp16:

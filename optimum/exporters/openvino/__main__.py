@@ -161,7 +161,7 @@ def main_export(
             ov_config = OVConfig(quantization_config=q_config)
 
     original_task = task
-    task = get_relevant_task(task, model_name_or_path)
+    task = TasksManager.map_from_synonym(task)
     framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
     library_name_is_not_provided = library_name is None
     library_name = TasksManager.infer_library_from_model(
@@ -376,40 +376,3 @@ def main_export(
     if do_gptq_patching:
         torch.cuda.is_available = orig_cuda_check
         GPTQQuantizer.post_init_model = orig_post_init_model
-
-
-def get_relevant_task(task, model_name_or_path):
-    relevant_task = TasksManager.map_from_synonym(task)
-    if relevant_task == "auto":
-        try:
-            relevant_task = TasksManager.infer_task_from_model(model_name_or_path)
-        except KeyError as e:
-            raise KeyError(
-                f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
-        except RequestsConnectionError as e:
-            raise RequestsConnectionError(
-                f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
-    return relevant_task
-
-
-def export_optimized_diffusion_model(model_name_or_path, output, task, quantization_config):
-    task = get_relevant_task(task, model_name_or_path)
-    if task == "latent-consistency":
-        from optimum.intel import OVLatentConsistencyModelPipeline
-
-        model_cls = OVLatentConsistencyModelPipeline
-    elif task == "stable-diffusion-xl":
-        from optimum.intel import OVStableDiffusionXLPipeline
-
-        model_cls = OVStableDiffusionXLPipeline
-    elif task == "stable-diffusion":
-        from optimum.intel import OVStableDiffusionPipeline
-
-        model_cls = OVStableDiffusionPipeline
-    else:
-        raise NotImplementedError(f"Quantization in hybrid mode isn't supported for {task}.")
-
-    model = model_cls.from_pretrained(model_id=model_name_or_path, quantization_config=quantization_config)
-    model.save_pretrained(output)

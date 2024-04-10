@@ -187,8 +187,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_hybrid_quantization(self, model_type: str, exp_num_fq: int, exp_num_int8: int):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} "
-                f"--task {model_type} --dataset laion/filtered-wit --weight-format int8 {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --dataset laion/filtered-wit --weight-format int8 {tmpdir}",
                 shell=True,
                 check=True,
             )
