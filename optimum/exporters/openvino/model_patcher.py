@@ -531,9 +531,10 @@ def _qwen_attention_forward(
             value = value.permute(0, 2, 1, 3)
 
         if not self.use_cache_quantization and SUPPORT_SDPA:
-            causal_mask = registered_causal_mask[:, :, key.size(-2) - query.size(-2) : key.size(-2), : key.size(-2)]
+            # For performance, using constant tril to generate causal_mask
+            causal_mask = self.bias[:, :, key.size(-2) - query.size(-2) : key.size(-2), : key.size(-2)]
             if attention_mask is not None:
-                attention_mask = attention_mask.expand(-1, -1, causal_mask.size(2), -1).masked_fill(
+                attention_mask = attention_mask.expand(-1, -1, query.size(2), -1).masked_fill(
                     ~causal_mask, torch.finfo(query.dtype).min
                 )
             else:
@@ -578,8 +579,17 @@ class QwenModelPatcher(DecoderModelPatcher):
 
     def __enter__(self):
         super().__enter__()
+        max_positions = self._model.config.seq_length
         for block in self._model.transformer.h:
             block.attn._orig_forward = block.attn.forward
+            # For performance, using constant tril to generate causal_mask
+            block.attn.register_buffer(
+                "bias",
+                torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
+                    1, 1, max_positions, max_positions
+                ),
+                persistent=False,
+            )
             block.attn.forward = types.MethodType(_qwen_attention_forward, block.attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
