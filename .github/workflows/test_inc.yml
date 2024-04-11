@@ -35,7 +35,7 @@ jobs:
         pip install torch==2.1.0 torchaudio==2.1.0 torchvision==0.16 --extra-index-url https://download.pytorch.org/whl/cpu
         pip install .[neural-compressor,diffusers,tests]
         pip install intel-extension-for-pytorch==2.1.100
-        pip install intel-extension-for-transformers==1.3.2
+        pip install intel-extension-for-transformers
         pip install peft
     - name: Test with Pytest
       run: |
