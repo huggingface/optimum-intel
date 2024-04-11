@@ -140,8 +140,9 @@ class INCModel(OptimizedModel):
                 quantization_config = PretrainedConfig.from_pretrained(model_save_dir / "quantize_config.json")
                 algorithm = getattr(quantization_config, "quant_method", None)
                 if algorithm in {"rtn", "gptq", "awq", "autoaround"}:
-
-                    from intel_extension_for_transformers.transformers.modeling.modeling_auto import _BaseQBitsAutoModelClass
+                    from intel_extension_for_transformers.transformers.modeling.modeling_auto import (
+                        _BaseQBitsAutoModelClass,
+                    )
 
                     _BaseQBitsAutoModelClass.ORIG_MODEL = cls.auto_model_class
 

@@ -71,6 +71,7 @@ from .modeling_base import (  # noqa
 )
 from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 
+
 INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION = "1.4.0"
 
 if is_intel_extension_for_transformers_available():
@@ -81,8 +82,12 @@ if is_intel_extension_for_transformers_available():
         )
     from intel_extension_for_transformers.transformers.llm.quantization.utils import convert_to_quantized_model
     from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
-    from intel_extension_for_transformers.transformers.utils.config import ITREXQuantizationConfigMixin
-    from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig, AwqConfig
+    from intel_extension_for_transformers.transformers.utils.config import (
+        AwqConfig,
+        GPTQConfig,
+        ITREXQuantizationConfigMixin,
+        RtnConfig,
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -195,7 +200,9 @@ class INCQuantizer(OptimumQuantizer):
         self._set_task()
 
         if kwargs.pop("weight_only", None) is None:
-            logger.warning(f"`weight_only` is deprecated. Use `quantization_config` instead to specify which methodology and quantization pamraters to apply.")
+            logger.warning(
+                "`weight_only` is deprecated. Use `quantization_config` instead to specify which methodology and quantization pamraters to apply."
+            )
 
         if (
             isinstance(quantization_config, PostTrainingQuantConfig)
@@ -209,15 +216,15 @@ class INCQuantizer(OptimumQuantizer):
             )
 
         if save_onnx_model:
-            if not isinstance(quantization_config, PostTrainingQuantConfig) or INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.DYNAMIC:
-                
+            if (
+                not isinstance(quantization_config, PostTrainingQuantConfig)
+                or INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.DYNAMIC
+            ):
                 logger.warning("ONNX export for dynamic and weight only quantized model is not supported.")
                 save_onnx_model = False
 
-
         # ITREX Weight Only Quantization
         if not isinstance(quantization_config, PostTrainingQuantConfig):
-
             # check neural-compressor version
             if is_neural_compressor_version("<", NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION):
                 raise ImportError(
@@ -237,7 +244,9 @@ class INCQuantizer(OptimumQuantizer):
                 raise ValueError("")
 
             if not isinstance(quantization_config, (GPTQConfig, RtnConfig)):
-                raise ValueError(f"Weight-only quantization is only support RTN and GPTQ algorithm now! But got {quantization_config}")
+                raise ValueError(
+                    f"Weight-only quantization is only support RTN and GPTQ algorithm now! But got {quantization_config}"
+                )
 
             if calibration_dataset is None and isinstance(quantization_config, (GPTQConfig, AwqConfig)):
                 raise ValueError(
@@ -273,7 +282,6 @@ class INCQuantizer(OptimumQuantizer):
                 logger.warning("ONNX export is no supported for model with quantized embeddings")
                 save_onnx_model = False
 
-
         if not isinstance(quantization_config, PostTrainingQuantConfig):
             if use_cpu:
                 # will remove after intel-extension-for-transformers 1.3.3 release.
@@ -287,7 +295,7 @@ class INCQuantizer(OptimumQuantizer):
             self._quantized_model = convert_to_quantized_model(
                 self._original_model, quantization_config, device=quantization_config.device
             )
-            
+
             self._quantized_model.quantization_config = quantization_config
             self._quantized_model.save_pretrained = types.MethodType(save_low_bit, self._quantized_model)
             self._quantized_model.save_pretrained(save_directory)

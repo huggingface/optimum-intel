@@ -87,16 +87,11 @@ class OptimizationTest(INCTestMixin):
         "hf-internal-testing/tiny-random-GPTNeoForCausalLM",
     )
 
-
-
-
     WEIGHT_ONLY_CONFIG = (
         ("rtn", "int4_clip"),
         ("gptq", "int4_clip"),
         ("rtn", "int8"),
     )
-
-
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_DYNAMIC)
     def test_dynamic_quantization(self, task, model_name, expected_quantized_matmuls):
@@ -244,7 +239,7 @@ class OptimizationTest(INCTestMixin):
         with torch.no_grad():
             loaded_outputs = loaded_model(**tokens)
             # quantizer_outputs = quantizer_model(**tokens)
-        
+
         self.assertTrue("logits" in loaded_outputs)
         self.assertIsInstance(loaded_outputs.logits, torch.Tensor)
         self.assertTrue("past_key_values" in loaded_outputs)
