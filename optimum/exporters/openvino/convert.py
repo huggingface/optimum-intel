@@ -505,14 +505,7 @@ def export_from_model(
         )
 
     model_kwargs = model_kwargs or {}
-    library_name_is_not_provided = library_name is None
     library_name = TasksManager._infer_library_from_model(model)
-    if library_name == "sentence_transformers" and library_name_is_not_provided:
-        logger.warning(
-            "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
-            "`transformers` will be selected. If you want to use `sentence_transformers`, please use `library_name` argument"
-        )
-        library_name = "transformers"
     TasksManager.standardize_model_attributes(model, library_name)
 
     if hasattr(model.config, "export_model_type"):

@@ -122,11 +122,11 @@ def parse_args_openvino(parser: "ArgumentParser"):
     )
 
     optional_group.add_argument(
-        "--library-name",
+        "--library",
         type=str,
         choices=["transformers", "diffusers", "timm", "sentence_transformers"],
         default=None,
-        help=("The library on the model." " If not provided, will attempt to infer the local checkpoint's library"),
+        help=("The library on the model. If not provided, will attempt to infer the local checkpoint's library"),
     )
 
 
@@ -209,6 +209,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             ov_config=ov_config,
             stateful=not self.args.disable_stateful,
             convert_tokenizer=self.args.convert_tokenizer,
-            library_name=self.args.library_name
+            library_name=self.args.library
             # **input_shapes,
         )

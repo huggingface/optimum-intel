@@ -171,7 +171,7 @@ def main_export(
     if library_name == "sentence_transformers" and library_name_is_not_provided:
         logger.warning(
             "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
-            "`transformers` will be selected. If you want to use `sentence_transformers`, please use --library_name argument"
+            "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
         )
         library_name = "transformers"
 
