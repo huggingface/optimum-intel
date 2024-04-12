@@ -245,7 +245,7 @@ class OVQuantizer(OptimumQuantizer):
         >>> from transformers import AutoModelForCausalLM
         >>> model = AutoModelForCausalLM.from_pretrained("databricks/dolly-v2-3b")
         >>> quantizer = OVQuantizer.from_pretrained(model, task="text-generation")
-        >>> ov_config = OVConfig(quantization_config=OVWeightQuantizationConfig(bits=8, sym=True))
+        >>> ov_config = OVConfig(quantization_config=OVWeightQuantizationConfig())
         >>> quantizer.quantize(ov_config=ov_config, save_directory="./quantized_model")
         >>> optimized_model = OVModelForCausalLM.from_pretrained("./quantized_model")
         ```
@@ -257,15 +257,17 @@ class OVQuantizer(OptimumQuantizer):
         >>> # or
         >>> model = AutoModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
         >>> quantizer = OVQuantizer.from_pretrained(model, task="text-classification")
-        >>> ov_config = OVConfig(quantization_config=OVQuantizationConfig(dataset=calibration_dataset))
+        >>> ov_config = OVConfig(quantization_config=OVQuantizationConfig())
         >>> quantizer.quantize(calibration_dataset=dataset, ov_config=ov_config, save_directory="./quantized_model")
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
         """
+        # TODO: deprecate weights_only argument
         if weights_only is not None:
             logger.warning(
                 "`weights_only` argument is deprecated. In the future please provide `ov_config.quantization_config` "
-                "as an instance of OVWeightQuantizationConfig for weight-only compression."
+                "as an instance of OVWeightQuantizationConfig for weight-only compression or as an instance of "
+                "OVQuantizationConfig for full model quantization."
             )
 
         if save_directory is None:
@@ -274,9 +276,8 @@ class OVQuantizer(OptimumQuantizer):
 
         if ov_config is None:
             ov_config = OVConfig()
-        if ov_config is not None:
-            if not isinstance(ov_config, OVConfig):
-                raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
+        if not isinstance(ov_config, OVConfig):
+            raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
         quantization_config = ov_config.quantization_config
         if quantization_config is None:
             if weights_only is None or weights_only is True:
