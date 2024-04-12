@@ -371,7 +371,6 @@ class INCQuantizer(OptimumQuantizer):
             self._save_pretrained(compressed_model, output_path)
             quantization_config = INCConfig(quantization=quantization_config, save_onnx_model=save_onnx_model)
             quantization_config.save_pretrained(save_directory)
-        return self._quantized_model
 
     @staticmethod
     def _save_pretrained(model: Union[PyTorchModel, IPEXModel], output_path: str):

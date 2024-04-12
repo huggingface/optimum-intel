@@ -69,10 +69,10 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(SEED)
 
 
-class OptimizationTest(INCTestMixin):
+class QuantizationTest(INCTestMixin):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         ("text-classification", "hf-internal-testing/tiny-random-BertForSequenceClassification", 21),
-        # ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 21), # TODO : enable causal lm task once INC ONNX export fixed
+        ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 21),
     )
 
     SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS + (
@@ -83,12 +83,6 @@ class OptimizationTest(INCTestMixin):
     TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
         "hf-internal-testing/tiny-random-BloomForCausalLM",
         "hf-internal-testing/tiny-random-GPTNeoForCausalLM",
-    )
-
-    WEIGHT_ONLY_CONFIG = (
-        ("rtn", "int4_clip"),
-        ("gptq", "int4_clip"),
-        ("rtn", "int8"),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_DYNAMIC)
@@ -171,79 +165,6 @@ class OptimizationTest(INCTestMixin):
                 load_inc_model=True,
                 num_samples=num_samples,
             )
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    @unittest.skipIf(is_torch_version(">=", "2.2.0"), "compatibility issue with torch 2.2.0 and IPEX latest version")
-    def test_ipex_static_quantization_with_smoothquant(self, task, model_name, expected_quantized_matmuls):
-        recipes = {"smooth_quant": True, "smooth_quant_args": {"alpha": 0.5}}
-        num_samples = 10
-        quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex", recipes=recipes)
-        model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        quantizer = INCQuantizer.from_pretrained(model, task=task)
-        calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer.quantize(
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-                save_directory=tmp_dir,
-                save_onnx_model=False,
-            )
-            self.check_model_outputs(
-                q_model=quantizer._quantized_model,
-                task=task,
-                tokenizer=tokenizer,
-                save_directory=tmp_dir,
-                expected_quantized_matmuls=expected_quantized_matmuls,
-                is_static=True,
-                load_onnx_model=False,
-                num_samples=num_samples,
-                load_inc_model=False,
-                load_ipex_model=True,
-            )
-
-    @parameterized.expand(WEIGHT_ONLY_CONFIG)
-    @unittest.skipIf(not is_intel_extension_for_transformers_available(), reason="ITREX not available")
-    def test_weight_only_quantization(self, methodology, weight_dtype):
-        model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
-
-        from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig
-
-        bits = 4 if "4" in weight_dtype else 8
-        if methodology == "gptq":
-            quantization_config = GPTQConfig(bits=bits, sym=True, damp_percent=0.01, weight_dtype=weight_dtype)
-        else:
-            quantization_config = RtnConfig(bits=bits, weight_dtype=weight_dtype)
-
-        model = AutoModelForCausalLM.from_pretrained(model_name)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
-        calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer_model = quantizer.quantize(
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-                save_directory=tmp_dir,
-            )
-            loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir)
-
-        tokens = tokenizer("This is a sample output", return_tensors="pt")
-
-        with torch.no_grad():
-            loaded_outputs = loaded_model(**tokens)
-            # quantizer_outputs = quantizer_model(**tokens)
-
-        self.assertTrue("logits" in loaded_outputs)
-        self.assertIsInstance(loaded_outputs.logits, torch.Tensor)
-        self.assertTrue("past_key_values" in loaded_outputs)
-        self.assertIsInstance(loaded_outputs.past_key_values, tuple)
-
-        # self.assertTrue(torch.allclose(quantizer_outputs.logits, loaded_outputs.logits, equal_nan=True, atol=1e-4))
 
     def test_dynamic_accuracy_strategy_quantization(self):
         model_name = "distilbert-base-cased-distilled-squad"
@@ -350,6 +271,13 @@ class OptimizationTest(INCTestMixin):
         )
         outputs = model.generate(**tokens, do_sample=False, num_beams=1, temperature=0.9, min_length=20, max_length=20)
         self.assertTrue(torch.equal(pre_outputs, outputs))
+
+
+class TrainingOptimizationTest(INCTestMixin):
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
+        ("text-classification", "hf-internal-testing/tiny-random-BertForSequenceClassification", 21),
+        ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 21),
+    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, task, model_name, expected_quantized_matmuls):
@@ -569,3 +497,96 @@ class OptimizationTest(INCTestMixin):
             self.assertIsInstance(loaded_model_outputs.logits, torch.Tensor)
             # Compare tensor outputs
             # self.assertTrue(torch.allclose(loaded_model_outputs.logits, model_outputs.logits, atol=1e-4))
+
+
+
+class WeightOnlyQuantizationTest(INCTestMixin):
+
+    WEIGHT_ONLY_CONFIG = (
+        ("rtn", "int4_clip"),
+        ("gptq", "int4_clip"),
+        ("rtn", "int8"),
+    )
+
+    @parameterized.expand(WEIGHT_ONLY_CONFIG)
+    @unittest.skipIf(not is_intel_extension_for_transformers_available(), reason="ITREX not available")
+    def test_weight_only_quantization(self, methodology, weight_dtype):
+        model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
+
+        from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig
+
+        bits = 4 if "4" in weight_dtype else 8
+        if methodology == "gptq":
+            quantization_config = GPTQConfig(bits=bits, sym=True, damp_percent=0.01, weight_dtype=weight_dtype)
+        else:
+            quantization_config = RtnConfig(bits=bits, weight_dtype=weight_dtype)
+
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
+        calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                calibration_dataset=calibration_dataset,
+                save_directory=tmp_dir,
+            )
+            loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir)
+
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
+
+        with torch.no_grad():
+            loaded_outputs = loaded_model(**tokens)
+            # quantizer_outputs = model(**tokens)
+
+        self.assertTrue("logits" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.logits, torch.Tensor)
+        self.assertTrue("past_key_values" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.past_key_values, tuple)
+
+        # self.assertTrue(torch.allclose(quantizer_outputs.logits, loaded_outputs.logits, equal_nan=True, atol=1e-4))
+
+
+
+
+class IPEXQuantizationTest(INCTestMixin):
+
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
+        ("text-classification", "hf-internal-testing/tiny-random-BertForSequenceClassification", 21),
+        ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 21),
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    @unittest.skipIf(is_torch_version(">=", "2.2.0"), "compatibility issue with torch 2.2.0 and IPEX latest version")
+    def test_ipex_static_quantization_with_smoothquant(self, task, model_name, expected_quantized_matmuls):
+        recipes = {"smooth_quant": True, "smooth_quant_args": {"alpha": 0.5}}
+        num_samples = 10
+        quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex", recipes=recipes)
+        model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        quantizer = INCQuantizer.from_pretrained(model, task=task)
+        calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                calibration_dataset=calibration_dataset,
+                save_directory=tmp_dir,
+                save_onnx_model=False,
+            )
+            self.check_model_outputs(
+                q_model=quantizer._quantized_model,
+                task=task,
+                tokenizer=tokenizer,
+                save_directory=tmp_dir,
+                expected_quantized_matmuls=expected_quantized_matmuls,
+                is_static=True,
+                load_onnx_model=False,
+                num_samples=num_samples,
+                load_inc_model=False,
+                load_ipex_model=True,
+            )
