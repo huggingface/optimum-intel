@@ -163,9 +163,17 @@ def main_export(
     original_task = task
     task = TasksManager.map_from_synonym(task)
     framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
+    library_name_is_not_provided = library_name is None
     library_name = TasksManager.infer_library_from_model(
         model_name_or_path, subfolder=subfolder, library_name=library_name
     )
+
+    if library_name == "sentence_transformers" and library_name_is_not_provided:
+        logger.warning(
+            "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
+            "`transformers` will be selected. If you want to use `sentence_transformers`, please use --library_name argument"
+        )
+        library_name = "transformers"
 
     if task == "auto":
         try:
@@ -337,6 +345,7 @@ def main_export(
         preprocessors=preprocessors,
         device=device,
         trust_remote_code=trust_remote_code,
+        library_name=library_name,
         **kwargs_shapes,
     )
 

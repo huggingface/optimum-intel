@@ -382,6 +382,8 @@ def export_pytorch(
 
         sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
+        if not ordered_dummy_inputs:
+            ordered_dummy_inputs = dummy_inputs
         ordered_input_names = list(inputs)
         flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
         ov_model.validate_nodes_and_infer_types()
@@ -494,6 +496,7 @@ def export_from_model(
     preprocessors: List = None,
     device: str = "cpu",
     trust_remote_code: bool = False,
+    library_name: str = None,
     **kwargs_shapes,
 ):
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
@@ -502,7 +505,14 @@ def export_from_model(
         )
 
     model_kwargs = model_kwargs or {}
+    library_name_is_not_provided = library_name is None
     library_name = TasksManager._infer_library_from_model(model)
+    if library_name == "sentence_transformers" and library_name_is_not_provided:
+        logger.warning(
+            "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
+            "`transformers` will be selected. If you want to use `sentence_transformers`, please use `library_name` argument"
+        )
+        library_name = "transformers"
     TasksManager.standardize_model_attributes(model, library_name)
 
     if hasattr(model.config, "export_model_type"):
