@@ -502,8 +502,8 @@ class TrainingOptimizationTest(INCTestMixin):
 class WeightOnlyQuantizationTest(INCTestMixin):
     WEIGHT_ONLY_CONFIG = (
         ("rtn", "int4_clip"),
-        ("gptq", "int4_clip"),
         ("rtn", "int8"),
+        # ("gptq", "int4_clip"), # can be enabled after fix in neural-compressor merged
     )
 
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
