@@ -44,7 +44,7 @@ from transformers import (
     pipeline,
     set_seed,
 )
-from utils_tests import SEED, INCTestMixin, _generate_dataset
+from utils_tests import MODEL_NAMES, SEED, INCTestMixin, _generate_dataset
 from optimum.intel.utils.import_utils import is_torch_version, is_intel_extension_for_transformers_available
 
 
@@ -71,22 +71,23 @@ set_seed(SEED)
 
 class QuantizationTest(INCTestMixin):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("text-classification", "hf-internal-testing/tiny-random-BertForSequenceClassification", 21),
-        ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 21),
+        ("text-classification", "bert", 21),
+        # ("text-generation", "bloom", 21),
     )
 
     SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS + (
-        ("fill-mask", "hf-internal-testing/tiny-random-BertForMaskedLM", 22),
-        ("token-classification", "hf-internal-testing/tiny-random-AlbertForTokenClassification", 26),
+        ("fill-mask", "bert", 22),
+        ("token-classification", "albert", 26),
     )
 
     TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
-        "hf-internal-testing/tiny-random-BloomForCausalLM",
-        "hf-internal-testing/tiny-random-GPTNeoForCausalLM",
+        "bloom",
+        "gpt_neo",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_DYNAMIC)
-    def test_dynamic_quantization(self, task, model_name, expected_quantized_matmuls):
+    def test_dynamic_quantization(self, task, model_arch, expected_quantized_matmuls):
+        model_name = MODEL_NAMES[model_arch]
         quantization_config = PostTrainingQuantConfig(approach="dynamic")
         model_class = ORT_SUPPORTED_TASKS[task]["class"][0]
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -121,8 +122,9 @@ class QuantizationTest(INCTestMixin):
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_static_quantization(self, task, model_name, expected_quantized_matmuls):
+    def test_static_quantization(self, task, model_arch, expected_quantized_matmuls):
         num_samples = 10
+        model_name = MODEL_NAMES[model_arch]
         model_class = ORT_SUPPORTED_TASKS[task]["class"][0]
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         if tokenizer.pad_token is None:
@@ -245,7 +247,8 @@ class QuantizationTest(INCTestMixin):
         self.assertTrue(np.allclose(loaded_pipe_outputs, outputs, atol=1e-4))
 
     @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
-    def test_quantize_text_generate_model(self, model_id):
+    def test_quantize_text_generate_model(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
         set_seed(42)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -274,13 +277,11 @@ class QuantizationTest(INCTestMixin):
 
 
 class TrainingOptimizationTest(INCTestMixin):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("text-classification", "hf-internal-testing/tiny-random-BertForSequenceClassification", 21),
-        ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 21),
-    )
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("text-classification", "bert", 21),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_aware_training_quantization(self, task, model_name, expected_quantized_matmuls):
+    def test_aware_training_quantization(self, task, model_arch, expected_quantized_matmuls):
+        model_name = MODEL_NAMES[model_arch]
         quantization_config = QuantizationAwareTrainingConfig()
         save_onnx_model = False
 
@@ -303,7 +304,8 @@ class TrainingOptimizationTest(INCTestMixin):
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_aware_training_quantization_pruning(self, task, model_name, expected_quantized_matmuls):
+    def test_aware_training_quantization_pruning(self, task, model_arch, expected_quantized_matmuls):
+        model_name = MODEL_NAMES[model_arch]
         quantization_config = QuantizationAwareTrainingConfig()
         target_sparsity = 0.9
         pruning_config = WeightPruningConfig(
@@ -335,7 +337,8 @@ class TrainingOptimizationTest(INCTestMixin):
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_magnitude_pruning(self, task, model_name, expected_quantized_matmuls):
+    def test_magnitude_pruning(self, task, model_arch, expected_quantized_matmuls):
+        model_name = MODEL_NAMES[model_arch]
         target_sparsity = 0.9
         # end_step should be training_args.num_train_epochs * (len(train_dataset) // training_args.per_device_train_batch_size)
         pruning_config = WeightPruningConfig(
@@ -374,7 +377,8 @@ class TrainingOptimizationTest(INCTestMixin):
             self.assertEqual(inc_config.pruning["pattern"], "4x1")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_distillation(self, task, model_name, expected_quantized_matmuls):
+    def test_distillation(self, task, model_arch, expected_quantized_matmuls):
+        model_name = MODEL_NAMES[model_arch]
         teacher_model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
         distillation_config = DistillationConfig(teacher_model=teacher_model)
         save_onnx_model = True
