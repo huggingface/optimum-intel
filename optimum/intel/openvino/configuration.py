@@ -223,10 +223,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             The maximum number of samples composing the calibration dataset.
         quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
             Weight compression method to apply.
-            weight_only (`bool`, *optional*):
-                Used to explicitly specify type of quantization to apply.
         weight_only (`bool`, *optional*):
-            Used to explicitly specify type of quantization (weight-only of full) to apply.
+            Used to explicitly specify type of quantization (weight-only of full) to apply. Useful when building
+            the config from dictionary.
     """
 
     def __init__(
@@ -343,7 +342,8 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             overflow_fix (`nncf.OverflowFix`, default to OverflowFix.DISABLE):
                 Parameter for controlling overflow fix setting.
             weight_only (`bool`, *optional*):
-                Used to explicitly specify type of quantization (weight-only of full) to apply.
+                Used to explicitly specify type of quantization (weight-only of full) to apply. Useful when building
+                the config from dictionary.
         """
         if weight_only is True:
             logger.warning(

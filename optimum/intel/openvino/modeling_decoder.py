@@ -19,7 +19,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
 
-import nncf
 import numpy as np
 import openvino
 import torch
@@ -574,7 +573,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         local_files_only: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
-        calibration_dataset: Optional[nncf.Dataset] = None,
         **kwargs,
     ):
         model_path = Path(model_id)
@@ -598,6 +596,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
+        calibration_dataset = kwargs.get("calibration_dataset", None)
         model = cls.load_model(
             model_cache_path,
             quantization_config=None if load_in_4bit else quantization_config,

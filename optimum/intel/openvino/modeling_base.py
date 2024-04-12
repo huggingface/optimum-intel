@@ -18,7 +18,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
 from typing import Dict, Optional, Union
 
-import nncf
 import openvino
 from huggingface_hub import hf_hub_download
 from openvino import Core, convert_model
@@ -104,7 +103,7 @@ class OVBaseModel(OptimizedModel):
     def load_model(
         file_name: Union[str, Path],
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-        calibration_dataset: Optional[nncf.Dataset] = None,
+        calibration_dataset: Optional["nncf.Dataset"] = None,
     ):
         """
         Loads the model.
