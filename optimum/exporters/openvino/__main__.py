@@ -345,7 +345,6 @@ def main_export(
         preprocessors=preprocessors,
         device=device,
         trust_remote_code=trust_remote_code,
-        library_name=library_name,
         **kwargs_shapes,
     )
 

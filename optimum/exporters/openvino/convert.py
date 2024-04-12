@@ -496,7 +496,6 @@ def export_from_model(
     preprocessors: List = None,
     device: str = "cpu",
     trust_remote_code: bool = False,
-    library_name: str = None,
     **kwargs_shapes,
 ):
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
