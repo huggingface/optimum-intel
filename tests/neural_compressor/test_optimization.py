@@ -499,9 +499,7 @@ class TrainingOptimizationTest(INCTestMixin):
             # self.assertTrue(torch.allclose(loaded_model_outputs.logits, model_outputs.logits, atol=1e-4))
 
 
-
 class WeightOnlyQuantizationTest(INCTestMixin):
-
     WEIGHT_ONLY_CONFIG = (
         ("rtn", "int4_clip"),
         ("gptq", "int4_clip"),
@@ -549,10 +547,7 @@ class WeightOnlyQuantizationTest(INCTestMixin):
         # self.assertTrue(torch.allclose(quantizer_outputs.logits, loaded_outputs.logits, equal_nan=True, atol=1e-4))
 
 
-
-
 class IPEXQuantizationTest(INCTestMixin):
-
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         ("text-classification", "hf-internal-testing/tiny-random-BertForSequenceClassification", 21),
         ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 21),
