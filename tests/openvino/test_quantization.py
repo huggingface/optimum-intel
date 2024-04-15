@@ -76,14 +76,14 @@ _TASK_TO_DATASET = {
 
 
 class OVQuantizerTest(unittest.TestCase):
-    # TODO : add models, enable OVModelForCausalLM.
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        (OVModelForSequenceClassification, "hf-internal-testing/tiny-random-bert", 32, 35),
-        # (OVModelForCausalLM, "hf-internal-testing/tiny-random-gpt2", 41, 23),
+        (OVModelForSequenceClassification, "bert", 32, 35),
+        (OVModelForCausalLM, "gpt2", 41, 23),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_automodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
+    def test_automodel_static_quantization(self, model_cls, model_arch, expected_fake_quantize, expected_int8):
+        model_name = MODEL_NAMES[model_arch]
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
         file_name = "openvino_quantized_model.xml"
@@ -128,7 +128,8 @@ class OVQuantizerTest(unittest.TestCase):
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
+    def test_ovmodel_static_quantization(self, model_cls, model_arch, expected_fake_quantize, expected_int8):
+        model_name = MODEL_NAMES[model_arch]
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
         if "gpt2" in model_name:
@@ -188,13 +189,13 @@ class OVWeightCompressionTest(unittest.TestCase):
     LOAD_IN_4_BITS_SCOPE = (
         (
             OVModelForCausalLM,
-            "hf-internal-testing/tiny-random-gpt2",
+            "gpt2",
             dict(bits=4, sym=False, group_size=-1, ratio=0.8),
             14,
         ),
         (
             OVModelForCausalLM,
-            "hf-internal-testing/tiny-random-gpt2",
+            "gpt2",
             dict(
                 bits=4,
                 sym=False,
@@ -205,13 +206,13 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
-            "hf-internal-testing/tiny-random-gpt2",
+            "gpt2",
             dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
             18,
         ),
         (
             OVModelForCausalLM,
-            "hf-internal-testing/tiny-random-OPTForCausalLM",
+            "opt",
             dict(
                 bits=4,
                 sym=True,
@@ -224,7 +225,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
-            "hf-internal-testing/tiny-random-OPTForCausalLM",
+            "opt",
             dict(
                 bits=4,
                 sym=True,
@@ -451,8 +452,9 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(
-        self, model_cls, model_id, quantization_config, expected_ov_int4
+        self, model_cls, model_arch, quantization_config, expected_ov_int4
     ):
+        model_id = MODEL_NAMES[model_arch]
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
