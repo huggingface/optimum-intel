@@ -52,7 +52,6 @@ _DEFAULT_4BIT_CONFIGS = {
 }
 
 
-
 @dataclass
 class OVQuantizationConfigBase(QuantizationConfigMixin):
     """
@@ -376,16 +375,15 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
             return self_copy.to_dict()
         return super().to_dict()
 
-
     def post_init(self):
         r"""
         Safety checker that arguments are correct
         """
         super().post_init()
-        
+
         if self.bits != 8:
             raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
-        
+
 
 def _check_default_4bit_configs(config: PretrainedConfig):
     return _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
