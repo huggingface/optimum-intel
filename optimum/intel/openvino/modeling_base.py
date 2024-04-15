@@ -103,7 +103,7 @@ class OVBaseModel(OptimizedModel):
     def load_model(
         file_name: Union[str, Path],
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-        calibration_dataset: Optional["nncf.Dataset"] = None,
+        calibration_dataset: Optional["Dataset"] = None,
     ):
         """
         Loads the model.
