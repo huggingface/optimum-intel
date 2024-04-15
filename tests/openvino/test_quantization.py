@@ -114,10 +114,9 @@ class OVQuantizerTest(unittest.TestCase):
             )
             model = model_cls.from_pretrained(tmp_dir, file_name=file_name)
 
-            # TODO: uncomment once move to a newer version of NNCF which has some fixes (addmm, baddmm)
-            # num_fake_quantize, num_int8, _ = get_num_quantized_nodes(model)
-            # self.assertEqual(expected_fake_quantize, num_fake_quantize)
-            # self.assertEqual(expected_int8, num_int8)
+            num_fake_quantize, num_int8, _ = get_num_quantized_nodes(model)
+            self.assertEqual(expected_fake_quantize, num_fake_quantize)
+            self.assertEqual(expected_int8, num_int8)
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -711,7 +710,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
             OVQuantizationConfig(
                 ignored_scope={"names": ["op_name"]},
                 num_samples=100,
-                preset=nncf.QuantizationPreset.MIXED,
+                sym=False,
                 model_type=nncf.ModelType.TRANSFORMER,
                 fast_bias_correction=True,
                 overflow_fix=OverflowFix.DISABLE,
@@ -757,7 +756,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
             dict(
                 ignored_scope={"names": ["op_name"]},
                 num_samples=100,
-                preset=nncf.QuantizationPreset.MIXED,
+                sym=False,
                 model_type=nncf.ModelType.TRANSFORMER,
                 fast_bias_correction=True,
                 overflow_fix=OverflowFix.DISABLE,

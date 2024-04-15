@@ -52,6 +52,7 @@ _DEFAULT_4BIT_CONFIGS = {
 }
 
 
+
 @dataclass
 class OVQuantizationConfigBase(QuantizationConfigMixin):
     """
@@ -309,9 +310,10 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 class OVQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
+        bits: int = 8,
+        sym: bool = False,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = 300,
-        preset: nncf.QuantizationPreset = None,
         model_type: nncf.ModelType = nncf.ModelType.TRANSFORMER,
         fast_bias_correction: bool = True,
         overflow_fix: OverflowFix = OverflowFix.DISABLE,
@@ -323,18 +325,15 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         compression, during quantization both weights and activations are converted to lower precision.
         For weight-only model quantization please see OVWeightQuantizationConfig.
         Args:
+            bits (`int`, defaults to 8):
+                The number of bits to quantize to.
             ignored_scope (`dict`, *optional*):
                 An ignored scope that defines the list of model nodes to be ignored during quantization. Dictionary
                 entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
-            preset (`nncf.QuantizationPreset`, *optional*):
-                A preset controls the quantization mode (symmetric and asymmetric).
-                It can take the following values:
-                - `performance`: Symmetric quantization of weights and activations.
-                - `mixed`: Symmetric quantization of weights and asymmetric quantization of activations.
-                Default value is None. In this case, `mixed` preset is used for `transformer`
-                model type otherwise `performance`.
+            sym (`bool`, defaults to `False`):
+                Whether to use symmetric quantization on the activations. Symmetric quantization will be applied on the weights in any case.
             model_type (`nncf.ModelType`, defaults to nncf.ModelType.TRANSFORMER):
                 Model type is needed to specify additional patterns in the model. Supported only `transformer` now.
             fast_bias_correction (`bool`, defaults to True):
@@ -354,10 +353,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         # TODO: remove checks below once NNCF is updated to 2.10
         if isinstance(overflow_fix, str):
             overflow_fix = OverflowFix(overflow_fix)
-        if isinstance(preset, str):
-            preset = nncf.QuantizationPreset(preset)
 
-        self.preset = preset
+        self.bits = bits
+        self.sym = sym
         self.model_type = model_type
         self.fast_bias_correction = fast_bias_correction
         self.overflow_fix = overflow_fix
@@ -365,7 +363,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
 
     def to_dict(self) -> Dict[str, Any]:
         # TODO: remove code below once NNCF is updated to 2.10
-        if isinstance(self.overflow_fix, Enum) or isinstance(self.preset, Enum):
+        if isinstance(self.overflow_fix, Enum):
             overflow_fix_value = (
                 None
                 if self.overflow_fix is None
@@ -373,15 +371,21 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 if isinstance(self.overflow_fix, str)
                 else self.overflow_fix.value
             )
-            preset_value = (
-                None if self.preset is None else self.preset if isinstance(self.preset, str) else self.preset.value
-            )
             self_copy = copy.deepcopy(self)
             self_copy.overflow_fix = overflow_fix_value
-            self_copy.preset = preset_value
             return self_copy.to_dict()
         return super().to_dict()
 
+
+    def post_init(self):
+        r"""
+        Safety checker that arguments are correct
+        """
+        super().post_init()
+        
+        if self.bits != 8:
+            raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
+        
 
 def _check_default_4bit_configs(config: PretrainedConfig):
     return _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
