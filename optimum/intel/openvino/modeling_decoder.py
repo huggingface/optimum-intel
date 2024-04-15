@@ -635,6 +635,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     f"For the given model, we recommend the following `quantization_config` : {default_config}"
                 )
 
+            calibration_dataset = None
             if isinstance(quantization_config.dataset, str):
                 tokenizer = quantization_config.tokenizer or AutoTokenizer.from_pretrained(model_id)
 
