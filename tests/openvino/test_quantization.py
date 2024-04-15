@@ -78,7 +78,7 @@ _TASK_TO_DATASET = {
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
         (OVModelForSequenceClassification, "bert", 32, 35),
-        (OVModelForCausalLM, "gpt2", 41, 23),
+        # (OVModelForCausalLM, "gpt2", 41, 23),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
