@@ -597,6 +597,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
         calibration_dataset = kwargs.get("calibration_dataset", None)
+
+        if calibration_dataset is not None:
+            logger.warning(
+                "The `calibration_dataset` argument is deprecated and will be removed, to apply quantization using a custom dataset, please use the `OVQuantizer`."
+            )
         model = cls.load_model(
             model_cache_path,
             quantization_config=None if load_in_4bit else quantization_config,
