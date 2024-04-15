@@ -109,7 +109,7 @@ def load_ipex_model(
 
     if model is None:
         model_id = SUPPORTED_TASKS[targeted_task]["default"]
-        model = ipex_model_class.from_pretrained(model_id, export=True)
+        model = ipex_model_class.from_pretrained(model_id, export=True, **model_kwargs)
     elif isinstance(model, str):
         model_id = model
         try:
@@ -258,6 +258,15 @@ def pipeline(
     load_tokenizer = False if task in no_tokenizer_tasks else True
     load_feature_extractor = False if task in no_feature_extractor_tasks else True
 
+    commit_hash = kwargs.pop("_commit_hash", None)
+
+    hub_kwargs = {
+        "revision": kwargs.pop("revision", None),
+        "token": kwargs.pop("use_auth_token", None),
+        "trust_remote_code": kwargs.pop("trust_remote_code", None),
+        "_commit_hash": commit_hash,
+    }
+
     if isinstance(model, Path):
         model = str(model)
 
@@ -274,9 +283,9 @@ def pipeline(
     model, model_id = MAPPING_LOADING_FUNC[accelerator](model, task, supported_tasks, model_kwargs, **kwargs)
 
     if load_tokenizer and model_id and tokenizer is None:
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, **hub_kwargs, **model_kwargs)
     if load_feature_extractor and model_id and feature_extractor is None:
-        feature_extractor = AutoFeatureExtractor.from_pretrained(model_id)
+        feature_extractor = AutoFeatureExtractor.from_pretrained(model_id, **hub_kwargs, **model_kwargs)
 
     if torch_dtype is not None:
         kwargs["torch_dtype"] = torch_dtype
