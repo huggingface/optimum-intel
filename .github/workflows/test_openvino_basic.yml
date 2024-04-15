@@ -25,7 +25,7 @@ jobs:
         # Testing lower and upper bound of supported Python versions
         # This also ensures that the test fails if dependencies break for Python 3.7
         python-version: ["3.8", "3.11"]
-        transformers: ['transformers', 'git+https://github.com/huggingface/transformers.git']
+        transformers: ['transformers']
         optimum: ['optimum', 'git+https://github.com/huggingface/optimum.git']
 
     runs-on: ubuntu-20.04
@@ -42,7 +42,7 @@ jobs:
         # Install openvino manually to prevent dependency conflicts when .[openvino] pins
         # optimum or transformers to a specific version
         # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
-        pip install torch --extra-index-url https://download.pytorch.org/whl/cpu
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         pip install .[tests] openvino onnx onnxruntime ${{ matrix.optimum}} ${{ matrix.transformers }}
 
     - name: Pip freeze        
@@ -51,4 +51,4 @@ jobs:
     - name: Test with Pytest
       run: |
         pytest tests/openvino/test_modeling_basic.py
-
+        RUN_SLOW=1 pytest tests/openvino/test_modeling.py -s -m "run_slow" --durations=0
