@@ -15,6 +15,14 @@
 import logging
 
 from ..utils.import_utils import is_accelerate_available, is_diffusers_available, is_nncf_available
+
+
+if not is_nncf_available():
+    raise ImportError("optimum.intel.openvino requires nncf, please install it with `pip install nncf`")
+
+
+import nncf
+
 from .utils import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
@@ -25,25 +33,24 @@ from .utils import (
 )
 
 
-if is_nncf_available():
-    import nncf
+# Suppress version mismatch logging
+nncf.set_log_level(logging.ERROR)
+from nncf.torch import patch_torch_operators
 
-    # Suppress version mismatch logging
-    nncf.set_log_level(logging.ERROR)
-    from nncf.torch import patch_torch_operators
 
-    nncf.set_log_level(logging.INFO)
+nncf.set_log_level(logging.INFO)
 
-    patch_torch_operators()
-
-    from .quantization import OVQuantizer
-    from .training_args import OVTrainingArguments
-
-    if is_accelerate_available():
-        from .trainer import OVTrainer
-
+patch_torch_operators()
 
 from .configuration import OVConfig, OVQuantizationConfig, OVWeightQuantizationConfig
+from .quantization import OVQuantizer
+from .training_args import OVTrainingArguments
+
+
+if is_accelerate_available():
+    from .trainer import OVTrainer
+
+
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,

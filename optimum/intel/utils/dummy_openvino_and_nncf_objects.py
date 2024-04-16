@@ -15,34 +15,12 @@
 from .import_utils import DummyObject, requires_backends
 
 
-class OVTrainingArguments(metaclass=DummyObject):
-    _backends = ["openvino", "nncf"]
-
-    def __init__(self, *args, **kwargs):
-        requires_backends(self, ["openvino", "nncf"])
-
-    @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        requires_backends(cls, ["openvino", "nncf"])
-
-
 class OVTrainer(metaclass=DummyObject):
-    _backends = ["openvino", "nncf", "accelerate"]
+    _backends = ["openvino", "accelerate"]
 
     def __init__(self, *args, **kwargs):
-        requires_backends(self, ["openvino", "nncf", "accelerate"])
+        requires_backends(self, ["openvino", "accelerate"])
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
-        requires_backends(cls, ["openvino", "nncf", "accelerate"])
-
-
-class OVQuantizer(metaclass=DummyObject):
-    _backends = ["openvino", "nncf"]
-
-    def __init__(self, *args, **kwargs):
-        requires_backends(self, ["openvino", "nncf"])
-
-    @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        requires_backends(cls, ["openvino", "nncf"])
+        requires_backends(cls, ["openvino", "accelerate"])

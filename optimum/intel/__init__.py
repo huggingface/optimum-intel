@@ -22,7 +22,6 @@ from .utils import (
     is_diffusers_available,
     is_ipex_available,
     is_neural_compressor_available,
-    is_nncf_available,
     is_openvino_available,
 )
 from .version import __version__
@@ -55,17 +54,9 @@ else:
         "IPEXModel",
     ]
 
-try:
-    if not (is_openvino_available() and is_nncf_available()):
-        raise OptionalDependencyNotAvailable()
-except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(["OVQuantizer", "OVTrainingArguments"])
-else:
-    _import_structure["openvino"].extend(["OVQuantizer", "OVTrainingArguments"])
-
 
 try:
-    if not (is_openvino_available() and is_nncf_available() and is_accelerate_available()):
+    if not (is_openvino_available() and is_accelerate_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
     _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(["OVTrainer"])
@@ -97,6 +88,7 @@ else:
         ]
     )
 
+
 try:
     if not is_openvino_available():
         raise OptionalDependencyNotAvailable()
@@ -127,6 +119,8 @@ else:
             "OVQuantizationConfig",
             "OVWeightQuantizationConfig",
             "OVConfig",
+            "OVQuantizer",
+            "OVTrainingArguments",
         ]
     )
 
@@ -185,15 +179,7 @@ if TYPE_CHECKING:
         )
 
     try:
-        if not (is_openvino_available() and is_nncf_available()):
-            raise OptionalDependencyNotAvailable()
-    except OptionalDependencyNotAvailable:
-        from .utils.dummy_openvino_and_nncf_objects import OVQuantizer, OVTrainingArguments
-    else:
-        from .openvino import OVQuantizer, OVTrainingArguments
-
-    try:
-        if not (is_openvino_available() and is_nncf_available() and is_accelerate_available()):
+        if not (is_openvino_available() and is_accelerate_available()):
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
         from .utils.dummy_openvino_and_nncf_objects import OVTrainer
@@ -245,6 +231,8 @@ if TYPE_CHECKING:
             OVModelForTokenClassification,
             OVModelForVision2Seq,
             OVQuantizationConfig,
+            OVQuantizer,
+            OVTrainingArguments,
             OVWeightQuantizationConfig,
         )
 

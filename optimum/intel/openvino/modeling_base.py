@@ -30,7 +30,6 @@ from optimum.exporters.onnx import OnnxConfig
 from optimum.modeling_base import OptimizedModel
 
 from ...exporters.openvino import export, main_export
-from ..utils.import_utils import is_nncf_available
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, _print_compiled_model_properties
 
@@ -136,12 +135,7 @@ class OVBaseModel(OptimizedModel):
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
 
         if quantization_config:
-            if not is_nncf_available():
-                raise ImportError(
-                    "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
-                )
-
-            from optimum.intel.openvino.quantization import _weight_only_quantization
+            from .quantization import _weight_only_quantization
 
             model = _weight_only_quantization(model, quantization_config, calibration_dataset=calibration_dataset)
 

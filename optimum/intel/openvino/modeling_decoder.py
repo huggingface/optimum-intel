@@ -19,6 +19,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
 
+import nncf
 import numpy as np
 import openvino
 import torch
@@ -33,7 +34,6 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
-from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import _DEFAULT_4BIT_CONFIGS, OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
@@ -622,12 +622,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
 
         if load_in_4bit:
-            if not is_nncf_available():
-                raise ImportError(
-                    "Quantization of the weights requires nncf, please install it with `pip install nncf`"
-                )
-            import nncf
-
             from .quantization import _weight_only_quantization
 
             default_config = _check_default_4bit_configs(config)

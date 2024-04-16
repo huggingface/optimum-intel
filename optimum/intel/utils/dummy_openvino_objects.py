@@ -200,3 +200,25 @@ class OVWeightQuantizationConfig(metaclass=DummyObject):
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["openvino"])
+
+
+class OVTrainingArguments(metaclass=DummyObject):
+    _backends = ["openvino"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino"])
+
+
+class OVQuantizer(metaclass=DummyObject):
+    _backends = ["openvino"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino"])

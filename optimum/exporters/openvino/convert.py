@@ -18,7 +18,7 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers import T5Tokenizer, T5TokenizerFast
 from transformers.utils import is_tf_available, is_torch_available
@@ -36,7 +36,7 @@ from optimum.exporters.utils import _get_submodels_and_export_configs
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
-from ...intel.utils.import_utils import is_nncf_available
+from ...intel.openvino.configuration import OVConfig
 from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_export_task_support_stateful, ensure_stateful_is_available, patch_stateful
 from .utils import (
@@ -65,20 +65,11 @@ if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
-if TYPE_CHECKING:
-    from optimum.intel.openvino.configuration import OVConfig
-
-
 def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
     compress_to_fp16 = False
 
     if ov_config is not None:
         if ov_config.quantization_config:
-            if not is_nncf_available():
-                raise ImportError(
-                    "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
-                )
-
             from optimum.intel.openvino.quantization import _weight_only_quantization
 
             _weight_only_quantization(model, ov_config.quantization_config)
@@ -498,11 +489,6 @@ def export_from_model(
     trust_remote_code: bool = False,
     **kwargs_shapes,
 ):
-    if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
-        raise ImportError(
-            f"Compression of the weights to {ov_config.quantization_config} requires nncf, please install it with `pip install nncf`"
-        )
-
     model_kwargs = model_kwargs or {}
     library_name = TasksManager._infer_library_from_model(model)
     TasksManager.standardize_model_attributes(model, library_name)
@@ -590,17 +576,9 @@ def export_from_model(
             num_parameters = sum(param.numel() for param in list(model.parameters()) if param.requires_grad)
 
         if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
-            if is_nncf_available():
-                from ...intel.openvino.configuration import OVConfig
+            ov_config = OVConfig(quantization_config={"bits": 8})
 
-                ov_config = OVConfig(quantization_config={"bits": 8})
-
-                logger.info("The model weights will be quantized to int8.")
-            else:
-                logger.warning(
-                    "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
-                    "please install it with `pip install nncf`"
-                )
+            logger.info("The model weights will be quantized to int8.")
 
     if library_name != "diffusers":
         # Saving the model config and preprocessor as this is needed sometimes.
