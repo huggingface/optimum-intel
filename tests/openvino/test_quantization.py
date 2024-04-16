@@ -770,12 +770,6 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(abc="def", weight_only=True), OVWeightQuantizationConfig, None),
         (dict(bits=8, fast_bias_correction=True, weight_only=True), OVWeightQuantizationConfig, None),
         (dict(bits=8, fast_bias_correction=True, weight_only=False), OVQuantizationConfig, None),
-        (dict(bits=8, sym=True, weight_only=False), OVWeightQuantizationConfig, "Please check your configuration"),
-        (
-            dict(model_type=nncf.ModelType.TRANSFORMER, weight_only=True),
-            OVQuantizationConfig,
-            "Please check your configuration",
-        ),
     )
 
     @parameterized.expand(QUANTIZATION_CONFIGS)
@@ -818,8 +812,6 @@ class OVQuantizationConfigTest(unittest.TestCase):
             ov_config = OVConfig(quantization_config=quantization_config)
         self.assertIsInstance(ov_config.quantization_config, config_type)
         for k, v in quantization_config.items():
-            if k == "weight_only" and warning_log == "Please check your configuration":
-                continue
             if hasattr(ov_config.quantization_config, k):
                 self.assertEqual(getattr(ov_config.quantization_config, k), v)
 

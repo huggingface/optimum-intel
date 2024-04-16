@@ -294,7 +294,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 
 @dataclass
 class OVDynamicQuantizationConfig(OVWeightQuantizationConfig):
-
     def __init__(
         self,
         bits: int = 8,
