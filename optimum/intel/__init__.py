@@ -29,7 +29,7 @@ from .version import __version__
 
 _import_structure = {
     "openvino": [],
-    "utils.dummy_openvino_and_nncf_objects": [],
+    "utils.dummy_openvino_and_accelerate_objects": [],
 }
 
 try:
@@ -59,7 +59,7 @@ try:
     if not (is_openvino_available() and is_accelerate_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(["OVTrainer"])
+    _import_structure["utils.dummy_openvino_and_accelerate_objects"].extend(["OVTrainer"])
 else:
     _import_structure["openvino"].extend(["OVTrainer"])
 
@@ -182,7 +182,7 @@ if TYPE_CHECKING:
         if not (is_openvino_available() and is_accelerate_available()):
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
-        from .utils.dummy_openvino_and_nncf_objects import OVTrainer
+        from .utils.dummy_openvino_and_accelerate_objects import OVTrainer
     else:
         from .openvino import OVTrainer
 
