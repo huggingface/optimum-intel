@@ -199,7 +199,7 @@ class INCQuantizer(OptimumQuantizer):
         default_name = WEIGHTS_NAME if not isinstance(self._original_model, ORTModel) else ONNX_WEIGHTS_NAME
         self._set_task()
 
-        if kwargs.pop("weight_only", None) is None:
+        if kwargs.pop("weight_only", None) is not None:
             logger.warning(
                 "`weight_only` is deprecated. Use `quantization_config` instead to specify which methodology and quantization pamraters to apply."
             )
@@ -241,7 +241,10 @@ class INCQuantizer(OptimumQuantizer):
                 )
 
             if not isinstance(quantization_config, ITREXQuantizationConfigMixin):
-                raise ValueError("quantization_config is not an object of ITREXQuantizationConfigMixin, please refer to https://github.com/huggingface/optimum-intel/tree/main/examples/neural_compressor/language-modeling/run_clm.py")
+                raise TypeError(
+                    "`quantization_config` should either be an instance of `neural_compressor.config.PostTrainingQuantConfig` or "
+                    f"`intel_extension_for_transformers.transformers.utils.config.ITREXQuantizationConfigMixin` but got: {type(quantization_config)} instead."
+                )
 
             if not isinstance(quantization_config, (GPTQConfig, RtnConfig)):
                 raise ValueError(
@@ -331,10 +334,7 @@ class INCQuantizer(OptimumQuantizer):
             )
 
             if not hasattr(compressed_model, "_model") or compressed_model._model is None:
-                raise RuntimeError(
-                    "The maximum number of trials specified has been reached and no quantized model meeting the specified"
-                    " accuracy tolerance has been found. Either the tolerance or the number of trials need to be increased."
-                )
+                raise RuntimeError("Calling `neural_compressor.fit` returned unexpected results")
 
             if isinstance(self._original_model.config, PretrainedConfig):
                 # If backend is IPEX, then the quantized model is JIT model which will drop the config attribute,

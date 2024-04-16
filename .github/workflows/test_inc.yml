@@ -35,13 +35,14 @@ jobs:
         pip install .[neural-compressor,diffusers,tests]
         pip install intel-extension-for-transformers
         pip install peft
+
     - name: Test with Pytest
       run: |
         pytest tests/neural_compressor/ --ignore tests/neural_compressor/test_ipex.py --durations=0
     - name: Test IPEX
       run: |
-        pip uninstall intel-extension-for-transformers
+        pip uninstall -y intel-extension-for-transformers
         pip install torch==2.1.0 torchaudio==2.1.0 torchvision==0.16 --extra-index-url https://download.pytorch.org/whl/cpu
-        pip install intel-extension-for-pytorch
+        pip install intel-extension-for-pytorch==2.1.100
         pytest tests/neural_compressor/test_ipex.py
 
