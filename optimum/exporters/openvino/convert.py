@@ -18,7 +18,7 @@ import inspect
 import logging
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers import T5Tokenizer, T5TokenizerFast
 from transformers.utils import is_tf_available, is_torch_available
@@ -36,7 +36,6 @@ from optimum.exporters.utils import _get_submodels_and_export_configs
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
-from ...intel.openvino.configuration import OVConfig
 from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_export_task_support_stateful, ensure_stateful_is_available, patch_stateful
 from .utils import (
@@ -63,6 +62,10 @@ if is_diffusers_available():
 
 if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
+
+
+if TYPE_CHECKING:
+    from optimum.intel.openvino.configuration import OVConfig
 
 
 def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
@@ -576,6 +579,8 @@ def export_from_model(
             num_parameters = sum(param.numel() for param in list(model.parameters()) if param.requires_grad)
 
         if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+            from ...intel.openvino.configuration import OVConfig
+
             ov_config = OVConfig(quantization_config={"bits": 8})
 
             logger.info("The model weights will be quantized to int8.")
