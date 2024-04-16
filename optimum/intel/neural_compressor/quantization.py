@@ -241,7 +241,7 @@ class INCQuantizer(OptimumQuantizer):
                 )
 
             if not isinstance(quantization_config, ITREXQuantizationConfigMixin):
-                raise ValueError("")
+                raise ValueError("quantization_config is not an object of ITREXQuantizationConfigMixin, please refer to https://github.com/huggingface/optimum-intel/tree/main/examples/neural_compressor/language-modeling/run_clm.py")
 
             if not isinstance(quantization_config, (GPTQConfig, RtnConfig)):
                 raise ValueError(
