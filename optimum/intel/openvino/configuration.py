@@ -62,7 +62,6 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         self,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
-        weight_only: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -72,14 +71,11 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                 entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
-            weight_only (`bool`, *optional*):
-                Used to explicitly specify type of quantization (weight-only of full) to apply.
         """
         if isinstance(ignored_scope, nncf.IgnoredScope):
             ignored_scope = ignored_scope.__dict__
         self.ignored_scope = ignored_scope
         self.num_samples = num_samples
-        self.weight_only = weight_only
 
     def post_init(self):
         try:
@@ -191,6 +187,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
     Args:
         bits (`int`, defaults to 8):
             The number of bits to quantize to.
+        group_size (`int`, *optional*):
+            The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
         sym (`bool`, defaults to `False`):
             Whether to use symmetric quantization.
         tokenizer (`str`, *optional*):
@@ -209,8 +207,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         ratio (`float`, defaults to 1.0):
             The ratio between baseline and backup precisions (e.g. 0.9 means 90% of layers quantized to INT4_ASYM
             and the rest to INT8_ASYM).
-        group_size (`int`, *optional*):
-            The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
         all_layers (`bool`, *optional*):
             Defines how many layers are compressed to 4-bits while the rest are kept in 8-bit precision.
         sensitivity_metric (`str`, *optional*):
@@ -223,33 +219,24 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             The maximum number of samples composing the calibration dataset.
         quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
             Weight compression method to apply.
-        weight_only (`bool`, *optional*):
-            Used to explicitly specify type of quantization (weight-only of full) to apply. Useful when building
-            the config from dictionary.
     """
 
     def __init__(
         self,
         bits: int = 8,
+        group_size: Optional[int] = None,
         sym: bool = False,
         tokenizer: Optional[str] = None,
         dataset: Optional[Union[str, List[str]]] = None,
         ratio: float = 1.0,
-        group_size: Optional[int] = None,
         all_layers: Optional[bool] = None,
         sensitivity_metric: Optional[str] = None,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
         quant_method: Optional[Union[QuantizationMethod, OVQuantizationMethod]] = OVQuantizationMethod.DEFAULT,
-        weight_only: Optional[bool] = True,
         **kwargs,
     ):
-        if weight_only is False:
-            logger.warning(
-                "Trying to create an instance of `OVWeightQuantizationConfig` with `weight_only` being "
-                "False. Please check your configuration."
-            )
-        super().__init__(ignored_scope, num_samples, True)
+        super().__init__(ignored_scope, num_samples)
         self.bits = bits
         self.sym = sym
         self.tokenizer = tokenizer
@@ -306,6 +293,21 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 
 
 @dataclass
+class OVDynamicQuantizationConfig(OVWeightQuantizationConfig):
+
+    def __init__(
+        self,
+        bits: int = 8,
+        weights_group_size: Optional[int] = None,
+        activations_group_size: int = 32,
+        **kwargs,
+    ):
+        super().__init__(bits=bits, group_size=weights_group_size, **kwargs)
+        # TODO add kv_cache_dtype
+        self.activations_group_size = activations_group_size
+
+
+@dataclass
 class OVQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
@@ -316,7 +318,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         model_type: nncf.ModelType = nncf.ModelType.TRANSFORMER,
         fast_bias_correction: bool = True,
         overflow_fix: OverflowFix = OverflowFix.DISABLE,
-        weight_only: Optional[bool] = False,
         **kwargs,
     ):
         """
@@ -339,16 +340,8 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 Whether to apply fast or full bias correction algorithm.
             overflow_fix (`nncf.OverflowFix`, default to OverflowFix.DISABLE):
                 Parameter for controlling overflow fix setting.
-            weight_only (`bool`, *optional*):
-                Used to explicitly specify type of quantization (weight-only of full) to apply. Useful when building
-                the config from dictionary.
         """
-        if weight_only is True:
-            logger.warning(
-                "Trying to create an instance of `OVQuantizationConfig` with `weight_only` being True. "
-                "Please check your configuration."
-            )
-        super().__init__(ignored_scope, num_samples, False)
+        super().__init__(ignored_scope, num_samples)
         # TODO: remove checks below once NNCF is updated to 2.10
         if isinstance(overflow_fix, str):
             overflow_fix = OverflowFix(overflow_fix)
