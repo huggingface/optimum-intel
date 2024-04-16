@@ -520,7 +520,9 @@ class WeightOnlyQuantizationTest(INCTestMixin):
         bits = 4 if "4" in weight_dtype else 8
         if methodology == "gptq":
             # max_input_length can be removed after neural-compressor > v2.5.1
-            quantization_config = GPTQConfig(bits=bits, sym=True, damp_percent=0.01, weight_dtype=weight_dtype, max_input_length=128)
+            quantization_config = GPTQConfig(
+                bits=bits, sym=True, damp_percent=0.01, weight_dtype=weight_dtype, max_input_length=128
+            )
         else:
             quantization_config = RtnConfig(bits=bits, weight_dtype=weight_dtype)
 
