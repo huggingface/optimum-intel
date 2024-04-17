@@ -1542,20 +1542,17 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
         url = "http://images.cocodataset.org/val2017/000000039769.jpg"
         image = Image.open(requests.get(url, stream=True).raw)
         inputs = preprocessor(images=image, return_tensors="pt")
-
-        # with torch.no_grad():
-        #     transformers_outputs = transformers_model(**inputs, output_attentions=True)
-
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs, output_attentions=True)
         for input_type in ["pt", "np"]:
             inputs = preprocessor(images=image, return_tensors=input_type)
             ov_outputs = ov_model(**inputs)
             self.assertIn("logits", ov_outputs)
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
-            # Compare tensor outputs
-            # self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
-            # self.assertTrue(
-            #     torch.allclose(torch.Tensor(ov_outputs.attentions), transformers_outputs.attentions, atol=1e-4)
-            # )
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(
+                torch.allclose(torch.Tensor(ov_outputs.attentions), transformers_outputs.attentions, atol=1e-4)
+            )
         del transformers_model
         del ov_model
         gc.collect()
