@@ -251,8 +251,6 @@ if TYPE_CHECKING:
             OVModelForSpeechSeq2Seq,
             OVModelForTokenClassification,
             OVModelForVision2Seq,
-            OVQuantizationConfig,
-            OVWeightQuantizationConfig,
         )
 
     try:

@@ -55,6 +55,10 @@ _DEFAULT_4BIT_CONFIGS = {
 }
 
 
+class OVQuantizationMethod(str, Enum):
+    DEFAULT = "default"
+
+
 @dataclass
 class OVQuantizationConfigBase(QuantizationConfigMixin):
     """
@@ -66,6 +70,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
         weight_only: Optional[bool] = None,
+        quant_method: Union[QuantizationMethod, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
         **kwargs,
     ):
         """
@@ -83,6 +88,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         self.ignored_scope = ignored_scope
         self.num_samples = num_samples
         self.weight_only = weight_only
+        self.quant_method = quant_method
 
     def post_init(self):
         try:
@@ -181,10 +187,6 @@ class OVConfig(BaseConfig):
         return self._to_dict_safe(to_diff_dict=True)
 
 
-class OVQuantizationMethod(str, Enum):
-    DEFAULT = "default"
-
-
 @dataclass
 class OVWeightQuantizationConfig(OVQuantizationConfigBase):
     """
@@ -243,7 +245,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sensitivity_metric: Optional[str] = None,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
-        quant_method: Optional[Union[QuantizationMethod, OVQuantizationMethod]] = OVQuantizationMethod.DEFAULT,
+        quant_method: Union[QuantizationMethod, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
         weight_only: Optional[bool] = True,
         **kwargs,
     ):
@@ -252,7 +254,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 "Trying to create an instance of `OVWeightQuantizationConfig` with `weight_only` being "
                 "False. Please check your configuration."
             )
-        super().__init__(ignored_scope, num_samples, True)
+        super().__init__(ignored_scope, num_samples, True, quant_method)
         self.bits = bits
         self.sym = sym
         self.tokenizer = tokenizer
@@ -261,7 +263,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
-        self.quant_method = quant_method
         self.post_init()
 
     def post_init(self):
@@ -315,7 +316,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         sym: bool = False,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = 300,
-        model_type: "nncf.ModelType" = None,
+        model_type: str = "transformer",
         fast_bias_correction: bool = True,
         overflow_fix: str = "disable",
         weight_only: Optional[bool] = False,
@@ -333,7 +334,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
-            model_type (`nncf.ModelType`, defaults to nncf.ModelType.TRANSFORMER):
+            model_type (`str`, defaults to "transformer"):
                 Model type is needed to specify additional patterns in the model. Supported only `transformer` now.
             fast_bias_correction (`bool`, defaults to True):
                 Whether to apply fast or full bias correction algorithm.
@@ -349,27 +350,11 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 "Please check your configuration."
             )
         super().__init__(ignored_scope, num_samples, False)
-        # TODO: remove checks below once NNCF is updated to 2.10
         self.sym = sym
         self.model_type = model_type
         self.fast_bias_correction = fast_bias_correction
         self.overflow_fix = overflow_fix
         self.post_init()
-
-    def to_dict(self) -> Dict[str, Any]:
-        # TODO: remove code below once NNCF is updated to 2.10
-        if isinstance(self.overflow_fix, Enum):
-            overflow_fix_value = (
-                None
-                if self.overflow_fix is None
-                else self.overflow_fix
-                if isinstance(self.overflow_fix, str)
-                else self.overflow_fix.value
-            )
-            self_copy = copy.deepcopy(self)
-            self_copy.overflow_fix = overflow_fix_value
-            return self_copy.to_dict()
-        return super().to_dict()
 
 
 def _check_default_4bit_configs(config: PretrainedConfig):

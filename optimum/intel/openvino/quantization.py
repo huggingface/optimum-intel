@@ -378,7 +378,7 @@ class OVQuantizer(OptimumQuantizer):
             quantization_dataset,
             subset_size=quantization_config.num_samples,
             ignored_scope=quantization_config.get_ignored_scope_instance(),
-            model_type=quantization_config.model_type or nncf.ModelType.TRANSFORMER,
+            model_type=nncf.ModelType(quantization_config.model_type),
             preset=nncf.QuantizationPreset.PERFORMANCE if quantization_config.sym else nncf.QuantizationPreset.MIXED,
             fast_bias_correction=quantization_config.fast_bias_correction,
             advanced_parameters=nncf.AdvancedQuantizationParameters(
@@ -478,7 +478,7 @@ class OVQuantizer(OptimumQuantizer):
                 quantization_dataset,
                 subset_size=quantization_config.num_samples,
                 ignored_scope=quantization_config.get_ignored_scope_instance(),
-                model_type=quantization_config.model_type or nncf.ModelType.TRANSFORMER,
+                model_type=nncf.ModelType(quantization_config.model_type),
                 preset=nncf.QuantizationPreset.PERFORMANCE
                 if quantization_config.sym
                 else nncf.QuantizationPreset.MIXED,

@@ -749,7 +749,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 ignored_scope={"names": ["op_name"]},
                 num_samples=100,
                 sym=False,
-                model_type=nncf.ModelType.TRANSFORMER,
+                model_type="transformer",
                 fast_bias_correction=True,
                 overflow_fix="disable",
             ),
@@ -789,13 +789,13 @@ class OVQuantizationConfigTest(unittest.TestCase):
             OVWeightQuantizationConfig,
             "Can't determine type of OV quantization config",
         ),
-        (dict(model_type=nncf.ModelType.TRANSFORMER), OVQuantizationConfig, None),
+        (dict(model_type="transformer"), OVQuantizationConfig, None),
         (
             dict(
                 ignored_scope={"names": ["op_name"]},
                 num_samples=100,
                 sym=False,
-                model_type=nncf.ModelType.TRANSFORMER,
+                model_type="transformer",
                 fast_bias_correction=True,
                 overflow_fix="disable",
             ),
@@ -809,21 +809,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(bits=8, fast_bias_correction=True, weight_only=True), OVWeightQuantizationConfig, None),
         (dict(bits=8, fast_bias_correction=True, weight_only=False), OVQuantizationConfig, None),
         (dict(bits=8, sym=True, weight_only=False), OVWeightQuantizationConfig, "Please check your configuration"),
-        (
-            dict(model_type=nncf.ModelType.TRANSFORMER, weight_only=True),
-            OVQuantizationConfig,
-            "Please check your configuration",
-        ),
+        (dict(model_type="transformer", weight_only=True), OVQuantizationConfig, "Please check your configuration"),
     )
 
     @parameterized.expand(QUANTIZATION_CONFIGS)
     def test_config_serialization(self, quantization_config: OVQuantizationConfigBase):
-        def str_to_enum(enum_cls, value):
-            for k, v in enum_cls.__members__.items():
-                if getattr(enum_cls, k).value == value:
-                    return v
-            raise ValueError(f"Could not convert string {value} to enum value of type {enum_cls}")
-
         ov_config = OVConfig(quantization_config=quantization_config)
         with tempfile.TemporaryDirectory() as tmp_dir:
             ov_config.save_pretrained(tmp_dir)
