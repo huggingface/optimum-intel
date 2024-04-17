@@ -1551,7 +1551,12 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
             self.assertTrue(
-                torch.allclose(torch.Tensor(ov_outputs.attentions), transformers_outputs.attentions, atol=1e-4)
+                all(
+                    torch.allclose(
+                        torch.Tensor(ov_outputs.attentions[i]), transformers_outputs.attentions[i], atol=1e-4
+                    )
+                    for i in range(len(ov_outputs.attentions))
+                )
             )
         del transformers_model
         del ov_model
