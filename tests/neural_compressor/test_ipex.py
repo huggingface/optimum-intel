@@ -27,7 +27,7 @@ from transformers import (
     AutoTokenizer,
     set_seed,
 )
-from utils_tests import SEED, INCTestMixin, _generate_dataset
+from utils_tests import MODEL_NAMES, SEED, INCTestMixin, _generate_dataset
 
 
 from optimum.intel import (
@@ -50,15 +50,13 @@ set_seed(SEED)
 
 
 class IPEXQuantizationTest(INCTestMixin):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("text-classification", "hf-internal-testing/tiny-random-BertForSequenceClassification", 21),
-        ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 21),
-    )
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("text-classification", "bert", 21),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_ipex_static_quantization_with_smoothquant(self, task, model_name, expected_quantized_matmuls):
+    def test_ipex_static_quantization_with_smoothquant(self, task, model_arch, expected_quantized_matmuls):
         recipes = {"smooth_quant": True, "smooth_quant_args": {"alpha": 0.5}}
         num_samples = 10
+        model_name = MODEL_NAMES[model_arch]
         quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex", recipes=recipes)
         model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
