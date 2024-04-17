@@ -36,7 +36,6 @@ jobs:
     - name: Test with Pytest
       run: |
         pytest tests/openvino/ --ignore tests/openvino/test_modeling_basic.py --durations=0
-
     - name: Test basic
       run: |
         pip uninstall -y nncf
