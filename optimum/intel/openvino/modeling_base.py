@@ -100,13 +100,21 @@ class OVBaseModel(OptimizedModel):
             self._openvino_config = OVConfig(quantization_config=quantization_config)
 
     @staticmethod
-    def load_model(file_name: Union[str, Path], quantization_config: Union[OVWeightQuantizationConfig, Dict] = None):
+    def load_model(
+        file_name: Union[str, Path],
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        calibration_dataset: Optional = None,
+    ):
         """
         Loads the model.
 
         Arguments:
             file_name (`str` or `Path`):
                 The path of the model ONNX or XML file.
+            quantization_config (`OVWeightQuantizationConfig` or `Dict`, *optional*):
+                Quantization config to apply after model is loaded.
+            calibration_dataset (`nncf.Dataset`, *optional*):
+                Optional nncf.Dataset to feed to model weight compression when quantization config is provided.
         """
 
         def fix_op_names_duplicates(model: openvino.runtime.Model):
@@ -135,7 +143,7 @@ class OVBaseModel(OptimizedModel):
 
             from optimum.intel.openvino.quantization import _weight_only_quantization
 
-            model = _weight_only_quantization(model, quantization_config)
+            model = _weight_only_quantization(model, quantization_config, calibration_dataset=calibration_dataset)
 
         return model
 

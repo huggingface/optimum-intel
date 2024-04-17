@@ -80,7 +80,6 @@ from transformers.utils import (
     is_accelerate_available,
     is_apex_available,
     is_sagemaker_mp_enabled,
-    is_torch_tpu_available,
     logging,
 )
 
@@ -89,7 +88,7 @@ from optimum.exporters.onnx import OnnxConfig
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_transformers_version
-from .configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
+from .configuration import OVConfig
 from .quantization import OVDataLoader
 from .training_args import OVTrainingArguments
 from .utils import (
@@ -100,6 +99,11 @@ from .utils import (
     use_external_data_format,
 )
 
+
+if is_transformers_version(">=", "4.39.0"):
+    from transformers.utils import is_torch_xla_available
+else:
+    from transformers.utils import is_torch_tpu_available as is_torch_xla_available
 
 if is_accelerate_available():
     from accelerate import __version__ as accelerate_version
@@ -123,7 +127,7 @@ if is_apex_available():
 if is_sagemaker_mp_enabled():
     import smdistributed.modelparallel.torch as smp
 
-if is_torch_tpu_available(check_device=False):
+if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
 
 core = Core()
@@ -134,6 +138,25 @@ logger.setLevel(logging.INFO)
 # NNCF Error to be shown on stdout
 # set_log_level(logging.ERROR)
 NNCF_LOG_FILE_NAME = "nncf_output.log"
+
+
+DEFAULT_QUANTIZATION_CONFIG = {
+    "algorithm": "quantization",
+    "preset": "mixed",
+    "overflow_fix": "disable",
+    "initializer": {
+        "range": {"num_init_samples": 300, "type": "mean_min_max"},
+        "batchnorm_adaptation": {"num_bn_adaptation_samples": 0},
+    },
+    "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
+    "ignored_scopes": [
+        "{re}.*Embedding.*",
+        "{re}.*add___.*",
+        "{re}.*layer_norm_.*",
+        "{re}.*matmul_1",
+        "{re}.*__truediv__.*",
+    ],
+}
 
 
 def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Union[str, io.BytesIO], opset: int = None):
@@ -228,6 +251,16 @@ class OVTrainer(Trainer):
         if self.ov_config is not None:
             if self.ov_config.compression is None:
                 self.ov_config.compression = DEFAULT_QUANTIZATION_CONFIG
+            if (
+                isinstance(self.ov_config.compression, dict)
+                and "algorithm" in self.ov_config.compression
+                and self.ov_config.compression["algorithm"] == "quantization"
+            ):
+                self.ov_config.compression["export_to_onnx_standard_ops"] = self.ov_config.save_onnx_model
+            elif isinstance(self.ov_config.compression, list):
+                for i, algo_config in enumerate(self.ov_config.compression):
+                    if algo_config["algorithm"] == "quantization":
+                        self.ov_config.compression[i]["export_to_onnx_standard_ops"] = self.ov_config.save_onnx_model
 
             if self.args.do_train:
                 self._set_task()
@@ -611,7 +644,7 @@ class OVTrainer(Trainer):
 
                 if (
                     args.logging_nan_inf_filter
-                    and not is_torch_tpu_available()
+                    and not is_torch_xla_available()
                     and (torch.isnan(tr_loss_step) or torch.isinf(tr_loss_step))
                 ):
                     # if loss is nan or inf simply add the average of previous logged losses
@@ -706,7 +739,7 @@ class OVTrainer(Trainer):
         logger.info("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
         if args.load_best_model_at_end and self.state.best_model_checkpoint is not None:
             # Wait for everyone to get here so we are sure the model has been saved by process 0.
-            if is_torch_tpu_available():
+            if is_torch_xla_available():
                 xm.rendezvous("load_best_model_at_end")
             elif args.parallel_mode == ParallelMode.DISTRIBUTED:
                 dist.barrier()
@@ -799,7 +832,7 @@ class OVTrainer(Trainer):
 
     def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
         if self.control.should_log:
-            if is_torch_tpu_available():
+            if is_torch_xla_available():
                 xm.mark_step()
 
             logs: Dict[str, float] = {}

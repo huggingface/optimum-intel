@@ -19,7 +19,7 @@ from packaging import version
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
-from optimum.exporters.onnx.model_configs import GemmaOnnxConfig
+from optimum.exporters.onnx.model_configs import GemmaOnnxConfig, LlamaOnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -34,6 +34,7 @@ from .model_patcher import (
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
     GemmaModelPatcher,
+    LlamaModelPatcher,
     MixtralModelPatcher,
     QwenModelPatcher,
 )
@@ -74,7 +75,7 @@ register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_e
 
 
 @register_in_tasks_manager("baichuan", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class BaichaunOpenVINOConfig(TextDecoderOnnxConfig):
+class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
         num_layers="num_hidden_layers", num_attention_heads="num_attention_heads", hidden_size="hidden_size"
@@ -274,6 +275,24 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
         return GemmaModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
+@register_in_tasks_manager(
+    "llama",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class LlamaOpenVINOConfig(LlamaOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return LlamaModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
 class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
@@ -395,6 +414,24 @@ class QwenOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     "starcoder2", *["text-generation", "text-generation-with-past"], library_name="transformers"
 )
 class Starcoder2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager("internlm2", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager("orion", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)

@@ -52,6 +52,7 @@ TESTS_REQUIRE = [
     "auto-gptq",
     "transformers_stream_generator",
     "einops",
+    "tiktoken",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]

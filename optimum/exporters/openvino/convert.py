@@ -341,7 +341,7 @@ def export_pytorch(
                     input_dict = dict(zip(keys, tuple_input))
                     kwargs[input_name] = input_dict
                 outputs = patched_forward(*args, **kwargs)
-                return tuple(outputs.values())
+                return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs.values()])
 
             patcher.patched_forward = ts_patched_forward
 
@@ -378,6 +378,8 @@ def export_pytorch(
 
         sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
+        if not ordered_dummy_inputs:
+            ordered_dummy_inputs = dummy_inputs
         ordered_input_names = list(inputs)
         flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
         ov_model.validate_nodes_and_infer_types()
@@ -560,6 +562,7 @@ def export_from_model(
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
 
+    logging.disable(logging.INFO)
     export_config, models_and_export_configs = _get_submodels_and_export_configs(
         model=model,
         task=task,
@@ -574,6 +577,7 @@ def export_from_model(
         legacy=False,
         exporter="openvino",
     )
+    logging.disable(logging.NOTSET)
 
     if ov_config is None:
         if library_name == "diffusers":

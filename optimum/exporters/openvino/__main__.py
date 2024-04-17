@@ -162,9 +162,17 @@ def main_export(
     original_task = task
     task = TasksManager.map_from_synonym(task)
     framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
+    library_name_is_not_provided = library_name is None
     library_name = TasksManager.infer_library_from_model(
         model_name_or_path, subfolder=subfolder, library_name=library_name
     )
+
+    if library_name == "sentence_transformers" and library_name_is_not_provided:
+        logger.warning(
+            "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
+            "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+        )
+        library_name = "transformers"
 
     if task == "auto":
         try:
@@ -195,7 +203,6 @@ def main_export(
         quantization_config = getattr(config, "quantization_config", None)
         do_gptq_patching = quantization_config and quantization_config["quant_method"] == "gptq"
         model_type = config.model_type.replace("_", "-")
-
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
         elif task not in TasksManager.get_supported_tasks_for_model_type(
@@ -213,6 +220,20 @@ def main_export(
             )
         if is_transformers_version(">=", "4.36") and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED:
             loading_kwargs["attn_implementation"] = "eager"
+        # there are some difference between remote and in library representation of past key values for some models,
+        # for avoiding confusion we disable remote code for them
+        if (
+            trust_remote_code
+            and model_type in {"falcon", "mpt", "phi"}
+            and ("with-past" in task or original_task == "auto")
+            and not custom_export_configs
+        ):
+            logger.warning(
+                f"Model type `{model_type}` export for task `{task}` is not supported for loading with `trust_remote_code=True`"
+                "using default export configuration, `trust_remote_code` will be disabled. "
+                "Please provide custom export config if you want load model with remote code."
+            )
+            trust_remote_code = False
 
     # Patch the modules to export of GPTQ models w/o GPU
     if do_gptq_patching:
