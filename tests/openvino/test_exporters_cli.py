@@ -26,6 +26,7 @@ from utils_tests import (
 
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.intel import (  # noqa
+    OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
@@ -37,7 +38,6 @@ from optimum.intel import (  # noqa
     OVModelForTokenClassification,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
-    OVLatentConsistencyModelPipeline,
 )
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available

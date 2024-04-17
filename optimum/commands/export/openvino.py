@@ -19,8 +19,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from ...exporters import TasksManager
-from ..base import BaseOptimumCLICommand, CommandInfo
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
+from ..base import BaseOptimumCLICommand, CommandInfo
 
 
 logger = logging.getLogger(__name__)
@@ -212,7 +212,6 @@ class OVExportCommand(BaseOptimumCLICommand):
         library_name = TasksManager.infer_library_from_model(self.args.model)
 
         if library_name == "diffusers" and ov_config and ov_config.quantization_config.get("dataset"):
-
             if not is_diffusers_available():
                 raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
 
@@ -222,13 +221,11 @@ class OVExportCommand(BaseOptimumCLICommand):
             class_name = diffusers_config.get("_class_name", None)
 
             if class_name == "LatentConsistencyModelPipeline":
-
                 from optimum.intel import OVLatentConsistencyModelPipeline
 
                 model_cls = OVLatentConsistencyModelPipeline
 
             elif class_name == "StableDiffusionXLPipeline":
-
                 from optimum.intel import OVStableDiffusionXLPipeline
 
                 model_cls = OVStableDiffusionXLPipeline
@@ -239,7 +236,9 @@ class OVExportCommand(BaseOptimumCLICommand):
             else:
                 raise NotImplementedError(f"Quantization in hybrid mode isn't supported for class {class_name}.")
 
-            model = model_cls.from_pretrained(self.args.model, export=True, quantization_config=ov_config.quantization_config)
+            model = model_cls.from_pretrained(
+                self.args.model, export=True, quantization_config=ov_config.quantization_config
+            )
             model.save_pretrained(self.args.output)
 
         else:
