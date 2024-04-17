@@ -148,13 +148,15 @@ class INCModel(OptimizedModel):
 
                     return _BaseQBitsAutoModelClass.from_pretrained(
                         pretrained_model_name_or_path=model_id,
-                        use_auth_token=use_auth_token,
-                        revision=revision,
-                        force_download=force_download,
-                        cache_dir=cache_dir,
-                        local_files_only=local_files_only,
-                        subfolder=subfolder,
+                        # The following parameters are not supported in itrex1.4 version and will be supported in the next version
+                        # use_auth_token=use_auth_token,
+                        # revision=revision,
+                        # force_download=force_download,
+                        # cache_dir=cache_dir,
+                        # local_files_only=local_files_only,
+                        # subfolder=subfolder,
                         trust_remote_code=trust_remote_code,
+                        use_neural_speed=False,
                         **kwargs,
                     )
             except EnvironmentError:

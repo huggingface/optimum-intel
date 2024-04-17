@@ -126,6 +126,33 @@ mpirun -np <number_of_processes> <RUN_CMD>
 
 Please refer to INC [documentation](https://github.com/intel/neural-compressor/blob/master/docs/source/tuning_strategies.md#distributed-tuning) and [text-classification](https://github.com/huggingface/optimum-intel/tree/main/examples/neural_compressor/text-classification) example for more details. 
 
+## Weight-only quantization
+As large language models (LLMs) become more prevalent, there is a growing need for new and improved quantization methods that can meet the computational demands of these modern architectures while maintaining the accuracy. Compared to normal quantization like W8A8, weight only quantization is probably a better trade-off to balance the performance and the accuracy. Up to now, we support "GPTQ" and "RTN" method. 
+
+```python
+from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig
+# for GPTQ method
+quantization_config = GPTQConfig(
+                          damp_percent=0.01,
+                          weight_dtype="int4_clip",
+                      )
+
+# for RTN method
+quantization_config = RtnConfig(
+                          weight_dtype="int4_clip",
+                      )
+quantizer = INCQuantizer.from_pretrained(model)
+quantizer.quantize(
+    quantization_config=quantization_config,
+    save_directory="output_dir",
+    calibration_dataset=(
+        train_dataset if quantization_config.quant_metod == "gptq" else None
+    ),
+)
+q_model = quantizer._quantized_model
+
+```
+Please refer to [example](https://github.com/huggingface/optimum-intel/tree/main/examples/neural_compressor/text-generation).
 
 ## During training optimization
 

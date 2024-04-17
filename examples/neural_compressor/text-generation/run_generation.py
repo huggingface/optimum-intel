@@ -45,6 +45,14 @@ from transformers import (
 )
 
 from optimum.intel.neural_compressor import INCModelForCausalLM, INCQuantizer
+from optimum.intel.utils.import_utils import (
+    INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR,
+    is_intel_extension_for_transformers_available,
+)
+
+
+if is_intel_extension_for_transformers_available():
+    from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig
 
 
 logging.basicConfig(
@@ -281,6 +289,69 @@ def main():
     )
     parser.add_argument("--dataset_name", nargs="?", default="NeelNanda/pile-10k", const="NeelNanda/pile-10k")
     parser.add_argument("--calib_iters", default=100, type=int, help="calibration iters.")
+    parser.add_argument(
+        "--bits",
+        default="4",
+        type=str,
+        help="Bits number of weight for weight only quantization. 1~8 bits.",
+    )
+    parser.add_argument(
+        "--weight_dtype",
+        default="int4_clip",
+        type=str,
+        help="weight dtype for weight only quantization.",
+    )
+    parser.add_argument(
+        "--group_size",
+        default=32,
+        type=int,
+        help="Group size for weight only quantization. Group_size=[1-N] indicates "
+             "splitting the input channel elements per group_size. -1 indicates "
+             "the per-channel quantization per output channel.",
+    )
+    parser.add_argument(
+        "--weight_only_scheme",
+        default="sym",
+        type=str,
+        help="Scheme for weight only quantization. Choose from 'sym' and 'asym'.",
+    )
+    parser.add_argument(
+        "--quantization_methodology",
+        choices=["rtn", "gptq"],
+        default="rtn",
+        type=str,
+        help="Quantization methodology for weight only quantization. Choose from 'rtn' and 'gptq'.",
+    )
+    parser.add_argument(
+        "--damp_percent",
+        default=0.01,
+        type=float,
+        help="Percentage of Hessian's diagonal values average, which will be added to Hessian's diagonal to increase numerical stability, used for GPTQ quantization",
+    )
+    parser.add_argument(
+        "--gptq_block_size",
+        default=128,
+        type=int,
+        help="Block size. sub weight matrix size to run GPTQ.",
+    )
+    parser.add_argument(
+        "--num_calibration_samples",
+        default=128,
+        type=int,
+        help="Number of examples to use for the GPTQ calibration step."
+    )
+    parser.add_argument(
+        "--use_max_length",
+        default=False,
+        type=bool,
+        help="Set all sequence length to be same length of args.gptq_pad_max_length",
+    )
+    parser.add_argument(
+        "--pad_max_length",
+        default=2048,
+        type=int,
+        help="Calibration dataset sequence max length, this should align with your model config",
+    )
     args = parser.parse_args()
 
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -313,6 +384,43 @@ def main():
     model.to(args.device)
 
     if args.apply_quantization:
+        supported_approach = {"static", "dynamic", "weight_only"}
+        if args.quantization_approach not in supported_approach:
+            raise ValueError(
+                f"Unknown quantization approach. Supported approach are {supported_approach}."
+                f"{args.quantization_approach} was given."
+            )
+        if args.quantization_approach == "weight_only":
+            if not is_intel_extension_for_transformers_available():
+                raise ImportError(INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR.format("WeightOnly quantization"))
+
+            algorithm_args = {
+                "weight_dtype": args.weight_dtype,
+                "sym": args.weight_only_scheme == "sym",
+                "group_size": args.group_size,
+            }
+
+            if args.quantization_methodology == "gptq":
+                quantization_config = GPTQConfig(
+                    damp_percent=args.damp_percent,
+                    nsamples=args.num_calibration_samples,
+                    blocksize=args.gptq_block_size,
+                    **algorithm_args,
+                )
+            else:
+                quantization_config = RtnConfig(**algorithm_args)
+
+        else:
+            example_inputs = {"input_ids": torch.randint(100, (1, 32)), "attention_mask": torch.ones(1, 32)}
+            quantization_config = PostTrainingQuantConfig(
+                approach=args.quantization_approach,
+                recipes={
+                    "smooth_quant": args.smooth_quant,
+                    "smooth_quant_args": {"alpha": args.smooth_quant_alpha, "folding": True},
+                },
+                example_inputs=example_inputs,
+            )
+            model.config.return_dict = False
         # This is just an example for calibration_fn. If you want to achieve good accuracy,
         # you must perform a calibration on your real dataset.
         calib_dataset = load_dataset(args.dataset_name, split="train")
@@ -347,16 +455,6 @@ def main():
                     do_sample=False,
                 )
 
-        example_inputs = {"input_ids": torch.randint(100, (1, 32)), "attention_mask": torch.ones(1, 32)}
-        quantization_config = PostTrainingQuantConfig(
-            approach=args.quantization_approach,
-            recipes={
-                "smooth_quant": args.smooth_quant,
-                "smooth_quant_args": {"alpha": args.smooth_quant_alpha, "folding": True},
-            },
-            example_inputs=example_inputs,
-        )
-        model.config.return_dict = False
         quantizer = INCQuantizer.from_pretrained(model, calibration_fn=calibration_fn)
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantizer.quantize(

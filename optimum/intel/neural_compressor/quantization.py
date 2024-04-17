@@ -297,6 +297,7 @@ class INCQuantizer(OptimumQuantizer):
             )
 
             self._quantized_model.quantization_config = quantization_config
+            self._quantized_model.config.quantization_config = quantization_config
             self._quantized_model.save_pretrained = types.MethodType(save_low_bit, self._quantized_model)
             self._quantized_model.save_pretrained(save_directory)
 
