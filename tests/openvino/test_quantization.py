@@ -748,7 +748,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
             OVQuantizationConfig(
                 ignored_scope={"names": ["op_name"]},
                 num_samples=100,
-                preset=nncf.QuantizationPreset.MIXED,
+                sym=False,
                 model_type=nncf.ModelType.TRANSFORMER,
                 fast_bias_correction=True,
                 overflow_fix=OverflowFix.DISABLE,
@@ -794,7 +794,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
             dict(
                 ignored_scope={"names": ["op_name"]},
                 num_samples=100,
-                preset=nncf.QuantizationPreset.MIXED,
+                sym=False,
                 model_type=nncf.ModelType.TRANSFORMER,
                 fast_bias_correction=True,
                 overflow_fix=OverflowFix.DISABLE,
@@ -834,14 +834,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 return
             for key, value in loaded_ov_config.quantization_config.to_dict().items():
                 initial_value = getattr(ov_config.quantization_config, key)
-                if key == "preset" or key == "overflow_fix":
+                if key == "overflow_fix":
                     # TODO: remove once NNCF is updated to 2.10
                     if getattr(quantization_config, key) is not None:
                         self.assertTrue(isinstance(value, str))
-                        if key == "preset":
-                            value = str_to_enum(nncf.QuantizationPreset, value)
-                        else:
-                            value = str_to_enum(OverflowFix, value)
+                        value = str_to_enum(OverflowFix, value)
                 self.assertEqual(value, initial_value)
 
     @parameterized.expand(QUANTIZATION_CONFIG_DICTS)
