@@ -669,13 +669,13 @@ def export_tokenizer(
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)
     except NotImplementedError:
-        logger.warning("Detokenizer is not supported, convert tokenizer only.")
+        logger.info("Detokenizer is not supported, convert tokenizer only.")
         converted = convert_tokenizer(tokenizer, with_detokenizer=False)
     except OVTypeError:
-        logger.warning(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
+        logger.debug(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
         return
     except Exception as exception:
-        logger.warning(
+        logger.debug(
             f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported. Exception: {exception}"
         )
         return
