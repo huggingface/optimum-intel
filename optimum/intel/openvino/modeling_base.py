@@ -85,6 +85,10 @@ class OVBaseModel(OptimizedModel):
         output_names = {}
         for idx, key in enumerate(model.outputs):
             names = tuple(key.get_names())
+
+            if len(names) == 0:
+                names = ("no_name_output_O_o",)
+
             output_names[next((name for name in names if "/" not in name), names[0])] = idx
         self.output_names = output_names
 

@@ -1004,7 +1004,13 @@ class OVModelForCustomTasks(OVModel):
         # Run inference
         outputs = self.request(inputs)
 
+        model_outputs = {}
         for key, value in outputs.items():
-            outputs[key] = torch.from_numpy(value).to(self.device) if not np_inputs else value
+            if len(key.names) == 0:
+                key_names = {"no_name_output_O_o"}
+            else:
+                key_names = key.names
 
-        return ModelOutput(**outputs)
+            model_outputs[next(iter(key_names))] = torch.from_numpy(value).to(self.device) if not np_inputs else value
+
+        return ModelOutput(**model_outputs)

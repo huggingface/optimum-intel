@@ -63,6 +63,7 @@ from optimum.intel import (
     OVModelForAudioXVector,
     OVModelForCausalLM,
     OVModelForCTC,
+    OVModelForCustomTasks,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
@@ -1524,4 +1525,37 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, ov_model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
 
+        gc.collect()
+
+
+class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ["vit-with-attentions"]
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        ov_model = OVModelForCustomTasks.from_pretrained(model_id, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        image = Image.open(requests.get(url, stream=True).raw)
+        inputs = preprocessor(images=image, return_tensors="pt")
+
+        # with torch.no_grad():
+        #     transformers_outputs = transformers_model(**inputs, output_attentions=True)
+
+        for input_type in ["pt", "np"]:
+            inputs = preprocessor(images=image, return_tensors=input_type)
+            ov_outputs = ov_model(**inputs)
+            self.assertIn("logits", ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+            # Compare tensor outputs
+            # self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
+            # self.assertTrue(
+            #     torch.allclose(torch.Tensor(ov_outputs.attentions), transformers_outputs.attentions, atol=1e-4)
+            # )
+        del transformers_model
+        del ov_model
         gc.collect()
