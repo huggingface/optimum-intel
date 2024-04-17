@@ -1529,21 +1529,30 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
 
 
 class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ["vit-with-attentions"]
+    SUPPORTED_ARCHITECTURES_WITH_ATTENTION = ["vit-with-attentions"]
+    SUPPORTED_ARCHITECTURES_WITH_HIDDEN_STATES = ["vit-with-hidden-states"]
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_compare_to_transformers(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        set_seed(SEED)
-        ov_model = OVModelForCustomTasks.from_pretrained(model_id, ov_config=F32_CONFIG)
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
-        transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
-        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+    def _get_sample_image(self):
         url = "http://images.cocodataset.org/val2017/000000039769.jpg"
         image = Image.open(requests.get(url, stream=True).raw)
+        return image
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_ATTENTION)
+    def test_compare_output_attentions(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+
+        image = self._get_sample_image()
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         inputs = preprocessor(images=image, return_tensors="pt")
+
+        transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
+        transformers_model.eval()
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs, output_attentions=True)
+
+        ov_model = OVModelForCustomTasks.from_pretrained(model_id, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
         for input_type in ["pt", "np"]:
             inputs = preprocessor(images=image, return_tensors=input_type)
             ov_outputs = ov_model(**inputs)
@@ -1556,6 +1565,39 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
                         torch.Tensor(ov_outputs.attentions[i]), transformers_outputs.attentions[i], atol=1e-4
                     )
                     for i in range(len(ov_outputs.attentions))
+                )
+            )
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HIDDEN_STATES)
+    def test_compare_output_hidden_states(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+
+        image = self._get_sample_image()
+        preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
+        inputs = preprocessor(images=image, return_tensors="pt")
+
+        transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
+        transformers_model.eval()
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs, output_hidden_states=True)
+
+        ov_model = OVModelForCustomTasks.from_pretrained(model_id, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        for input_type in ["pt", "np"]:
+            inputs = preprocessor(images=image, return_tensors=input_type)
+            ov_outputs = ov_model(**inputs)
+            self.assertIn("logits", ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
+            self.assertTrue(
+                all(
+                    torch.allclose(
+                        torch.Tensor(ov_outputs.hidden_states[i]), transformers_outputs.hidden_states[i], atol=1e-4
+                    )
+                    for i in range(len(ov_outputs.hidden_states))
                 )
             )
         del transformers_model
