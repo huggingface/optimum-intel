@@ -20,7 +20,7 @@ Based on the script [`run_generation.py`](https://github.com/huggingface/transfo
 
 The original generation task only supported the PyTorch eager model. By calling the `TSModelForCausalLM` class, we can now support a TorchScript model for generation tasks.
 
-This example also allows us to apply different quantization approaches (such as dynamic, static, weight-only and aware-training quantization. The example applies post-training static quantization on a gptj model).
+This example also allows us to apply different quantization approaches (such as dynamic, static and weight-only. The example applies post-training static quantization on a gptj model).
 
 Example usage:
 ### apply_quantization with post-training static
