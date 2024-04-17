@@ -43,6 +43,7 @@ from transformers.modeling_outputs import (
     CausalLMOutput,
     ImageClassifierOutput,
     MaskedLMOutput,
+    ModelOutput,
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
     TokenClassifierOutput,
@@ -953,3 +954,57 @@ class OVModelForAudioFrameClassification(OVModel):
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
 
         return TokenClassifierOutput(logits=logits)
+
+
+CUSTOM_TASKS_EXAMPLE = """
+    Example of custom tasks (e.g. a sentence transformers taking `pooler_output` as output):
+
+    ```python
+    >>> from transformers import {processor_class}
+    >>> from optimum.intel import {model_class}
+
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}")
+
+    >>> inputs = tokenizer("I love burritos!", return_tensors="np")
+
+    >>> outputs = model(**inputs)
+    >>> last_hidden_state = outputs.last_hidden_state
+    >>> pooler_output = outputs.pooler_output
+    ```
+"""
+
+
+@add_start_docstrings(
+    """
+    OpenVINO Model for custom tasks.
+    """,
+    MODEL_START_DOCSTRING,
+)
+class OVModelForCustomTasks(OVModel):
+    """
+    OpenVINO Model for any custom tasks. It can be used to leverage the inference acceleration for any single-file ONNX model, that may use custom inputs and outputs.
+    """
+
+    @add_start_docstrings_to_model_forward(
+        CUSTOM_TASKS_EXAMPLE.format(
+            processor_class=_TOKENIZER_FOR_DOC,
+            model_class="OVModelForCustomTasks",
+            checkpoint="sentence-transformers/all-MiniLM-L6-v2",
+        )
+    )
+    def forward(self, **kwargs):
+        np_inputs = isinstance(next(iter(kwargs.values())), np.ndarray)
+
+        inputs = {}
+
+        for key, value in kwargs.items():
+            inputs[key] = np.array(value) if not np_inputs else value
+
+        # Run inference
+        outputs = self.request(inputs)
+
+        for key, value in outputs.items():
+            outputs[key] = torch.from_numpy(value).to(self.device) if not np_inputs else value
+
+        return ModelOutput(**outputs)

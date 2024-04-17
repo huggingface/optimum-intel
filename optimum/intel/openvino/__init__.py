@@ -49,6 +49,7 @@ from .modeling import (
     OVModelForAudioFrameClassification,
     OVModelForAudioXVector,
     OVModelForCTC,
+    OVModelForCustomTasks,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
