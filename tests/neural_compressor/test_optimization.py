@@ -507,7 +507,7 @@ class WeightOnlyQuantizationTest(INCTestMixin):
     WEIGHT_ONLY_CONFIG = (
         ("rtn", "int4_clip"),
         ("rtn", "int8"),
-        # ("gptq", "int4_clip"), # can be enabled after fix in neural-compressor merged
+        ("gptq", "int4_clip"),
     )
 
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
@@ -519,7 +519,9 @@ class WeightOnlyQuantizationTest(INCTestMixin):
 
         bits = 4 if "4" in weight_dtype else 8
         if methodology == "gptq":
-            quantization_config = GPTQConfig(bits=bits, sym=True, damp_percent=0.01, weight_dtype=weight_dtype)
+            quantization_config = GPTQConfig(
+                bits=bits, sym=True, damp_percent=0.01, weight_dtype=weight_dtype, max_input_length=128
+            )
         else:
             quantization_config = RtnConfig(bits=bits, weight_dtype=weight_dtype)
 
