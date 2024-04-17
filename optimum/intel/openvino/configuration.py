@@ -16,7 +16,7 @@ import inspect
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 from transformers import PretrainedConfig
@@ -25,6 +25,7 @@ from transformers.utils.quantization_config import QuantizationConfigMixin, Quan
 from optimum.configuration_utils import BaseConfig
 
 from ..utils.import_utils import is_nncf_available
+
 
 if is_nncf_available():
     import nncf
