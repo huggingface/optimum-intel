@@ -75,10 +75,10 @@ from .utils import INCDataLoader, _cfgs_to_fx_cfgs
 INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION = "1.4.0"
 
 if is_intel_extension_for_transformers_available():
-    if is_intel_extension_for_transformers_version("!=", INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION):
+    if is_intel_extension_for_transformers_version("<", INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION):
         raise ImportError(
             f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_intel_extension_for_transformers_version}, "
-            f"but only version {INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION} is supported."
+            f"but only version {INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION} or higher is supported."
         )
     from intel_extension_for_transformers.transformers.llm.quantization.utils import convert_to_quantized_model
     from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
