@@ -211,7 +211,12 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         library_name = TasksManager.infer_library_from_model(self.args.model)
 
-        if library_name == "diffusers" and ov_config and ov_config.quantization_config.get("dataset"):
+        if (
+            library_name == "diffusers"
+            and ov_config
+            and ov_config.quantization_config
+            and ov_config.quantization_config.dataset is not None
+        ):
             if not is_diffusers_available():
                 raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
 
