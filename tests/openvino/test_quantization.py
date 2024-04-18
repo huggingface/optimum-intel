@@ -748,10 +748,10 @@ class OVQuantizationConfigTest(unittest.TestCase):
             OVQuantizationConfig(
                 ignored_scope={"names": ["op_name"]},
                 num_samples=100,
-                preset=nncf.QuantizationPreset.MIXED,
-                model_type=nncf.ModelType.TRANSFORMER,
+                sym=False,
+                model_type="transformer",
                 fast_bias_correction=True,
-                overflow_fix=OverflowFix.DISABLE,
+                overflow_fix="disable",
             ),
         ),
         (OVQuantizationConfig(ignored_scope=nncf.IgnoredScope(names=["op_name"])),),
@@ -789,15 +789,15 @@ class OVQuantizationConfigTest(unittest.TestCase):
             OVWeightQuantizationConfig,
             "Can't determine type of OV quantization config",
         ),
-        (dict(model_type=nncf.ModelType.TRANSFORMER), OVQuantizationConfig, None),
+        (dict(model_type="transformer"), OVQuantizationConfig, None),
         (
             dict(
                 ignored_scope={"names": ["op_name"]},
                 num_samples=100,
-                preset=nncf.QuantizationPreset.MIXED,
-                model_type=nncf.ModelType.TRANSFORMER,
+                sym=False,
+                model_type="transformer",
                 fast_bias_correction=True,
-                overflow_fix=OverflowFix.DISABLE,
+                overflow_fix="disable",
             ),
             OVQuantizationConfig,
             None,
@@ -809,21 +809,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(bits=8, fast_bias_correction=True, weight_only=True), OVWeightQuantizationConfig, None),
         (dict(bits=8, fast_bias_correction=True, weight_only=False), OVQuantizationConfig, None),
         (dict(bits=8, sym=True, weight_only=False), OVWeightQuantizationConfig, "Please check your configuration"),
-        (
-            dict(model_type=nncf.ModelType.TRANSFORMER, weight_only=True),
-            OVQuantizationConfig,
-            "Please check your configuration",
-        ),
+        (dict(model_type="transformer", weight_only=True), OVQuantizationConfig, "Please check your configuration"),
     )
 
     @parameterized.expand(QUANTIZATION_CONFIGS)
     def test_config_serialization(self, quantization_config: OVQuantizationConfigBase):
-        def str_to_enum(enum_cls, value):
-            for k, v in enum_cls.__members__.items():
-                if getattr(enum_cls, k).value == value:
-                    return v
-            raise ValueError(f"Could not convert string {value} to enum value of type {enum_cls}")
-
         ov_config = OVConfig(quantization_config=quantization_config)
         with tempfile.TemporaryDirectory() as tmp_dir:
             ov_config.save_pretrained(tmp_dir)
@@ -834,14 +824,6 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 return
             for key, value in loaded_ov_config.quantization_config.to_dict().items():
                 initial_value = getattr(ov_config.quantization_config, key)
-                if key == "preset" or key == "overflow_fix":
-                    # TODO: remove once NNCF is updated to 2.10
-                    if getattr(quantization_config, key) is not None:
-                        self.assertTrue(isinstance(value, str))
-                        if key == "preset":
-                            value = str_to_enum(nncf.QuantizationPreset, value)
-                        else:
-                            value = str_to_enum(OverflowFix, value)
                 self.assertEqual(value, initial_value)
 
     @parameterized.expand(QUANTIZATION_CONFIG_DICTS)

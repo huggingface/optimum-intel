@@ -59,9 +59,13 @@ try:
     if not (is_openvino_available() and is_nncf_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(["OVQuantizer", "OVTrainingArguments"])
+    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(
+        ["OVQuantizer", "OVTrainingArguments", "OVQuantizationConfig", "OVWeightQuantizationConfig"]
+    )
 else:
-    _import_structure["openvino"].extend(["OVQuantizer", "OVTrainingArguments"])
+    _import_structure["openvino"].extend(
+        ["OVQuantizer", "OVTrainingArguments", "OVQuantizationConfig", "OVWeightQuantizationConfig"]
+    )
 
 
 try:
@@ -124,8 +128,6 @@ else:
             "OVModelForVision2Seq",
             "OVModelForSequenceClassification",
             "OVModelForTokenClassification",
-            "OVQuantizationConfig",
-            "OVWeightQuantizationConfig",
             "OVConfig",
         ]
     )
@@ -188,9 +190,14 @@ if TYPE_CHECKING:
         if not (is_openvino_available() and is_nncf_available()):
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
-        from .utils.dummy_openvino_and_nncf_objects import OVQuantizer, OVTrainingArguments
+        from .utils.dummy_openvino_and_nncf_objects import (
+            OVQuantizationConfig,
+            OVQuantizer,
+            OVTrainingArguments,
+            OVWeightQuantizationConfig,
+        )
     else:
-        from .openvino import OVQuantizer, OVTrainingArguments
+        from .openvino import OVQuantizationConfig, OVQuantizer, OVTrainingArguments, OVWeightQuantizationConfig
 
     try:
         if not (is_openvino_available() and is_nncf_available() and is_accelerate_available()):
@@ -244,8 +251,6 @@ if TYPE_CHECKING:
             OVModelForSpeechSeq2Seq,
             OVModelForTokenClassification,
             OVModelForVision2Seq,
-            OVQuantizationConfig,
-            OVWeightQuantizationConfig,
         )
 
     try:

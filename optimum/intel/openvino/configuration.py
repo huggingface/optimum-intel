@@ -18,14 +18,17 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-import nncf
 import torch
-from nncf.quantization.advanced_parameters import OverflowFix
 from transformers import PretrainedConfig
 from transformers.utils.quantization_config import QuantizationConfigMixin, QuantizationMethod
 
 from optimum.configuration_utils import BaseConfig
 
+from ..utils.import_utils import is_nncf_available
+
+
+if is_nncf_available():
+    import nncf
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +55,17 @@ _DEFAULT_4BIT_CONFIGS = {
 }
 
 
+class OVQuantizationMethod(str, Enum):
+    DEFAULT = "default"
+
+
 @dataclass
 class OVQuantizationConfigBase(QuantizationConfigMixin):
     """
     Base configuration class for quantization parameters
     """
+
+    quant_method = OVQuantizationMethod.DEFAULT
 
     def __init__(
         self,
@@ -91,7 +100,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         if not (self.num_samples is None or isinstance(self.num_samples, int) and self.num_samples > 0):
             raise ValueError(f"`num_samples` is expected to be a positive integer, but found: {self.num_samples}")
 
-    def get_ignored_scope_instance(self) -> nncf.IgnoredScope:
+    def get_ignored_scope_instance(self) -> "nncf.IgnoredScope":
         if self.ignored_scope is None:
             return nncf.IgnoredScope()
         return nncf.IgnoredScope(**copy.deepcopy(self.ignored_scope))
@@ -178,10 +187,6 @@ class OVConfig(BaseConfig):
         return self._to_dict_safe(to_diff_dict=True)
 
 
-class OVQuantizationMethod(str, Enum):
-    DEFAULT = "default"
-
-
 @dataclass
 class OVWeightQuantizationConfig(OVQuantizationConfigBase):
     """
@@ -240,7 +245,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sensitivity_metric: Optional[str] = None,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
-        quant_method: Optional[Union[QuantizationMethod, OVQuantizationMethod]] = OVQuantizationMethod.DEFAULT,
+        quant_method: Union[QuantizationMethod, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
         weight_only: Optional[bool] = True,
         **kwargs,
     ):
@@ -309,12 +314,12 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 class OVQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
+        sym: bool = False,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = 300,
-        preset: nncf.QuantizationPreset = None,
-        model_type: nncf.ModelType = nncf.ModelType.TRANSFORMER,
+        model_type: str = "transformer",
         fast_bias_correction: bool = True,
-        overflow_fix: OverflowFix = OverflowFix.DISABLE,
+        overflow_fix: str = "disable",
         weight_only: Optional[bool] = False,
         **kwargs,
     ):
@@ -323,23 +328,18 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         compression, during quantization both weights and activations are converted to lower precision.
         For weight-only model quantization please see OVWeightQuantizationConfig.
         Args:
+            sym (`bool`, defaults to `False`):
+                Whether to use symmetric quantization on the activations. Symmetric quantization will be applied on the weights in any case.
             ignored_scope (`dict`, *optional*):
                 An ignored scope that defines the list of model nodes to be ignored during quantization. Dictionary
                 entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
-            preset (`nncf.QuantizationPreset`, *optional*):
-                A preset controls the quantization mode (symmetric and asymmetric).
-                It can take the following values:
-                - `performance`: Symmetric quantization of weights and activations.
-                - `mixed`: Symmetric quantization of weights and asymmetric quantization of activations.
-                Default value is None. In this case, `mixed` preset is used for `transformer`
-                model type otherwise `performance`.
-            model_type (`nncf.ModelType`, defaults to nncf.ModelType.TRANSFORMER):
+            model_type (`str`, defaults to "transformer"):
                 Model type is needed to specify additional patterns in the model. Supported only `transformer` now.
             fast_bias_correction (`bool`, defaults to True):
                 Whether to apply fast or full bias correction algorithm.
-            overflow_fix (`nncf.OverflowFix`, default to OverflowFix.DISABLE):
+            overflow_fix (`str`, default to "disable"):
                 Parameter for controlling overflow fix setting.
             weight_only (`bool`, *optional*):
                 Used to explicitly specify type of quantization (weight-only of full) to apply. Useful when building
@@ -351,36 +351,11 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 "Please check your configuration."
             )
         super().__init__(ignored_scope, num_samples, False)
-        # TODO: remove checks below once NNCF is updated to 2.10
-        if isinstance(overflow_fix, str):
-            overflow_fix = OverflowFix(overflow_fix)
-        if isinstance(preset, str):
-            preset = nncf.QuantizationPreset(preset)
-
-        self.preset = preset
+        self.sym = sym
         self.model_type = model_type
         self.fast_bias_correction = fast_bias_correction
         self.overflow_fix = overflow_fix
         self.post_init()
-
-    def to_dict(self) -> Dict[str, Any]:
-        # TODO: remove code below once NNCF is updated to 2.10
-        if isinstance(self.overflow_fix, Enum) or isinstance(self.preset, Enum):
-            overflow_fix_value = (
-                None
-                if self.overflow_fix is None
-                else self.overflow_fix
-                if isinstance(self.overflow_fix, str)
-                else self.overflow_fix.value
-            )
-            preset_value = (
-                None if self.preset is None else self.preset if isinstance(self.preset, str) else self.preset.value
-            )
-            self_copy = copy.deepcopy(self)
-            self_copy.overflow_fix = overflow_fix_value
-            self_copy.preset = preset_value
-            return self_copy.to_dict()
-        return super().to_dict()
 
 
 def _check_default_4bit_configs(config: PretrainedConfig):

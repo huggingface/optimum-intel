@@ -189,14 +189,3 @@ class OVConfig(metaclass=DummyObject):
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["openvino"])
-
-
-class OVWeightQuantizationConfig(metaclass=DummyObject):
-    _backends = ["openvino"]
-
-    def __init__(self, *args, **kwargs):
-        requires_backends(self, ["openvino"])
-
-    @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        requires_backends(cls, ["openvino"])
