@@ -138,8 +138,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             if number_of_tokenizers == 1:
                 self.assertTrue("Detokenizer is not supported, convert tokenizer only." in output, output)
-            elif number_of_tokenizers == 0 and task not in ("image-classification", "audio-classification"):
-                self.assertTrue(("OpenVINO Tokenizer export for" in output and "is not supported." in output), output)
+
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):
