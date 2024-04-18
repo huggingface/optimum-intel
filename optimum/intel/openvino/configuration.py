@@ -65,12 +65,13 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
     Base configuration class for quantization parameters
     """
 
+    quant_method = OVQuantizationMethod.DEFAULT
+
     def __init__(
         self,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
         weight_only: Optional[bool] = None,
-        quant_method: Union[QuantizationMethod, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
         **kwargs,
     ):
         """
@@ -88,7 +89,6 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         self.ignored_scope = ignored_scope
         self.num_samples = num_samples
         self.weight_only = weight_only
-        self.quant_method = quant_method
 
     def post_init(self):
         try:
@@ -254,7 +254,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 "Trying to create an instance of `OVWeightQuantizationConfig` with `weight_only` being "
                 "False. Please check your configuration."
             )
-        super().__init__(ignored_scope, num_samples, True, quant_method)
+        super().__init__(ignored_scope, num_samples, True)
         self.bits = bits
         self.sym = sym
         self.tokenizer = tokenizer
@@ -263,6 +263,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
+        self.quant_method = quant_method
         self.post_init()
 
     def post_init(self):
