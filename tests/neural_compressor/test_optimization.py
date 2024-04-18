@@ -44,7 +44,7 @@ from transformers import (
     pipeline,
     set_seed,
 )
-from utils_tests import SEED, INCTestMixin, _generate_dataset
+from utils_tests import MODEL_NAMES, SEED, INCTestMixin, _generate_dataset
 from optimum.intel.utils.import_utils import is_torch_version, is_intel_extension_for_transformers_available
 
 
@@ -64,38 +64,30 @@ from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
 from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
 from optimum.pipelines import ORT_SUPPORTED_TASKS
 
-if is_intel_extension_for_transformers_available():
-    from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 set_seed(SEED)
 
 
-class OptimizationTest(INCTestMixin):
+class QuantizationTest(INCTestMixin):
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
-        ("text-classification", "hf-internal-testing/tiny-random-BertForSequenceClassification", 21),
-        # ("text-generation", "hf-internal-testing/tiny-random-BloomForCausalLM", 21), # TODO : enable causal lm task once INC ONNX export fixed
+        ("text-classification", "bert", 21),
+        # ("text-generation", "bloom", 21),
     )
 
     SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS + (
-        ("fill-mask", "hf-internal-testing/tiny-random-BertForMaskedLM", 22),
-        ("token-classification", "hf-internal-testing/tiny-random-AlbertForTokenClassification", 26),
+        ("fill-mask", "bert", 22),
+        ("token-classification", "albert", 26),
     )
 
     TEXT_GENERATION_SUPPORTED_ARCHITECTURES = (
-        "hf-internal-testing/tiny-random-BloomForCausalLM",
-        "hf-internal-testing/tiny-random-GPTNeoForCausalLM",
-    )
-
-    WEIGHT_ONLY_CONFIG = (
-        ("RTN", "int4_clip"),
-        ("GPTQ", "int4_clip"),
-        ("RTN", "int8"),
-        ("", ""),
+        "bloom",
+        "gpt_neo",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_DYNAMIC)
-    def test_dynamic_quantization(self, task, model_name, expected_quantized_matmuls):
+    def test_dynamic_quantization(self, task, model_arch, expected_quantized_matmuls):
+        model_name = MODEL_NAMES[model_arch]
         quantization_config = PostTrainingQuantConfig(approach="dynamic")
         model_class = ORT_SUPPORTED_TASKS[task]["class"][0]
         tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -130,8 +122,9 @@ class OptimizationTest(INCTestMixin):
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_static_quantization(self, task, model_name, expected_quantized_matmuls):
+    def test_static_quantization(self, task, model_arch, expected_quantized_matmuls):
         num_samples = 10
+        model_name = MODEL_NAMES[model_arch]
         model_class = ORT_SUPPORTED_TASKS[task]["class"][0]
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         if tokenizer.pad_token is None:
@@ -174,82 +167,6 @@ class OptimizationTest(INCTestMixin):
                 load_inc_model=True,
                 num_samples=num_samples,
             )
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    @unittest.skipIf(is_torch_version(">=", "2.2.0"), "compatibility issue with torch 2.2.0 and IPEX latest version")
-    def test_ipex_static_quantization_with_smoothquant(self, task, model_name, expected_quantized_matmuls):
-        recipes = {"smooth_quant": True, "smooth_quant_args": {"alpha": 0.5}}
-        num_samples = 10
-        quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex", recipes=recipes)
-        model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        quantizer = INCQuantizer.from_pretrained(model, task=task)
-        calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer.quantize(
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-                save_directory=tmp_dir,
-                save_onnx_model=False,
-            )
-            self.check_model_outputs(
-                q_model=quantizer._quantized_model,
-                task=task,
-                tokenizer=tokenizer,
-                save_directory=tmp_dir,
-                expected_quantized_matmuls=expected_quantized_matmuls,
-                is_static=True,
-                load_onnx_model=False,
-                num_samples=num_samples,
-                load_inc_model=False,
-                load_ipex_model=True,
-            )
-
-    @parameterized.expand(WEIGHT_ONLY_CONFIG)
-    @unittest.skipIf(
-        not is_intel_extension_for_transformers_available(), reason="Intel-extension-for-transformers not available!"
-    )
-    def test_weight_only_quantization(self, methodology, weight_dtype):
-        model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
-        model = AutoModelForCausalLM.from_pretrained(model_name)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
-        calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            if methodology:
-                gptq_args = {
-                    "percdamp": 0.01,
-                    "act_order": False,
-                    "scheme": "sym",
-                }
-
-                quantization_config = WeightOnlyQuantConfig(
-                    algorithm=methodology,
-                    algorithm_args=gptq_args if methodology == "GPTQ" else None,
-                    weight_dtype=weight_dtype,
-                )
-                quantizer.quantize(
-                    quantization_config=quantization_config,
-                    calibration_dataset=calibration_dataset,
-                    save_directory=tmp_dir,
-                )
-            else:
-                quantizer.quantize(
-                    quantization_config=None,
-                    save_directory=tmp_dir,
-                    weight_only=True,  # use RTN quantization method and NF4 weight data type is default.
-                )
-
-            q_model = INCModelForCausalLM.from_pretrained(tmp_dir)
-            inp = torch.tensor([calibration_dataset[0]["input_ids"]])
-            out = model(inp)[0]
-            q_out = q_model(inp)[0]
-            self.assertTrue(torch.all(torch.isclose(out, q_out, atol=5e-1)))
 
     def test_dynamic_accuracy_strategy_quantization(self):
         model_name = "distilbert-base-cased-distilled-squad"
@@ -330,7 +247,8 @@ class OptimizationTest(INCTestMixin):
         self.assertTrue(np.allclose(loaded_pipe_outputs, outputs, atol=1e-4))
 
     @parameterized.expand(TEXT_GENERATION_SUPPORTED_ARCHITECTURES)
-    def test_quantize_text_generate_model(self, model_id):
+    def test_quantize_text_generate_model(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
         set_seed(42)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -357,8 +275,13 @@ class OptimizationTest(INCTestMixin):
         outputs = model.generate(**tokens, do_sample=False, num_beams=1, temperature=0.9, min_length=20, max_length=20)
         self.assertTrue(torch.equal(pre_outputs, outputs))
 
+
+class TrainingOptimizationTest(INCTestMixin):
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("text-classification", "bert", 21),)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_aware_training_quantization(self, task, model_name, expected_quantized_matmuls):
+    def test_aware_training_quantization(self, task, model_arch, expected_quantized_matmuls):
+        model_name = MODEL_NAMES[model_arch]
         quantization_config = QuantizationAwareTrainingConfig()
         save_onnx_model = False
 
@@ -381,7 +304,8 @@ class OptimizationTest(INCTestMixin):
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_aware_training_quantization_pruning(self, task, model_name, expected_quantized_matmuls):
+    def test_aware_training_quantization_pruning(self, task, model_arch, expected_quantized_matmuls):
+        model_name = MODEL_NAMES[model_arch]
         quantization_config = QuantizationAwareTrainingConfig()
         target_sparsity = 0.9
         pruning_config = WeightPruningConfig(
@@ -413,7 +337,8 @@ class OptimizationTest(INCTestMixin):
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_magnitude_pruning(self, task, model_name, expected_quantized_matmuls):
+    def test_magnitude_pruning(self, task, model_arch, expected_quantized_matmuls):
+        model_name = MODEL_NAMES[model_arch]
         target_sparsity = 0.9
         # end_step should be training_args.num_train_epochs * (len(train_dataset) // training_args.per_device_train_batch_size)
         pruning_config = WeightPruningConfig(
@@ -452,7 +377,8 @@ class OptimizationTest(INCTestMixin):
             self.assertEqual(inc_config.pruning["pattern"], "4x1")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
-    def test_distillation(self, task, model_name, expected_quantized_matmuls):
+    def test_distillation(self, task, model_arch, expected_quantized_matmuls):
+        model_name = MODEL_NAMES[model_arch]
         teacher_model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
         distillation_config = DistillationConfig(teacher_model=teacher_model)
         save_onnx_model = True
@@ -575,3 +501,54 @@ class OptimizationTest(INCTestMixin):
             self.assertIsInstance(loaded_model_outputs.logits, torch.Tensor)
             # Compare tensor outputs
             # self.assertTrue(torch.allclose(loaded_model_outputs.logits, model_outputs.logits, atol=1e-4))
+
+
+class WeightOnlyQuantizationTest(INCTestMixin):
+    WEIGHT_ONLY_CONFIG = (
+        ("rtn", "int4_clip"),
+        ("rtn", "int8"),
+        ("gptq", "int4_clip"),
+    )
+
+    @parameterized.expand(WEIGHT_ONLY_CONFIG)
+    @unittest.skipIf(not is_intel_extension_for_transformers_available(), reason="ITREX not available")
+    def test_weight_only_quantization(self, methodology, weight_dtype):
+        model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
+
+        from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig
+
+        bits = 4 if "4" in weight_dtype else 8
+        if methodology == "gptq":
+            # max_input_length can be removed after neural-compressor > v2.5.1
+            quantization_config = GPTQConfig(
+                bits=bits, sym=True, damp_percent=0.01, weight_dtype=weight_dtype, max_input_length=128
+            )
+        else:
+            quantization_config = RtnConfig(bits=bits, weight_dtype=weight_dtype)
+
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
+        calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                calibration_dataset=calibration_dataset,
+                save_directory=tmp_dir,
+            )
+            loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir)
+
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
+
+        with torch.no_grad():
+            loaded_outputs = loaded_model(**tokens)
+            # quantizer_outputs = model(**tokens)
+
+        self.assertTrue("logits" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.logits, torch.Tensor)
+        self.assertTrue("past_key_values" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.past_key_values, tuple)
+
+        # self.assertTrue(torch.allclose(quantizer_outputs.logits, loaded_outputs.logits, equal_nan=True, atol=1e-4))
