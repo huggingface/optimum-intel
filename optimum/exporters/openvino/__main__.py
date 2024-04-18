@@ -77,7 +77,7 @@ def main_export(
         model_name_or_path (`str`):
             Model ID on huggingface.co or path on disk to the model repository to export.
         output (`Union[str, Path]`):
-            Path indicating the directory where to store the generated ONNX model.
+            Path indicating the directory where to store the generated OpenVINO model.
 
         > Optional parameters
 

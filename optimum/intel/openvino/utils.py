@@ -96,6 +96,7 @@ _HEAD_TO_AUTOMODELS = {
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
     "pix2struct": "OVModelForPix2Struct",
+    "latent-consistency": "OVLatentConsistencyModelPipeline",
 }
 
 

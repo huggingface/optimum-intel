@@ -387,7 +387,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 self.__call__(**inputs, height=height, width=width)
             else:
                 self.__call__(*inputs, height=height, width=width)
-            if len(calibration_data) > num_samples:
+            if len(calibration_data) >= num_samples:
                 break
 
         self.unet.request = self.unet.request.request
