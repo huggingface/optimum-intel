@@ -66,7 +66,7 @@ class OVCLIExportTestCase(unittest.TestCase):
     )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
-        "t5": 0,  # failed internal sentencepiece check - no <s> token in the vocab
+        "t5": 0,  # no .model file in the repository
         "albert": 0,  # not supported yet
         "distilbert": 1,  # no detokenizer
         "roberta": 2,
@@ -125,26 +125,26 @@ class OVCLIExportTestCase(unittest.TestCase):
         for arch in SUPPORTED_ARCHITECTURES
         if not arch[0].endswith("-with-past") and not arch[1].endswith("-refiner")
     )
-    @unittest.skipIf(not is_openvino_tokenizers_available(), reason="OpenVINO Tokenizers not available")
     def test_exporters_cli_tokenizers(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
             output = subprocess.check_output(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --convert-tokenizer --task {task} {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
                 shell=True,
                 stderr=subprocess.STDOUT,
             ).decode()
-            save_dir = Path(tmpdir)
-            number_of_tokenizers = sum("tokenizer" in file for file in map(str, save_dir.rglob("*.xml")))
-            self.assertEqual(
-                self.EXPECTED_NUMBER_OF_TOKENIZER_MODELS[model_type],
-                number_of_tokenizers,
-                f"OVT: {is_openvino_tokenizers_available() }",
-            )
+            if not is_openvino_tokenizers_available():
+                self.assertTrue(
+                    "OpenVINO Tokenizers is not available." in output
+                    or "OpenVINO and OpenVINO Tokenizers versions are not binary compatible." in output,
+                    msg=output,
+                )
+                return
+
+            number_of_tokenizers = sum("tokenizer" in file for file in map(str, Path(tmpdir).rglob("*.xml")))
+            self.assertEqual(self.EXPECTED_NUMBER_OF_TOKENIZER_MODELS[model_type], number_of_tokenizers, output)
 
             if number_of_tokenizers == 1:
                 self.assertTrue("Detokenizer is not supported, convert tokenizer only." in output, output)
-            elif number_of_tokenizers == 0 and task not in ("image-classification", "audio-classification"):
-                self.assertTrue(("OpenVINO Tokenizer export for" in output and "is not supported." in output), output)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):

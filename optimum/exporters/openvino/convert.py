@@ -20,7 +20,6 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
-from transformers import T5Tokenizer, T5TokenizerFast
 from transformers.utils import is_tf_available, is_torch_available
 
 from openvino.runtime import PartialShape, save_model
@@ -47,9 +46,6 @@ from .utils import (
     get_input_shapes,
     remove_none_from_dummy_inputs,
 )
-
-
-UNSUPPORTED_TOKENIZER_CLASSES = (T5Tokenizer, T5TokenizerFast)
 
 
 logger = logging.getLogger(__name__)
@@ -662,10 +658,6 @@ def export_tokenizer(
 ):
     from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME  # avoid circular imports
 
-    if isinstance(tokenizer, UNSUPPORTED_TOKENIZER_CLASSES):
-        logger.info(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
-        return
-
     try:
         from openvino_tokenizers import convert_tokenizer
     except ModuleNotFoundError:
@@ -681,13 +673,13 @@ def export_tokenizer(
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)
     except NotImplementedError:
-        logger.warning("Detokenizer is not supported, convert tokenizer only.")
+        logger.info("Detokenizer is not supported, convert tokenizer only.")
         converted = convert_tokenizer(tokenizer, with_detokenizer=False)
     except OVTypeError:
-        logger.warning(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
+        logger.debug(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
         return
     except Exception as exception:
-        logger.warning(
+        logger.debug(
             f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported. Exception: {exception}"
         )
         return
