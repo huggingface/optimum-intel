@@ -214,7 +214,13 @@ class OVExportCommand(BaseOptimumCLICommand):
             quantization_config["dataset"] = self.args.dataset
             ov_config = OVConfig(quantization_config=quantization_config)
 
-        library_name = TasksManager.infer_library_from_model(self.args.model)
+        library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
+        if library_name == "sentence_transformers" and self.args.library is None:
+            logger.warning(
+                "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
+                "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+            )
+            library_name = "transformers"
 
         if (
             library_name == "diffusers"
