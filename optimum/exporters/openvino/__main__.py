@@ -22,10 +22,9 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
+from optimum.exporters.openvino.convert import export_from_model, export_tokenizer
+from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
-
-from ...intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
-from .convert import export_from_model, export_tokenizer
 
 
 if TYPE_CHECKING:
@@ -77,7 +76,7 @@ def main_export(
         model_name_or_path (`str`):
             Model ID on huggingface.co or path on disk to the model repository to export.
         output (`Union[str, Path]`):
-            Path indicating the directory where to store the generated ONNX model.
+            Path indicating the directory where to store the generated OpenVINO model.
 
         > Optional parameters
 
@@ -186,12 +185,6 @@ def main_export(
             raise RequestsConnectionError(
                 f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
             )
-
-    if convert_tokenizer and not is_openvino_tokenizers_available():
-        logger.warning(
-            "`convert_tokenizer` requires openvino-tokenizers, please install it with `pip install optimum-intel[openvino-tokenizers]`"
-        )
-        convert_tokenizer = False
 
     do_gptq_patching = False
     custom_architecture = False
@@ -348,7 +341,7 @@ def main_export(
         **kwargs_shapes,
     )
 
-    if convert_tokenizer:
+    if convert_tokenizer and is_openvino_tokenizers_available():
         if library_name != "diffusers":
             tokenizer = next(
                 (preprocessor for preprocessor in preprocessors if isinstance(preprocessor, PreTrainedTokenizerBase)),
@@ -371,6 +364,8 @@ def main_export(
             tokenizer_2 = getattr(model, "tokenizer_2", None)
             if tokenizer_2 is not None:
                 export_tokenizer(tokenizer_2, output, suffix="_2")
+    elif convert_tokenizer and not is_openvino_tokenizers_available():
+        logger.warning("Tokenizer won't be converted.")
 
     # Unpatch modules after GPTQ export
     if do_gptq_patching:

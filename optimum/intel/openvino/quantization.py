@@ -26,7 +26,7 @@ import openvino
 import torch
 import transformers
 from nncf import CompressWeightsMode, SensitivityMetric
-from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters
+from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters, OverflowFix
 from nncf.torch import register_module
 from nncf.torch.initialization import PTInitializingDataLoader
 from openvino._offline_transformations import compress_quantize_weights_transformation
@@ -370,10 +370,12 @@ class OVQuantizer(OptimumQuantizer):
             quantization_dataset,
             subset_size=quantization_config.num_samples,
             ignored_scope=quantization_config.get_ignored_scope_instance(),
-            model_type=quantization_config.model_type,
+            model_type=nncf.ModelType(quantization_config.model_type),
             preset=nncf.QuantizationPreset.PERFORMANCE if quantization_config.sym else nncf.QuantizationPreset.MIXED,
             fast_bias_correction=quantization_config.fast_bias_correction,
-            advanced_parameters=nncf.AdvancedQuantizationParameters(overflow_fix=quantization_config.overflow_fix),
+            advanced_parameters=nncf.AdvancedQuantizationParameters(
+                overflow_fix=OverflowFix(quantization_config.overflow_fix)
+            ),
             **kwargs,
         )
         self.model.model = quantized_model
@@ -468,12 +470,14 @@ class OVQuantizer(OptimumQuantizer):
                 quantization_dataset,
                 subset_size=quantization_config.num_samples,
                 ignored_scope=quantization_config.get_ignored_scope_instance(),
-                model_type=quantization_config.model_type,
+                model_type=nncf.ModelType(quantization_config.model_type),
                 preset=nncf.QuantizationPreset.PERFORMANCE
                 if quantization_config.sym
                 else nncf.QuantizationPreset.MIXED,
                 fast_bias_correction=quantization_config.fast_bias_correction,
-                advanced_parameters=nncf.AdvancedQuantizationParameters(overflow_fix=quantization_config.overflow_fix),
+                advanced_parameters=nncf.AdvancedQuantizationParameters(
+                    overflow_fix=OverflowFix(quantization_config.overflow_fix)
+                ),
                 **kwargs,
             )
 

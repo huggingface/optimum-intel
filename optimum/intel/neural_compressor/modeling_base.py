@@ -67,11 +67,6 @@ MODEL_START_DOCSTRING = r"""
 """
 
 
-if is_intel_extension_for_transformers_available():
-    from intel_extension_for_transformers.transformers.modeling import AutoModelForCausalLM as ITREX_WOQ_MODEL
-    from intel_extension_for_transformers.transformers.utils import WeightOnlyQuantConfig
-
-
 class INCModel(OptimizedModel):
     auto_model_class = AutoModel
     export_feature = "feature-extraction"
@@ -142,15 +137,16 @@ class INCModel(OptimizedModel):
         msg = None
         if is_intel_extension_for_transformers_available():
             try:
-                quantization_config = WeightOnlyQuantConfig.from_pretrained(model_id)
-                algorithm = getattr(quantization_config, "algorithm", None)
-                if algorithm is not None and quantization_config.algorithm.lower() in {
-                    "rtn",
-                    "gptq",
-                    "awq",
-                    "autoaround",
-                }:
-                    return ITREX_WOQ_MODEL.from_pretrained(
+                quantization_config = PretrainedConfig.from_pretrained(model_save_dir / "quantize_config.json")
+                algorithm = getattr(quantization_config, "quant_method", None)
+                if algorithm in {"rtn", "gptq", "awq", "autoaround"}:
+                    from intel_extension_for_transformers.transformers.modeling.modeling_auto import (
+                        _BaseQBitsAutoModelClass,
+                    )
+
+                    _BaseQBitsAutoModelClass.ORIG_MODEL = cls.auto_model_class
+
+                    return _BaseQBitsAutoModelClass.from_pretrained(
                         pretrained_model_name_or_path=model_id,
                         use_auth_token=use_auth_token,
                         revision=revision,
