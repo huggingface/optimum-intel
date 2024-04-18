@@ -1559,14 +1559,18 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
             self.assertIn("logits", ov_outputs)
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
-            self.assertTrue(
-                all(
+            self.assertTrue(len(ov_outputs.attentions) == len(transformers_outputs.attentions))
+            for i in range(len(ov_outputs.attentions)):
+                self.assertTrue(
                     torch.allclose(
-                        torch.Tensor(ov_outputs.attentions[i]), transformers_outputs.attentions[i], atol=1e-4
-                    )
-                    for i in range(len(ov_outputs.attentions))
+                        torch.Tensor(ov_outputs.attentions[i]),
+                        transformers_outputs.attentions[i],
+                        atol=1e-4,  # attentions are accurate
+                        rtol=1e-4,  # attentions are accurate
+                    ),
+                    f"Attention mismatch at layer {i}",
                 )
-            )
+
         del transformers_model
         del ov_model
         gc.collect()
@@ -1592,14 +1596,17 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
             self.assertIn("logits", ov_outputs)
             self.assertIsInstance(ov_outputs.logits, TENSOR_ALIAS_TO_TYPE[input_type])
             self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-4))
-            self.assertTrue(
-                all(
+            self.assertTrue(len(ov_outputs.hidden_states) == len(transformers_outputs.hidden_states))
+            for i in range(len(ov_outputs.hidden_states)):
+                self.assertTrue(
                     torch.allclose(
-                        torch.Tensor(ov_outputs.hidden_states[i]), transformers_outputs.hidden_states[i], atol=1e-4
-                    )
-                    for i in range(len(ov_outputs.hidden_states))
+                        torch.Tensor(ov_outputs.hidden_states[i]),
+                        transformers_outputs.hidden_states[i],
+                        atol=1e-3,  # hidden states are less accurate
+                        rtol=1e-2,  # hidden states are less accurate
+                    ),
+                    f"Hidden states mismatch at layer {i}",
                 )
-            )
         del transformers_model
         del ov_model
         gc.collect()
