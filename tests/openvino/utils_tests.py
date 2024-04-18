@@ -19,6 +19,7 @@ import torch
 MODEL_NAMES = {
     "albert": "hf-internal-testing/tiny-random-albert",
     "audio_spectrogram_transformer": "Ericwang/tiny-random-ast",
+    "bge": "BAAI/bge-small-en-v1.5",
     "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
     "bert": "hf-internal-testing/tiny-random-bert",
     "bart": "hf-internal-testing/tiny-random-bart",
