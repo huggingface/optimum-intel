@@ -28,7 +28,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
-
+from transformers.utils import ModelOutput
+from dataclasses import dataclass
 from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
@@ -44,6 +45,23 @@ logger = logging.getLogger(__name__)
 
 core = Core()
 
+@dataclass
+class OVCausalLMOutputWithPast(ModelOutput):
+    """
+    Base class for causal language model (or autoregressive) outputs.
+
+    Args:
+        infer_request(`openvino.runtime.InferRequest` to be reused in the generation cycles.
+        beam_idx (`torch.Tensor` beam search algorimth context for the generation using stateful models
+    """
+
+    loss: Optional[torch.FloatTensor] = None
+    logits: torch.FloatTensor = None
+    past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    infer_request: Optional[openvino.runtime.InferRequest] = None
+    beam_idx: Optional[torch.Tensor] = None
 
 TEXT_GENERATION_EXAMPLE = r"""
     Example of text generation:
@@ -341,12 +359,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     export_feature = "text-generation"
     auto_model_class = AutoModelForCausalLM
 
-    def generate(self, *args, **kwargs):
-        self.compile()
-        if kwargs.get("infer_request") is None:
-            infer_context = [self.compiled_model.create_infer_request()]
-            kwargs["infer_context"] = infer_context
-        return super().generate(*args, **kwargs)
+#    def generate(self, *args, **kwargs):
+#        self.compile()
+#        if kwargs.get("infer_request") is None:
+#            infer_context = [self.compiled_model.create_infer_request()]
+#            kwargs["infer_context"] = infer_context
+#        return super().generate(*args, **kwargs)
 
     @add_start_docstrings_to_model_forward(
         INPUTS_DOCSTRING.format("batch_size, sequence_length")
@@ -362,6 +380,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
+        beam_idx: Optional[torch.tensor] = None,
         **kwargs,
     ) -> Dict:
         if self.use_cache and past_key_values is not None:
@@ -436,7 +455,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         if "beam_idx" in self.input_names:
             inputs["beam_idx"] = (
-                past_key_values[0] if past_key_values is not None else np.arange(batch_size, dtype=int)
+                beam_idx if beam_idx is not None else np.arange(batch_size, dtype=int)
             )
 
         return inputs
@@ -447,28 +466,25 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        infer_context: Optional[List[openvino.runtime.InferRequest]] = None,
+        infer_request: Optional[openvino.runtime.InferRequest] = None,
+        beam_idx: torch.Tensor = None,
         **kwargs,
-    ) -> CausalLMOutputWithPast:
+    ) -> OVCausalLMOutputWithPast:
         self.compile()
         inputs = self.prepare_inputs(
             input_ids=input_ids,
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             position_ids=position_ids,
+            beam_idx=beam_idx,
             **kwargs,
         )
+
         # Run inference
-        if self.stateful and past_key_values is not None:
-            # for stateful models, infer request is created in generate and __call_ methods and passed in the cycle via past_key_values param
-            infer_request = past_key_values[1]
-        else:
-            if infer_context is not None:
-                # Use passed inference request if provided in kwargs, create new one overwise
-                infer_request = infer_context[0]
-            else:
-                self.compile()
-                infer_request = self.compiled_model.create_infer_request()
+        if infer_request is None:
+            self.compile()
+            infer_request = self.compiled_model.create_infer_request()
+
         infer_request.start_async(inputs, share_inputs=True)
         infer_request.wait()
         logits = torch.from_numpy(infer_request.get_tensor("logits").data).to(self.device)
@@ -476,7 +492,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # Need a marker to differentiate the first generate iteration from the others in
             # the first condition at the function beginning above.
             # It should be something that is not None and it should be True when converted to Boolean.
-            past_key_values = ((inputs["beam_idx"]), infer_request)
+            past_key_values = ((),)
 
         if not self.stateful:
             if self.use_cache:
@@ -490,14 +506,31 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             else:
                 past_key_values = None
 
-        return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+        return OVCausalLMOutputWithPast(logits=logits, past_key_values=past_key_values, infer_request=infer_request, beam_idx=beam_idx)
+
+    def _update_model_kwargs_for_generation(
+        self, outputs: OVCausalLMOutputWithPast, 
+        model_kwargs: dict[str],
+        is_encoder_decoder: bool = False,
+        standardize_cache_format: bool = False,
+    ) -> dict[str]: 
+        model_kwargs = super()._update_model_kwargs_for_generation(
+            outputs=outputs,
+            model_kwargs=model_kwargs,
+            is_encoder_decoder=is_encoder_decoder,
+            standardize_cache_format=standardize_cache_format,
+            )
+        if "infer_request" in outputs: model_kwargs["infer_request"] = outputs["infer_request"]
+        if "beam_idx" in outputs: model_kwargs["beam_idx"] = outputs["beam_idx"]
+        return model_kwargs
 
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
         # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
         attention_mask = kwargs.get("attention_mask", None)
         use_cache = kwargs.get("use_cache", None)
-        infer_context = kwargs.get("infer_context", None)
+        infer_request = kwargs.get("infer_request", None)
+        beam_idx = kwargs.get("beam_idx", None)
         position_ids = kwargs.get("position_ids", None)
         if attention_mask is not None and position_ids is None:
             # create position_ids on the fly for batch generation
@@ -510,7 +543,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             "input_ids": input_ids,
             "past_key_values": past_key_values,
             "use_cache": use_cache,
-            "infer_context": infer_context,
+            "infer_request": infer_request,
+            "beam_idx": beam_idx,
             "position_ids": position_ids,
             "attention_mask": attention_mask,
         }
@@ -528,7 +562,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # TODO: Apply it differently based on model type
             # TODO: At least for bloom we need to replicate values for each attention head
             # save beam_idx and infer_request to be used as an input in the next iteration
-            past_key_values = ((np.array(beam_idx)), past_key_values[1])
+            
             return past_key_values
         else:
             return tuple(
@@ -760,3 +794,5 @@ class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
             return past_key_values
         else:
             return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)
+        
+

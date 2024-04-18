@@ -563,12 +563,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
-        # self.assertTrue("past_key_values" in ov_outputs)
-        # self.assertIsInstance(ov_outputs.past_key_values, tuple)
+        self.assertTrue("past_key_values" in ov_outputs)
+        self.assertIsInstance(ov_outputs.past_key_values, tuple)
         is_stateful = ov_model.config.model_type not in not_stateful and self.IS_SUPPORT_STATEFUL
         self.assertEqual(ov_model.stateful, is_stateful)
-        # if is_stateful:
-        #    self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+        if is_stateful:
+           self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
 
@@ -596,16 +596,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         model_kwargs = {}
         if model_arch in self.REMOTE_CODE_MODELS:
-            model_kwargs = {
-                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
-                "trust_remote_code": True,
-            }
+            model_kwargs = {"trust_remote_code": True}
+
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
         self.assertEqual(
             ov_model.stateful, self.IS_SUPPORT_STATEFUL and ov_model.config.model_type not in not_stateful
         )
+
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         if model_arch == "qwen":
@@ -848,7 +847,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_default_filling_attention_mask_and_position_ids(self):
         model_id = MODEL_NAMES["llama"]
-        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
+        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=False)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input"]
@@ -866,6 +865,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
         outs_without_attn_mask_step2 = model_with_cache(input_ids=input_ids, past_key_values=past_key_values)
         self.assertTrue(torch.allclose(outs_step2.logits, outs_without_attn_mask_step2.logits))
+        print()
         del model_with_cache
         gc.collect()
 
