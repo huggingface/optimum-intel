@@ -270,5 +270,3 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 # **input_shapes,
             )
-            
-
