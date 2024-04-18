@@ -997,20 +997,20 @@ class OVModelForCustomTasks(OVModel):
         np_inputs = isinstance(next(iter(kwargs.values())), np.ndarray)
 
         inputs = {}
-
         for key, value in kwargs.items():
             inputs[key] = np.array(value) if not np_inputs else value
 
-        # Run inference
         outputs = self.request(inputs)
 
         model_outputs = {}
         for key, value in outputs.items():
-            if len(key.names) == 0:
-                key_names = {"no_name_output_O_o"}
+            key_name = next(iter(key.names))
+            if "." in key_name:
+                key_name = key_name.split(".")[0]
+                if key_name not in model_outputs:
+                    model_outputs[key_name] = []
+                model_outputs[key_name].append(torch.from_numpy(value).to(self.device) if not np_inputs else value)
             else:
-                key_names = key.names
-
-            model_outputs[next(iter(key_names))] = torch.from_numpy(value).to(self.device) if not np_inputs else value
+                model_outputs[key_name] = torch.from_numpy(value).to(self.device) if not np_inputs else value
 
         return ModelOutput(**model_outputs)
