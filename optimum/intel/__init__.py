@@ -60,11 +60,11 @@ try:
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
     _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(
-        ["OVQuantizer", "OVTrainingArguments", "OVQuantizationConfig", "OVWeightQuantizationConfig"]
+        ["OVQuantizer", "OVTrainingArguments", "OVQuantizationConfig", "OVWeightQuantizationConfig", "OVDynamicQuantizationConfig"]
     )
 else:
     _import_structure["openvino"].extend(
-        ["OVQuantizer", "OVTrainingArguments", "OVQuantizationConfig", "OVWeightQuantizationConfig"]
+        ["OVQuantizer", "OVTrainingArguments", "OVQuantizationConfig", "OVWeightQuantizationConfig", "OVDynamicQuantizationConfig"]
     )
 
 
@@ -195,9 +195,10 @@ if TYPE_CHECKING:
             OVQuantizer,
             OVTrainingArguments,
             OVWeightQuantizationConfig,
+            OVDynamicQuantizationConfig,
         )
     else:
-        from .openvino import OVQuantizationConfig, OVQuantizer, OVTrainingArguments, OVWeightQuantizationConfig
+        from .openvino import OVQuantizationConfig, OVQuantizer, OVTrainingArguments, OVWeightQuantizationConfig, OVDynamicQuantizationConfig
 
     try:
         if not (is_openvino_available() and is_nncf_available() and is_accelerate_available()):

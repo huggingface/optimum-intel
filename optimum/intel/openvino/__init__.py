@@ -43,7 +43,7 @@ if is_nncf_available():
         from .trainer import OVTrainer
 
 
-from .configuration import OVConfig, OVQuantizationConfig, OVWeightQuantizationConfig
+from .configuration import OVConfig, OVQuantizationConfig, OVWeightQuantizationConfig, OVDynamicQuantizationConfig
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
