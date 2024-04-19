@@ -552,6 +552,29 @@ class OVWeightCompressionTest(unittest.TestCase):
                         compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
 
+    @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
+    def test_ovmodel_4bit_dynamic_with_config(self, model_cls, model_name, quantization_config, expected_ov_int4):
+        model_id = MODEL_NAMES[model_name]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            group_size = quantization_config.pop("group_size", 32)
+            quantization_config = OVDynamicQuantizationConfig(weights_group_size=group_size, activations_group_size=group_size, **quantization_config)
+            model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
+            self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
+            self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
+
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            _, num_int4, _ = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int4, num_int4)
+            model.save_pretrained(tmp_dir)
+
+            openvino_config = OVConfig.from_pretrained(tmp_dir)
+            self.assertEqual(openvino_config.quantization_config.bits, 4)
+            self.assertEqual(openvino_config.dtype, "int4")
+
+
 class OVQuantizerQATest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (("hf-internal-testing/tiny-random-BertForQuestionAnswering",),)
 

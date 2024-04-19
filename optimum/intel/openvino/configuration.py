@@ -234,7 +234,6 @@ class OVDynamicQuantizationConfig(OVWeightQuantizationConfig):
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, group_size=weights_group_size, **kwargs)
-        # TODO add kv_cache_dtype
         self.activations_group_size = activations_group_size
 
 
