@@ -957,7 +957,7 @@ class OVModelForAudioFrameClassification(OVModel):
 
 
 CUSTOM_TASKS_EXAMPLE = """
-    Example of custom tasks (e.g. a sentence transformers taking `pooler_output` as output):
+    Example of custom tasks (e.g. a sentence transformers with a pooler head):
 
     ```python
     >>> from transformers import {processor_class}
@@ -977,20 +977,16 @@ CUSTOM_TASKS_EXAMPLE = """
 
 @add_start_docstrings(
     """
-    OpenVINO Model for custom tasks.
+    OpenVINO Model for custom tasks. It can be used to leverage the inference acceleration for any single-file OpenVINO model, that may use custom inputs and outputs.
     """,
     MODEL_START_DOCSTRING,
 )
 class OVModelForCustomTasks(OVModel):
-    """
-    OpenVINO Model for any custom tasks. It can be used to leverage the inference acceleration for any single-file ONNX model, that may use custom inputs and outputs.
-    """
-
     @add_start_docstrings_to_model_forward(
         CUSTOM_TASKS_EXAMPLE.format(
             processor_class=_TOKENIZER_FOR_DOC,
             model_class="OVModelForCustomTasks",
-            checkpoint="sentence-transformers/all-MiniLM-L6-v2",
+            checkpoint="IlyasMoutawwakil/bert-with-pooler",
         )
     )
     def forward(self, **kwargs):
@@ -1001,7 +997,7 @@ class OVModelForCustomTasks(OVModel):
             raise ValueError(
                 f"Got unexpected inputs: expecting the following inputs : {', '.join(expected_inputs_names)} but got : {', '.join(inputs_names)}."
             )
-        
+
         np_inputs = isinstance(next(iter(kwargs.values())), np.ndarray)
         inputs = {}
         for input_name in self.input_names:
