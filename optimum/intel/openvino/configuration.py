@@ -191,7 +191,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         if not (self.dataset is None or isinstance(self.dataset, (str, list))):
             raise ValueError(
                 f"Dataset must be a instance of either string or list of strings, but found {type(self.dataset)}. "
-                f"If you wish to provide a custom dataset please pass it via `calibration_dataset` argument."
+                f"If you wish to provide a custom dataset, please use the `OVQuantizer` instead."
             )
         if self.dataset is not None and isinstance(self.dataset, str):
             llm_datasets = ["wikitext", "c4", "c4-new", "ptb", "ptb-new"]
