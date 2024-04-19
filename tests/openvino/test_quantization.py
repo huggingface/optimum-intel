@@ -685,7 +685,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
     QUANTIZATION_CONFIGS = (
         (None,),
         (OVWeightQuantizationConfig(),),
-        (OVWeightQuantizationConfig(bits=8,sym=True),),
+        (OVWeightQuantizationConfig(bits=8, sym=True),),
         (
             OVWeightQuantizationConfig(
                 dataset="wikitext",
@@ -713,7 +713,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
             ),
         ),
         (OVQuantizationConfig(ignored_scope=nncf.IgnoredScope(names=["op_name"])),),
-        (OVDynamicQuantizationConfig(bits=8,sym=True),),
+        (OVDynamicQuantizationConfig(bits=8, sym=True),),
     )
 
     QUANTIZATION_CONFIG_DICTS = (
@@ -743,7 +743,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
         ),
         (dict(num_samples=100), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (dict(abc="def"), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
-        (dict(bits=8, fast_bias_correction=True, dataset="wikitext"), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
+        (
+            dict(bits=8, fast_bias_correction=True, dataset="wikitext"),
+            OVWeightQuantizationConfig,
+            "Can't determine type of OV quantization config",
+        ),
         (dict(model_type="transformer"), OVQuantizationConfig, None),
         (
             dict(
@@ -761,7 +765,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(weight_only=False), OVQuantizationConfig, None),
         (dict(abc="def", weight_only=False), OVQuantizationConfig, None),
         (dict(abc="def", weight_only=True), OVWeightQuantizationConfig, None),
-        (dict(bits=8, fast_bias_correction=True, dataset="wikitext", weight_only=True), OVWeightQuantizationConfig, None),
+        (
+            dict(bits=8, fast_bias_correction=True, dataset="wikitext", weight_only=True),
+            OVWeightQuantizationConfig,
+            None,
+        ),
         (dict(bits=8, fast_bias_correction=True, weight_only=False), OVQuantizationConfig, None),
     )
 
