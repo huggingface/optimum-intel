@@ -124,9 +124,13 @@ class CustomExportModelTest(unittest.TestCase):
         class BertOnnxConfigWithPooler(BertOnnxConfig):
             @property
             def outputs(self):
-                common_outputs = {}
-                common_outputs["last_hidden_state"] = {0: "batch_size", 1: "sequence_length"}
-                common_outputs["pooler_output"] = {0: "batch_size"}
+                if self.task == "feature-extraction-with-pooler":
+                    common_outputs = {}
+                    common_outputs["last_hidden_state"] = {0: "batch_size", 1: "sequence_length"}
+                    common_outputs["pooler_output"] = {0: "batch_size"}
+                else:
+                    common_outputs = super().outputs
+
                 return common_outputs
 
         base_task = "feature-extraction"
@@ -134,7 +138,7 @@ class CustomExportModelTest(unittest.TestCase):
         model_id = "sentence-transformers/all-MiniLM-L6-v2"
 
         config = AutoConfig.from_pretrained(model_id)
-        custom_export_configs = {"model": BertOnnxConfigWithPooler(config, task=base_task)}
+        custom_export_configs = {"model": BertOnnxConfigWithPooler(config, task=custom_task)}
 
         with TemporaryDirectory() as tmpdirname:
             main_export(
