@@ -100,6 +100,8 @@ MODEL_NAMES = {
     "unispeech": "hf-internal-testing/tiny-random-unispeech",
     "unispeech_sat": "hf-internal-testing/tiny-random-UnispeechSatModel",
     "vit": "hf-internal-testing/tiny-random-vit",
+    "vit-with-attentions": "IlyasMoutawwakil/vit-with-attentions",
+    "vit-with-hidden-states": "IlyasMoutawwakil/vit-with-hidden_states",
     "vision-encoder-decoder": "hf-internal-testing/tiny-random-VisionEncoderDecoderModel-vit-gpt2",
     "wavlm": "hf-internal-testing/tiny-random-WavlmModel",
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
