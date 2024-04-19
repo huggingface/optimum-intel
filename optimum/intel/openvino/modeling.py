@@ -986,7 +986,7 @@ class OVModelForCustomTasks(OVModel):
         CUSTOM_TASKS_EXAMPLE.format(
             processor_class=_TOKENIZER_FOR_DOC,
             model_class="OVModelForCustomTasks",
-            checkpoint="IlyasMoutawwakil/bert-with-pooler",
+            checkpoint="IlyasMoutawwakil/sbert-all-MiniLM-L6-v2-with-pooler",
         )
     )
     def forward(self, **kwargs):
