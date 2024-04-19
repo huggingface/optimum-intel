@@ -218,3 +218,31 @@ class OVCLIExportTestCase(unittest.TestCase):
             shell=True,
             check=True,
         )
+
+    def test_exporters_cli_sentence_transformers(self):
+        model_id = MODEL_NAMES["bge"]
+        with TemporaryDirectory() as tmpdir:
+            # default export creates transformers model
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_id} --task feature-extraction {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS["feature-extraction"]).from_pretrained(tmpdir, compile=False)
+            self.assertTrue("last_hidden_state" in model.output_names)
+            # export with transformers lib creates transformers model
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_id} --task feature-extraction --library transformers {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS["feature-extraction"]).from_pretrained(tmpdir, compile=False)
+            self.assertTrue("last_hidden_state" in model.output_names)
+            # export with sentence_transformers lib creates sentence_transformers model
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_id} --task feature-extraction --library sentence_transformers {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS["feature-extraction"]).from_pretrained(tmpdir, compile=False)
+            self.assertFalse("last_hidden_state" in model.output_names)
