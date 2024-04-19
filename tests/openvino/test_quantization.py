@@ -328,10 +328,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
             ov_config = OVConfig(quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, ratio=0.8))
-            quantizer.quantize(
-                save_directory=tmp_dir,
-                ov_config=ov_config,
-            )
+            quantizer.quantize(save_directory=tmp_dir, ov_config=ov_config)
             model = model_cls.from_pretrained(tmp_dir)
 
             _, num_int8, num_int4 = get_num_quantized_nodes(model)
