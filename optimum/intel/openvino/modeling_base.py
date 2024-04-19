@@ -87,15 +87,15 @@ class OVBaseModel(OptimizedModel):
 
         self.model = model
         self.request = None
-        if enable_compilation:
-            self.compile()
-
         self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
         self._set_ov_config_parameters()
+
+        if enable_compilation:
+            self.compile()
 
     @staticmethod
     def load_model(

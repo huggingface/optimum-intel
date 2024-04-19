@@ -140,9 +140,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         if self.is_dynamic:
             self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
 
-        if compile:
-            self.compile()
-
         sub_models = {
             DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER: self.text_encoder,
             DIFFUSION_MODEL_UNET_SUBFOLDER: self.unet,
@@ -161,6 +158,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
         self._set_ov_config_parameters()
+
+        if compile:
+            self.compile()
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
