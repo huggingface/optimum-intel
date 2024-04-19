@@ -312,10 +312,7 @@ class OVConfig(BaseConfig):
             quantization_config = self._quantization_config_from_dict(quantization_config)
         self.quantization_config = quantization_config
         self.compression = None  # A field for backward-compatability of training-time compression parameters
-
-        bits = (
-            self.quantization_config.bits if isinstance(self.quantization_config, OVWeightQuantizationConfig) else None
-        )
+        bits = self.quantization_config.bits if self.quantization_config else None
         self.dtype = "int" + str(bits) if isinstance(bits, int) else dtype
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
@@ -332,11 +329,11 @@ class OVConfig(BaseConfig):
     def _quantization_config_from_dict(quantization_config: dict) -> OVQuantizationConfigBase:
         wq_args = inspect.getfullargspec(OVWeightQuantizationConfig.__init__).args
         q_args = inspect.getfullargspec(OVQuantizationConfig.__init__).args
+        weight_only = quantization_config.pop("weight_only", None)
         config_keys = quantization_config.keys()
         matches_wq_config_signature = all(arg_name in wq_args for arg_name in config_keys)
         matches_q_config_signature = all(arg_name in q_args for arg_name in config_keys)
         if matches_wq_config_signature == matches_q_config_signature:
-            weight_only = quantization_config.get("weight_only", None)
             if weight_only is None:
                 logger.warning(
                     "Can't determine type of OV quantization config. Please specify explicitly whether you intend to "
