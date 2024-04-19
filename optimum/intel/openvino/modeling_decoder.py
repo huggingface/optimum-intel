@@ -328,12 +328,6 @@ class OVBaseDecoderModel(OVModel):
         patch_stateful(self.config, self.model)
         self.stateful = True
 
-    def _set_ov_config_parameters(self):
-        super()._set_ov_config_parameters()
-
-        if "DYNAMIC_QUANTIZATION_GROUP_SIZE" in self.ov_config and "KV_CACHE_PRECISION" not in self.ov_config:
-            self.ov_config["KV_CACHE_PRECISION"] = "u8"
-
 
 @add_start_docstrings(
     """

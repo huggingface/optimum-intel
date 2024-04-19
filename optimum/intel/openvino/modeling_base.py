@@ -253,6 +253,8 @@ class OVBaseModel(OptimizedModel):
         q_config = self._openvino_config.quantization_config if self._openvino_config else None
         if isinstance(q_config, OVDynamicQuantizationConfig):
             self.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"] = str(q_config.activations_group_size)
+            if self.can_generate() and "KV_CACHE_PRECISION" not in self.ov_config:
+                self.ov_config["KV_CACHE_PRECISION"] = "u8"
 
     @staticmethod
     def _cached_file(
