@@ -994,11 +994,18 @@ class OVModelForCustomTasks(OVModel):
         )
     )
     def forward(self, **kwargs):
-        np_inputs = isinstance(next(iter(kwargs.values())), np.ndarray)
+        expected_inputs_names = set(self.input_names)
+        inputs_names = set(kwargs)
 
+        if not expected_inputs_names.issubset(inputs_names):
+            raise ValueError(
+                f"Got unexpected inputs: expecting the following inputs : {', '.join(expected_inputs_names)} but got : {', '.join(inputs_names)}."
+            )
+        
+        np_inputs = isinstance(next(iter(kwargs.values())), np.ndarray)
         inputs = {}
-        for key, value in kwargs.items():
-            inputs[key] = np.array(value) if not np_inputs else value
+        for input_name in self.input_names:
+            inputs[input_name] = np.array(kwargs.pop(input_name)) if not np_inputs else kwargs.pop(input_name)
 
         outputs = self.request(inputs)
 
