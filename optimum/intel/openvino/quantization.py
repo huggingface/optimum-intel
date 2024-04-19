@@ -280,13 +280,18 @@ class OVQuantizer(OptimumQuantizer):
             raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
         quantization_config = ov_config.quantization_config
         if quantization_config is None:
-            if weights_only is None or weights_only is True:
+            if (weights_only is None or weights_only is True) and calibration_dataset is None:
                 if weights_only is None:
                     logger.info(
                         "`quantization_config` was not provided, 8-bit asymmetric weight quantization will be applied."
                     )
                 ov_config.quantization_config = OVWeightQuantizationConfig(bits=8)
             else:
+                logger.warning(
+                    "`quantization_config` was not provided, but calibration dataset was provided, assuming full "
+                    "model quantization is intended. In the future, please provide `quantization_config` as an "
+                    "instance of OVQuantizationConfig."
+                )
                 ov_config.quantization_config = OVQuantizationConfig()
 
         if isinstance(self.model, OVBaseModel):
