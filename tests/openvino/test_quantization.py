@@ -551,13 +551,14 @@ class OVWeightCompressionTest(unittest.TestCase):
                         }
                         compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
-
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_dynamic_with_config(self, model_cls, model_name, quantization_config, expected_ov_int4):
         model_id = MODEL_NAMES[model_name]
         with tempfile.TemporaryDirectory() as tmp_dir:
             group_size = quantization_config.pop("group_size", 32)
-            quantization_config = OVDynamicQuantizationConfig(weights_group_size=group_size, activations_group_size=group_size, **quantization_config)
+            quantization_config = OVDynamicQuantizationConfig(
+                weights_group_size=group_size, activations_group_size=group_size, **quantization_config
+            )
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
             self.assertEqual(model.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"], str(group_size))
             self.assertEqual(model.ov_config["KV_CACHE_PRECISION"], "u8")
