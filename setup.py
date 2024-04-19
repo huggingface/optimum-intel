@@ -53,7 +53,7 @@ TESTS_REQUIRE = [
     "transformers_stream_generator",
     "einops",
     "tiktoken",
-    "sentence_transformers"
+    "sentence_transformers",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]

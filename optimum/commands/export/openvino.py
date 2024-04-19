@@ -217,7 +217,7 @@ class OVExportCommand(BaseOptimumCLICommand):
         library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
         if library_name == "sentence_transformers" and self.args.library is None:
             logger.warning(
-                "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
+                "Library name is not specified. There are multiple possible variants: `sentence_transformers`, `transformers`."
                 "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
             )
             library_name = "transformers"
