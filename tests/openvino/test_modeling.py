@@ -54,9 +54,8 @@ from transformers import (
     set_seed,
 )
 from transformers.onnx.utils import get_preprocessor
-from utils_tests import MODEL_NAMES, run_on_multiple_threads
 from transformers.testing_utils import slow
-from utils_tests import MODEL_NAMES
+from utils_tests import MODEL_NAMES, run_on_multiple_threads
 
 from optimum.intel import (
     OVModelForAudioClassification,
@@ -897,7 +896,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
         outs_without_attn_mask_step2 = model_with_cache(input_ids=input_ids, past_key_values=past_key_values)
         self.assertTrue(torch.allclose(outs_step2.logits, outs_without_attn_mask_step2.logits))
-        
+
         del model_with_cache
         gc.collect()
 
@@ -1495,7 +1494,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
                 **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
 
-        # self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
+        self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertTrue(

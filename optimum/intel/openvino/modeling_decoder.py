@@ -15,9 +15,10 @@
 import copy
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -27,9 +28,8 @@ from openvino.runtime import Core, Tensor, Type
 from transformers import AutoModelForCausalLM, AutoTokenizer, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
-from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.utils import ModelOutput
-from dataclasses import dataclass
+
 from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
@@ -44,6 +44,7 @@ from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 logger = logging.getLogger(__name__)
 
 core = Core()
+
 
 @dataclass
 class OVCausalLMOutputWithPast(ModelOutput):
@@ -62,6 +63,7 @@ class OVCausalLMOutputWithPast(ModelOutput):
     attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
     infer_request: Optional[openvino.runtime.InferRequest] = None
     past_length: Optional[int] = None
+
 
 TEXT_GENERATION_EXAMPLE = r"""
     Example of text generation:
@@ -137,11 +139,7 @@ class OVBaseDecoderModel(OVModel):
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
         self._pkv_precision = Type.f32
-#<<<<<<< HEAD
-#=======
-#        self.next_beam_idx = None
-#        self._past_length = 0
-#>>>>>>> origin/main
+
         self.update_pkv_precision()
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
@@ -364,7 +362,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     export_feature = "text-generation"
     auto_model_class = AutoModelForCausalLM
 
-
     @add_start_docstrings_to_model_forward(
         INPUTS_DOCSTRING.format("batch_size, sequence_length")
         + TEXT_GENERATION_EXAMPLE.format(
@@ -421,7 +418,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                             shape[1] = 0
                     inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
 
-
         inputs["input_ids"] = np.array(input_ids)
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names or "position_ids" in self.input_names:
@@ -448,10 +444,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         if "beam_idx" in self.input_names:
             if past_key_values is not None:
-                if len(past_key_values[0]) > 0: 
+                if len(past_key_values[0]) > 0:
                     inputs["beam_idx"] = past_key_values[0]
                     return inputs
-            inputs["beam_idx"] = np.arange(batch_size, dtype=int)                     
+            inputs["beam_idx"] = np.arange(batch_size, dtype=int)
 
         return inputs
 
@@ -502,22 +498,27 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             else:
                 past_key_values = None
 
-        return OVCausalLMOutputWithPast(logits=logits, past_key_values=past_key_values, infer_request=infer_request, past_length=past_length)
+        return OVCausalLMOutputWithPast(
+            logits=logits, past_key_values=past_key_values, infer_request=infer_request, past_length=past_length
+        )
 
     def _update_model_kwargs_for_generation(
-        self, outputs: OVCausalLMOutputWithPast, 
+        self,
+        outputs: OVCausalLMOutputWithPast,
         model_kwargs: dict[str],
         is_encoder_decoder: bool = False,
         standardize_cache_format: bool = False,
-    ) -> dict[str]: 
+    ) -> dict[str]:
         model_kwargs = super()._update_model_kwargs_for_generation(
             outputs=outputs,
             model_kwargs=model_kwargs,
             is_encoder_decoder=is_encoder_decoder,
             standardize_cache_format=standardize_cache_format,
-            )
-        if "infer_request" in outputs: model_kwargs["infer_request"] = outputs["infer_request"]
-        if "past_length" in outputs: model_kwargs["past_length"] = outputs["past_length"]
+        )
+        if "infer_request" in outputs:
+            model_kwargs["infer_request"] = outputs["infer_request"]
+        if "past_length" in outputs:
+            model_kwargs["past_length"] = outputs["past_length"]
         return model_kwargs
 
     # Adapted from transformers.models.llama.modeling_llama.LlamaForCausalLM.prepare_inputs_for_generation
@@ -525,10 +526,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
         attention_mask = kwargs.get("attention_mask", None)
         use_cache = kwargs.get("use_cache", None)
-#<<<<<<< HEAD
+
         infer_request = kwargs.get("infer_request", None)
         past_length = kwargs.get("past_length", 0)
-#=======
 
         if past_key_values is not None:
             past_length = self._get_past_length(past_key_values, past_length=past_length)
@@ -543,7 +543,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             elif past_length < input_ids.shape[1]:
                 input_ids = input_ids[:, past_length:]
             # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens
-#>>>>>>> origin/main
+        # >>>>>>> origin/main
         position_ids = kwargs.get("position_ids", None)
         if attention_mask is not None and position_ids is None and "position_ids" in self.input_names:
             # create position_ids on the fly for batch generation
@@ -594,7 +594,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # TODO: At least for bloom we need to replicate values for each attention head
             # save beam_idx and infer_request to be used as an input in the next iteration
             # here, beam_idx content is passed inside the past_key_values
-            
+
             return ((beam_idx),)
         else:
             return tuple(
@@ -788,5 +788,3 @@ class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
             return past_key_values
         else:
             return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)
-        
-
