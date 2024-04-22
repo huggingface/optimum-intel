@@ -34,11 +34,11 @@ from .model_patcher import (
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
     GemmaModelPatcher,
+    InternLMPatcher,
     LlamaModelPatcher,
     MixtralModelPatcher,
-    QwenModelPatcher,
     MPTModelPatcher,
-    InternLMPatcher,
+    QwenModelPatcher,
 )
 
 

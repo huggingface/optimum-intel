@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import inspect
 import logging as log
 import math
 import types
@@ -340,9 +341,9 @@ def _llama_gemma_update_causal_mask(self, attention_mask, input_tensor, cache_po
                 offset = 0
             mask_shape = attention_mask.shape
             mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[: mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]] = (
-                mask_slice
-            )
+            causal_mask[
+                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
+            ] = mask_slice
 
     if (
         self.config._attn_implementation == "sdpa"
@@ -613,6 +614,46 @@ class QwenModelPatcher(DecoderModelPatcher):
         self._model.config.fp16 = self.original_fp16
 
 
+def _baichuan13b_atten_forward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    output_attentions: bool = False,
+    use_cache: bool = True,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    bsz, q_len, _ = hidden_states.size()
+
+    proj = self.W_pack(hidden_states)
+    proj = proj.unflatten(-1, (3, self.hidden_size)).unsqueeze(0).transpose(0, -2).squeeze(-2)
+    query_states = proj[0].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    key_states = proj[1].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    value_states = proj[2].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+    kv_seq_len = key_states.shape[-2]
+    if past_key_value is not None:
+        kv_seq_len += past_key_value[0].shape[-2]
+
+    if past_key_value is not None:
+        # reuse k, v, self_attention
+        if attention_mask is not None:
+            attention_mask = attention_mask[:, :, -key_states.shape[-2] :, :]
+        key_states = torch.cat([past_key_value[0], key_states], dim=2)
+        value_states = torch.cat([past_key_value[1], value_states], dim=2)
+
+    past_key_value = (key_states, value_states) if use_cache else None
+    attn_output = F.scaled_dot_product_attention(query_states, key_states, value_states, attn_mask=attention_mask)
+    attn_output = attn_output.transpose(1, 2)
+    attn_weights = None
+    attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+    attn_output = self.o_proj(attn_output)
+
+    if not output_attentions:
+        attn_weights = None
+
+    return attn_output, attn_weights, past_key_value
+
+
 class BaichuanModelPatcher(DecoderModelPatcher):
     def __init__(
         self,
@@ -624,6 +665,50 @@ class BaichuanModelPatcher(DecoderModelPatcher):
         # model has first inference buffers initialization
         if hasattr(self._model.lm_head, "first_flag"):
             self._model(torch.ones((1, 10), dtype=torch.int64), torch.ones((1, 10), dtype=torch.int64))
+
+    def __enter__(self):
+        super().__enter__()
+        # override signature to have position_ids
+        if "position_ids" not in inspect.signature(self._model.forward).parameters:
+            self._model._orig_forward = self._model.forward
+
+            def forward(
+                self,
+                input_ids: torch.LongTensor = None,
+                attention_mask: Optional[torch.Tensor] = None,
+                past_key_values: Optional[Tuple[torch.FloatTensor]] = None,
+                inputs_embeds: Optional[torch.FloatTensor] = None,
+                labels: Optional[torch.LongTensor] = None,
+                use_cache: Optional[bool] = None,
+                output_attentions: Optional[bool] = False,
+                output_hidden_states: Optional[bool] = False,
+                return_dict: Optional[bool] = True,
+                position_ids: Optional[torch.LongTensor] = None,
+            ):
+                return self._orig_forward(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    past_key_values=past_key_values,
+                    inputs_embeds=inputs_embeds,
+                    labels=labels,
+                    use_cache=past_key_values is not None,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=self.config.return_dict,
+                )
+
+            self._model.forward = types.MethodType(forward, self._model)
+            for layer in self._model.model.layers:
+                layer.self_attn._orig_forward = layer.self_attn.forward
+                layer.self_attn.forward = types.MethodType(_baichuan13b_atten_forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model, "_orig_forward"):
+            self._model.forward = self._model._orig_forward
+
+            for layer in self._model.model.layers:
+                layer.self_attn.forward = layer.self_attn._orig_forward
 
 
 def _mpt_attention_forward(
@@ -691,8 +776,7 @@ def _internlm_attention_forward(
     use_cache: bool = False,
     **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-
-    from transformers.models.llama.modeling_llama import repeat_kv, apply_rotary_pos_emb
+    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
 
     bsz, q_len, _ = hidden_states.size()
 
