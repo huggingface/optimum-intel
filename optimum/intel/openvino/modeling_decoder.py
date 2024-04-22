@@ -504,10 +504,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     def _update_model_kwargs_for_generation(
         self,
         outputs: OVCausalLMOutputWithPast,
-        model_kwargs: dict[str],
+        model_kwargs: Dict[str],
         is_encoder_decoder: bool = False,
         standardize_cache_format: bool = False,
-    ) -> dict[str]:
+    ) -> Dict[str]:
         model_kwargs = super()._update_model_kwargs_for_generation(
             outputs=outputs,
             model_kwargs=model_kwargs,
