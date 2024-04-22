@@ -66,11 +66,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
-        self.ov_config = ov_config if ov_config is not None else {}
-
-        if self.ov_config.get("PERFORMANCE_HINT") is None:
-            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
-
+        self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
 
         if self.is_dynamic:
@@ -84,6 +80,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
