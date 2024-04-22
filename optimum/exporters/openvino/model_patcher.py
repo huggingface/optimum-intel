@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging as log
+import math
 import types
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -339,9 +340,9 @@ def _llama_gemma_update_causal_mask(self, attention_mask, input_tensor, cache_po
                 offset = 0
             mask_shape = attention_mask.shape
             mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[
-                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
-            ] = mask_slice
+            causal_mask[: mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]] = (
+                mask_slice
+            )
 
     if (
         self.config._attn_implementation == "sdpa"
@@ -623,3 +624,132 @@ class BaichuanModelPatcher(DecoderModelPatcher):
         # model has first inference buffers initialization
         if hasattr(self._model.lm_head, "first_flag"):
             self._model(torch.ones((1, 10), dtype=torch.int64), torch.ones((1, 10), dtype=torch.int64))
+
+
+def _mpt_attention_forward(
+    self,
+    hidden_states: torch.Tensor,
+    position_bias: torch.Tensor,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+):
+    batch_size, seq_length = hidden_states.shape[:2]
+
+    mixed_qkv = self.Wqkv(hidden_states)
+    query_states, key_states, value_states = mixed_qkv.chunk(3, dim=2)
+    query_states = query_states.reshape(batch_size, seq_length, self.n_heads, self.head_dim).transpose(1, 2)
+    key_states = key_states.reshape(batch_size, seq_length, self.n_heads, self.head_dim).transpose(1, 2)
+    value_states = value_states.reshape(batch_size, seq_length, self.n_heads, self.head_dim).transpose(1, 2)
+
+    if past_key_value is not None:
+        if len(past_key_value) != 0:
+            key_states = torch.cat([past_key_value[0], key_states], dim=2)
+            value_states = torch.cat([past_key_value[1], value_states], dim=2)
+        past_key_value = (key_states, value_states)
+    else:
+        past_key_value = (key_states, value_states)
+
+    attention_mask_sdpa = torch.ones(attention_mask.shape, dtype=query_states.dtype)
+    attention_mask_sdpa.masked_fill_(attention_mask, torch.finfo(query_states.dtype).min)
+    context_states = torch.nn.functional.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        attn_mask=attention_mask_sdpa,
+        dropout_p=self.attn_dropout_p,
+        scale=self.softmax_scale,
+    )
+    context_states = context_states.permute(0, 2, 1, 3).contiguous().view(batch_size, seq_length, -1)
+    attn_output = self.out_proj(context_states)
+
+    return attn_output, None, past_key_value
+
+
+class MPTModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        if is_torch_version(">=", "2.1.0"):
+            for block in self._model.transformer.blocks:
+                block.attn._orig_forward = block.attn.forward
+                block.attn.forward = types.MethodType(_mpt_attention_forward, block.attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for block in self._model.transformer.blocks:
+            if hasattr(block.attn, "_orig_forward"):
+                block.attn.forward = block.attn._orig_forward
+
+
+def _internlm_attention_forward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    output_attentions: bool = False,
+    use_cache: bool = False,
+    **kwargs,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+
+    from transformers.models.llama.modeling_llama import repeat_kv, apply_rotary_pos_emb
+
+    bsz, q_len, _ = hidden_states.size()
+
+    qkv_states = self.wqkv(hidden_states)
+
+    qkv_states = qkv_states.reshape(
+        qkv_states.shape[0], qkv_states.shape[1], -1, 2 + self.num_key_values_groups, self.head_dim
+    )
+    query_states = qkv_states[..., : self.num_key_value_groups, :]
+    query_states = query_states.reshape(query_states.shape[0], query_states.shape[1], -1, query_states.shape[-1])
+    key_states = qkv_states[..., -2, :]
+    value_states = qkv_states[..., -1, :]
+
+    query_states = query_states.transpose(1, 2)
+    key_states = key_states.transpose(1, 2)
+    value_states = value_states.transpose(1, 2)
+
+    kv_seq_len = key_states.shape[-2]
+    if past_key_value is not None:
+        kv_seq_len += past_key_value[0].shape[-2]
+    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+
+    if past_key_value is not None:
+        # reuse k, v, self_attention
+        key_states = torch.cat([past_key_value[0], key_states], dim=2)
+        value_states = torch.cat([past_key_value[1], value_states], dim=2)
+
+    past_key_value = (key_states, value_states) if use_cache else None
+
+    key_states = repeat_kv(key_states, self.num_key_value_groups)
+    value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+    attn_output = torch.nn.functional.scaled_dot_product_attention(
+        query_states, key_states, value_states, attention_mask, scale=(1 / math.sqrt(self.head_dim))
+    )
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+
+    attn_output = self.wo(attn_output)
+
+    attn_weights = None
+
+    return attn_output, attn_weights, past_key_value
+
+
+class InternLMPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        if is_torch_version(">=", "2.1.0"):
+            for block in self._model.model.layers:
+                block.attention._orig_forward = block.attention.forward
+                block.attention.forward = types.MethodType(_internlm_attention_forward, block.attention)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for block in self._model.model.layers:
+            if hasattr(block.attention, "_orig_forward"):
+                block.attention.forward = block.attention._orig_forward
