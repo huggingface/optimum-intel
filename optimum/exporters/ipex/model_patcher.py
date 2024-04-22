@@ -29,6 +29,9 @@ from .modeling_utils import (
     _llama_model_forward,
 )
 
+# from modeling.utils import _IPEXPatcher
+from modeling.modeling_llama import _IPEXLlamaDecoderLayer
+
 
 _IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
 _IPEX_EXPORTED_TASK = ("text-generation",)
@@ -73,19 +76,25 @@ def _patch_llama_model(model):
         model.config.rope_theta,
         model.config.architectures[0],
     )
-    ipex_scale_dot_product = IndirectAccessKVCache(text_max_length=model.config.max_position_embeddings)
     patch_op(model, LlamaAttention, "ipex_rope", ipex_rope)
-    patch_op(model, LlamaAttention, "ipex_scale_dot_product", ipex_scale_dot_product)
+    if model.device_type == "cpu":
+        ipex_scale_dot_product = IndirectAccessKVCache(text_max_length=model.config.max_position_embeddings)
+        patch_op(model, LlamaAttention, "ipex_scale_dot_product", ipex_scale_dot_product)
 
-    convert_functions(model, LlamaModel, "forward", _llama_model_forward)
-    convert_functions(model, LlamaAttention, "forward", _llama_attn_forward)
-    convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
+        convert_functions(model, LlamaModel, "forward", _llama_model_forward)
+        convert_functions(model, LlamaAttention, "forward", _llama_attn_forward)
+        convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
 
-    convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayerRef, model.config)
+        convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayerRef, model.config)
+    else:
+        convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayer)
+        convert_functions(model, LlamaModel, "forward", _llama_model_forward)
     return model
 
 
 def _patch_model(model):
     if isinstance(model, LlamaForCausalLM):
         model = _patch_llama_model(model)
+    # _IPEXPatcher.patch_model(model)
+        
     return model
