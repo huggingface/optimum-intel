@@ -224,17 +224,17 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
-            "hf-internal-testing/tiny-random-OPTForCausalLM",
+            "HuggingFaceH4/tiny-random-LlamaForCausalLM",
             dict(
                 bits=4,
                 sym=True,
-                group_size=-1,
+                group_size=16,
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="ptb",
                 quant_method=QuantizationMethod.AWQ,
             ),
-            14,
+            16,
         ),
     )
 
@@ -455,7 +455,20 @@ class OVWeightCompressionTest(unittest.TestCase):
     ):
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
-            model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
+
+            from nncf.common.logging.track_progress import track
+
+            with unittest.mock.patch("nncf.common.logging.track_progress.track", wraps=track) as track_patch:
+                model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
+                if quantization_config.quant_method == QuantizationMethod.AWQ:
+                    # Called at least once with description="Applying AWQ"
+                    self.assertTrue(
+                        any(
+                            args.kwargs.get("description", None) == "Applying AWQ"
+                            for args in track_patch.call_args_list
+                        )
+                    )
+
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token

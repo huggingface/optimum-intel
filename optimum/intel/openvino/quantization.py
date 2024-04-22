@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import datasets
+from transformers.utils.quantization_config import QuantizationMethod
+
 import nncf
 import openvino
 import torch
@@ -677,10 +679,10 @@ def _weight_only_quantization(
         group_size=config.group_size,
         all_layers=config.all_layers,
         sensitivity_metric=sensitivity_metric,
-        # awq=config.quant_method == QuantizationMethod.AWQ,    # TODO : enable from nncf v2.9.0
+        awq=config.quant_method == QuantizationMethod.AWQ,
         ignored_scope=config.get_ignored_scope_instance(),
         dataset=dataset,
-        # subset_size=config.num_samples if config.num_samples else 128,    # TODO : enable from nncf v2.9.0
+        subset_size=config.num_samples if config.num_samples else 128,
     )
 
 
