@@ -33,7 +33,7 @@ from openvino._offline_transformations import compress_quantize_weights_transfor
 from openvino.runtime import Core, Tensor
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
-from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
+from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator, PreTrainedTokenizer
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
@@ -622,6 +622,8 @@ def _weight_only_quantization(
     model: openvino.runtime.Model,
     quantization_config: Union[OVWeightQuantizationConfig, Dict],
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
+    tokenizer: Optional[PreTrainedTokenizer] = None,
+    transform_fn: Optional[Callable] = None,
 ) -> openvino.runtime.Model:
     config = quantization_config
     if isinstance(config, dict):
@@ -645,13 +647,14 @@ def _weight_only_quantization(
         else:
             dataset = nncf.Dataset(calibration_dataset)
     elif config.dataset is not None and isinstance(config.dataset, str):
-        tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
+        tokenizer = tokenizer or AutoTokenizer.from_pretrained(config.tokenizer)
 
         from optimum.gptq.data import get_dataset, prepare_dataset
 
         nsamples = config.num_samples if config.num_samples else 128
         dataset = get_dataset(config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
         dataset = prepare_dataset(dataset)
+        dataset = nncf.Dataset(dataset, transform_fn)
 
     sensitivity_metric = None
     if isinstance(config.sensitivity_metric, str):

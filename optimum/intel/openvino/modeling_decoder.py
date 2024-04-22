@@ -624,29 +624,21 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 raise ImportError(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
                 )
-            import nncf
 
-            from .quantization import _weight_only_quantization
+            from optimum.intel.openvino.quantization import _weight_only_quantization
 
             default_config = _check_default_4bit_configs(config)
-
             if default_config:
                 logger.info(
                     f"For the given model, we recommend the following `quantization_config` : {default_config}"
                 )
 
-            calibration_dataset = None
-            if isinstance(quantization_config.dataset, str):
-                tokenizer = quantization_config.tokenizer or AutoTokenizer.from_pretrained(model_id)
-
-                from optimum.gptq.data import get_dataset, prepare_dataset
-
-                nsamples = quantization_config.num_samples or 128
-                dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
-                dataset = prepare_dataset(dataset)
-                calibration_dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))
-
-            _weight_only_quantization(model, quantization_config, calibration_dataset)
+            _weight_only_quantization(
+                model,
+                quantization_config,
+                tokenizer=AutoTokenizer.from_pretrained(quantization_config.tokenizer or model_id),
+                transform_fn=lambda x: causal_model.prepare_inputs(**x),
+            )
 
         return causal_model
 
