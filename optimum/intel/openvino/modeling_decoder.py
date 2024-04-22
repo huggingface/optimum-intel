@@ -17,7 +17,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -504,10 +504,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     def _update_model_kwargs_for_generation(
         self,
         outputs: OVCausalLMOutputWithPast,
-        model_kwargs: Dict[str],
+        model_kwargs: Dict[str, Any],
         is_encoder_decoder: bool = False,
         standardize_cache_format: bool = False,
-    ) -> Dict[str]:
+    ) -> Dict[str, Any]:
         model_kwargs = super()._update_model_kwargs_for_generation(
             outputs=outputs,
             model_kwargs=model_kwargs,
