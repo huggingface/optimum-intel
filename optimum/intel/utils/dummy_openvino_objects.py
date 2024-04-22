@@ -147,6 +147,17 @@ class OVModelForSpeechSeq2Seq(metaclass=DummyObject):
         requires_backends(cls, ["openvino"])
 
 
+class OVModelForVision2Seq(metaclass=DummyObject):
+    _backends = ["openvino"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino"])
+
+
 class OVModelForSequenceClassification(metaclass=DummyObject):
     _backends = ["openvino"]
 
@@ -170,17 +181,6 @@ class OVModelForTokenClassification(metaclass=DummyObject):
 
 
 class OVConfig(metaclass=DummyObject):
-    _backends = ["openvino"]
-
-    def __init__(self, *args, **kwargs):
-        requires_backends(self, ["openvino"])
-
-    @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        requires_backends(cls, ["openvino"])
-
-
-class OVWeightQuantizationConfig(metaclass=DummyObject):
     _backends = ["openvino"]
 
     def __init__(self, *args, **kwargs):

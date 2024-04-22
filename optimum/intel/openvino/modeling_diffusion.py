@@ -387,7 +387,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 self.__call__(**inputs, height=height, width=width)
             else:
                 self.__call__(*inputs, height=height, width=width)
-            if len(calibration_data) > num_samples:
+            if len(calibration_data) >= num_samples:
                 break
 
         self.unet.request = self.unet.request.request
@@ -671,7 +671,7 @@ class OVModelPart:
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
                 and not str(self._model_dir).startswith(gettempdir())
-                and self.device.lower().split(":")[0] == "gpu"
+                and "gpu" in self.device.lower()
             ):
                 self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 

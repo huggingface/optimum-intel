@@ -11,7 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
+import functools
 import importlib.util
 import logging
 import operator as op
@@ -95,32 +95,6 @@ if _openvino_available:
     except ImportError:
         _openvino_available = False
 
-_openvino_tokenizers_available = importlib.util.find_spec("openvino_tokenizers") is not None and _openvino_available
-_openvino_tokenizers_version = "N/A"
-if _openvino_tokenizers_available:
-    try:
-        _openvino_tokenizers_version = importlib_metadata.version("openvino_tokenizers")
-    except importlib_metadata.PackageNotFoundError:
-        _openvino_tokenizers_available = False
-
-if _openvino_tokenizers_available and _openvino_tokenizers_version != "N/A":
-    _compatible_openvino_version = next(
-        (
-            requirement.split("==")[-1]
-            for requirement in importlib_metadata.requires("openvino-tokenizers")
-            if requirement.startswith("openvino==")
-        ),
-        "",
-    )
-    _openvino_tokenizers_available = _compatible_openvino_version == ov_major_version
-    if not _openvino_tokenizers_available:
-        logger.warning(
-            "OpenVINO Tokenizer version is not compatible with OpenVINO version. "
-            f"Installed OpenVINO version: {ov_major_version},"
-            f"OpenVINO Tokenizers requires {_compatible_openvino_version}. "
-            f"OpenVINO Tokenizers models will not be added during export."
-        )
-
 _nncf_available = importlib.util.find_spec("nncf") is not None
 _nncf_version = "N/A"
 if _nncf_available:
@@ -196,8 +170,81 @@ def is_openvino_available():
     return _openvino_available
 
 
+@functools.lru_cache(1)
 def is_openvino_tokenizers_available():
-    return _openvino_tokenizers_available
+    if not is_openvino_available():
+        return False
+
+    if importlib.util.find_spec("openvino_tokenizers") is None:
+        logger.info(
+            "OpenVINO Tokenizers is not available. To deploy models in production "
+            "with C++ code, please follow installation instructions: "
+            "https://github.com/openvinotoolkit/openvino_tokenizers?tab=readme-ov-file#installation\n"
+        )
+        return False
+
+    try:
+        pip_metadata_version = importlib_metadata.version("openvino")
+    except importlib_metadata.PackageNotFoundError:
+        pip_metadata_version = False
+    try:
+        pip_metadata_version = importlib_metadata.version("openvino-nightly")
+        is_nightly = True
+    except importlib_metadata.PackageNotFoundError:
+        is_nightly = False
+
+    try:
+        import openvino_tokenizers
+
+        openvino_tokenizers._get_factory()
+    except RuntimeError:
+        tokenizers_version = openvino_tokenizers.__version__
+
+        if tokenizers_version == "0.0.0.0":
+            try:
+                tokenizers_version = importlib_metadata.version("openvino_tokenizers") or tokenizers_version
+            except importlib_metadata.PackageNotFoundError:
+                pass
+        message = (
+            "OpenVINO and OpenVINO Tokenizers versions are not binary compatible.\n"
+            f"OpenVINO version:            {_openvino_version}\n"
+            f"OpenVINO Tokenizers version: {tokenizers_version}\n"
+            "First 3 numbers should be the same. Update OpenVINO Tokenizers to compatible version. "
+        )
+        if not pip_metadata_version:
+            message += (
+                "For archive installation of OpenVINO try to build OpenVINO Tokenizers from source: "
+                "https://github.com/openvinotoolkit/openvino_tokenizers/tree/master?tab=readme-ov-file"
+                "#build-and-install-from-source"
+            )
+            if sys.platform == "linux":
+                message += (
+                    "\nThe PyPI version of OpenVINO Tokenizers is built on CentOS and may not be compatible with other "
+                    "Linux distributions; rebuild OpenVINO Tokenizers from source."
+                )
+        else:
+            message += (
+                "It is recommended to use the same day builds for pre-release version. "
+                "To install both OpenVINO and OpenVINO Tokenizers release version perform:\n"
+            )
+            if is_nightly:
+                message += "pip uninstall -y openvino-nightly && "
+            message += "pip install --force-reinstall openvino openvino-tokenizers\n"
+            if is_nightly:
+                message += (
+                    "openvino-nightly package will be deprecated in the future - use pre-release drops instead. "
+                )
+            message += "To update both OpenVINO and OpenVINO Tokenizers to the latest pre-release version perform:\n"
+            if is_nightly:
+                message += "pip uninstall -y openvino-nightly && "
+            message += (
+                "pip install --pre -U openvino openvino-tokenizers "
+                "--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
+            )
+        logger.warning(message)
+        return False
+
+    return True
 
 
 def is_nncf_available():

@@ -61,7 +61,7 @@ class OVCausalLMOutputWithPast(ModelOutput):
     hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
     attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
     infer_request: Optional[openvino.runtime.InferRequest] = None
-    #beam_idx: Optional[torch.Tensor] = None
+    past_length: Optional[int] = None
 
 TEXT_GENERATION_EXAMPLE = r"""
     Example of text generation:
@@ -137,6 +137,11 @@ class OVBaseDecoderModel(OVModel):
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
         self._original_model = self.model.clone()  # keep original model for serialization
         self._pkv_precision = Type.f32
+#<<<<<<< HEAD
+#=======
+#        self.next_beam_idx = None
+#        self._past_length = 0
+#>>>>>>> origin/main
         self.update_pkv_precision()
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
@@ -374,20 +379,16 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
+        past_length: Optional[int] = 0,
         **kwargs,
     ) -> Dict:
-        if self.use_cache and past_key_values is not None:
-            input_ids = input_ids[:, -1:]
-
         batch_size = input_ids.shape[0]
         if self.config.model_type == "bloom":
             batch_size *= self.config.num_attention_heads
         inputs = {}
-        past_len = 0
         if not self.stateful:
             if past_key_values is not None:
                 if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
-                    past_len = past_key_values[0][1].shape[-2]
                     if self._pkv_precision == Type.bf16:
                         # numpy does not support bf16, pretending f16, should change to bf16
                         past_key_values = tuple(
@@ -400,8 +401,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                         past_key_values = tuple(
                             past_key_value for pkv_per_layer in past_key_values for past_key_value in pkv_per_layer
                         )
-                else:
-                    past_len = past_key_values[0].shape[-2]
 
                 # Add the past_key_values to the decoder inputs
                 inputs = dict(zip(self.key_value_input_names, past_key_values))
@@ -422,6 +421,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                             shape[1] = 0
                     inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
 
+
         inputs["input_ids"] = np.array(input_ids)
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names or "position_ids" in self.input_names:
@@ -429,7 +429,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 attention_mask = np.array(attention_mask)
             else:
                 attention_mask = np.ones(
-                    (input_ids.shape[0], input_ids.shape[1] + past_len), dtype=inputs["input_ids"].dtype
+                    (input_ids.shape[0], input_ids.shape[1] + past_length), dtype=inputs["input_ids"].dtype
                 )
 
         if "attention_mask" in self.input_names:
@@ -442,14 +442,16 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 position_ids = np.cumsum(attention_mask, axis=1) - 1
                 position_ids[attention_mask == 0] = 1
                 if past_key_values:
-                    position_ids = np.expand_dims(position_ids[:, -1], axis=-1)
+                    position_ids = position_ids[:, -input_ids.shape[1] :]
 
             inputs["position_ids"] = position_ids
 
         if "beam_idx" in self.input_names:
-            inputs["beam_idx"] = (
-                past_key_values[0] if past_key_values is not None else np.arange(batch_size, dtype=int)
-            )
+            if past_key_values is not None:
+                if len(past_key_values[0]) > 0: 
+                    inputs["beam_idx"] = past_key_values[0]
+                    return inputs
+            inputs["beam_idx"] = np.arange(batch_size, dtype=int)                     
 
         return inputs
 
@@ -460,6 +462,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         position_ids: Optional[torch.LongTensor] = None,
         infer_request: Optional[openvino.runtime.InferRequest] = None,
+        past_length: Optional[int] = 0,
         **kwargs,
     ) -> OVCausalLMOutputWithPast:
         self.compile()
@@ -468,6 +471,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             position_ids=position_ids,
+            past_length=past_length,
             **kwargs,
         )
 
@@ -484,6 +488,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # the first condition at the function beginning above.
             # It should be something that is not None and it should be True when converted to Boolean.
             past_key_values = ((),)
+            past_length += input_ids.shape[1]
 
         if not self.stateful:
             if self.use_cache:
@@ -497,7 +502,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             else:
                 past_key_values = None
 
-        return OVCausalLMOutputWithPast(logits=logits, past_key_values=past_key_values, infer_request=infer_request)
+        return OVCausalLMOutputWithPast(logits=logits, past_key_values=past_key_values, infer_request=infer_request, past_length=past_length)
 
     def _update_model_kwargs_for_generation(
         self, outputs: OVCausalLMOutputWithPast, 
@@ -512,21 +517,40 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             standardize_cache_format=standardize_cache_format,
             )
         if "infer_request" in outputs: model_kwargs["infer_request"] = outputs["infer_request"]
+        if "past_length" in outputs: model_kwargs["past_length"] = outputs["past_length"]
         return model_kwargs
 
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
+    # Adapted from transformers.models.llama.modeling_llama.LlamaForCausalLM.prepare_inputs_for_generation
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
         # if model is used as a decoder in encoder-decoder model, the decoder attention mask is created on the fly
         attention_mask = kwargs.get("attention_mask", None)
         use_cache = kwargs.get("use_cache", None)
+#<<<<<<< HEAD
         infer_request = kwargs.get("infer_request", None)
+        past_length = kwargs.get("past_length", 0)
+#=======
+
+        if past_key_values is not None:
+            past_length = self._get_past_length(past_key_values, past_length=past_length)
+            # Keep only the unprocessed tokens:
+            # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
+            # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
+            # input)
+            if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:
+                input_ids = input_ids[:, -(attention_mask.shape[1] - past_length) :]
+            # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
+            # input_ids based on the past_length.
+            elif past_length < input_ids.shape[1]:
+                input_ids = input_ids[:, past_length:]
+            # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens
+#>>>>>>> origin/main
         position_ids = kwargs.get("position_ids", None)
-        if attention_mask is not None and position_ids is None:
+        if attention_mask is not None and position_ids is None and "position_ids" in self.input_names:
             # create position_ids on the fly for batch generation
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
             if past_key_values:
-                position_ids = position_ids[:, -1].unsqueeze(-1)
+                position_ids = position_ids[:, -input_ids.shape[1] :]
 
         return {
             "input_ids": input_ids,
@@ -535,7 +559,26 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             "infer_request": infer_request,
             "position_ids": position_ids,
             "attention_mask": attention_mask,
+            "past_length": past_length,
         }
+
+    def _get_past_length(self, past_key_values=None, past_length=0):
+        if past_key_values is None:
+            return 0
+        if self.stateful:
+            return past_length
+        if self.config.model_type in MULTI_QUERY_ATTN_MODELS:
+            return past_key_values[0].shape[-2]
+        seq_length_dim = -2
+        if self.config.model_type == "chatglm":
+            seq_length_dim = 0
+        elif self.config.model_type == "qwen":
+            seq_length_dim = 1
+        # input is tuple of pairs
+        if isinstance(past_key_values[0], (tuple, list)):
+            return past_key_values[0][1].shape[seq_length_dim]
+        # past key values comes after flattening
+        return past_key_values[1].shape[seq_length_dim]
 
     # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
     def _reorder_cache(
@@ -551,6 +594,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             # TODO: At least for bloom we need to replicate values for each attention head
             # save beam_idx and infer_request to be used as an input in the next iteration
             # here, beam_idx content is passed inside the past_key_values
+            
             return ((beam_idx),)
         else:
             return tuple(
@@ -575,7 +619,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
-        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         model_path = Path(model_id)
@@ -599,15 +643,16 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
-        model = cls.load_model(model_cache_path, quantization_config=None if load_in_4bit else quantization_config)
+        calibration_dataset = kwargs.get("calibration_dataset", None)
+        model = cls.load_model(
+            model_cache_path,
+            quantization_config=None if load_in_4bit else quantization_config,
+            calibration_dataset=calibration_dataset,
+        )
 
         model_type = config.model_type.replace("_", "-")
         if model_type == "bloom":
             init_cls = OVBloomForCausalLM
-        elif model_type == "mpt":
-            init_cls = OVMPTForCausalLM
-        elif model_type == "opt":
-            init_cls = OVOPTForCausalLM
         elif model_type == "gpt-bigcode":
             init_cls = OVGPTBigCodeForCausalLM
         else:
@@ -639,7 +684,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     f"For the given model, we recommend the following `quantization_config` : {default_config}"
                 )
 
-            if isinstance(quantization_config.dataset, str):
+            if calibration_dataset is None and isinstance(quantization_config.dataset, str):
                 tokenizer = quantization_config.tokenizer or AutoTokenizer.from_pretrained(model_id)
 
                 from optimum.gptq.data import get_dataset, prepare_dataset
@@ -651,9 +696,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
                 dataset = prepare_dataset(dataset)
                 quantization_config = copy.deepcopy(quantization_config)
-                quantization_config.dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))
+                calibration_dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))
 
-            _weight_only_quantization(model, quantization_config)
+            _weight_only_quantization(model, quantization_config, calibration_dataset)
 
         return causal_model
 
@@ -661,22 +706,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 class OVBloomForCausalLM(OVModelForCausalLM):
     # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM.prepare_inputs_for_generation
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        attention_mask = kwargs.get("attention_mask", None)
-        use_cache = kwargs.get("use_cache", None)
-
         # only last token for input_ids if past is not None
         if past_key_values and not self.stateful:
             # the cache may be in the stardard format (e.g. in contrastive search), convert to bloom's format if needed
             if past_key_values[0][0].shape[0] == input_ids.shape[0]:
                 past_key_values = self._convert_to_bloom_cache(past_key_values)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": use_cache,
-            "position_ids": None,
-            "attention_mask": attention_mask,
-        }
+        return super().prepare_inputs_for_generation(input_ids, past_key_values=past_key_values, **kwargs)
 
     # Adapted from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
     def _reorder_cache(
@@ -692,7 +727,8 @@ class OVBloomForCausalLM(OVModelForCausalLM):
             batch_size = beam_idx.shape[0]
             indices = np.array(range(batch_size * self.config.num_attention_heads))
             indices = indices.reshape([batch_size, self.config.num_attention_heads])
-            return ((np.take(indices, beam_idx, 0).flatten()), past_key_values[1])
+            next_beam_idx = np.take(indices, beam_idx, 0).flatten()
+            return ((next_beam_idx),)
         else:
             standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
             reordered_past = tuple(
@@ -740,36 +776,6 @@ class OVBloomForCausalLM(OVModelForCausalLM):
             )
             for layer_past in past_key_value
         )
-
-
-class OVOPTForCausalLM(OVModelForCausalLM):
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        attention_mask = kwargs.get("attention_mask", None)
-        use_cache = kwargs.get("use_cache", None)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": use_cache,
-            "position_ids": None,
-            "attention_mask": attention_mask,
-        }
-
-
-class OVMPTForCausalLM(OVModelForCausalLM):
-    # Adapted from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel.prepare_inputs_for_generation
-    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, **kwargs):
-        attention_mask = kwargs.get("attention_mask", None)
-        use_cache = kwargs.get("use_cache", None)
-
-        return {
-            "input_ids": input_ids,
-            "past_key_values": past_key_values,
-            "use_cache": use_cache,
-            "position_ids": None,
-            "attention_mask": attention_mask,
-        }
 
 
 class OVGPTBigCodeForCausalLM(OVModelForCausalLM):

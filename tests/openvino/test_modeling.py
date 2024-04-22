@@ -20,6 +20,7 @@ import unittest
 from typing import Dict
 
 import numpy as np
+import pytest
 import requests
 import timm
 import torch
@@ -30,6 +31,7 @@ from PIL import Image
 from transformers import (
     AutoConfig,
     AutoFeatureExtractor,
+    AutoImageProcessor,
     AutoModel,
     AutoModelForAudioClassification,
     AutoModelForAudioFrameClassification,
@@ -43,6 +45,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForSpeechSeq2Seq,
     AutoModelForTokenClassification,
+    AutoModelForVision2Seq,
     AutoTokenizer,
     GenerationConfig,
     Pix2StructForConditionalGeneration,
@@ -52,6 +55,8 @@ from transformers import (
 )
 from transformers.onnx.utils import get_preprocessor
 from utils_tests import MODEL_NAMES, run_on_multiple_threads
+from transformers.testing_utils import slow
+from utils_tests import MODEL_NAMES
 
 from optimum.intel import (
     OVModelForAudioClassification,
@@ -68,6 +73,7 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
+    OVModelForVision2Seq,
     OVStableDiffusionPipeline,
 )
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
@@ -361,6 +367,8 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
@@ -376,6 +384,8 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    @pytest.mark.run_slow
+    @slow
     def test_metric(self):
         model_id = "distilbert-base-cased-distilled-squad"
         set_seed(SEED)
@@ -428,6 +438,8 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForTokenClassification.from_pretrained(model_id, export=True)
@@ -478,6 +490,8 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForFeatureExtraction.from_pretrained(model_id, export=True)
@@ -521,10 +535,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "stablelm",
         "starcoder2",
         "phi",
+        "internlm2",
+        "orion",
+        "falcon",
     )
     GENERATION_LENGTH = 100
-    IS_SUPPORT_STATEFUL = is_openvino_version(">=", "2023.3")
-    REMOTE_CODE_MODELS = ("chatglm", "minicpm", "baichuan2", "jais", "qwen")
+    REMOTE_CODE_MODELS = ("chatglm", "minicpm", "baichuan2", "jais", "qwen", "internlm2", "olmo", "orion")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -548,32 +564,56 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-        self.assertEqual(
-            ov_model.stateful, self.IS_SUPPORT_STATEFUL and ov_model.config.model_type not in not_stateful
-        )
-        set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        self.assertEqual(ov_model.stateful, ov_model.config.model_type not in not_stateful)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
-        if model_arch == "qwen":
-            transformers_model.to(torch.float32)
-        tokens = tokenizer(
-            "This is a sample", return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None
-        )
-        ov_outputs = ov_model(**tokens)
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
 
+        ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
         self.assertIsInstance(ov_outputs.logits, torch.Tensor)
         self.assertTrue("past_key_values" in ov_outputs)
         self.assertIsInstance(ov_outputs.past_key_values, tuple)
-        is_stateful = ov_model.config.model_type not in not_stateful and self.IS_SUPPORT_STATEFUL
+        is_stateful = ov_model.config.model_type not in not_stateful
         self.assertEqual(ov_model.stateful, is_stateful)
         if is_stateful:
-           self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+            self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+
+        set_seed(SEED)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        if model_arch == "qwen":
+            transformers_model.to(torch.float32)
+
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
 
         # Compare tensor outputs
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=1e-4))
+
+        # Qwen tokenizer does not support padding
+        if model_arch == "qwen":
+            return
+
+        if model_arch != "chatglm":
+            tokenizer.pad_token_id = tokenizer.eos_token_id
+        # Compare batched generation
+        tokenizer.padding_side = "left"
+        tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        ov_model.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+        gen_config = GenerationConfig(
+            max_new_tokens=30,
+            min_new_tokens=30,
+            num_beams=3,
+            do_sample=False,
+            eos_token_id=None,
+        )
+
+        ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
+        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+        self.assertTrue(torch.allclose(ov_outputs, transformers_outputs))
+
         del transformers_model
         del ov_model
         gc.collect()
@@ -590,8 +630,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         if "gptq" in model_arch:
             self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
-        if model_arch in ["chatglm", "baichuan2"]:
-            self.skipTest("Models " + model_id + "doesn't support concurrent execution in AutoModelForCausalLM")
 
         set_seed(SEED)
         model_kwargs = {}
@@ -601,9 +639,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(ov_model.use_cache)
-        self.assertEqual(
-            ov_model.stateful, self.IS_SUPPORT_STATEFUL and ov_model.config.model_type not in not_stateful
-        )
+        self.assertEqual(ov_model.stateful, ov_model.config.model_type not in not_stateful)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
 
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
@@ -616,27 +654,20 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ]
 
         def run_ov_model(tokens, transformers_model, ov_model):
-            # global ov_model, transformers_model
-            # position_ids = None
-            # if model_arch.replace("_", "-") in MODEL_TYPES_REQUIRING_POSITION_IDS:
-            #    input_shape = tokens["input_ids"].shape
-            #    position_ids = (
-            #        torch.arange(0, input_shape[-1], dtype=torch.long).unsqueeze(0).view(-1, input_shape[-1])
-            #    )
             set_seed(SEED)
             ov_outputs = ov_model(**tokens)
-
             self.assertTrue("logits" in ov_outputs)
             self.assertIsInstance(ov_outputs.logits, torch.Tensor)
-            # self.assertTrue("past_key_values" in ov_outputs)
-            # self.assertIsInstance(ov_outputs.past_key_values, tuple)
-            # if self.IS_SUPPORT_STATEFUL and model_arch != "gpt_bigcode":
-            #    self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+            self.assertTrue("past_key_values" in ov_outputs)
+            self.assertIsInstance(ov_outputs.past_key_values, tuple)
+            is_stateful = ov_model.config.model_type not in not_stateful
+            self.assertEqual(ov_model.stateful, is_stateful)
+            if is_stateful:
+                self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
             with torch.no_grad():
                 transformers_outputs = transformers_model(**tokens)
-            # Compare tensor outputs
-            self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
-            # self.assertTrue(False)
+                # Compare tensor outputs
+                self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
         run_on_multiple_threads(run_ov_model, tokens_list, (transformers_model, ov_model))
 
@@ -645,6 +676,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
@@ -788,12 +821,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
         self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
-        if self.IS_SUPPORT_STATEFUL:
-            model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
-            outputs_model_stateful = model_stateful.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
-            )
-            self.assertTrue(torch.equal(outputs_model_without_pkv, outputs_model_stateful))
+        model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
+        outputs_model_stateful = model_stateful.generate(
+            **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+        )
+        self.assertTrue(torch.equal(outputs_model_without_pkv, outputs_model_stateful))
 
         del model_with_pkv
         del model_without_pkv
@@ -847,7 +879,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
     def test_default_filling_attention_mask_and_position_ids(self):
         model_id = MODEL_NAMES["llama"]
-        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=False)
+        model_with_cache = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         texts = ["this is a simple input"]
@@ -865,7 +897,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
         outs_without_attn_mask_step2 = model_with_cache(input_ids=input_ids, past_key_values=past_key_values)
         self.assertTrue(torch.allclose(outs_step2.logits, outs_without_attn_mask_step2.logits))
-        print()
+        
         del model_with_cache
         gc.collect()
 
@@ -973,6 +1005,8 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForImageClassification.from_pretrained(model_id, export=True)
@@ -1103,6 +1137,8 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_generate_utils(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
@@ -1533,4 +1569,107 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
 
         del pipe
         del model
+        gc.collect()
+
+
+class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
+    SUPPORTED_ARCHITECTURES = ["vision-encoder-decoder", "trocr", "donut"]
+
+    GENERATION_LENGTH = 100
+    SPEEDUP_CACHE = 1.1
+
+    def _get_sample_image(self):
+        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        image = Image.open(requests.get(url, stream=True).raw)
+        return image
+
+    def _get_preprocessors(self, model_id):
+        image_processor = AutoImageProcessor.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        return image_processor, tokenizer
+
+    def test_load_vanilla_transformers_which_is_not_supported(self):
+        with self.assertRaises(Exception) as context:
+            _ = OVModelForVision2Seq.from_pretrained(MODEL_NAMES["bert"], export=True)
+
+        self.assertIn("only supports the tasks", str(context.exception))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
+    def test_generate_utils(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
+        feature_extractor, tokenizer = self._get_preprocessors(model_id)
+
+        data = self._get_sample_image()
+        features = feature_extractor(data, return_tensors="pt")
+
+        outputs = model.generate(inputs=features["pixel_values"])
+        res = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        self.assertIsInstance(res[0], str)
+
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True)
+
+        self.assertIsInstance(ov_model.encoder, OVEncoder)
+
+        self.assertIsInstance(ov_model.decoder, OVDecoder)
+        self.assertIsInstance(ov_model.decoder_with_past, OVDecoder)
+
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
+        set_seed(SEED)
+        transformers_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        feature_extractor, tokenizer = self._get_preprocessors(model_id)
+
+        data = self._get_sample_image()
+
+        start_token = "<s>"
+        decoder_start_token_id = tokenizer.encode(start_token)[0]
+
+        extra_inputs = [{}, {}]
+
+        for extra_inps in extra_inputs:
+            features = feature_extractor(data, return_tensors="pt")
+            decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
+
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**features, **decoder_inputs, **extra_inps, use_cache=True)
+            input_type = "pt"
+            features = feature_extractor(data, return_tensors=input_type)
+            ov_outputs = ov_model(**features, **decoder_inputs, **extra_inps)
+
+            self.assertTrue("logits" in ov_outputs)
+
+            # Compare tensor outputs
+            self.assertTrue(torch.allclose(torch.Tensor(ov_outputs.logits), transformers_outputs.logits, atol=1e-3))
+
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline_image_to_text(self, model_arch: str):
+        model_id = MODEL_NAMES[model_arch]
+        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True, compile=False)
+        feature_extractor, tokenizer = self._get_preprocessors(model_id)
+        ov_model.reshape(1, -1)
+        ov_model.compile()
+
+        # Speech recogition generation
+        pipe = pipeline(
+            "image-to-text",
+            model=ov_model,
+            tokenizer=tokenizer,
+            feature_extractor=feature_extractor,
+        )
+        data = self._get_sample_image()
+        outputs = pipe(data, max_new_tokens=3)
+        self.assertEqual(pipe.device, ov_model.device)
+        self.assertIsInstance(outputs[0]["generated_text"], str)
+
         gc.collect()

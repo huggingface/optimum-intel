@@ -43,7 +43,7 @@ if is_nncf_available():
         from .trainer import OVTrainer
 
 
-from .configuration import OVConfig, OVWeightQuantizationConfig
+from .configuration import OVConfig, OVQuantizationConfig, OVWeightQuantizationConfig
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
@@ -57,7 +57,7 @@ from .modeling import (
     OVModelForTokenClassification,
 )
 from .modeling_decoder import OVModelForCausalLM
-from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModelForSpeechSeq2Seq
+from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModelForSpeechSeq2Seq, OVModelForVision2Seq
 
 
 if is_diffusers_available():

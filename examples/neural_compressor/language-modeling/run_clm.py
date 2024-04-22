@@ -64,8 +64,7 @@ from optimum.intel.utils.import_utils import (
 
 
 if is_intel_extension_for_transformers_available():
-    from intel_extension_for_transformers.transformers.utils.config import WeightOnlyQuantConfig
-
+    from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
@@ -227,8 +226,9 @@ class OptimizationArguments:
         metadata={"help": "Scheme for weight only quantization. Choose from 'sym' and 'asym'."},
     )
     quantization_methodology: str = field(
-        default="RTN",
-        metadata={"help": "Quantization methodology for weight only quantization. Choose from 'RTN' and 'GPTQ'."},
+        choices=["rtn", "gptq"],
+        default="rtn",
+        metadata={"help": "Quantization methodology for weight only quantization. Choose from 'rtn' and 'gptq'."},
     )
     damp_percent: float = field(
         default=0.01,
@@ -662,22 +662,23 @@ def main():
                     raise ImportError(INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR.format("WeightOnly quantization"))
                 if optim_args.apply_pruning or optim_args.apply_distillation:
                     raise ValueError("Weight only quantization and pruning or distillation cannot be combined.")
-                if optim_args.quantization_methodology == "GPTQ":
-                    algorithm_args = {
-                        "act_order": False,
-                        "percdamp": optim_args.damp_percent,
-                        "block_size": optim_args.gptq_block_size,
-                        "nsamples": optim_args.num_calibration_samples,
-                        "use_max_length": optim_args.use_max_length,
-                        "pad_max_length": optim_args.pad_max_length,
-                    }
-                quantization_config = WeightOnlyQuantConfig(
-                    weight_dtype=optim_args.weight_dtype,
-                    group_size=optim_args.group_size,
-                    scheme=optim_args.weight_only_scheme,
-                    algorithm=optim_args.quantization_methodology,
-                    algorithm_args=algorithm_args if optim_args.quantization_methodology == "GPTQ" else None,
-                )
+
+                algorithm_args = {
+                    "weight_dtype": optim_args.weight_dtype,
+                    "sym": optim_args.weight_only_scheme == "sym",
+                    "group_size": optim_args.group_size,
+                }
+
+                if optim_args.quantization_methodology == "gptq":
+                    quantization_config = GPTQConfig(
+                        damp_percent=optim_args.damp_percent,
+                        nsamples=optim_args.num_calibration_samples,
+                        blocksize=optim_args.gptq_block_size,
+                        **algorithm_args,
+                    )
+                else:
+                    quantization_config = RtnConfig(**algorithm_args)
+
             else:
                 quantization_config = PostTrainingQuantConfig(
                     approach=optim_args.quantization_approach, recipes=recipes
