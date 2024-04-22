@@ -43,11 +43,7 @@ from transformers.utils.generic import ContextManagers
 from optimum.intel.generation import BaseModelForCausalLM
 
 from ...modeling_base import OptimizedModel
-from ..utils.import_utils import (
-    _torch_version,
-    is_intel_extension_for_transformers_available,
-    is_torch_version,
-)
+from ..utils.import_utils import _torch_version, is_itrex_available, is_torch_version
 from .configuration import INCConfig
 from .utils import WEIGHTS_NAME
 
@@ -135,7 +131,7 @@ class INCModel(OptimizedModel):
         model_save_dir = Path(model_cache_path).parent
         inc_config = None
         msg = None
-        if is_intel_extension_for_transformers_available():
+        if is_itrex_available():
             try:
                 quantization_config = PretrainedConfig.from_pretrained(model_save_dir / "quantize_config.json")
                 algorithm = getattr(quantization_config, "quant_method", None)

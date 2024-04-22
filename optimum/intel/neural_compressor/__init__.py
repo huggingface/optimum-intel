@@ -12,7 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from ..utils.import_utils import is_diffusers_available, is_intel_extension_for_transformers_available
+from ..utils.import_utils import is_diffusers_available
 from .configuration import INCConfig
 from .modeling_base import (
     INCModel,
