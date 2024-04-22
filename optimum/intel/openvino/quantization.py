@@ -21,7 +21,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import datasets
-from transformers.utils.quantization_config import QuantizationMethod
 
 import nncf
 import openvino
@@ -38,6 +37,7 @@ from torch.utils.data import DataLoader, RandomSampler
 from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
+from transformers.utils.quantization_config import QuantizationMethod
 
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.tasks import TasksManager
