@@ -56,7 +56,6 @@ TESTS_REQUIRE = [
     "sentence-transformers",
 ]
 
-
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
 
 EXTRAS_REQUIRE = {
