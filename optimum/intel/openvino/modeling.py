@@ -43,6 +43,7 @@ from transformers.modeling_outputs import (
     CausalLMOutput,
     ImageClassifierOutput,
     MaskedLMOutput,
+    ModelOutput,
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
     TokenClassifierOutput,
@@ -953,3 +954,66 @@ class OVModelForAudioFrameClassification(OVModel):
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
 
         return TokenClassifierOutput(logits=logits)
+
+
+CUSTOM_TASKS_EXAMPLE = """
+    Example of custom tasks (e.g. a sentence transformers with a pooler head):
+
+    ```python
+    >>> from transformers import {processor_class}
+    >>> from optimum.intel import {model_class}
+
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}")
+
+    >>> inputs = tokenizer("I love burritos!", return_tensors="np")
+
+    >>> outputs = model(**inputs)
+    >>> last_hidden_state = outputs.last_hidden_state
+    >>> pooler_output = outputs.pooler_output
+    ```
+"""
+
+
+@add_start_docstrings(
+    """
+    OpenVINO Model for custom tasks. It can be used to leverage the inference acceleration for any single-file OpenVINO model, that may use custom inputs and outputs.
+    """,
+    MODEL_START_DOCSTRING,
+)
+class OVModelForCustomTasks(OVModel):
+    @add_start_docstrings_to_model_forward(
+        CUSTOM_TASKS_EXAMPLE.format(
+            processor_class=_TOKENIZER_FOR_DOC,
+            model_class="OVModelForCustomTasks",
+            checkpoint="IlyasMoutawwakil/sbert-all-MiniLM-L6-v2-with-pooler",
+        )
+    )
+    def forward(self, **kwargs):
+        expected_inputs_names = set(self.input_names)
+        inputs_names = set(kwargs)
+
+        if not expected_inputs_names.issubset(inputs_names):
+            raise ValueError(
+                f"Got unexpected inputs: expecting the following inputs : {', '.join(expected_inputs_names)} but got : {', '.join(inputs_names)}."
+            )
+
+        np_inputs = isinstance(next(iter(kwargs.values())), np.ndarray)
+        inputs = {}
+        for input_name in self.input_names:
+            inputs[input_name] = np.array(kwargs.pop(input_name)) if not np_inputs else kwargs.pop(input_name)
+
+        outputs = self.request(inputs)
+
+        model_outputs = {}
+        for key, value in outputs.items():
+            key_name = next(iter(key.names))
+            if "." in key_name:
+                key_name = key_name.split(".")[0]
+                if key_name not in model_outputs:
+                    model_outputs[key_name] = []
+                model_outputs[key_name].append(torch.from_numpy(value).to(self.device) if not np_inputs else value)
+            else:
+                model_outputs[key_name] = torch.from_numpy(value).to(self.device) if not np_inputs else value
+
+        return ModelOutput(**model_outputs)

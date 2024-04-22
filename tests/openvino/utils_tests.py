@@ -21,6 +21,7 @@ import torch
 MODEL_NAMES = {
     "albert": "hf-internal-testing/tiny-random-albert",
     "audio_spectrogram_transformer": "Ericwang/tiny-random-ast",
+    "bge": "BAAI/bge-small-en-v1.5",
     "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
     "bert": "hf-internal-testing/tiny-random-bert",
     "bart": "hf-internal-testing/tiny-random-bart",
@@ -102,6 +103,8 @@ MODEL_NAMES = {
     "unispeech": "hf-internal-testing/tiny-random-unispeech",
     "unispeech_sat": "hf-internal-testing/tiny-random-UnispeechSatModel",
     "vit": "hf-internal-testing/tiny-random-vit",
+    "vit-with-attentions": "IlyasMoutawwakil/vit-with-attentions",
+    "vit-with-hidden-states": "IlyasMoutawwakil/vit-with-hidden_states",
     "vision-encoder-decoder": "hf-internal-testing/tiny-random-VisionEncoderDecoderModel-vit-gpt2",
     "wavlm": "hf-internal-testing/tiny-random-WavlmModel",
     "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",

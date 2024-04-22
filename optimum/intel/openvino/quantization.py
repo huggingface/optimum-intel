@@ -180,22 +180,15 @@ class OVQuantizer(OptimumQuantizer):
         """
         super().__init__()
         self.model = model
-        feature = kwargs.pop("feature", None)
-        if feature is not None:
-            logger.warning("`feature` is deprecated and will be removed in a future version. Use `task` instead.")
-        if task is not None and task != feature:
-            logger.warning(
-                f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export."
-            )
-        self.task = task or feature
+        self.task = task
         self.seed = seed
-        # TODO : deprecate input_names
-        self.input_names = None
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
-        self._export_input_names = [
-            column for column in self._signature_columns if column not in {"label", "labels", "label_ids"}
-        ]
+
+    @property
+    def input_names(self):
+        logger.warning("The`input_names` attribute is deprecated and will be removed in v1.18.0")
+        return None
 
     @classmethod
     def from_pretrained(cls, model: PreTrainedModel, **kwargs):
@@ -265,9 +258,8 @@ class OVQuantizer(OptimumQuantizer):
         # TODO: deprecate weights_only argument
         if weights_only is not None:
             logger.warning(
-                "`weights_only` argument is deprecated. In the future please provide `ov_config.quantization_config` "
-                "as an instance of OVWeightQuantizationConfig for weight-only compression or as an instance of "
-                "OVQuantizationConfig for full model quantization."
+                "`weights_only` argument is deprecated and will be removed in v1.18.0. In the future please provide `ov_config.quantization_config` "
+                "as an instance of `OVWeightQuantizationConfig` for weight-only compression or as an instance of `OVQuantizationConfig` for full model quantization."
             )
 
         if save_directory is None:
@@ -280,13 +272,18 @@ class OVQuantizer(OptimumQuantizer):
             raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
         quantization_config = ov_config.quantization_config
         if quantization_config is None:
-            if weights_only is None or weights_only is True:
+            if (weights_only is None or weights_only is True) and calibration_dataset is None:
                 if weights_only is None:
                     logger.info(
                         "`quantization_config` was not provided, 8-bit asymmetric weight quantization will be applied."
                     )
                 ov_config.quantization_config = OVWeightQuantizationConfig(bits=8)
             else:
+                logger.warning(
+                    "`quantization_config` was not provided, but calibration dataset was provided, assuming full "
+                    "model quantization is intended. In the future, please provide `quantization_config` as an "
+                    "instance of OVQuantizationConfig."
+                )
                 ov_config.quantization_config = OVQuantizationConfig()
 
         if isinstance(self.model, OVBaseModel):

@@ -214,7 +214,6 @@ class OVTrainer(Trainer):
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
         ov_config: Optional[OVConfig] = None,
         task: Optional[str] = None,
-        feature: Optional[str] = None,
     ):
         self.neftune_noise_alpha = None
 
@@ -233,13 +232,7 @@ class OVTrainer(Trainer):
         )
 
         self.ov_config = ov_config
-        if feature is not None:
-            logger.warning("`feature` is deprecated and will be removed in a future version. Use `task` instead.")
-            if task is not None and task != feature:
-                logger.warning(
-                    f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export."
-                )
-        self.task = task or feature
+        self.task = task
         self.teacher = None
         if teacher_model is not None:
             self.teacher = teacher_model.to(args.device)

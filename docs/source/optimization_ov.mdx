@@ -84,7 +84,7 @@ Here is how to apply static quantization on a fine-tuned DistilBERT given your o
 
 ```python
 from transformers import AutoTokenizer
-from optimum.intel import OVQuantizer, OVModelForSequenceClassification,
+from optimum.intel import OVQuantizer, OVModelForSequenceClassification, OVConfig, OVQuantizationConfig
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
 model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
@@ -95,7 +95,8 @@ save_dir = "ptq_model"
 quantizer = OVQuantizer.from_pretrained(model)
 
 # Apply static quantization and export the resulting quantized model to OpenVINO IR format
-quantizer.quantize(calibration_dataset=calibration_dataset, save_directory=save_dir)
+ov_config = OVConfig(quantization_config=OVQuantizationConfig())
+quantizer.quantize(ov_config=ov_config, calibration_dataset=calibration_dataset, save_directory=save_dir)
 # Save the tokenizer
 tokenizer.save_pretrained(save_dir)
 ```

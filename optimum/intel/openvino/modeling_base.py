@@ -31,7 +31,7 @@ from optimum.modeling_base import OptimizedModel
 
 from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available
-from .configuration import OVConfig, OVWeightQuantizationConfig
+from .configuration import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, _print_compiled_model_properties
 
 
@@ -64,10 +64,7 @@ class OVBaseModel(OptimizedModel):
         self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
-        self.ov_config = ov_config if ov_config is not None else {}
-        if self.ov_config.get("PERFORMANCE_HINT") is None:
-            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
-
+        self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
 
@@ -99,12 +96,15 @@ class OVBaseModel(OptimizedModel):
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
+
+        if enable_compilation:
+            self.compile()
 
     @staticmethod
     def load_model(
         file_name: Union[str, Path],
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-        calibration_dataset: Optional = None,
     ):
         """
         Loads the model.
@@ -114,8 +114,6 @@ class OVBaseModel(OptimizedModel):
                 The path of the model ONNX or XML file.
             quantization_config (`OVWeightQuantizationConfig` or `Dict`, *optional*):
                 Quantization config to apply after model is loaded.
-            calibration_dataset (`nncf.Dataset`, *optional*):
-                Optional nncf.Dataset to feed to model weight compression when quantization config is provided.
         """
 
         def fix_op_names_duplicates(model: openvino.runtime.Model):
@@ -144,7 +142,7 @@ class OVBaseModel(OptimizedModel):
 
             from optimum.intel.openvino.quantization import _weight_only_quantization
 
-            model = _weight_only_quantization(model, quantization_config, calibration_dataset=calibration_dataset)
+            model = _weight_only_quantization(model, quantization_config)
 
         return model
 
@@ -251,6 +249,16 @@ class OVBaseModel(OptimizedModel):
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
         return quantization_config
+
+    def _set_ov_config_parameters(self):
+        if self.ov_config.get("PERFORMANCE_HINT") is None:
+            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
+
+        q_config = self._openvino_config.quantization_config if self._openvino_config else None
+        if isinstance(q_config, OVDynamicQuantizationConfig):
+            self.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"] = str(q_config.activations_group_size)
+            if self.can_generate() and "KV_CACHE_PRECISION" not in self.ov_config:
+                self.ov_config["KV_CACHE_PRECISION"] = "u8"
 
     @staticmethod
     def _cached_file(

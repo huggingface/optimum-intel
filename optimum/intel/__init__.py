@@ -60,11 +60,23 @@ try:
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
     _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(
-        ["OVQuantizer", "OVTrainingArguments", "OVQuantizationConfig", "OVWeightQuantizationConfig"]
+        [
+            "OVQuantizer",
+            "OVTrainingArguments",
+            "OVQuantizationConfig",
+            "OVWeightQuantizationConfig",
+            "OVDynamicQuantizationConfig",
+        ]
     )
 else:
     _import_structure["openvino"].extend(
-        ["OVQuantizer", "OVTrainingArguments", "OVQuantizationConfig", "OVWeightQuantizationConfig"]
+        [
+            "OVQuantizer",
+            "OVTrainingArguments",
+            "OVQuantizationConfig",
+            "OVWeightQuantizationConfig",
+            "OVDynamicQuantizationConfig",
+        ]
     )
 
 
@@ -116,8 +128,9 @@ else:
             "OVModelForAudioClassification",
             "OVModelForAudioFrameClassification",
             "OVModelForAudioXVector",
-            "OVModelForCTC",
             "OVModelForCausalLM",
+            "OVModelForCTC",
+            "OVModelForCustomTasks",
             "OVModelForFeatureExtraction",
             "OVModelForImageClassification",
             "OVModelForMaskedLM",
@@ -191,13 +204,20 @@ if TYPE_CHECKING:
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
         from .utils.dummy_openvino_and_nncf_objects import (
+            OVDynamicQuantizationConfig,
             OVQuantizationConfig,
             OVQuantizer,
             OVTrainingArguments,
             OVWeightQuantizationConfig,
         )
     else:
-        from .openvino import OVQuantizationConfig, OVQuantizer, OVTrainingArguments, OVWeightQuantizationConfig
+        from .openvino import (
+            OVDynamicQuantizationConfig,
+            OVQuantizationConfig,
+            OVQuantizer,
+            OVTrainingArguments,
+            OVWeightQuantizationConfig,
+        )
 
     try:
         if not (is_openvino_available() and is_nncf_available() and is_accelerate_available()):
@@ -242,6 +262,7 @@ if TYPE_CHECKING:
             OVModelForAudioXVector,
             OVModelForCausalLM,
             OVModelForCTC,
+            OVModelForCustomTasks,
             OVModelForFeatureExtraction,
             OVModelForImageClassification,
             OVModelForMaskedLM,
