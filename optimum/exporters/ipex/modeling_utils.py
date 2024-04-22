@@ -112,6 +112,19 @@ def _llama_attn_forward(
 
     return attn_output, attn_weights, past_key_value
 
+def padding_attn_mask(attn_mask, alignment):
+    if attn_mask is None:
+        return None
+    assert isinstance(attn_mask, torch.Tensor), f"attn mask is supposed to be a tensor, instead we got {type(attn_mask)}"
+    if attn_mask.device == torch.device("cpu"):
+        return attn_mask
+    last_dim_size=  attn_mask.size(-1)
+    aligned_size = (last_dim_size + alignment - 1) // alignment * alignment
+    mask_size = [*attn_mask.size()[:-1], aligned_size]
+    new_attn_mask = torch.empty(mask_size, dtype=attn_mask.dtype, device=attn_mask.device).fill_(-65504.0)
+    new_attn_mask[..., :last_dim_size] = attn_mask
+    return new_attn_mask
+
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L1130
 def _llama_model_forward(
@@ -167,6 +180,8 @@ def _llama_model_forward(
         attention_mask = _prepare_4d_causal_attention_mask(
             attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length
         )
+
+    attention_mask = padding_attn_mask(attention_mask, 8)
 
     # embed positions
     hidden_states = inputs_embeds
