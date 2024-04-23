@@ -181,22 +181,15 @@ class OVQuantizer(OptimumQuantizer):
         """
         super().__init__()
         self.model = model
-        feature = kwargs.pop("feature", None)
-        if feature is not None:
-            logger.warning("`feature` is deprecated and will be removed in a future version. Use `task` instead.")
-        if task is not None and task != feature:
-            logger.warning(
-                f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export."
-            )
-        self.task = task or feature
+        self.task = task
         self.seed = seed
-        # TODO : deprecate input_names
-        self.input_names = None
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
-        self._export_input_names = [
-            column for column in self._signature_columns if column not in {"label", "labels", "label_ids"}
-        ]
+
+    @property
+    def input_names(self):
+        logger.warning("The`input_names` attribute is deprecated and will be removed in v1.18.0")
+        return None
 
     @classmethod
     def from_pretrained(cls, model: PreTrainedModel, **kwargs):
@@ -266,9 +259,8 @@ class OVQuantizer(OptimumQuantizer):
         # TODO: deprecate weights_only argument
         if weights_only is not None:
             logger.warning(
-                "`weights_only` argument is deprecated. In the future please provide `ov_config.quantization_config` "
-                "as an instance of OVWeightQuantizationConfig for weight-only compression or as an instance of "
-                "OVQuantizationConfig for full model quantization."
+                "`weights_only` argument is deprecated and will be removed in v1.18.0. In the future please provide `ov_config.quantization_config` "
+                "as an instance of `OVWeightQuantizationConfig` for weight-only compression or as an instance of `OVQuantizationConfig` for full model quantization."
             )
 
         if save_directory is None:
