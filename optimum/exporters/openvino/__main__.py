@@ -108,9 +108,11 @@ def main_export(
             cached versions if they exist.
         local_files_only (`Optional[bool]`, defaults to `False`):
             Whether or not to only look at local files (i.e., do not try to download the model).
-        use_auth_token (`Optional[str]`, defaults to `None`):
+        use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+            Deprecated. Please use `token` instead.
+        token (Optional[Union[bool, str]], defaults to `None`):
             The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-            when running `transformers-cli login` (stored in `~/.huggingface`).
+            when running `huggingface-cli login` (stored in `~/.huggingface`).
         model_kwargs (`Optional[Dict[str, Any]]`, defaults to `None`):
             Experimental usage: keyword arguments to pass to the model during
             the export. This argument should be used along the `custom_export_configs` argument

@@ -466,8 +466,11 @@ class INCQuantizer(OptimumQuantizer):
                 Processing function to apply to each example after loading dataset.
             preprocess_batch (`bool`, defaults to `True`):
                 Whether the `preprocess_function` should be batched.
-            use_auth_token (`bool`, defaults to `False`):
-                Whether to use the token generated when running `transformers-cli login`.
+            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+                Deprecated. Please use `token` instead.
+            token (Optional[Union[bool, str]], defaults to `None`):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `huggingface-cli login` (stored in `~/.huggingface`).
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """

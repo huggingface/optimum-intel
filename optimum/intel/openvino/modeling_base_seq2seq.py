@@ -133,9 +133,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 Can be either:
                     - The model id of a pretrained model hosted inside a model repo on huggingface.co.
                     - The path to a directory containing the model weights.
-            use_auth_token (`str` or `bool`):
-                The token to use as HTTP bearer authorization for remote files. Needed to load models from a private
-                repository.
+            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+                Deprecated. Please use `token` instead.
+            token (Optional[Union[bool, str]], defaults to `None`):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `huggingface-cli login` (stored in `~/.huggingface`).
             revision (`str`):
                 The specific model version to use. It can be a branch name, a tag name, or a commit id.
             force_download (`bool`, *optional*, defaults to `False`):
@@ -248,8 +250,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             save_dir (`str` or `Path`):
                 The directory where the exported ONNX model should be saved, defaults to
                 `transformers.file_utils.default_cache_path`, which is the cache directory for transformers.
-            use_auth_token (`str` or `bool`):
-                Is needed to load models from a private repository
+            use_auth_token (`Optional[str]`, defaults to `None`):
+                Deprecated. Please use `token` instead.
+            token (Optional[Union[bool, str]], defaults to `None`):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `huggingface-cli login` (stored in `~/.huggingface`).
             revision (`str`):
                 Revision is the specific model version to use. It can be a branch name, a tag name, or a commit id
             kwargs (`Dict`, *optional*):
