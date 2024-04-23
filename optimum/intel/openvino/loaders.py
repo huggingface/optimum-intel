@@ -258,6 +258,7 @@ class OVTextualInversionLoaderMixin:
         proxies = kwargs.pop("proxies", None)
         local_files_only = kwargs.pop("local_files_only", HF_HUB_OFFLINE)
         use_auth_token = kwargs.pop("use_auth_token", None)
+        token = kwargs.pop("token", None)
         revision = kwargs.pop("revision", None)
         subfolder = kwargs.pop("subfolder", None)
         weight_name = kwargs.pop("weight_name", None)
@@ -320,6 +321,7 @@ class OVTextualInversionLoaderMixin:
                             proxies=proxies,
                             local_files_only=local_files_only,
                             use_auth_token=use_auth_token,
+                            token=token,
                             revision=revision,
                             subfolder=subfolder,
                             user_agent=user_agent,
@@ -341,6 +343,7 @@ class OVTextualInversionLoaderMixin:
                         proxies=proxies,
                         local_files_only=local_files_only,
                         use_auth_token=use_auth_token,
+                        token=token,
                         revision=revision,
                         subfolder=subfolder,
                         user_agent=user_agent,

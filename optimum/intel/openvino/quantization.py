@@ -540,7 +540,8 @@ class OVQuantizer(OptimumQuantizer):
         dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
-        use_auth_token: bool = False,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         cache_dir: Optional[str] = None,
     ) -> datasets.Dataset:
         """
@@ -576,6 +577,7 @@ class OVQuantizer(OptimumQuantizer):
             name=dataset_config_name,
             split=dataset_split,
             use_auth_token=use_auth_token,
+            token=token,
             cache_dir=cache_dir,
         )
 

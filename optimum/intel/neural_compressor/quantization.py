@@ -446,7 +446,8 @@ class INCQuantizer(OptimumQuantizer):
         dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
-        use_auth_token: bool = False,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
     ) -> Dataset:
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -475,6 +476,7 @@ class INCQuantizer(OptimumQuantizer):
             name=dataset_config_name,
             split=dataset_split,
             use_auth_token=use_auth_token,
+            token=token,
         )
 
         if num_samples is not None:
