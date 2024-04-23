@@ -72,7 +72,7 @@ MODEL_NAMES = {
     "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
     "mt5": "stas/mt5-tiny-random",
     "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
-    "olmo": "katuni4ka/tiny-random-olmo",
+    "olmo": "katuni4ka/tiny-random-olmo-hf",
     "orion": "katuni4ka/tiny-random-orion",
     "pegasus": "hf-internal-testing/tiny-random-pegasus",
     "pix2struct": "fxmarty/pix2struct-tiny-random",
