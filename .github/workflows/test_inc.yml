@@ -33,7 +33,7 @@ jobs:
         pip install cmake
         pip install py-cpuinfo
         pip install .[neural-compressor,diffusers,tests]
-        pip install intel-extension-for-transformers==1.4.0
+        pip install intel-extension-for-transformers
         pip install peft
 
     - name: Test with Pytest

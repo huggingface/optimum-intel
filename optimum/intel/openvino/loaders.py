@@ -25,7 +25,7 @@ if is_safetensors_available():
     import safetensors
 
 import openvino
-from huggingface_hub.constants import HF_HUB_OFFLINE
+from huggingface_hub.constants import HF_HUB_OFFLINE, HUGGINGFACE_HUB_CACHE
 from openvino.runtime import Type
 from openvino.runtime import opset11 as ops
 from openvino.runtime.passes import Manager, Matcher, MatcherPass, WrapType
@@ -37,7 +37,7 @@ from .utils import TEXTUAL_INVERSION_EMBEDDING_KEY, TEXTUAL_INVERSION_NAME, TEXT
 try:
     from diffusers.utils import DIFFUSERS_CACHE
 except ImportError:
-    DIFFUSERS_CACHE = None
+    DIFFUSERS_CACHE = HUGGINGFACE_HUB_CACHE
 
 
 logger = logging.getLogger(__name__)

@@ -23,6 +23,7 @@ import openvino
 import torch
 import transformers
 from huggingface_hub import model_info
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -424,7 +425,7 @@ class OVModelForFeatureExtraction(OVModel):
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
         task: Optional[str] = None,
@@ -588,7 +589,7 @@ class OVModelForImageClassification(OVModel):
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
         task: Optional[str] = None,

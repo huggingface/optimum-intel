@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+
 from ...exporters import TasksManager
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
 from ..base import BaseOptimumCLICommand, CommandInfo
@@ -47,7 +49,9 @@ def parse_args_openvino(parser: "ArgumentParser"):
             f" {str(TasksManager.get_all_tasks())}. For decoder models, use `xxx-with-past` to export the model using past key values in the decoder."
         ),
     )
-    optional_group.add_argument("--cache_dir", type=str, default=None, help="Path indicating where to store cache.")
+    optional_group.add_argument(
+        "--cache_dir", type=str, default=HUGGINGFACE_HUB_CACHE, help="Path indicating where to store cache."
+    )
     optional_group.add_argument(
         "--framework",
         type=str,
