@@ -11,7 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
+import copy
 import logging
 import os
 from pathlib import Path
@@ -633,10 +633,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     f"For the given model, we recommend the following `quantization_config` : {default_config}"
                 )
 
+            quantization_config_copy = copy.deepcopy(quantization_config)
+            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
             _weight_only_quantization(
                 model,
-                quantization_config,
-                tokenizer=AutoTokenizer.from_pretrained(quantization_config.tokenizer or model_id),
+                quantization_config_copy,
                 transform_fn=lambda x: causal_model.prepare_inputs(**x),
             )
 

@@ -622,7 +622,6 @@ def _weight_only_quantization(
     model: openvino.runtime.Model,
     quantization_config: Union[OVWeightQuantizationConfig, Dict],
     calibration_dataset: Optional[Union[nncf.Dataset, Iterable]] = None,
-    tokenizer: Optional[PreTrainedTokenizer] = None,
     transform_fn: Optional[Callable] = None,
 ) -> openvino.runtime.Model:
     config = quantization_config
@@ -647,7 +646,7 @@ def _weight_only_quantization(
         else:
             dataset = nncf.Dataset(calibration_dataset)
     elif config.dataset is not None and isinstance(config.dataset, str):
-        tokenizer = tokenizer or AutoTokenizer.from_pretrained(config.tokenizer)
+        tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
 
         from optimum.gptq.data import get_dataset, prepare_dataset
 
