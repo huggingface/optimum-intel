@@ -734,7 +734,18 @@ def _mpt_attention_forward(
     else:
         past_key_value = (key_states, value_states)
 
-    attention_mask_sdpa = torch.ones(attention_mask.shape, dtype=query_states.dtype)
+    key_length = key_states.shape[-2]
+    query_length = seq_length if past_key_value is None else seq_length + past_key_value[0].shape[2]
+    attention_mask_sdpa = torch.ones(
+        (query_states.shape[0], query_states.shape[1], query_states.shape[2], key_states.shape[2]),
+        dtype=query_states.dtype,
+    )
+    if position_bias is not None:
+        position_bias_query_index = max(0, position_bias.size(1) - query_length)
+        position_bias_key_index = max(0, position_bias.size(2) - key_length)
+
+        position_bias = position_bias[:, position_bias_query_index:, position_bias_key_index:]
+        attention_mask_sdpa += position_bias
     attention_mask_sdpa.masked_fill_(attention_mask, torch.finfo(query_states.dtype).min)
     context_states = torch.nn.functional.scaled_dot_product_attention(
         query_states,
@@ -744,6 +755,7 @@ def _mpt_attention_forward(
         dropout_p=self.attn_dropout_p,
         scale=self.softmax_scale,
     )
+
     context_states = context_states.permute(0, 2, 1, 3).contiguous().view(batch_size, seq_length, -1)
     attn_output = self.out_proj(context_states)
 
@@ -776,17 +788,47 @@ def _internlm_attention_forward(
     use_cache: bool = False,
     **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-    from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
+    # from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
+    from einops import rearrange
+
+    def rotate_half(x):
+        """Rotates half the hidden dims of the input."""
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
+        """Applies Rotary Position Embedding to the query and key tensors."""
+        cos = cos[position_ids].unsqueeze(unsqueeze_dim)
+        sin = sin[position_ids].unsqueeze(unsqueeze_dim)
+        q_embed = (q * cos) + (rotate_half(q) * sin)
+        k_embed = (k * cos) + (rotate_half(k) * sin)
+        return q_embed, k_embed
+
+    def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+        """
+        This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
+        num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
+        """
+        batch, num_key_value_heads, slen, head_dim = hidden_states.shape
+        if n_rep == 1:
+            return hidden_states
+        hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
+        return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
     bsz, q_len, _ = hidden_states.size()
 
     qkv_states = self.wqkv(hidden_states)
 
-    qkv_states = qkv_states.reshape(
-        qkv_states.shape[0], qkv_states.shape[1], -1, 2 + self.num_key_values_groups, self.head_dim
+    qkv_states = rearrange(
+        qkv_states,
+        "b q (h gs d) -> b q h gs d",
+        gs=2 + self.num_key_value_groups,
+        d=self.head_dim,
     )
+
     query_states = qkv_states[..., : self.num_key_value_groups, :]
-    query_states = query_states.reshape(query_states.shape[0], query_states.shape[1], -1, query_states.shape[-1])
+    query_states = rearrange(query_states, "b q h gs d -> b q (h gs) d")
     key_states = qkv_states[..., -2, :]
     value_states = qkv_states[..., -1, :]
 
