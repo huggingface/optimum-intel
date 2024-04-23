@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 import timm
 import torch
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from packaging import version
 from timm.layers.config import set_fused_attn
 from timm.models._hub import load_model_config_from_hf
@@ -55,7 +56,7 @@ class TimmConfig(PretrainedConfig):
     def from_pretrained(
         cls,
         pretrained_model_name_or_path: Union[str, os.PathLike],
-        cache_dir: Optional[Union[str, os.PathLike]] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         force_download: bool = False,
         local_files_only: bool = False,
         token: Optional[Union[str, bool]] = None,

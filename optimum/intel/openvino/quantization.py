@@ -25,6 +25,7 @@ import nncf
 import openvino
 import torch
 import transformers
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from nncf import CompressWeightsMode, SensitivityMetric
 from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters, OverflowFix
 from nncf.torch import register_module
@@ -541,7 +542,7 @@ class OVQuantizer(OptimumQuantizer):
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
         use_auth_token: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
     ) -> datasets.Dataset:
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
