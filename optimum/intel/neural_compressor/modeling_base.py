@@ -20,6 +20,7 @@ from typing import Dict, Optional, Union
 
 import torch
 from huggingface_hub import hf_hub_download
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from neural_compressor.utils.pytorch import load
 from transformers import (
     AutoConfig,
@@ -100,7 +101,7 @@ class INCModel(OptimizedModel):
         use_auth_token: Optional[Union[bool, str, None]] = None,
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: str = WEIGHTS_NAME,
         local_files_only: bool = False,
         subfolder: str = "",
