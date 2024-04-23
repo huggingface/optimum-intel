@@ -2,9 +2,7 @@ name: Offline usage / Python - Test
 
 on:
   push:
-    branches:
-      - main
-      - hub-offline*
+    branches: [main]
   pull_request:
     branches: [main]
 
