@@ -141,6 +141,17 @@ def main_export(
     ```
     """
 
+    if use_auth_token is not None:
+        logger.warning(
+            "The `use_auth_token` argument is deprecated and will be removed soon. "
+            "Please use the `token` argument instead."
+        )
+        if token is not None:
+            raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+        token = use_auth_token
+        use_auth_token = None
+
     if compression_option is not None:
         logger.warning(
             "The `compression_option` argument is deprecated and will be removed in optimum-intel v1.17.0. "
