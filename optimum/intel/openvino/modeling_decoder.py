@@ -23,7 +23,7 @@ import openvino
 import torch
 from openvino.preprocess import PrePostProcessor
 from openvino.runtime import Core, Tensor, Type
-from transformers import AutoModelForCausalLM, AutoTokenizer, PretrainedConfig
+from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
