@@ -33,7 +33,7 @@ from openvino._offline_transformations import compress_quantize_weights_transfor
 from openvino.runtime import Core, Tensor
 from torch.utils._pytree import tree_map
 from torch.utils.data import DataLoader, RandomSampler
-from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator, PreTrainedTokenizer
+from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
