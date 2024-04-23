@@ -21,9 +21,14 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 import datasets
+import nncf
 import openvino
 import torch
 import transformers
+from nncf import CompressWeightsMode, SensitivityMetric
+from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters, OverflowFix
+from nncf.torch import register_module
+from nncf.torch.initialization import PTInitializingDataLoader
 from openvino._offline_transformations import compress_quantize_weights_transformation
 from openvino.runtime import Core, Tensor
 from torch.utils._pytree import tree_map
@@ -32,11 +37,6 @@ from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_d
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
 
-import nncf
-from nncf import CompressWeightsMode, SensitivityMetric
-from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters, OverflowFix
-from nncf.torch import register_module
-from nncf.torch.initialization import PTInitializingDataLoader
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.tasks import TasksManager
 from optimum.quantization_base import OptimumQuantizer
