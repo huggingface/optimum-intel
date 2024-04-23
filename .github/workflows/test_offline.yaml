@@ -27,14 +27,16 @@ jobs:
         uses: actions/setup-python@v3
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install dependencies for pytorch export
+      - name: Install dependencies
         run: |
           pip install .[tests,openvino]
-      - name: Test with unittest
+      - name: Test
         run: |
           HF_HOME=/tmp/ huggingface-cli download hf-internal-testing/tiny-random-gpt2
           HF_HOME=/tmp/ HF_HUB_OFFLINE=1 optimum-cli export openvino --model hf-internal-testing/tiny-random-gpt2 gpt2_openvino --task text-generation
+
           huggingface-cli download hf-internal-testing/tiny-random-gpt2
           HF_HUB_OFFLINE=1 optimum-cli export openvino --model hf-internal-testing/tiny-random-gpt2 gpt2_openvino --task text-generation
-          pytest tests/openvino/test_modeling.py -k "test_load_model_from_hub and not from_hub_openvino" -s -vvvvv
-          HF_HUB_OFFLINE=1 pytest tests/openvinoruntime/test_modeling.py -k "test_load_model_from_hub and not from_hub_openvino" -s -vvvvv
+
+          pytest tests/openvino/test_modeling.py -k "test_load_from_hub" -s -vvvvv
+          HF_HUB_OFFLINE=1 pytest tests/openvino/test_modeling.py -k "test_load_from_hub" -s -vvvvv
