@@ -21,7 +21,6 @@ from typing import Optional
 import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
-from torch import nn
 from transformers import AutoConfig, AutoTokenizer
 from utils_tests import MODEL_NAMES
 
