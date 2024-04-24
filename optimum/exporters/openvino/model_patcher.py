@@ -341,9 +341,9 @@ def _llama_gemma_update_causal_mask(self, attention_mask, input_tensor, cache_po
                 offset = 0
             mask_shape = attention_mask.shape
             mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[
-                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
-            ] = mask_slice
+            causal_mask[: mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]] = (
+                mask_slice
+            )
 
     if (
         self.config._attn_implementation == "sdpa"
@@ -647,9 +647,6 @@ def _baichuan13b_atten_forward(
     attn_weights = None
     attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
     attn_output = self.o_proj(attn_output)
-
-    if not output_attentions:
-        attn_weights = None
 
     return attn_output, attn_weights, past_key_value
 
