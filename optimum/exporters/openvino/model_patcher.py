@@ -311,7 +311,6 @@ def _llama_gemma_update_causal_mask(self, attention_mask, input_tensor, cache_po
 
         target_length = attention_mask.shape[-1] if isinstance(attention_mask, torch.Tensor) else current_length
 
-
     causal_mask = torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
     if sequence_length != 1:
         causal_mask = torch.triu(causal_mask, diagonal=1)
