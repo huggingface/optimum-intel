@@ -223,6 +223,17 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         vae_decoder_file_name = vae_decoder_file_name or default_file_name
         text_encoder_file_name = text_encoder_file_name or default_file_name
@@ -261,7 +272,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 model_id,
                 cache_dir=cache_dir,
                 local_files_only=local_files_only,
-                use_auth_token=use_auth_token,
                 token=token,
                 revision=revision,
                 allow_patterns=allow_patterns,
@@ -414,6 +424,17 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
@@ -431,7 +452,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             no_post_process=True,
             revision=revision,
             cache_dir=cache_dir,
-            use_auth_token=use_auth_token,
             token=token,
             local_files_only=local_files_only,
             force_download=force_download,
@@ -442,7 +462,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             model_id=save_dir_path,
             config=config,
             from_onnx=False,
-            use_auth_token=use_auth_token,
             token=token,
             revision=revision,
             force_download=force_download,

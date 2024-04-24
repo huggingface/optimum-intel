@@ -161,13 +161,23 @@ class IPEXModel(OptimizedModel):
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         trust_remote_code: bool = False,
     ):
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         if is_torch_version("<", "2.1.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
         task = cls.export_feature
         model_kwargs = {
             "revision": revision,
-            "use_auth_token": use_auth_token,
             "token": token,
             "cache_dir": cache_dir,
             "subfolder": subfolder,
@@ -200,6 +210,17 @@ class IPEXModel(OptimizedModel):
         subfolder: str = "",
         **kwargs,
     ):
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         if not getattr(config, "torchscript", False):
             raise ValueError(
                 "`config.torchscript` should be set to `True`, if your model is not a TorchScript model and needs to be traced please set `export=True` when loading it with `.from_pretrained()`"
@@ -214,7 +235,6 @@ class IPEXModel(OptimizedModel):
             model_cache_path = hf_hub_download(
                 repo_id=model_id,
                 filename=file_name,
-                use_auth_token=use_auth_token,
                 token=token,
                 revision=revision,
                 cache_dir=cache_dir,

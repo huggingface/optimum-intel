@@ -109,6 +109,17 @@ class INCModel(OptimizedModel):
         trust_remote_code: bool = False,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         model_name_or_path = kwargs.pop("model_name_or_path", None)
         if model_name_or_path is not None:
             logger.warning("`model_name_or_path` is deprecated please use `model_id`")
@@ -123,7 +134,6 @@ class INCModel(OptimizedModel):
                 repo_id=model_id,
                 filename=file_name,
                 subfolder=subfolder,
-                use_auth_token=use_auth_token,
                 token=token,
                 revision=revision,
                 cache_dir=cache_dir,
@@ -147,7 +157,6 @@ class INCModel(OptimizedModel):
 
                     return _BaseQBitsAutoModelClass.from_pretrained(
                         pretrained_model_name_or_path=model_id,
-                        use_auth_token=use_auth_token,
                         token=token,
                         revision=revision,
                         force_download=force_download,

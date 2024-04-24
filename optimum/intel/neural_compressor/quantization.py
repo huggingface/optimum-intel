@@ -474,11 +474,21 @@ class INCQuantizer(OptimumQuantizer):
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         calibration_dataset = load_dataset(
             dataset_name,
             name=dataset_config_name,
             split=dataset_split,
-            use_auth_token=use_auth_token,
             token=token,
         )
 

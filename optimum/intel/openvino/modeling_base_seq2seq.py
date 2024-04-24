@@ -158,6 +158,17 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
         default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
         default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
@@ -194,7 +205,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 model_cache_path = hf_hub_download(
                     repo_id=model_id,
                     filename=file_name,
-                    use_auth_token=use_auth_token,
                     token=token,
                     revision=revision,
                     cache_dir=cache_dir,
@@ -260,6 +270,17 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
@@ -281,7 +302,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             subfolder=subfolder,
             revision=revision,
             cache_dir=cache_dir,
-            use_auth_token=use_auth_token,
             token=token,
             local_files_only=local_files_only,
             force_download=force_download,

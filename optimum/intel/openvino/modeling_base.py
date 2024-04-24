@@ -212,13 +212,23 @@ class OVBaseModel(OptimizedModel):
             load_in_8bit (`bool`, *optional*, defaults to `False`):
                 Whether or not to apply 8-bit weight quantization.
         """
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
 
         model_cache_path = cls._cached_file(
             model_path=model_path,
-            use_auth_token=use_auth_token,
             token=token,
             revision=revision,
             force_download=force_download,
@@ -273,6 +283,17 @@ class OVBaseModel(OptimizedModel):
         subfolder: str = "",
         local_files_only: bool = False,
     ):
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         # locates a file in a local folder and repo, downloads and cache it if necessary.
         model_path = Path(model_path)
         if model_path.is_dir():
@@ -288,7 +309,6 @@ class OVBaseModel(OptimizedModel):
                     repo_id=model_path.as_posix(),
                     filename=file_name.as_posix(),
                     subfolder=subfolder,
-                    use_auth_token=use_auth_token,
                     token=token,
                     revision=revision,
                     cache_dir=cache_dir,
@@ -338,6 +358,17 @@ class OVBaseModel(OptimizedModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
@@ -354,7 +385,6 @@ class OVBaseModel(OptimizedModel):
             subfolder=subfolder,
             revision=revision,
             cache_dir=cache_dir,
-            use_auth_token=use_auth_token,
             token=token,
             local_files_only=local_files_only,
             force_download=force_download,
@@ -386,6 +416,17 @@ class OVBaseModel(OptimizedModel):
         stateful: bool = False,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
@@ -402,7 +443,6 @@ class OVBaseModel(OptimizedModel):
             model_id=save_dir_path,
             config=config,
             from_onnx=False,
-            use_auth_token=use_auth_token,
             token=token,
             revision=revision,
             force_download=force_download,

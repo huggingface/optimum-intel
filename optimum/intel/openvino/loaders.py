@@ -266,6 +266,17 @@ class OVTextualInversionLoaderMixin:
         weight_name = kwargs.pop("weight_name", None)
         use_safetensors = kwargs.pop("use_safetensors", None)
 
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         if use_safetensors and not is_safetensors_available():
             raise ValueError(
                 "`use_safetensors`=True but safetensors is not installed. Please install safetensors with `pip install safetensors"
@@ -322,8 +333,7 @@ class OVTextualInversionLoaderMixin:
                             resume_download=resume_download,
                             proxies=proxies,
                             local_files_only=local_files_only,
-                            use_auth_token=use_auth_token,
-                            token=token,
+                            use_auth_token=token,  # still uses use_auth_token
                             revision=revision,
                             subfolder=subfolder,
                             user_agent=user_agent,
@@ -344,8 +354,7 @@ class OVTextualInversionLoaderMixin:
                         resume_download=resume_download,
                         proxies=proxies,
                         local_files_only=local_files_only,
-                        use_auth_token=use_auth_token,
-                        token=token,
+                        use_auth_token=token,  # still uses use_auth_token
                         revision=revision,
                         subfolder=subfolder,
                         user_agent=user_agent,

@@ -477,9 +477,9 @@ class OVQuantizer(OptimumQuantizer):
                 subset_size=quantization_config.num_samples,
                 ignored_scope=quantization_config.get_ignored_scope_instance(),
                 model_type=nncf.ModelType(quantization_config.model_type),
-                preset=nncf.QuantizationPreset.PERFORMANCE
-                if quantization_config.sym
-                else nncf.QuantizationPreset.MIXED,
+                preset=(
+                    nncf.QuantizationPreset.PERFORMANCE if quantization_config.sym else nncf.QuantizationPreset.MIXED
+                ),
                 fast_bias_correction=quantization_config.fast_bias_correction,
                 advanced_parameters=nncf.AdvancedQuantizationParameters(
                     overflow_fix=OverflowFix(quantization_config.overflow_fix)
@@ -572,6 +572,17 @@ class OVQuantizer(OptimumQuantizer):
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
+        if use_auth_token is not None:
+            logger.warning(
+                "The `use_auth_token` argument is deprecated and will be removed soon. "
+                "Please use the `token` argument instead."
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+
+            token = use_auth_token
+            use_auth_token = None
+
         if not is_datasets_available():
             raise ValueError(DATASETS_IMPORT_ERROR.format("OVQuantizer.get_calibration_dataset"))
         from datasets import load_dataset
@@ -580,7 +591,6 @@ class OVQuantizer(OptimumQuantizer):
             dataset_name,
             name=dataset_config_name,
             split=dataset_split,
-            use_auth_token=use_auth_token,
             token=token,
             cache_dir=cache_dir,
         )
