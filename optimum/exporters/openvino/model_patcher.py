@@ -294,6 +294,14 @@ class ChatGLMModelPatcher(DecoderModelPatcher):
 def _llama_gemma_update_causal_mask(self, attention_mask, input_tensor, cache_position, past_seen_tokens=None):
     from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 
+    if self.config._attn_implementation == "sdpa" and past_seen_tokens is not None:
+        # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument,
+        # in order to dispatch on Flash Attention 2.
+        if AttentionMaskConverter._ignore_causal_mask_sdpa(
+            attention_mask, inputs_embeds=input_tensor, past_key_values_length=past_seen_tokens
+        ):
+            return None
+
     dtype, device = input_tensor.dtype, input_tensor.device
 
     # using minimum from dtype with larger bandwith (floa32) may lead to overflow
