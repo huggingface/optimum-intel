@@ -37,6 +37,7 @@ from .model_patcher import (
     LlamaModelPatcher,
     MixtralModelPatcher,
     QwenModelPatcher,
+    Phi3ModelPatcher,
 )
 
 
@@ -451,4 +452,7 @@ class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     library_name="transformers",
 )
 class Phi3OpenVINOConfig(PhiOnnxConfig):
-    pass
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return Phi3ModelPatcher(self, model, model_kwargs=model_kwargs)

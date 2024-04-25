@@ -623,3 +623,16 @@ class BaichuanModelPatcher(DecoderModelPatcher):
         # model has first inference buffers initialization
         if hasattr(self._model.lm_head, "first_flag"):
             self._model(torch.ones((1, 10), dtype=torch.int64), torch.ones((1, 10), dtype=torch.int64))
+
+
+class Phi3ModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        # init inv_freq for torchscript tracing
+        for layer in self._model.model.layers:
+            if layer.self_attn.rotary_emb.inv_freq is None:
+                rotary_emb = layer.self_attn.rotary_emb
+                layer.self_attn.rotary_emb.inv_freq = 1.0 / (
+                    rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
+                )
