@@ -1,0 +1,40 @@
+name: Offline usage / Python - Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: [3.9]
+        os: [ubuntu-latest]
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          pip install .[tests,openvino]
+      - name: Test
+        run: |
+          HF_HOME=/tmp/ huggingface-cli download hf-internal-testing/tiny-random-gpt2
+          HF_HOME=/tmp/ HF_HUB_OFFLINE=1 optimum-cli export openvino --model hf-internal-testing/tiny-random-gpt2 gpt2_openvino --task text-generation
+
+          huggingface-cli download hf-internal-testing/tiny-random-gpt2
+          HF_HUB_OFFLINE=1 optimum-cli export openvino --model hf-internal-testing/tiny-random-gpt2 gpt2_openvino --task text-generation
+
+          pytest tests/openvino/test_modeling.py -k "test_load_from_hub" -s -vvvvv
+          HF_HUB_OFFLINE=1 pytest tests/openvino/test_modeling.py -k "test_load_from_hub" -s -vvvvv
