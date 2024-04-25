@@ -235,7 +235,7 @@ class OVQuantizer(OptimumQuantizer):
 
         Examples:
         ```python
-        >>> from optimum.intel.openvino import OVQuantizer, OVModelForCausalLM
+        >>> from optimum.intel import OVQuantizer, OVModelForCausalLM
         >>> from transformers import AutoModelForCausalLM
         >>> model = AutoModelForCausalLM.from_pretrained("databricks/dolly-v2-3b")
         >>> quantizer = OVQuantizer.from_pretrained(model, task="text-generation")
@@ -245,7 +245,7 @@ class OVQuantizer(OptimumQuantizer):
         ```
 
         ```python
-        >>> from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
+        >>> from optimum.intel import OVQuantizer, OVModelForSequenceClassification
         >>> from transformers import AutoModelForSequenceClassification
         >>> model = OVModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english", export=True)
         >>> # or
