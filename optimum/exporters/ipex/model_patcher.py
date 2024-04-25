@@ -30,7 +30,7 @@ from .modeling_utils import (
 )
 
 # from modeling.utils import _IPEXPatcher
-from modeling.modeling_llama import _IPEXLlamaDecoderLayer
+from .modeling.modeling_llama import _IPEXLlamaDecoderLayer
 
 
 _IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
@@ -65,10 +65,10 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 
 def _patch_llama_model(model):
-    if is_ipex_version("<", "2.5.0"):
-        raise ImportError("Only ipex version > 2.3.0 supports RotaryEmbedding and IndirectAccessKVCache")
+    if is_ipex_version("<", "2.1.0"):
+        raise ImportError("Only ipex version > 2.1.0 supports RotaryEmbedding and IndirectAccessKVCache")
 
-    from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCache, RotaryEmbedding
+    from intel_extension_for_pytorch.llm.modules import RotaryEmbedding
 
     ipex_rope = RotaryEmbedding(
         model.config.max_position_embeddings,
@@ -77,7 +77,8 @@ def _patch_llama_model(model):
         model.config.architectures[0],
     )
     patch_op(model, LlamaAttention, "ipex_rope", ipex_rope)
-    if model.device_type == "cpu":
+    if "cpu" in str(model.device):
+        from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCache
         ipex_scale_dot_product = IndirectAccessKVCache(text_max_length=model.config.max_position_embeddings)
         patch_op(model, LlamaAttention, "ipex_scale_dot_product", ipex_scale_dot_product)
 
@@ -87,7 +88,7 @@ def _patch_llama_model(model):
 
         convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayerRef, model.config)
     else:
-        convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayer)
+        convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayer, model.config)
         convert_functions(model, LlamaModel, "forward", _llama_model_forward)
     return model
 
