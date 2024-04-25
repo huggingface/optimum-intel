@@ -77,6 +77,7 @@ MODEL_NAMES = {
     "pegasus": "hf-internal-testing/tiny-random-pegasus",
     "pix2struct": "fxmarty/pix2struct-tiny-random",
     "phi": "echarlaix/tiny-random-PhiForCausalLM",
+    "phi3": "katuni4ka/tiny-random-phi3",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "katuni4ka/tiny-random-qwen",
     "qwen2": "Qwen/Qwen1.5-0.5B",
