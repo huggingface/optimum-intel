@@ -65,7 +65,7 @@ class IPEXIntegrationTest(unittest.TestCase):
         "gptj",
         "gpt2",
         "gpt_neo",
-        # "gpt_bigcode",
+        "gpt_bigcode",
         "llama",
         "llama2",
         "opt",

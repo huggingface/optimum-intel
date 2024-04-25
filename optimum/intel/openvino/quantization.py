@@ -25,6 +25,7 @@ import nncf
 import openvino
 import torch
 import transformers
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from nncf import CompressWeightsMode, SensitivityMetric
 from nncf.quantization.advanced_parameters import AdvancedSmoothQuantParameters, OverflowFix
 from nncf.torch import register_module
@@ -234,7 +235,7 @@ class OVQuantizer(OptimumQuantizer):
 
         Examples:
         ```python
-        >>> from optimum.intel.openvino import OVQuantizer, OVModelForCausalLM
+        >>> from optimum.intel import OVQuantizer, OVModelForCausalLM
         >>> from transformers import AutoModelForCausalLM
         >>> model = AutoModelForCausalLM.from_pretrained("databricks/dolly-v2-3b")
         >>> quantizer = OVQuantizer.from_pretrained(model, task="text-generation")
@@ -244,7 +245,7 @@ class OVQuantizer(OptimumQuantizer):
         ```
 
         ```python
-        >>> from optimum.intel.openvino import OVQuantizer, OVModelForSequenceClassification
+        >>> from optimum.intel import OVQuantizer, OVModelForSequenceClassification
         >>> from transformers import AutoModelForSequenceClassification
         >>> model = OVModelForSequenceClassification.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english", export=True)
         >>> # or
@@ -562,7 +563,7 @@ class OVQuantizer(OptimumQuantizer):
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
         use_auth_token: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
     ) -> datasets.Dataset:
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.

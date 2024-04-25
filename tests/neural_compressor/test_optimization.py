@@ -45,7 +45,7 @@ from transformers import (
     set_seed,
 )
 from utils_tests import MODEL_NAMES, SEED, INCTestMixin, _generate_dataset
-from optimum.intel.utils.import_utils import is_torch_version, is_intel_extension_for_transformers_available
+from optimum.intel.utils.import_utils import is_torch_version, is_itrex_available
 
 
 from optimum.intel import (
@@ -511,7 +511,7 @@ class WeightOnlyQuantizationTest(INCTestMixin):
     )
 
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
-    @unittest.skipIf(not is_intel_extension_for_transformers_available(), reason="ITREX not available")
+    @unittest.skipIf(not is_itrex_available(), reason="ITREX not available")
     def test_weight_only_quantization(self, methodology, weight_dtype):
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
 

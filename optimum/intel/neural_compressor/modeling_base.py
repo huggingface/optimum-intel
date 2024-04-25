@@ -20,6 +20,7 @@ from typing import Dict, Optional, Union
 
 import torch
 from huggingface_hub import hf_hub_download
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from neural_compressor.utils.pytorch import load
 from transformers import (
     AutoConfig,
@@ -43,11 +44,7 @@ from transformers.utils.generic import ContextManagers
 from optimum.intel.generation import BaseModelForCausalLM
 
 from ...modeling_base import OptimizedModel
-from ..utils.import_utils import (
-    _torch_version,
-    is_intel_extension_for_transformers_available,
-    is_torch_version,
-)
+from ..utils.import_utils import _torch_version, is_itrex_available, is_torch_version
 from .configuration import INCConfig
 from .utils import WEIGHTS_NAME
 
@@ -104,7 +101,7 @@ class INCModel(OptimizedModel):
         use_auth_token: Optional[Union[bool, str, None]] = None,
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: str = WEIGHTS_NAME,
         local_files_only: bool = False,
         subfolder: str = "",
@@ -135,7 +132,7 @@ class INCModel(OptimizedModel):
         model_save_dir = Path(model_cache_path).parent
         inc_config = None
         msg = None
-        if is_intel_extension_for_transformers_available():
+        if is_itrex_available():
             try:
                 quantization_config = PretrainedConfig.from_pretrained(model_save_dir / "quantize_config.json")
                 algorithm = getattr(quantization_config, "quant_method", None)

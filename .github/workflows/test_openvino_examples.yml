@@ -7,11 +7,11 @@ on:
   push:
     paths:
     - '.github/workflows/test_openvino_examples.yml'
-    - 'examples/openvino/*'
+    - 'examples/openvino/**'
   pull_request:
     paths:
     - '.github/workflows/test_openvino_examples.yml'
-    - 'examples/openvino/*'
+    - 'examples/openvino/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -22,9 +22,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.10"]
+        python-version: ["3.8", "3.11"]
 
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
 
     steps:
     - uses: actions/checkout@v2
@@ -35,11 +35,11 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install optimum[openvino] jstyleson nncf pytest
-        pip install -r examples/openvino/audio-classification/requirements.txt
-        pip install -r examples/openvino/image-classification/requirements.txt
-        pip install -r examples/openvino/question-answering/requirements.txt
-        pip install -r examples/openvino/text-classification/requirements.txt
+        pip install .[openvino] jstyleson pytest
+        pip install -r examples/openvino/audio-classification/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+        pip install -r examples/openvino/image-classification/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+        pip install -r examples/openvino/question-answering/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+        pip install -r examples/openvino/text-classification/requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
     - name: Test examples
       run: |

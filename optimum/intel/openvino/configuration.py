@@ -310,7 +310,9 @@ class OVConfig(BaseConfig):
         if isinstance(quantization_config, dict):
             quantization_config = self._quantization_config_from_dict(quantization_config)
         self.quantization_config = quantization_config
-        self.compression = None  # A field for backward-compatability of training-time compression parameters
+        self.compression = kwargs.get(
+            "compression", None
+        )  # A field for backward-compatability of training-time compression parameters
         bits = self.quantization_config.bits if self.quantization_config else None
         self.dtype = "int" + str(bits) if isinstance(bits, int) else dtype
 
