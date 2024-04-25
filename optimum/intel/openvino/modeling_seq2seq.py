@@ -224,7 +224,7 @@ AUTOMATIC_SPEECH_RECOGNITION_EXAMPLE = r"""
 
     ```python
     >>> from transformers import {processor_class}
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
     >>> from datasets import load_dataset
 
     >>> processor = {processor_class}.from_pretrained("{checkpoint}")
@@ -241,7 +241,7 @@ AUTOMATIC_SPEECH_RECOGNITION_EXAMPLE = r"""
 
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
     >>> from datasets import load_dataset
 
     >>> processor = {processor_class}.from_pretrained("{checkpoint}")

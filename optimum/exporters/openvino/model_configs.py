@@ -19,13 +19,14 @@ from packaging import version
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
-from optimum.exporters.onnx.model_configs import GemmaOnnxConfig, LlamaOnnxConfig, MPTOnnxConfig
+from optimum.exporters.onnx.model_configs import FalconOnnxConfig, GemmaOnnxConfig, LlamaOnnxConfig, MPTOnnxConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummyTextInputGenerator,
+    FalconDummyPastKeyValuesGenerator,
     MistralDummyPastKeyValuesGenerator,
 )
 from optimum.utils.normalized_config import NormalizedTextConfig
@@ -454,3 +455,50 @@ class MPTOpenVINOConfig(MPTOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return MPTModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+class OVFalconDummyPastKeyValuesGenerator(FalconDummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+            **kwargs,
+        )
+        if normalized_config.new_decoder_architecture:
+            self.num_kv_heads = normalized_config.num_attention_heads
+        else:
+            self.num_kv_heads = normalized_config.num_kv_heads if not normalized_config.multi_query else 1
+
+        self.head_dim = self.hidden_size // self.num_attention_heads
+
+
+@register_in_tasks_manager(
+    "falcon",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "question-answering",
+        "text-generation",
+        "text-generation-with-past",
+        "token-classification",
+    ],
+    library_name="transformers",
+)
+class FalconOpenVINOConfig(FalconOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        OVFalconDummyPastKeyValuesGenerator,
+    ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+    DUMMY_PKV_GENERATOR_CLASS = OVFalconDummyPastKeyValuesGenerator

@@ -45,6 +45,7 @@ MODEL_NAMES = {
     "electra": "hf-internal-testing/tiny-random-electra",
     "gemma": "fxmarty/tiny-random-GemmaForCausalLM",
     "falcon": "fxmarty/really-tiny-falcon-testing",
+    "falcon-40b": "katuni4ka/tiny-random-falcon-40b",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
