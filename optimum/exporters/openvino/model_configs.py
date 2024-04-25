@@ -36,8 +36,8 @@ from .model_patcher import (
     GemmaModelPatcher,
     LlamaModelPatcher,
     MixtralModelPatcher,
-    QwenModelPatcher,
     Phi3ModelPatcher,
+    QwenModelPatcher,
 )
 
 
