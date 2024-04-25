@@ -27,7 +27,7 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-    "torch>=1.11,<2.3",
+    "torch>=1.11",
     "transformers>=4.36.0,<4.41.0",
     "optimum~=1.19",
     "datasets>=1.4.0",
