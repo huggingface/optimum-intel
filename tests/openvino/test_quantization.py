@@ -451,7 +451,6 @@ class OVWeightCompressionTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_name]
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
-
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
             if quantization_config.quant_method == QuantizationMethod.AWQ:
                 # TODO: Check that AWQ was actually applied
