@@ -32,6 +32,12 @@ from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.exporters.utils import _get_submodels_and_export_configs
+from optimum.intel.utils.import_utils import (
+    _optimum_intel_version,
+    _optimum_version,
+    _torch_version,
+    _transformers_version,
+)
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
@@ -81,6 +87,10 @@ def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
 
         compress_to_fp16 = ov_config.dtype == "fp16"
 
+    model.set_rt_info(_transformers_version, ["optimum", "transformers_version"])
+    model.set_rt_info(_torch_version, ["optimum", "pytorch_version"])
+    model.set_rt_info(_optimum_intel_version, ["optimum", "optimum_intel_version"])
+    model.set_rt_info(_optimum_version, ["optimum", "optimum_version"])
     save_model(model, path, compress_to_fp16)
 
 
