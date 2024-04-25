@@ -441,6 +441,12 @@ class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
 
+@register_in_tasks_manager("olmo", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class OlmoOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
 @register_in_tasks_manager(
     "phi3",
     *[

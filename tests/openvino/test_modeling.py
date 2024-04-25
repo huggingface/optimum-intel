@@ -528,6 +528,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral",
         "mixtral",
         "mpt",
+        "olmo",
         "opt",
         "pegasus",
         "qwen",
@@ -542,17 +543,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon-40b",
     )
     GENERATION_LENGTH = 100
-    REMOTE_CODE_MODELS = ("chatglm", "minicpm", "baichuan2", "jais", "qwen", "internlm2", "olmo", "orion", "phi3")
+    REMOTE_CODE_MODELS = ("chatglm", "minicpm", "baichuan2", "jais", "qwen", "internlm2", "orion", "phi3")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        not_stateful = ["gpt_bigcode"]
+        not_stateful = []
         if is_openvino_version("<", "2024.0"):
             not_stateful.append("mixtral")
 
         if is_openvino_version("<", "2024.1"):
-            not_stateful.extend(["llama", "gemma"])
+            not_stateful.extend(["llama", "gemma", "gpt_bigcode"])
 
         if "gptq" in model_arch:
             self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
