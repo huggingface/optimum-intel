@@ -528,6 +528,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral",
         "mixtral",
         "mpt",
+        "olmo",
         "opt",
         "pegasus",
         "qwen",
@@ -542,7 +543,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "falcon-40b",
     )
     GENERATION_LENGTH = 100
-    REMOTE_CODE_MODELS = ("chatglm", "minicpm", "baichuan2", "jais", "qwen", "internlm2", "olmo", "orion", "phi3")
+    REMOTE_CODE_MODELS = ("chatglm", "minicpm", "baichuan2", "jais", "qwen", "internlm2", "orion", "phi3")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
