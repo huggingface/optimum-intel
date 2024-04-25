@@ -27,7 +27,6 @@ import evaluate
 import numpy as np
 import torch
 from datasets import load_dataset
-from nncf.common.logging.track_progress import track
 from nncf.quantization.advanced_parameters import OverflowFix
 from parameterized import parameterized
 import openvino.runtime as ov
