@@ -465,9 +465,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
             with unittest.mock.patch(
-                "nncf.common.logging.track_progress.track",
-                wraps=track,
-                side_effect=collect_descriptions
+                "nncf.common.logging.track_progress.track", wraps=track, side_effect=collect_descriptions
             ):
                 model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
                 if quantization_config.quant_method == QuantizationMethod.AWQ:
