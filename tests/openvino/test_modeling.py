@@ -539,6 +539,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm2",
         "orion",
         "falcon",
+        "falcon-40b",
     )
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = ("chatglm", "minicpm", "baichuan2", "jais", "qwen", "internlm2", "orion")
