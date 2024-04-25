@@ -27,6 +27,7 @@ import evaluate
 import numpy as np
 import torch
 from datasets import load_dataset
+from nncf.common.logging.track_progress import track
 from nncf.quantization.advanced_parameters import OverflowFix
 from parameterized import parameterized
 import openvino.runtime as ov
@@ -221,7 +222,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
-            "HuggingFaceH4/tiny-random-LlamaForCausalLM",
+            "llama_awq",
             dict(
                 bits=4,
                 sym=True,
@@ -448,22 +449,30 @@ class OVWeightCompressionTest(unittest.TestCase):
     def test_ovmodel_4bit_auto_compression_with_config(
         self, model_cls, model_name, quantization_config, expected_ov_int4
     ):
+        # If this variable is defined locally, collect_descriptions() for some reason will collect values to the list
+        # defined for the first test case
+        if "track_descriptions" not in globals():
+            globals()["track_descriptions"] = []
+        track_descriptions = globals()["track_descriptions"]
+        track_descriptions.clear()
+
+        def collect_descriptions(*args, **kwargs):
+            track_descriptions.append(kwargs["description"])
+            return unittest.mock.DEFAULT
+
         model_id = MODEL_NAMES[model_name]
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
 
-            from nncf.common.logging.track_progress import track
-
-            with unittest.mock.patch("nncf.common.logging.track_progress.track", wraps=track) as track_patch:
+            with unittest.mock.patch(
+                "nncf.common.logging.track_progress.track",
+                wraps=track,
+                side_effect=collect_descriptions
+            ):
                 model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
                 if quantization_config.quant_method == QuantizationMethod.AWQ:
                     # Called at least once with description="Applying AWQ"
-                    self.assertTrue(
-                        any(
-                            args.kwargs.get("description", None) == "Applying AWQ"
-                            for args in track_patch.call_args_list
-                        )
-                    )
+                    self.assertTrue(any(it == "Applying AWQ" for it in track_descriptions))
 
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
