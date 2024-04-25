@@ -536,6 +536,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "stablelm",
         "starcoder2",
         "phi",
+        "phi3",
         "internlm2",
         "orion",
         "falcon",
@@ -552,6 +553,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm2",
         "olmo",
         "orion",
+        "phi3"
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
