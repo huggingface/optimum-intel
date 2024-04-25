@@ -640,11 +640,25 @@ def _baichuan13b_atten_forward(
             attention_mask = attention_mask[:, :, -key_states.shape[-2] :, :]
         key_states = torch.cat([past_key_value[0], key_states], dim=2)
         value_states = torch.cat([past_key_value[1], value_states], dim=2)
+    if not output_attentions:
+        past_key_value = (key_states, value_states) if use_cache else None
+        attn_output = F.scaled_dot_product_attention(query_states, key_states, value_states, attn_mask=attention_mask)
+        attn_weights = None
+    else:
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
-    past_key_value = (key_states, value_states) if use_cache else None
-    attn_output = F.scaled_dot_product_attention(query_states, key_states, value_states, attn_mask=attention_mask)
+        if attention_mask is not None:
+            if q_len == 1:  # inference with cache
+                if len(attention_mask.size()) == 4:
+                    attention_mask = attention_mask[:, :, -1:, :]
+                else:
+                    attention_mask = attention_mask[:, -1:, :]
+            attn_weights = attn_weights + attention_mask
+        attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1)
+        attn_output = torch.matmul(attn_weights, value_states)
+
     attn_output = attn_output.transpose(1, 2)
-    attn_weights = None
     attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
     attn_output = self.o_proj(attn_output)
 
@@ -708,7 +722,7 @@ class BaichuanModelPatcher(DecoderModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
-def _mpt_attention_forward(
+def _mpt_sdpa_attention_forward(
     self,
     hidden_states: torch.Tensor,
     position_bias: torch.Tensor,
@@ -759,18 +773,73 @@ def _mpt_attention_forward(
     return attn_output, None, past_key_value
 
 
+def _mpt_block_forward(
+    self,
+    hidden_states: torch.Tensor,
+    position_bias: torch.Tensor,
+    attention_mask: torch.Tensor,
+    layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    use_cache: bool = False,
+    output_attentions: bool = False,
+):
+    # hidden_states: [batch_size, seq_length, hidden_size]
+    # Layer norm at the beginning of the transformer layer.
+    layernorm_output = self.norm_1(hidden_states)
+
+    residual = hidden_states
+
+    if not output_attentions:
+        # Self attention.
+        attn_outputs, attn_weights, past_key_value = self.attn(
+            layernorm_output,
+            position_bias=position_bias,
+            attention_mask=attention_mask,
+            past_key_value=layer_past,
+        )
+    else:
+        attn_outputs, attn_weights, past_key_value = self.attn._orig_forward(
+            layernorm_output,
+            position_bias=position_bias,
+            attention_mask=attention_mask,
+            past_key_value=layer_past,
+        )
+
+    hidden_states = self.resid_attn_dropout(attn_outputs) + residual
+
+    layernorm_output = self.norm_2(hidden_states)
+
+    # Get residual
+    residual = hidden_states
+
+    # MLP.
+    output = self.ffn(layernorm_output, residual)
+    outputs = (output,)
+
+    if use_cache:
+        outputs += (past_key_value,)
+
+    if output_attentions:
+        outputs += (attn_weights,)
+
+    return outputs
+
+
 class MPTModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
         if is_torch_version(">=", "2.1.0"):
             for block in self._model.transformer.blocks:
+                block._orig_forward = block.forward
+                block.forward = types.MethodType(_mpt_block_forward, block)
                 block.attn._orig_forward = block.attn.forward
-                block.attn.forward = types.MethodType(_mpt_attention_forward, block.attn)
+                block.attn.forward = types.MethodType(_mpt_sdpa_attention_forward, block.attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         for block in self._model.transformer.blocks:
+            if hasattr(block, "_orig_forward"):
+                block.forward = block._orig_forward
             if hasattr(block.attn, "_orig_forward"):
                 block.attn.forward = block.attn._orig_forward
 
@@ -848,16 +917,20 @@ def _internlm_attention_forward(
 
     key_states = repeat_kv(key_states, self.num_key_value_groups)
     value_states = repeat_kv(value_states, self.num_key_value_groups)
+    if not output_attentions:
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            query_states, key_states, value_states, attention_mask, scale=(1 / math.sqrt(self.head_dim))
+        )
+        attn_weights = None
+    else:
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_output = torch.matmul(attn_weights, value_states)
 
-    attn_output = torch.nn.functional.scaled_dot_product_attention(
-        query_states, key_states, value_states, attention_mask, scale=(1 / math.sqrt(self.head_dim))
-    )
     attn_output = attn_output.transpose(1, 2).contiguous()
     attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
     attn_output = self.wo(attn_output)
-
-    attn_weights = None
 
     return attn_output, attn_weights, past_key_value
 
