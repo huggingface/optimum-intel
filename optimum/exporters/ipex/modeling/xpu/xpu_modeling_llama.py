@@ -37,8 +37,16 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
         self.num_heads = module.num_heads
         self.head_dim = module.head_dim
         self.num_kv_heads = module.num_key_value_heads
-        self.embed_dim = module.embed_dim
+        self.embed_dim = module.config.hidden_size
         self.port_parameters(module)
+        from intel_extension_for_pytorch.llm.modules import RotaryEmbedding
+
+        self.ipex_rope = RotaryEmbedding(
+                    module.config.max_position_embeddings,
+                    module.config.hidden_size // module.config.num_attention_heads,
+                    module.config.rope_theta,
+                    module.config.architectures[0],
+                                                        )
 
     def forward(
         self,
@@ -69,26 +77,29 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
         """
         # allocate cache and copy past_key_value
         bs, seqlen, _ = hidden_states.size()
-        _, prev_seqlen, _, _ = past_key_value[0].size()
+        prev_seqlen = 0
+        if past_key_value:
+            _, _, prev_seqlen, _ = past_key_value[0].size()
         if self.num_kv_heads == self.num_heads:
-            query = torch.empty_like([bs, prev_seqlen + seqlen, self.num_heads * self.head_dim], dtype=query.dtype, device=query.device)
-            key = torch.empty_like([bs, prev_seqlen + seqlen, self.num_heads * self.head_dim], dtype=query.dtype, device=query.device)
-            value = torch.empty_like([bs, prev_seqlen + seqlen, self.num_heads * self.head_dim], dtype=query.dtype, device=query.device)
+            query = torch.empty((bs, seqlen, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
+            key = torch.empty((bs, prev_seqlen + seqlen, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
+            value = torch.empty((bs, prev_seqlen + seqlen, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
             torch.ops.torch_ipex.mm_qkv_out(
-                hidden_states, self.qkv_proj_weight, self.qkv_proj_bias, query[:, prev_seqlen:, :, :], key[:, prev_seqlen:, :, :], value[:, prev_seqlen:, :, :])
+                hidden_states, self.qkv_proj_weight, self.qkv_proj_bias, query, key[:, prev_seqlen:, :], value[:, prev_seqlen:, :])
         else:
-            query = torch.empty([bs, prev_seqlen + seqlen, self.num_heads * self.head_dim], dtype=query.dtype, device=query.device)
-            key = torch.empty([bs, prev_seqlen + seqlen, self.num_kv_heads * self.head_dim], dtype=query.dtype, device=query.device)
-            value = torch.empty([bs, prev_seqlen + seqlen, self.num_kv_heads * self.head_dim], dtype=query.dtype, device=query.device)
+            query = torch.empty((bs, seqlen, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
+            key = torch.empty((bs, prev_seqlen + seqlen, self.num_kv_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
+            value = torch.empty((bs, prev_seqlen + seqlen, self.num_kv_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
             torch.ops.torch_ipex.mm_qkv_group_out(
                 hidden_states, self.qkv_proj_weight, self.qkv_proj_bias, query, key, value)
-        key[:, :prev_seqlen, :, :] = past_key_value[0].tranpose(1, 2)
-        value[:, :prev_seqlen, :, :] = past_key_value[1].tranpose(1, 2)
+        if past_key_value:
+            key[:, :prev_seqlen, :] = past_key_value[0].transpose(1, 2).view(bs, prev_seqlen, -1)
+            value[:, :prev_seqlen, :] = past_key_value[1].transpose(1, 2).view(bs, prev_seqlen, -1)
 
         # rope
-        query = query.view([-1, seqlen, self.num_heads, self.head_dim])
-        key = key.view([-1, seqlen, self.num_kv_heads, self.head_dim])
-        value = value.view([-1, seqlen, self.num_kv_heads, self.head_dim])
+        #query = query.view([-1, seqlen, self.num_heads, self.head_dim])
+        #key = key.view([-1, seqlen, self.num_kv_heads, self.head_dim])
+        value = value.view([bs, prev_seqlen + seqlen, self.num_kv_heads, self.head_dim])
 
         query = self.ipex_rope(
             query,
@@ -110,19 +121,21 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
             seqlen,
         )
 
-        key = key.tranpose(1, 2)
-        value = value.tranpose(1, 2)
+        key = key.transpose(1, 2)
+        value = value.transpose(1, 2)
         present = (key, value) if use_cache else None
 
         scale = 1.0 / math.sqrt(self.head_dim)
-        attn_output, attn_weight = torch.nn.functional.scaled_dot_product_attention(query, key, value, attention_mask, dropout_p=0.0, scale=scale)
-        attn_output = attn_output.tranpose(1, 2).view([bs, seqlen, self.embed_dim])
+        attn_output = torch.xpu.IpexSDP(query.transpose(1,2), key, value, None, attention_mask, None, scale, 1.0, 0.0, True, False)
+        # attn_output, attn_weight = torch.nn.functional.scaled_dot_product_attention(query, key, value, attention_mask, dropout_p=0.0, scale=scale)
+        attn_output = attn_output.transpose(1, 2).view([bs, seqlen, self.embed_dim])
         attn_output = matmul_add_add(attn_output, self.o_proj_weight, self.o_proj_bias, residual).view([bs, seqlen, self.embed_dim])
         outputs = (attn_output, present)
         if output_attentions:
-            outputs += (attn_weight, )
+            raise ValueError("not support output attn_weight")
+            # outputs += (attn_weight, )
         else:
-            outputs += (None)
+            outputs += (None, )
         return outputs
 
 
@@ -130,22 +143,22 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
         self.qkv_proj_bias = None
         self.qkv_proj_weight = None
         if self.num_heads == self.num_kv_heads:
-            q_proj = module.self_attn.q_proj.weight.contiguous(0, 1)
-            k_proj = module.self_attn.k_proj.weight.contiguous(0, 1)
-            v_proj = module.self_attn.v_proj.weight.contiguous(0, 1)
+            q_proj = module.q_proj.weight.transpose(0, 1)
+            k_proj = module.k_proj.weight.transpose(0, 1)
+            v_proj = module.v_proj.weight.transpose(0, 1)
             self.qkv_proj_weight = torch.stack([q_proj, k_proj, v_proj]).contiguous().view([3, -1, q_proj.shape[-1]])
-            if module.self_attn.q_proj.bias is not None:
-                self.qkv_proj_bias = torch.stack([module.self_attn.q_proj.bias, module.self_attn.k_proj.bias, module.self_attn.v_proj.bias]).contiguous().view([3, -1])
+            if module.q_proj.bias is not None:
+                self.qkv_proj_bias = torch.stack([module.q_proj.bias, module.k_proj.bias, module.v_proj.bias]).contiguous().view([3, -1])
         else:
             group = self.num_heads // self.num_kv_heads
-            q_proj = module.self_attn.q_proj.weight.view(self.num_kv_heads, group, self.head_dim, self.embed_dim)
-            k_proj = module.self_attn.k_proj.weight.view(self.num_kv_heads, 1, self.head_dim, self.embed_dim)
-            v_proj = module.self_attn.v_proj.weight.view(self.num_kv_heads, 1, self.head_dim, self.embed_dim)
+            q_proj = module.q_proj.weight.view(self.num_kv_heads, group, self.head_dim, self.embed_dim)
+            k_proj = module.k_proj.weight.view(self.num_kv_heads, 1, self.head_dim, self.embed_dim)
+            v_proj = module.v_proj.weight.view(self.num_kv_heads, 1, self.head_dim, self.embed_dim)
             self.qkv_proj_weight = torch.cat([q_proj, k_proj, v_proj], dim=1).view([self.num_kv_heads, group + 2, self.head_dim, self.embed_dim])
-            if module.self_attn.q_proj.bias is not None:
-                q_bias = module.self_attn.q_proj.bias.view(self.num_kv_heads, group, self.head_dim)
-                k_bias = module.self_attn.k_proj.bias.view(self.num_kv_heads, 1, self.head_dim)
-                v_bias = module.self_attn.v_proj.bias.view(self.num_kv_heads, 1, self.head_dim)
+            if module.q_proj.bias is not None:
+                q_bias = module.q_proj.bias.view(self.num_kv_heads, group, self.head_dim)
+                k_bias = module.k_proj.bias.view(self.num_kv_heads, 1, self.head_dim)
+                v_bias = module.v_proj.bias.view(self.num_kv_heads, 1, self.head_dim)
                 self.qkv_proj_bias = torch.cat([q_bias, k_bias, v_bias], dim=1).view([self.num_kv_heads, group + 2, self.head_dim])
         self.o_proj_weight = module.o_proj.weight
         self.o_proj_bias = module.o_proj.bias
@@ -158,6 +171,7 @@ class _IPEXLlamaMLPXPU(_IPEXLlamaMLP):
         self.mlp_impl = None
         if optimized_module is not None:
             self.mlp_impl = optimized_module
+        self.port_parameter(module)
 
     def forward(
         self,
@@ -176,7 +190,7 @@ class _IPEXLlamaMLPXPU(_IPEXLlamaMLP):
 
 
     def port_parameter(self, module):
-        self.up_proj_weight = module.up_proj.weight.tranpose(0, 1).contiguous()
+        self.up_proj_weight = module.up_proj.weight.transpose(0, 1).contiguous()
         self.gate_proj_weight = module.gate_proj.weight.transpose(0, 1).contiguous()
         self.down_proj_weight = module.down_proj.weight.transpose(0, 1).contiguous()
         self.up_proj_bias = module.up_proj.bias
