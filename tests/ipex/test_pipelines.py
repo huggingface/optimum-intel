@@ -22,6 +22,7 @@ from transformers import AutoTokenizer
 from transformers.pipelines import pipeline as transformers_pipeline
 
 from optimum.intel.ipex.modeling_base import (
+    IPEXModel,
     IPEXModelForAudioClassification,
     IPEXModelForCausalLM,
     IPEXModelForImageClassification,
@@ -121,6 +122,15 @@ class PipelinesIntegrationTest(unittest.TestCase):
         "mobilevit",
         "resnet",
         "vit",
+    )
+    SUPPORT_TASKS = (
+        "text-generation",
+        "fill-mask",
+        "question-answering",
+        "image-classification",
+        "text-classification",
+        "token-classification",
+        "audio-classification",
     )
 
     @parameterized.expand(COMMON_SUPPORTED_ARCHITECTURES)
@@ -263,3 +273,8 @@ class PipelinesIntegrationTest(unittest.TestCase):
         self.assertTrue(isinstance(ipex_generator.model, IPEXModelForSequenceClassification))
         self.assertTrue(isinstance(ipex_generator.model.model, torch.jit.RecursiveScriptModule))
         self.assertGreaterEqual(ipex_output[0]["score"], 0.0)
+
+    @parameterized.expand(SUPPORT_TASKS)
+    def test_pipeline_with_default_model(self, task):
+        ipex_generator = ipex_pipeline(task, accelerator="ipex")
+        self.assertTrue(isinstance(ipex_generator.model, IPEXModel))

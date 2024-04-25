@@ -99,6 +99,7 @@ def load_ipex_model(
     targeted_task,
     SUPPORTED_TASKS,
     model_kwargs: Optional[Dict[str, Any]] = None,
+    hub_kwargs: Optional[Dict[str, Any]] = None,
     **kwargs,
 ):
     export = kwargs.pop("export", True)
@@ -109,7 +110,7 @@ def load_ipex_model(
 
     if model is None:
         model_id = SUPPORTED_TASKS[targeted_task]["default"]
-        model = ipex_model_class.from_pretrained(model_id, export=True, **model_kwargs)
+        model = ipex_model_class.from_pretrained(model_id, export=True, **model_kwargs, **hub_kwargs)
     elif isinstance(model, str):
         model_id = model
         try:
@@ -121,7 +122,7 @@ def load_ipex_model(
                 "config file not found, please pass `export` to decide whether we should export this model. `export` defaullt to True"
             )
 
-        model = ipex_model_class.from_pretrained(model, export=export, **model_kwargs)
+        model = ipex_model_class.from_pretrained(model, export=export, **model_kwargs, **hub_kwargs)
     elif isinstance(model, IPEXModel):
         model_id = None
     else:
@@ -280,7 +281,9 @@ def pipeline(
 
     # Load the correct model if possible
     # Infer the framework from the model if not already defined
-    model, model_id = MAPPING_LOADING_FUNC[accelerator](model, task, supported_tasks, model_kwargs, **kwargs)
+    model, model_id = MAPPING_LOADING_FUNC[accelerator](
+        model, task, supported_tasks, model_kwargs, hub_kwargs, **kwargs
+    )
 
     if load_tokenizer and model_id and tokenizer is None:
         tokenizer = AutoTokenizer.from_pretrained(model_id, **hub_kwargs, **model_kwargs)
