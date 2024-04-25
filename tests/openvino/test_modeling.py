@@ -528,7 +528,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral",
         "mixtral",
         "mpt",
-        # "olmo", # TODO : enable after optimum update for support transformers 4.40
+        "olmo",
         "opt",
         "pegasus",
         "qwen",
