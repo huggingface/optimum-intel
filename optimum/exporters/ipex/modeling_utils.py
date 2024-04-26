@@ -194,7 +194,12 @@ def _llama_model_forward(
     # XPU
     #if True:
     #    past_key_values = []
-
+    seqlen = hidden_states.size(1)
+    head_dim = self.layers[0].attn.head_dim
+    sin, cos = self.layers[0].attn.ipex_rope.get_sin_cos(seqlen, head_dim // 2)
+    sin = sin.squeeze()[position_ids].unsqueeze(2)
+    cos = cos.squeeze()[position_ids].unsqueeze(2)
+    sin_cos = {"sin": sin, "cos": cos}
     for idx, decoder_layer in enumerate(self.layers):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
@@ -208,6 +213,7 @@ def _llama_model_forward(
             past_key_value=past_key_value,
             output_attentions=output_attentions,
             use_cache=use_cache,
+            **sin_cos,
         )
 
         hidden_states = layer_outputs[0]
