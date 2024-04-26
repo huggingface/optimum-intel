@@ -12,6 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import threading
+
 import numpy as np
 import torch
 
@@ -155,3 +157,37 @@ def get_num_quantized_nodes(ov_model):
             if elem.get_output_element_type(i).get_type_name() in ["i4", "u4"]:
                 num_int4 += 1
     return num_fake_quantize, num_int8, num_int4
+
+
+### Multithreading
+
+
+class OVThread(threading.Thread):
+    def __init__(self, target, args):
+        super().__init__()
+        self.target = target
+        self.args = args
+
+    def run(self):
+        self.exception = None
+        try:
+            self.target(*self.args)
+        except Exception as e:
+            self.exception = e
+
+    def join(self):
+        super().join()
+        if self.exception:
+            raise self.exception
+
+
+# Each set of args is run in a separate thread.
+# Amount of such sets define how many threads are spawned.
+def run_on_multiple_threads(target, list, extra_args):
+    threads = []
+    for input in list:
+        threads.append(OVThread(target=target, args=(input, *extra_args)))
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()

@@ -88,6 +88,10 @@ class OVBaseModel(OptimizedModel):
 
         self.model = model
         self.request = None
+        self.compiled_model = None
+        if enable_compilation:
+            self.compile()
+
         self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
         self._openvino_config = None

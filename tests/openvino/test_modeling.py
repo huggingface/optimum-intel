@@ -55,7 +55,7 @@ from transformers import (
 )
 from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
-from utils_tests import MODEL_NAMES
+from utils_tests import MODEL_NAMES, run_on_multiple_threads
 
 from optimum.intel import (
     OVModelForAudioClassification,
@@ -622,6 +622,61 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_compare_to_transformers_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        not_stateful = ["gpt_bigcode"]
+        if is_openvino_version("<", "2024.0"):
+            not_stateful.append("mixtral")
+
+        if is_openvino_version("<", "2024.1"):
+            not_stateful.extend(["llama", "gemma"])
+
+        if "gptq" in model_arch:
+            self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
+
+        set_seed(SEED)
+        model_kwargs = {}
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {"trust_remote_code": True}
+
+        ov_model = OVModelForCausalLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, **model_kwargs)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(ov_model.use_cache)
+        self.assertEqual(ov_model.stateful, ov_model.config.model_type not in not_stateful)
+
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        if model_arch == "qwen":
+            transformers_model.to(torch.float32)
+        inputs_list = ["This is a cat", "This is a dog", "Yet another test"]
+        tokens_list = [
+            tokenizer(inputs, return_tensors="pt", return_token_type_ids=False if model_arch == "llama" else None)
+            for inputs in inputs_list
+        ]
+
+        def run_ov_model(tokens, transformers_model, ov_model):
+            set_seed(SEED)
+            ov_outputs = ov_model(**tokens)
+            self.assertTrue("logits" in ov_outputs)
+            self.assertIsInstance(ov_outputs.logits, torch.Tensor)
+            self.assertTrue("past_key_values" in ov_outputs)
+            self.assertIsInstance(ov_outputs.past_key_values, tuple)
+            is_stateful = ov_model.config.model_type not in not_stateful
+            self.assertEqual(ov_model.stateful, is_stateful)
+            if is_stateful:
+                self.assertTrue(len(ov_outputs.past_key_values) == 1 and len(ov_outputs.past_key_values[0]) == 0)
+            with torch.no_grad():
+                transformers_outputs = transformers_model(**tokens)
+                # Compare tensor outputs
+                self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, atol=1e-4))
+
+        run_on_multiple_threads(run_ov_model, tokens_list, (transformers_model, ov_model))
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
     def test_pipeline(self, model_arch):
@@ -650,6 +705,95 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
         del pipe
+        del model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_pipeline_multithreading(self, model_arch):
+        model_kwargs = {}
+        model_id = MODEL_NAMES[model_arch]
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {
+                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
+                "trust_remote_code": True,
+            }
+
+        model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, use_cache=False, compile=False, **model_kwargs
+        )
+        model.eval()
+        model.config.encoder_no_repeat_ngram_size = 0
+        model.to("cpu")
+        model.half()
+        model.compile()
+
+        def run_ov_model(input_text, model):
+            # Tokenizer is not supposed to be shared by multiple threads
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS
+            )
+            pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+            outputs = pipe(input_text, max_length=30)
+            self.assertEqual(pipe.device, model.device)
+            for i in range(len(outputs)):
+                self.assertTrue(all(input_text[i] in item["generated_text"] for item in outputs[i]))
+            del pipe
+
+        inputs_list = [["This is a sample"], ["This is a second sample"], ["This is a third sample"]]
+        run_on_multiple_threads(run_ov_model, inputs_list, [model])
+        del model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_multiple_inputs(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        if model_arch == "qwen":
+            self.skipTest("Qwen tokenizer does not support padding")
+        model_kwargs = {}
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {
+                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
+                "trust_remote_code": True,
+            }
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=False, **model_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        tokenizer.pad_token = tokenizer.eos_token
+        texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
+        tokens = tokenizer(texts, padding=True, return_tensors="pt")
+        generation_config = GenerationConfig(encoder_no_repeat_ngram_size=0, max_new_tokens=20, num_beams=2)
+        outputs = model.generate(**tokens, generation_config=generation_config)
+        self.assertIsInstance(outputs, torch.Tensor)
+        self.assertEqual(outputs.shape[0], 3)
+        del model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_multiple_inputs_multithreading(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+        if model_arch == "qwen":
+            self.skipTest("Qwen tokenizer does not support padding")
+        model_kwargs = {}
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {
+                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
+                "trust_remote_code": True,
+            }
+        model = OVModelForCausalLM.from_pretrained(model_id, export=True, compile=False, **model_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        tokenizer.pad_token = tokenizer.eos_token
+        texts = ["this is a simple input", "this is a second simple input", "this is a third simple input"]
+        tokens = tokenizer(texts, padding=True, return_tensors="pt")
+        generation_config = GenerationConfig(encoder_no_repeat_ngram_size=0, max_new_tokens=20, num_beams=2)
+
+        def run_ov_model(tokens, model):
+            outputs = model.generate(**tokens, generation_config=generation_config)
+            self.assertIsInstance(outputs, torch.Tensor)
+            self.assertEqual(outputs.shape[0], 3)
+
+        tokens_list = [tokens, tokens, tokens, tokens]  # running in 4 threads
+        run_on_multiple_threads(run_ov_model, tokens_list, [model])
         del model
         gc.collect()
 
@@ -754,6 +898,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
         outs_without_attn_mask_step2 = model_with_cache(input_ids=input_ids, past_key_values=past_key_values)
         self.assertTrue(torch.allclose(outs_step2.logits, outs_without_attn_mask_step2.logits))
+
         del model_with_cache
         gc.collect()
 
