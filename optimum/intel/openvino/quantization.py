@@ -16,6 +16,7 @@ import copy
 import inspect
 import logging
 import os
+import warnings
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
@@ -573,15 +574,13 @@ class OVQuantizer(OptimumQuantizer):
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
             )
             if token is not None:
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
             token = use_auth_token
-            use_auth_token = None
 
         if not is_datasets_available():
             raise ValueError(DATASETS_IMPORT_ERROR.format("OVQuantizer.get_calibration_dataset"))

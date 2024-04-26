@@ -14,6 +14,7 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
@@ -234,15 +235,13 @@ class OVBaseDecoderModel(OVModel):
         **kwargs,
     ):
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
             )
             if token is not None:
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
             token = use_auth_token
-            use_auth_token = None
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
@@ -589,15 +588,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ):
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
             )
             if token is not None:
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
             token = use_auth_token
-            use_auth_token = None
 
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME

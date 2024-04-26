@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
@@ -142,15 +143,13 @@ def main_export(
     """
 
     if use_auth_token is not None:
-        logger.warning(
-            "The `use_auth_token` argument is deprecated and will be removed soon. "
-            "Please use the `token` argument instead."
+        warnings.warn(
+            "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+            FutureWarning,
         )
         if token is not None:
             raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
         token = use_auth_token
-        use_auth_token = None
 
     if compression_option is not None:
         logger.warning(

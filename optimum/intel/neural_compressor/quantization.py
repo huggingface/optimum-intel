@@ -16,6 +16,7 @@ import copy
 import inspect
 import logging
 import types
+import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
@@ -475,15 +476,13 @@ class INCQuantizer(OptimumQuantizer):
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
             )
             if token is not None:
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
             token = use_auth_token
-            use_auth_token = None
 
         calibration_dataset = load_dataset(
             dataset_name,

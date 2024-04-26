@@ -14,6 +14,7 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
@@ -435,15 +436,13 @@ class OVModelForFeatureExtraction(OVModel):
         **kwargs,
     ):
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
             )
             if token is not None:
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
             token = use_auth_token
-            use_auth_token = None
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
@@ -607,15 +606,13 @@ class OVModelForImageClassification(OVModel):
         **kwargs,
     ):
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
             )
             if token is not None:
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
             token = use_auth_token
-            use_auth_token = None
 
         # Fix the mismatch between timm_config and huggingface_config
         local_timm_model = _is_timm_ov_dir(model_id)

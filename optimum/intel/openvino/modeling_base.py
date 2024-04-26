@@ -14,6 +14,7 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
 from typing import Dict, Optional, Union
@@ -171,7 +172,7 @@ class OVBaseModel(OptimizedModel):
         config: PretrainedConfig,
         use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
-        revision: Optional[Union[str, None]] = None,
+        revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: Optional[str] = None,
@@ -213,15 +214,13 @@ class OVBaseModel(OptimizedModel):
                 Whether or not to apply 8-bit weight quantization.
         """
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
             )
             if token is not None:
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
             token = use_auth_token
-            use_auth_token = None
 
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
@@ -284,15 +283,13 @@ class OVBaseModel(OptimizedModel):
         local_files_only: bool = False,
     ):
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
             )
             if token is not None:
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
             token = use_auth_token
-            use_auth_token = None
 
         # locates a file in a local folder and repo, downloads and cache it if necessary.
         model_path = Path(model_path)
@@ -359,15 +356,13 @@ class OVBaseModel(OptimizedModel):
                 kwargs will be passed to the model during initialization
         """
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
             )
             if token is not None:
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
             token = use_auth_token
-            use_auth_token = None
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
@@ -417,15 +412,13 @@ class OVBaseModel(OptimizedModel):
         **kwargs,
     ):
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
             )
             if token is not None:
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
             token = use_auth_token
-            use_auth_token = None
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)

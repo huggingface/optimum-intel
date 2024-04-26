@@ -15,6 +15,7 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
@@ -162,15 +163,15 @@ class IPEXModel(OptimizedModel):
         trust_remote_code: bool = False,
     ):
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
+                FutureWarning,
             )
             if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
+                raise ValueError(
+                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
+                )
             token = use_auth_token
-            use_auth_token = None
 
         if is_torch_version("<", "2.1.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
@@ -202,7 +203,7 @@ class IPEXModel(OptimizedModel):
         config: PretrainedConfig,
         use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
-        revision: Optional[Union[str, None]] = None,
+        revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: Optional[str] = WEIGHTS_NAME,
@@ -211,15 +212,15 @@ class IPEXModel(OptimizedModel):
         **kwargs,
     ):
         if use_auth_token is not None:
-            logger.warning(
-                "The `use_auth_token` argument is deprecated and will be removed soon. "
-                "Please use the `token` argument instead."
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
+                FutureWarning,
             )
             if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-
+                raise ValueError(
+                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
+                )
             token = use_auth_token
-            use_auth_token = None
 
         if not getattr(config, "torchscript", False):
             raise ValueError(
