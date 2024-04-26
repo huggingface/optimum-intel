@@ -37,6 +37,7 @@ from torch.utils.data import DataLoader, RandomSampler
 from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
+from transformers.utils.quantization_config import QuantizationMethod
 
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.tasks import TasksManager
@@ -670,10 +671,10 @@ def _weight_only_quantization(
         group_size=config.group_size,
         all_layers=config.all_layers,
         sensitivity_metric=sensitivity_metric,
-        # awq=config.quant_method == QuantizationMethod.AWQ,    # TODO : enable from nncf v2.9.0
+        awq=config.quant_method == QuantizationMethod.AWQ or None,
         ignored_scope=config.get_ignored_scope_instance(),
         dataset=dataset,
-        # subset_size=config.num_samples if config.num_samples else 128,    # TODO : enable from nncf v2.9.0
+        subset_size=config.num_samples if config.num_samples else 128,
     )
 
 

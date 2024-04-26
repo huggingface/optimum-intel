@@ -221,17 +221,17 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
-            "opt",
+            "llama_awq",
             dict(
                 bits=4,
                 sym=True,
-                group_size=-1,
+                group_size=16,
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="ptb",
                 quant_method=QuantizationMethod.AWQ,
             ),
-            14,
+            16,
         ),
     )
 
@@ -452,6 +452,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
+            if quantization_config.quant_method == QuantizationMethod.AWQ:
+                # TODO: Check that AWQ was actually applied
+                pass
+
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -548,6 +552,8 @@ class OVWeightCompressionTest(unittest.TestCase):
                             "sensitivity_metric": None,
                             "dataset": None,
                             "ignored_scope": nncf.IgnoredScope(),
+                            "awq": None,
+                            "subset_size": 128,
                         }
                         compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
