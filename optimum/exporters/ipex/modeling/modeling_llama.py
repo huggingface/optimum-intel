@@ -209,6 +209,7 @@ class _IPEXLlamaDecoderLayer(nn.Module):
             past_key_value,
             output_attentions,
             use_cache,
+            None,
             residual,
             **kwargs,
         )
