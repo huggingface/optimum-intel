@@ -88,14 +88,14 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
         if past_key_value:
             _, _, prev_seqlen, _ = past_key_value[0].size()
         if self.num_kv_heads == self.num_heads:
-            # query = torch.empty((bs, seqlen, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
-            # key = torch.empty((bs, prev_seqlen + seqlen, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
-            # value = torch.empty((bs, prev_seqlen + seqlen, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
-            query = torch.empty_like(hidden_states)
-            key = torch.empty_like(hidden_states)
-            value = torch.empty_like(hidden_states)
+            query = torch.empty((bs, seqlen, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
+            key = torch.empty((bs, prev_seqlen + seqlen, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
+            value = torch.empty((bs, prev_seqlen + seqlen, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device)
+            # query = torch.empty_like(hidden_states)
+            # key = torch.empty_like(hidden_states)
+            # value = torch.empty_like(hidden_states)
             torch.ops.torch_ipex.mm_qkv_out(
-                hidden_states, self.qkv_proj_weight, self.qkv_proj_bias, query, key, value)
+                hidden_states, self.qkv_proj_weight, self.qkv_proj_bias, query, key[:, prev_seqlen:, :], value[:, prev_seqlen:, :])
             # torch.ops.torch_ipex.mm_qkv_out(
             #     hidden_states, self.qkv_proj_weight, self.qkv_proj_bias, query, key[:, prev_seqlen:, :], value[:, prev_seqlen:, :])
         else:
@@ -112,11 +112,19 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
         #key = key.view([-1, seqlen, self.num_kv_heads, self.head_dim])
         # value = value.view([bs, prev_seqlen + seqlen, self.num_kv_heads, self.head_dim])
         query = query.view([bs, seqlen, self.num_heads, self.head_dim])
-        key = key.view([bs, seqlen, self.num_kv_heads, self.head_dim])
-        sin, cos = self.ipex_rope.get_sin_cos(seqlen, self.head_dim // 2)
-        sin = sin.squeeze()[position_ids].unsqueeze(2)
-        cos = cos.squeeze()[position_ids].unsqueeze(2)
-        self.ipex_rope.apply_embedding(query, sin, cos, self.head_dim // 2, key)
+        key = key.view([bs, seqlen + prev_seqlen, self.num_kv_heads, self.head_dim])
+        # sin, cos = self.ipex_rope.get_sin_cos(seqlen, self.head_dim // 2)
+        # sin = sin.squeeze()[position_ids].unsqueeze(2)
+        # cos = cos.squeeze()[position_ids].unsqueeze(2)
+        if hasattr(kwargs, "sin") and hasattr(kwargs, "cos"):
+            print("cache sin cos")
+            sin = kwargs["sin"]
+            cos = kwargs["cos"]
+        else:
+            sin, cos = self.ipex_rope.get_sin_cos(seqlen, self.head_dim // 2)
+            sin = sin.squeeze()[position_ids].unsqueeze(2)
+            cos = cos.squeeze()[position_ids].unsqueeze(2)
+        self.ipex_rope.apply_embedding(query, sin, cos, self.head_dim // 2, key[:, prev_seqlen:, :, :])
         # query = self.ipex_rope(
         #     query,
         #     position_ids,
@@ -136,10 +144,12 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
         #     self.head_dim,
         #     seqlen,
         # )
-        value = value.view([bs, seqlen, self.num_kv_heads, self.head_dim])
+        value = value.view([bs, seqlen + prev_seqlen, self.num_kv_heads, self.head_dim])
         if past_key_value is not None:
-            value = torch.cat([past_key_value[1].transpose(1, 2), value], dim=1)
-            key = torch.cat([past_key_value[0].transpose(1, 2), key], dim=1)
+            value[:, :prev_seqlen, :, :] = past_key_value[1].transpose(1, 2)
+            key[:, :prev_seqlen, :, :] = past_key_value[0].transpose(1, 2)
+            # value = torch.cat([past_key_value[1].transpose(1, 2), value], dim=1)
+            # key = torch.cat([past_key_value[0].transpose(1, 2), key], dim=1)
         query = query.transpose(1, 2)
         key = key.transpose(1, 2)
         value = value.transpose(1, 2)
