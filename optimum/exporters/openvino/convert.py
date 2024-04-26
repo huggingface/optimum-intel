@@ -20,9 +20,10 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
+import onnx
 from transformers.utils import is_tf_available, is_torch_available
 
-from openvino.runtime import PartialShape, save_model
+from openvino.runtime import Model, PartialShape, save_model
 from openvino.runtime.exceptions import OVTypeError
 from openvino.runtime.utils.types import get_element_type
 from openvino.tools.ovc import convert_model
@@ -33,8 +34,10 @@ from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_o
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.exporters.utils import _get_submodels_and_export_configs
 from optimum.intel.utils.import_utils import (
+    _nncf_version,
     _optimum_intel_version,
     _optimum_version,
+    _timm_version,
     _torch_version,
     _transformers_version,
 )
@@ -87,10 +90,8 @@ def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
 
         compress_to_fp16 = ov_config.dtype == "fp16"
 
-    model.set_rt_info(_transformers_version, ["optimum", "transformers_version"])
-    model.set_rt_info(_torch_version, ["optimum", "pytorch_version"])
-    model.set_rt_info(_optimum_intel_version, ["optimum", "optimum_intel_version"])
-    model.set_rt_info(_optimum_version, ["optimum", "optimum_version"])
+    library_name = TasksManager.infer_library_from_model(Path(path).parent)
+    model = _add_version_info_to_model(model, library_name)
     save_model(model, path, compress_to_fp16)
 
 
@@ -699,3 +700,34 @@ def export_tokenizer(
 
     for model, file_name in zip(converted, (OV_TOKENIZER_NAME, OV_DETOKENIZER_NAME)):
         save_model(model, output / file_name.format(suffix))
+
+
+def _add_version_info_to_model(model: Model, library_name: Optional[str] = None):
+    """
+    Add dependency versions to OpenVINO model
+    """
+    try:
+        model.set_rt_info(_transformers_version, ["optimum", "transformers_version"])
+        model.set_rt_info(_torch_version, ["optimum", "pytorch_version"])
+        model.set_rt_info(_optimum_intel_version, ["optimum", "optimum_intel_version"])
+        model.set_rt_info(_optimum_version, ["optimum", "optimum_version"])
+
+        if any("token_embeddings" in output.get_names() for output in model.outputs):
+            import sentence_transformers
+
+            model.set_rt_info(sentence_transformers.__version__, ["optimum", "sentence_transformers_version"])
+        if library_name == "diffusers":
+            model.set_rt_info(_optimum_version, ["optimum", "diffusers_version"])
+        elif library_name == "timm":
+            model.set_rt_info(_timm_version, ["optimum", "timm_version"])
+        rt_info = model.get_rt_info()
+        if "nncf" in rt_info:
+            model.set_rt_info(_nncf_version, ["optimum", "nncf_version"])
+        input_model = rt_info["conversion_parameters"].get("input_model", None)
+        if input_model is not None and "onnx" in input_model.value:
+            model.set_rt_info(onnx.__version__, ["optimum", "onnx_version"])
+
+    except Exception:
+        pass
+
+    return model
