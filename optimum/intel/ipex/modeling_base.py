@@ -151,35 +151,17 @@ class IPEXModel(OptimizedModel):
         model_id: str,
         config: PretrainedConfig,
         use_cache: bool = True,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        subfolder: str = "",
-        local_files_only: bool = False,
-        torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
-        trust_remote_code: bool = False,
+        **model_kwargs,
     ):
         if is_torch_version("<", "2.1.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
         task = cls.export_feature
-        model_kwargs = {
-            "revision": revision,
-            "use_auth_token": use_auth_token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "torch_dtype": torch_dtype,
-            "trust_remote_code": trust_remote_code,
-        }
-
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
         traced_model = ipex_jit_trace(model, task, use_cache)
 
         config.torchscript = True
-        config.torch_dtype = torch_dtype
+        config.torch_dtype = model_kwargs.get("torch_dtype", None)
 
         return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
 
