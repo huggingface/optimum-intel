@@ -19,15 +19,18 @@ from tempfile import TemporaryDirectory
 from typing import Optional
 
 from parameterized import parameterized
+from transformers import AutoConfig
 from utils_tests import MODEL_NAMES
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-from optimum.exporters.openvino import export_from_model
+from optimum.exporters.onnx.model_configs import BertOnnxConfig
+from optimum.exporters.openvino import export_from_model, main_export
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
+    OVModelForCustomTasks,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
@@ -114,3 +117,39 @@ class ExportModelTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):
         self._openvino_export(model_type)
+
+
+class CustomExportModelTest(unittest.TestCase):
+    def test_export_custom_model(self):
+        class BertOnnxConfigWithPooler(BertOnnxConfig):
+            @property
+            def outputs(self):
+                if self.task == "feature-extraction-with-pooler":
+                    common_outputs = {}
+                    common_outputs["last_hidden_state"] = {0: "batch_size", 1: "sequence_length"}
+                    common_outputs["pooler_output"] = {0: "batch_size"}
+                else:
+                    common_outputs = super().outputs
+
+                return common_outputs
+
+        base_task = "feature-extraction"
+        custom_task = f"{base_task}-with-pooler"
+        model_id = "sentence-transformers/all-MiniLM-L6-v2"
+
+        config = AutoConfig.from_pretrained(model_id)
+        custom_export_configs = {"model": BertOnnxConfigWithPooler(config, task=custom_task)}
+
+        with TemporaryDirectory() as tmpdirname:
+            main_export(
+                model_name_or_path=model_id,
+                custom_export_configs=custom_export_configs,
+                library_name="transformers",
+                output=Path(tmpdirname),
+                task=base_task,
+            )
+
+            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname)
+
+            self.assertIsInstance(ov_model, OVBaseModel)
+            self.assertTrue(ov_model.output_names == {"last_hidden_state": 0, "pooler_output": 1})

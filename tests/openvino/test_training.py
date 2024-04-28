@@ -45,14 +45,14 @@ from transformers.trainer_utils import EvalPrediction, TrainOutput
 from transformers.utils import WEIGHTS_NAME
 
 from optimum.intel.openvino import OVTrainingArguments
-from optimum.intel.openvino.configuration import DEFAULT_QUANTIZATION_CONFIG, OVConfig
+from optimum.intel.openvino.configuration import OVConfig
 from optimum.intel.openvino.modeling import (
     OVModel,
     OVModelForAudioClassification,
     OVModelForImageClassification,
     OVModelForSequenceClassification,
 )
-from optimum.intel.openvino.trainer import OVTrainer
+from optimum.intel.openvino.trainer import DEFAULT_QUANTIZATION_CONFIG, OVTrainer
 from optimum.intel.openvino.utils import OV_XML_FILE_NAME
 
 
@@ -322,7 +322,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "default_quantization": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
-        expected_fake_quantize=44,
+        expected_fake_quantize=34,
         expected_int8=32,
         compression_metrics=["compression_loss"],
     ),
@@ -330,14 +330,14 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         model_id="hf-internal-testing/tiny-random-bert",
         teacher_model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
-        expected_fake_quantize=44,
+        expected_fake_quantize=34,
         expected_int8=32,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "customized_quantization": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG,
-        expected_fake_quantize=44,
+        expected_fake_quantize=34,
         expected_int8=32,
         compression_metrics=["compression_loss"],
     ),
@@ -345,7 +345,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         model_id="hf-internal-testing/tiny-random-bert",
         teacher_model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG,
-        expected_fake_quantize=44,
+        expected_fake_quantize=34,
         expected_int8=32,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
@@ -418,7 +418,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=44,
+        expected_fake_quantize=34,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss"],
@@ -429,7 +429,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
             CUSTOMIZED_QUANTIZATION_CONFIG,
             UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
         ],
-        expected_fake_quantize=44,
+        expected_fake_quantize=34,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss"],
@@ -438,7 +438,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         model_id="hf-internal-testing/tiny-random-bert",
         teacher_model_id="hf-internal-testing/tiny-random-bert",
         nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
-        expected_fake_quantize=44,
+        expected_fake_quantize=34,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
@@ -450,7 +450,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
             CUSTOMIZED_QUANTIZATION_CONFIG,
             UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
         ],
-        expected_fake_quantize=44,
+        expected_fake_quantize=34,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
@@ -730,7 +730,7 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
     "quantization": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
         nncf_compression_config=[QUANTIZATION_CONFIG_FOR_WAV2VEC2],
-        expected_fake_quantize=48,
+        expected_fake_quantize=40,
         expected_int8=30,
         compression_metrics=["compression_loss"],
     ),
@@ -757,7 +757,7 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
     "quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
         nncf_compression_config=[QUANTIZATION_CONFIG_FOR_WAV2VEC2, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2],
-        expected_fake_quantize=48,
+        expected_fake_quantize=40,
         expected_int8=30,
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
@@ -775,7 +775,7 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
         model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
         teacher_model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
         nncf_compression_config=[QUANTIZATION_CONFIG_FOR_WAV2VEC2, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2],
-        expected_fake_quantize=48,
+        expected_fake_quantize=40,
         expected_int8=30,
         expected_binary_masks=48,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],

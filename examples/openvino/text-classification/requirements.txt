@@ -5,3 +5,4 @@ scikit-learn
 protobuf
 torch >= 1.3
 evaluate
+accelerate

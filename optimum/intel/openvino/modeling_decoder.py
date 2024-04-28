@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import copy
 import logging
 import os
 from pathlib import Path
@@ -22,6 +21,7 @@ from typing import Dict, Optional, Tuple, Union
 import numpy as np
 import openvino
 import torch
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino.preprocess import PrePostProcessor
 from openvino.runtime import Core, Tensor, Type
 from transformers import AutoModelForCausalLM, AutoTokenizer, PretrainedConfig
@@ -222,7 +222,7 @@ class OVBaseDecoderModel(OVModel):
         use_auth_token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
         task: Optional[str] = None,
@@ -566,13 +566,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         use_auth_token: Optional[Union[bool, str, None]] = None,
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: Optional[str] = None,
         subfolder: str = "",
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
-        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
         model_path = Path(model_id)
@@ -596,7 +596,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
-        model = cls.load_model(model_cache_path, quantization_config=None if load_in_4bit else quantization_config)
+
+        model = cls.load_model(
+            model_cache_path,
+            quantization_config=None if load_in_4bit else quantization_config,
+        )
 
         model_type = config.model_type.replace("_", "-")
         if model_type == "bloom":
@@ -632,21 +636,18 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     f"For the given model, we recommend the following `quantization_config` : {default_config}"
                 )
 
+            calibration_dataset = None
             if isinstance(quantization_config.dataset, str):
                 tokenizer = quantization_config.tokenizer or AutoTokenizer.from_pretrained(model_id)
 
                 from optimum.gptq.data import get_dataset, prepare_dataset
 
-                # from optimum.gptq.utils import get_seqlen
-
-                # seqlen = get_seqlen(causal_model)
-                nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
+                nsamples = quantization_config.num_samples or 128
                 dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
                 dataset = prepare_dataset(dataset)
-                quantization_config = copy.deepcopy(quantization_config)
-                quantization_config.dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))
+                calibration_dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))
 
-            _weight_only_quantization(model, quantization_config)
+            _weight_only_quantization(model, quantization_config, calibration_dataset)
 
         return causal_model
 

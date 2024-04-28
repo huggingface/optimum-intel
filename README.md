@@ -78,10 +78,16 @@ It is possible to export your model to the [OpenVINO IR](https://docs.openvino.a
 optimum-cli export openvino --model gpt2 ov_model
 ```
 
-You can also apply 8-bit weight-only quantization when exporting your model : the model linear and embedding weights will be quantized to INT8, the activations will be kept in floating point precision.
+You can also apply 8-bit weight-only quantization when exporting your model : the model linear, embedding and convolution weights will be quantized to INT8, the activations will be kept in floating point precision.
 
 ```plain
 optimum-cli export openvino --model gpt2 --weight-format int8 ov_model
+```
+
+Quantization in hybrid mode can be applied to Stable Diffusion pipeline during model export. This involves applying hybrid post-training quantization to the UNet model and weight-only quantization for the rest of the pipeline components. In the hybrid mode, weights in MatMul and Embedding layers are quantized, as well as activations of other layers.
+
+```plain
+optimum-cli export openvino --model stabilityai/stable-diffusion-2-1 --dataset conceptual_captions --weight-format int8 ov_model
 ```
 
 To apply quantization on both weights and activations, you can find more information in the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov).
@@ -122,7 +128,7 @@ Post-training static quantization introduces an additional calibration step wher
 
 ```python
 from functools import partial
-from optimum.intel import OVQuantizer, OVModelForSequenceClassification
+from optimum.intel import OVQuantizer, OVModelForSequenceClassification, OVConfig, OVQuantizationConfig
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
@@ -145,7 +151,8 @@ calibration_dataset = quantizer.get_calibration_dataset(
 # The directory where the quantized model will be saved
 save_dir = "nncf_results"
 # Apply static quantization and save the resulting model in the OpenVINO IR format
-quantizer.quantize(calibration_dataset=calibration_dataset, save_directory=save_dir)
+ov_config = OVConfig(quantization_config=OVQuantizationConfig())
+quantizer.quantize(ov_config=ov_config, calibration_dataset=calibration_dataset, save_directory=save_dir)
 # Load the quantized model
 optimized_model = OVModelForSequenceClassification.from_pretrained(save_dir)
 ```

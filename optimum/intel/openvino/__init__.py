@@ -43,12 +43,13 @@ if is_nncf_available():
         from .trainer import OVTrainer
 
 
-from .configuration import OVConfig, OVWeightQuantizationConfig
+from .configuration import OVConfig, OVDynamicQuantizationConfig, OVQuantizationConfig, OVWeightQuantizationConfig
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
     OVModelForAudioXVector,
     OVModelForCTC,
+    OVModelForCustomTasks,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,

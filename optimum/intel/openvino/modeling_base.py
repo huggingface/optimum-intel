@@ -20,6 +20,7 @@ from typing import Dict, Optional, Union
 
 import openvino
 from huggingface_hub import hf_hub_download
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import GenerationConfig, PretrainedConfig
@@ -31,7 +32,7 @@ from optimum.modeling_base import OptimizedModel
 
 from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available
-from .configuration import OVConfig, OVWeightQuantizationConfig
+from .configuration import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
 from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, _print_compiled_model_properties
 
 
@@ -64,10 +65,7 @@ class OVBaseModel(OptimizedModel):
         self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
-        self.ov_config = ov_config if ov_config is not None else {}
-        if self.ov_config.get("PERFORMANCE_HINT") is None:
-            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
-
+        self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
         enable_compilation = kwargs.get("compile", True)
 
@@ -90,23 +88,29 @@ class OVBaseModel(OptimizedModel):
 
         self.model = model
         self.request = None
-        if enable_compilation:
-            self.compile()
-
         self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
+
+        if enable_compilation:
+            self.compile()
 
     @staticmethod
-    def load_model(file_name: Union[str, Path], quantization_config: Union[OVWeightQuantizationConfig, Dict] = None):
+    def load_model(
+        file_name: Union[str, Path],
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+    ):
         """
         Loads the model.
 
         Arguments:
             file_name (`str` or `Path`):
                 The path of the model ONNX or XML file.
+            quantization_config (`OVWeightQuantizationConfig` or `Dict`, *optional*):
+                Quantization config to apply after model is loaded.
         """
 
         def fix_op_names_duplicates(model: openvino.runtime.Model):
@@ -168,7 +172,7 @@ class OVBaseModel(OptimizedModel):
         use_auth_token: Optional[Union[bool, str, None]] = None,
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: Optional[str] = None,
         subfolder: str = "",
         from_onnx: bool = False,
@@ -243,6 +247,16 @@ class OVBaseModel(OptimizedModel):
 
         return quantization_config
 
+    def _set_ov_config_parameters(self):
+        if self.ov_config.get("PERFORMANCE_HINT") is None:
+            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
+
+        q_config = self._openvino_config.quantization_config if self._openvino_config else None
+        if isinstance(q_config, OVDynamicQuantizationConfig):
+            self.ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"] = str(q_config.activations_group_size)
+            if self.can_generate() and "KV_CACHE_PRECISION" not in self.ov_config:
+                self.ov_config["KV_CACHE_PRECISION"] = "u8"
+
     @staticmethod
     def _cached_file(
         model_path: Union[Path, str],
@@ -287,7 +301,7 @@ class OVBaseModel(OptimizedModel):
         use_auth_token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
         task: Optional[str] = None,
@@ -355,7 +369,7 @@ class OVBaseModel(OptimizedModel):
         use_auth_token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         local_files_only: bool = False,
         stateful: bool = False,
         **kwargs,

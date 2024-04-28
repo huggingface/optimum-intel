@@ -20,6 +20,7 @@ from typing import Dict, Optional, Union
 
 import openvino
 from huggingface_hub import hf_hub_download
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
@@ -66,11 +67,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
-        self.ov_config = ov_config if ov_config is not None else {}
-
-        if self.ov_config.get("PERFORMANCE_HINT") is None:
-            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
-
+        self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
 
         if self.is_dynamic:
@@ -84,6 +81,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -114,7 +112,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         use_auth_token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         encoder_file_name: Optional[str] = None,
         decoder_file_name: Optional[str] = None,
         decoder_with_past_file_name: Optional[str] = None,
@@ -225,7 +223,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         use_auth_token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
         task: Optional[str] = None,

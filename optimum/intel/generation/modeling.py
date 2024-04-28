@@ -21,6 +21,7 @@ from typing import Optional, Tuple, Union
 
 import torch
 from huggingface_hub import hf_hub_download
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from transformers import AutoConfig, AutoModelForCausalLM, GenerationConfig, PretrainedConfig, PreTrainedModel
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -179,12 +180,21 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         """
         if self.config.model_type == "bloom":
             return self._reorder_cache_bloom(past_key_values, beam_idx)
+        elif self.config.model_type == "gpt_bigcode":
+            return self._reorder_cache_gpt_bigcode(past_key_values, beam_idx)
 
         # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
         return tuple(
             tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
             for layer_past in past_key_values
         )
+
+    # Copied from transformers.models.gpt_bigcode.modeling_gpt_bigcode.GPTBigCodeForCausalLM._reorder_cache
+    @staticmethod
+    def _reorder_cache_gpt_bigcode(
+        past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        return tuple(layer_past.index_select(0, beam_idx.to(layer_past.device)) for layer_past in past_key_values)
 
     # Copied from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
     def _reorder_cache_bloom(
@@ -356,7 +366,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         use_auth_token: Optional[Union[bool, str, None]] = None,
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: Optional[str] = WEIGHTS_NAME,
         local_files_only: bool = False,
         use_cache: bool = True,
@@ -400,7 +410,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         use_auth_token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
         use_cache: bool = True,

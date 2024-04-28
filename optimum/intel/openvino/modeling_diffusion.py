@@ -35,6 +35,7 @@ from diffusers import (
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available
 from huggingface_hub import snapshot_download
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
@@ -100,9 +101,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         self._internal_dict = config
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
-        self.ov_config = ov_config if ov_config is not None else {}
-        if self.ov_config.get("PERFORMANCE_HINT") is None:
-            self.ov_config["PERFORMANCE_HINT"] = "LATENCY"
+        self.ov_config = {} if ov_config is None else {**ov_config}
 
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
@@ -142,9 +141,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         if self.is_dynamic:
             self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
 
-        if compile:
-            self.compile()
-
         sub_models = {
             DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER: self.text_encoder,
             DIFFUSION_MODEL_UNET_SUBFOLDER: self.unet,
@@ -162,6 +158,10 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
+
+        if compile:
+            self.compile()
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -209,7 +209,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         config: Dict[str, Any],
         use_auth_token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         vae_decoder_file_name: Optional[str] = None,
         text_encoder_file_name: Optional[str] = None,
         unet_file_name: Optional[str] = None,
@@ -387,7 +387,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 self.__call__(**inputs, height=height, width=width)
             else:
                 self.__call__(*inputs, height=height, width=width)
-            if len(calibration_data) > num_samples:
+            if len(calibration_data) >= num_samples:
                 break
 
         self.unet.request = self.unet.request.request
@@ -401,7 +401,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         use_auth_token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         local_files_only: bool = False,
         tokenizer: Optional["CLIPTokenizer"] = None,
         scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"] = None,
@@ -671,7 +671,7 @@ class OVModelPart:
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
                 and not str(self._model_dir).startswith(gettempdir())
-                and self.device.lower().split(":")[0] == "gpu"
+                and "gpu" in self.device.lower()
             ):
                 self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
