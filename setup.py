@@ -38,7 +38,7 @@ INSTALL_REQUIRE = [
 
 TESTS_REQUIRE = [
     "accelerate",
-    "pytest",
+    "pytest<8.2",
     "parameterized",
     "Pillow",
     "evaluate",
