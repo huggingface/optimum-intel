@@ -133,7 +133,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
             The dataset used for data-aware compression or quantization with NNCF. You can provide your own dataset
-            in a list of strings or just use the one from the list ['wikitext','c4','c4-new','ptb','ptb-new'] for LLLMs
+            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new','ptb','ptb-new'] for LLLMs
             or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models.
             Alternatively, you can provide data objects via `calibration_dataset` argument
             of `OVQuantizer.quantize()` method.
@@ -194,7 +194,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"If you wish to provide a custom dataset, please use the `OVQuantizer` instead."
             )
         if self.dataset is not None and isinstance(self.dataset, str):
-            llm_datasets = ["wikitext", "c4", "c4-new", "ptb", "ptb-new"]
+            llm_datasets = ["wikitext2", "c4", "c4-new", "ptb", "ptb-new"]
             stable_diffusion_datasets = [
                 "conceptual_captions",
                 "laion/220k-GPT4Vision-captions-from-LIVIS",
