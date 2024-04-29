@@ -14,6 +14,7 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
@@ -98,8 +99,9 @@ class INCModel(OptimizedModel):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str, None]] = None,
-        revision: Optional[Union[str, None]] = None,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: str = WEIGHTS_NAME,
@@ -108,6 +110,15 @@ class INCModel(OptimizedModel):
         trust_remote_code: bool = False,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         model_name_or_path = kwargs.pop("model_name_or_path", None)
         if model_name_or_path is not None:
             logger.warning("`model_name_or_path` is deprecated please use `model_id`")
@@ -122,7 +133,7 @@ class INCModel(OptimizedModel):
                 repo_id=model_id,
                 filename=file_name,
                 subfolder=subfolder,
-                use_auth_token=use_auth_token,
+                token=token,
                 revision=revision,
                 cache_dir=cache_dir,
                 force_download=force_download,
@@ -145,7 +156,7 @@ class INCModel(OptimizedModel):
 
                     return _BaseQBitsAutoModelClass.from_pretrained(
                         pretrained_model_name_or_path=model_id,
-                        use_auth_token=use_auth_token,
+                        token=token,
                         revision=revision,
                         force_download=force_download,
                         cache_dir=cache_dir,
