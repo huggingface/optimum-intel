@@ -11,7 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-
+import copy
 import logging
 import os
 import warnings
@@ -25,7 +25,7 @@ import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino.preprocess import PrePostProcessor
 from openvino.runtime import Core, Tensor, Type
-from transformers import AutoModelForCausalLM, AutoTokenizer, PretrainedConfig
+from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -646,9 +646,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 raise ImportError(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
                 )
-            import nncf
 
-            from .quantization import _weight_only_quantization
+            from optimum.intel.openvino.quantization import OVQuantizer
 
             default_config = _check_default_4bit_configs(config)
 
@@ -657,18 +656,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     f"For the given model, we recommend the following `quantization_config` : {default_config}"
                 )
 
-            calibration_dataset = None
-            if isinstance(quantization_config.dataset, str):
-                tokenizer = quantization_config.tokenizer or AutoTokenizer.from_pretrained(model_id)
-
-                from optimum.gptq.data import get_dataset, prepare_dataset
-
-                nsamples = quantization_config.num_samples or 128
-                dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
-                dataset = prepare_dataset(dataset)
-                calibration_dataset = nncf.Dataset(dataset, lambda x: causal_model.prepare_inputs(**x))
-
-            _weight_only_quantization(model, quantization_config, calibration_dataset)
+            quantizer = OVQuantizer(causal_model)
+            quantization_config_copy = copy.deepcopy(quantization_config)
+            quantization_config_copy.tokenizer = quantization_config.tokenizer or model_id
+            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 
         return causal_model
 
