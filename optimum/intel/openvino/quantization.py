@@ -16,6 +16,7 @@ import copy
 import inspect
 import logging
 import os
+import warnings
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
@@ -478,9 +479,9 @@ class OVQuantizer(OptimumQuantizer):
                 subset_size=quantization_config.num_samples,
                 ignored_scope=quantization_config.get_ignored_scope_instance(),
                 model_type=nncf.ModelType(quantization_config.model_type),
-                preset=nncf.QuantizationPreset.PERFORMANCE
-                if quantization_config.sym
-                else nncf.QuantizationPreset.MIXED,
+                preset=(
+                    nncf.QuantizationPreset.PERFORMANCE if quantization_config.sym else nncf.QuantizationPreset.MIXED
+                ),
                 fast_bias_correction=quantization_config.fast_bias_correction,
                 advanced_parameters=nncf.AdvancedQuantizationParameters(
                     overflow_fix=OverflowFix(quantization_config.overflow_fix)
@@ -542,7 +543,8 @@ class OVQuantizer(OptimumQuantizer):
         dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
-        use_auth_token: bool = False,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
     ) -> datasets.Dataset:
         """
@@ -562,13 +564,25 @@ class OVQuantizer(OptimumQuantizer):
                 Processing function to apply to each example after loading dataset.
             preprocess_batch (`bool`, defaults to `True`):
                 Whether the `preprocess_function` should be batched.
-            use_auth_token (`bool`, defaults to `False`):
-                Whether to use the token generated when running `transformers-cli login`.
+            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+                Deprecated. Please use `token` instead.
+            token (Optional[Union[bool, str]], defaults to `None`):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `huggingface-cli login` (stored in `~/.huggingface`).
             cache_dir (`str`, *optional*):
                 Caching directory for a calibration dataset.
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         if not is_datasets_available():
             raise ValueError(DATASETS_IMPORT_ERROR.format("OVQuantizer.get_calibration_dataset"))
         from datasets import load_dataset
@@ -577,7 +591,7 @@ class OVQuantizer(OptimumQuantizer):
             dataset_name,
             name=dataset_config_name,
             split=dataset_split,
-            use_auth_token=use_auth_token,
+            token=token,
             cache_dir=cache_dir,
         )
 

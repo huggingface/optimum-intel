@@ -15,6 +15,7 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
@@ -152,6 +153,7 @@ class IPEXModel(OptimizedModel):
         config: PretrainedConfig,
         use_cache: bool = True,
         use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
@@ -160,13 +162,24 @@ class IPEXModel(OptimizedModel):
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         trust_remote_code: bool = False,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError(
+                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
+                )
+            token = use_auth_token
+
         if is_torch_version("<", "2.1.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
         task = cls.export_feature
         model_kwargs = {
             "revision": revision,
-            "use_auth_token": use_auth_token,
+            "token": token,
             "cache_dir": cache_dir,
             "subfolder": subfolder,
             "local_files_only": local_files_only,
@@ -188,8 +201,9 @@ class IPEXModel(OptimizedModel):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str, None]] = None,
-        revision: Optional[Union[str, None]] = None,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: Optional[str] = WEIGHTS_NAME,
@@ -197,6 +211,17 @@ class IPEXModel(OptimizedModel):
         subfolder: str = "",
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError(
+                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
+                )
+            token = use_auth_token
+
         if not getattr(config, "torchscript", False):
             raise ValueError(
                 "`config.torchscript` should be set to `True`, if your model is not a TorchScript model and needs to be traced please set `export=True` when loading it with `.from_pretrained()`"
@@ -211,7 +236,7 @@ class IPEXModel(OptimizedModel):
             model_cache_path = hf_hub_download(
                 repo_id=model_id,
                 filename=file_name,
-                use_auth_token=use_auth_token,
+                token=token,
                 revision=revision,
                 cache_dir=cache_dir,
                 force_download=force_download,

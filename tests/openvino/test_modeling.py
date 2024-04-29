@@ -14,6 +14,7 @@
 
 import gc
 import os
+import subprocess
 import tempfile
 import time
 import unittest
@@ -246,6 +247,15 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(np.array_equal(pipeline_outputs, outputs))
         del pipeline
         gc.collect()
+
+    def test_load_model_from_hub_private_with_token(self):
+        subprocess.run("huggingface-cli logout", shell=True)
+
+        # a fine-grained read-only token of private repo "IlyasMoutawwakil/test-hub-bert"
+        token = "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"
+
+        loaded_model = OVModelForMaskedLM.from_pretrained("IlyasMoutawwakil/test-hub-bert", use_auth_token=token)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):

@@ -14,6 +14,7 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Tuple, Union
@@ -220,6 +221,7 @@ class OVBaseDecoderModel(OVModel):
         model_id: str,
         config: PretrainedConfig,
         use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
@@ -232,6 +234,15 @@ class OVBaseDecoderModel(OVModel):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
@@ -255,7 +266,7 @@ class OVBaseDecoderModel(OVModel):
             subfolder=subfolder,
             revision=revision,
             cache_dir=cache_dir,
-            use_auth_token=use_auth_token,
+            token=token,
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
@@ -563,7 +574,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str, None]] = None,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
@@ -575,13 +587,22 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
 
         model_cache_path = cls._cached_file(
             model_path=model_path,
-            use_auth_token=use_auth_token,
+            token=token,
             revision=revision,
             force_download=force_download,
             cache_dir=cache_dir,

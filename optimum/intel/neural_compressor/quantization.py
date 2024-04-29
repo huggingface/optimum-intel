@@ -16,6 +16,7 @@ import copy
 import inspect
 import logging
 import types
+import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
@@ -446,7 +447,8 @@ class INCQuantizer(OptimumQuantizer):
         dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
-        use_auth_token: bool = False,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
     ) -> Dataset:
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -465,16 +467,28 @@ class INCQuantizer(OptimumQuantizer):
                 Processing function to apply to each example after loading dataset.
             preprocess_batch (`bool`, defaults to `True`):
                 Whether the `preprocess_function` should be batched.
-            use_auth_token (`bool`, defaults to `False`):
-                Whether to use the token generated when running `transformers-cli login`.
+            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+                Deprecated. Please use `token` instead.
+            token (Optional[Union[bool, str]], defaults to `None`):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `huggingface-cli login` (stored in `~/.huggingface`).
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         calibration_dataset = load_dataset(
             dataset_name,
             name=dataset_config_name,
             split=dataset_split,
-            use_auth_token=use_auth_token,
+            token=token,
         )
 
         if num_samples is not None:

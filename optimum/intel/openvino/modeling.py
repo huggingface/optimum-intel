@@ -14,6 +14,7 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
@@ -422,6 +423,7 @@ class OVModelForFeatureExtraction(OVModel):
         model_id: str,
         config: PretrainedConfig,
         use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
@@ -433,6 +435,15 @@ class OVModelForFeatureExtraction(OVModel):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
@@ -450,7 +461,7 @@ class OVModelForFeatureExtraction(OVModel):
             subfolder=subfolder,
             revision=revision,
             cache_dir=cache_dir,
-            use_auth_token=use_auth_token,
+            token=token,
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
@@ -584,6 +595,7 @@ class OVModelForImageClassification(OVModel):
         export: bool = False,
         config: Optional["PretrainedConfig"] = None,
         use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
@@ -593,6 +605,15 @@ class OVModelForImageClassification(OVModel):
         trust_remote_code: bool = False,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         # Fix the mismatch between timm_config and huggingface_config
         local_timm_model = _is_timm_ov_dir(model_id)
         if local_timm_model or (not os.path.isdir(model_id) and model_info(model_id).library_name == "timm"):
@@ -621,7 +642,7 @@ class OVModelForImageClassification(OVModel):
                 model_id=model_id,
                 config=config,
                 export=export,
-                use_auth_token=use_auth_token,
+                token=token,
                 revision=revision,
                 force_download=force_download,
                 cache_dir=cache_dir,
