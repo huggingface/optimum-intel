@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 STR_OPERATION_TO_FUNC = {">": op.gt, ">=": op.ge, "==": op.eq, "!=": op.ne, "<=": op.le, "<": op.lt}
 
 _optimum_version = importlib_metadata.version("optimum")
+_optimum_intel_version = importlib_metadata.version("optimum-intel")
 
 _transformers_available = importlib.util.find_spec("transformers") is not None
 _transformers_version = "N/A"
