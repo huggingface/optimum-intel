@@ -715,7 +715,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (OVWeightQuantizationConfig(bits=8, sym=True),),
         (
             OVWeightQuantizationConfig(
-                dataset="wikitext",
+                dataset="wikitext2",
                 bits=4,
                 ignored_scope={"names": ["op_name"]},
                 sym=False,
@@ -747,7 +747,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(bits=8, sym=True), OVWeightQuantizationConfig, None),
         (
             dict(
-                dataset="wikitext",
+                dataset="wikitext2",
                 bits=4,
                 ignored_scope={"names": ["op_name"]},
                 sym=False,
@@ -771,7 +771,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(num_samples=100), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (dict(abc="def"), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (
-            dict(bits=8, fast_bias_correction=True, dataset="wikitext"),
+            dict(bits=8, fast_bias_correction=True, dataset="wikitext2"),
             OVWeightQuantizationConfig,
             "Can't determine type of OV quantization config",
         ),
@@ -793,7 +793,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(abc="def", weight_only=False), OVQuantizationConfig, None),
         (dict(abc="def", weight_only=True), OVWeightQuantizationConfig, None),
         (
-            dict(bits=8, fast_bias_correction=True, dataset="wikitext", weight_only=True),
+            dict(bits=8, fast_bias_correction=True, dataset="wikitext2", weight_only=True),
             OVWeightQuantizationConfig,
             None,
         ),
