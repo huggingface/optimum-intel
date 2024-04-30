@@ -778,6 +778,87 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model_with_cache
         gc.collect()
 
+    def test_beam_search(self):
+        model_id = MODEL_NAMES["llama"]
+        ov_model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
+        ov_model_stateless = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=False)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer.pad_token = tokenizer.eos_token
+        tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        ov_model_stateful.generation_config.eos_token_id = None
+        ov_model_stateless.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model_stateful.config.eos_token_id = None
+        ov_model_stateless.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+
+        # beam search
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=4,
+            do_sample=False,
+            eos_token_id=None,
+        )
+
+        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+        ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
+        self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs))
+        ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
+        self.assertTrue(torch.allclose(ov_stateless_outputs, transformers_outputs))
+        # beam sample
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=4,
+            do_sample=True,
+            eos_token_id=None,
+            top_k=1,
+        )
+
+        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+        ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
+        self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs))
+        ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
+        self.assertTrue(torch.allclose(ov_stateless_outputs, transformers_outputs))
+
+        # group beam search
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=4,
+            do_sample=False,
+            eos_token_id=None,
+            num_beam_groups=2,
+            diversity_penalty=0.0000001,
+        )
+
+        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+        ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
+        self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs))
+        ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
+        self.assertTrue(torch.allclose(ov_stateless_outputs, transformers_outputs))
+
+        # constrained beam search
+        force_word = "cat"
+        force_words_ids = [tokenizer([force_word], add_special_tokens=False).input_ids]
+        gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=4,
+            do_sample=False,
+            eos_token_id=None,
+            force_words_ids=force_words_ids,
+        )
+
+        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+        ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
+        self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs))
+        ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
+        self.assertTrue(torch.allclose(ov_stateless_outputs, transformers_outputs))
+
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (

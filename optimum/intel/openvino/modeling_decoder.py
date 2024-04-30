@@ -1418,22 +1418,22 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 beam_next_tokens = beam_outputs["next_beam_tokens"]
                 beam_idx = beam_outputs["next_beam_indices"]
 
-            if return_dict_in_generate and output_scores:
-                beam_indices[beam_group_idx] = tuple(
-                    beam_indices[beam_group_idx][beam_idx[i]] + (beam_idx[i],) for i in range(len(beam_indices[0]))
+                if return_dict_in_generate and output_scores:
+                    beam_indices[beam_group_idx] = tuple(
+                        beam_indices[beam_group_idx][beam_idx[i]] + (beam_idx[i],) for i in range(len(beam_indices[0]))
+                    )
+
+                input_ids[batch_group_indices] = group_input_ids[beam_idx]
+                group_input_ids = torch.cat([group_input_ids[beam_idx, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
+                current_tokens[batch_group_indices] = group_input_ids[:, -1]
+
+                # (beam_idx // group_size) -> batch_idx
+                # (beam_idx % group_size) -> offset of idx inside the group
+                reordering_indices[batch_group_indices] = (
+                    num_beams * torch.div(beam_idx, group_size, rounding_mode="floor")
+                    + group_start_idx
+                    + (beam_idx % group_size)
                 )
-
-            input_ids[batch_group_indices] = group_input_ids[beam_idx]
-            group_input_ids = torch.cat([group_input_ids[beam_idx, :], beam_next_tokens.unsqueeze(-1)], dim=-1)
-            current_tokens[batch_group_indices] = group_input_ids[:, -1]
-
-            # (beam_idx // group_size) -> batch_idx
-            # (beam_idx % group_size) -> offset of idx inside the group
-            reordering_indices[batch_group_indices] = (
-                num_beams * torch.div(beam_idx, group_size, rounding_mode="floor")
-                + group_start_idx
-                + (beam_idx % group_size)
-            )
 
             # Store scores, attentions and hidden_states when required
             if return_dict_in_generate:
