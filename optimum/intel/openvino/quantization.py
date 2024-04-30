@@ -21,7 +21,6 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
-import datasets
 import nncf
 import openvino
 import torch
@@ -62,6 +61,8 @@ from .utils import (
 
 if is_datasets_available():
     from datasets import Dataset
+else:
+    Dataset = None
 
 register_module(ignored_algorithms=[])(Conv1D)
 
@@ -318,7 +319,7 @@ class OVQuantizer(OptimumQuantizer):
         self,
         ov_config: OVConfig,
         save_directory: Union[str, Path] = None,
-        calibration_dataset: Optional[Union[datasets.Dataset, nncf.Dataset, Iterable]] = None,
+        calibration_dataset: Optional[Union["Dataset", nncf.Dataset, Iterable]] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
@@ -358,7 +359,7 @@ class OVQuantizer(OptimumQuantizer):
 
         if isinstance(calibration_dataset, nncf.Dataset):
             quantization_dataset = calibration_dataset
-        elif isinstance(calibration_dataset, datasets.Dataset):
+        elif Dataset is not None and isinstance(calibration_dataset, Dataset):
             calibration_dataloader = self._get_calibration_dataloader(
                 calibration_dataset=calibration_dataset,
                 batch_size=batch_size,
@@ -411,7 +412,7 @@ class OVQuantizer(OptimumQuantizer):
         self,
         ov_config: OVConfig,
         save_directory: Union[str, Path],
-        calibration_dataset: Optional[Union[datasets.Dataset, nncf.Dataset, Iterable]] = None,
+        calibration_dataset: Optional[Union["Dataset", nncf.Dataset, Iterable]] = None,
         file_name: Optional[str] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
@@ -482,7 +483,7 @@ class OVQuantizer(OptimumQuantizer):
 
             if isinstance(calibration_dataset, nncf.Dataset):
                 quantization_dataset = calibration_dataset
-            elif isinstance(calibration_dataset, datasets.Dataset):
+            elif isinstance(calibration_dataset, Dataset):
                 calibration_dataloader = self._get_calibration_dataloader(
                     calibration_dataset=calibration_dataset,
                     batch_size=batch_size,
@@ -567,7 +568,7 @@ class OVQuantizer(OptimumQuantizer):
         use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
-    ) -> datasets.Dataset:
+    ) -> "Dataset":
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
 
@@ -671,7 +672,7 @@ def _weight_only_quantization(
         )
     dataset = None
     if calibration_dataset is not None:
-        if isinstance(calibration_dataset, datasets.Dataset):
+        if Dataset is not None and isinstance(calibration_dataset, Dataset):
             raise ValueError(
                 "Providing calibration dataset as an instance of `datasets.Dataset` for OV weight-only "
                 "quantization is not supported. Please provide it as `nncf.Dataset` or as iterable of "
