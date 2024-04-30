@@ -358,6 +358,7 @@ def export_pytorch(
 
             with patcher:
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
+                sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
                 inputs = config.ordered_inputs(model)
                 input_names = list(inputs.keys())
                 output_names = list(config.outputs.keys())
@@ -387,7 +388,6 @@ def export_pytorch(
                 ov_config=ov_config,
             )
 
-        sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         if not ordered_dummy_inputs:
             ordered_dummy_inputs = dummy_inputs
@@ -403,7 +403,7 @@ def export_pytorch(
             inp_tensor.get_tensor().set_names({input_name})
             inp_data = flatten_inputs[idx]
             static_shape = PartialShape(inp_data.shape)
-            dims = inputs[input_name]
+            dims = inputs.get(input_name, [])
             for dim in dims:
                 static_shape[dim] = -1
             inp_tensor.get_node().set_partial_shape(static_shape)

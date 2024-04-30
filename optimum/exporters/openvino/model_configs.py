@@ -23,6 +23,7 @@ from optimum.exporters.onnx.model_configs import (
     FalconOnnxConfig,
     GemmaOnnxConfig,
     LlamaOnnxConfig,
+    MPTOnnxConfig,
     PhiOnnxConfig,
     UNetOnnxConfig,
     VaeDecoderOnnxConfig,
@@ -43,8 +44,10 @@ from .model_patcher import (
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
     GemmaModelPatcher,
+    InternLMPatcher,
     LlamaModelPatcher,
     MixtralModelPatcher,
+    MPTModelPatcher,
     Phi3ModelPatcher,
     QwenModelPatcher,
 )
@@ -439,6 +442,11 @@ class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return InternLMPatcher(self, model, model_kwargs=model_kwargs)
+
 
 @register_in_tasks_manager("orion", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
@@ -453,6 +461,16 @@ class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 class OlmoOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager(
+    "mpt", *["text-generation", "text-generation-with-past", "text-classification"], library_name="transformers"
+)
+class MPTOpenVINOConfig(MPTOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return MPTModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
