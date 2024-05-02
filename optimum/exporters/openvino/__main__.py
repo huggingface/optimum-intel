@@ -25,7 +25,6 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.openvino.convert import export_from_model, export_tokenizer
-from optimum.intel.openvino.utils import OV_TOKENIZER_FLOLDER
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
@@ -355,6 +354,9 @@ def main_export(
         trust_remote_code=trust_remote_code,
         **kwargs_shapes,
     )
+
+    # avoid circular import
+    from optimum.intel.openvino.utils import OV_TOKENIZER_FLOLDER
 
     if convert_tokenizer and is_openvino_tokenizers_available():
         if library_name != "diffusers":

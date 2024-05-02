@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Optional
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from ...exporters import TasksManager
+from ...exporters.openvino.convert import export_tokenizer
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
 from ..base import BaseOptimumCLICommand, CommandInfo
 
@@ -260,9 +261,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                 self.args.model, export=True, quantization_config=ov_config.quantization_config
             )
             model.save_pretrained(self.args.output)
-
-            # avoid circular import
-            from ...exporters.openvino.convert import export_tokenizer
 
             output = Path(self.args.output)
             tokenizer = getattr(model, "tokenizer", None)
