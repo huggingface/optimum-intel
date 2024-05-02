@@ -70,12 +70,13 @@ set_seed(SEED)
 
 
 class QuantizationTest(INCTestMixin):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
+    SUPPORTED_ARCHITECTURES_STATIC = (
+        ("text-generation", "gpt_neo", 17),
         ("text-classification", "bert", 21),
         ("text-generation", "bloom", 21),
     )
 
-    SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS + (
+    SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_STATIC + (
         ("fill-mask", "bert", 22),
         ("token-classification", "albert", 26),
     )
@@ -123,7 +124,7 @@ class QuantizationTest(INCTestMixin):
                 load_inc_model=True,
             )
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_STATIC)
     def test_static_quantization(self, task, model_arch, expected_quantized_matmuls):
         num_samples = 10
         model_name = MODEL_NAMES[model_arch]
@@ -134,13 +135,8 @@ class QuantizationTest(INCTestMixin):
 
         quantized_model = None
         save_onnx_model = False
-        op_type_dict = (
-            {"Embedding": {"weight": {"dtype": ["fp32"]}, "activation": {"dtype": ["fp32"]}}}
-            if save_onnx_model
-            else None
-        )
+        quantization_config = PostTrainingQuantConfig(approach="static")
         model_kwargs = {"use_cache": False, "use_io_binding": False} if task == "text-generation" else {}
-        quantization_config = PostTrainingQuantConfig(approach="static", op_type_dict=op_type_dict)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             for backend in ["torch", "ort"]:
@@ -148,8 +144,10 @@ class QuantizationTest(INCTestMixin):
                     model = model_class.auto_model_class.from_pretrained(model_name)
                 else:
                     model = model_class.from_pretrained(model_name, export=True, **model_kwargs)
+
                 quantizer = INCQuantizer.from_pretrained(model, task=task)
                 calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
+
                 quantizer.quantize(
                     quantization_config=quantization_config,
                     calibration_dataset=calibration_dataset,
