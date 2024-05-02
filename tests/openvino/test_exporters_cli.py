@@ -75,7 +75,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "bert": 1,  # no detokenizer
         "blenderbot": 2,
         "stable-diffusion": 2,
-        "stable-diffusion-xl": 2,
+        "stable-diffusion-xl": 4,
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = (

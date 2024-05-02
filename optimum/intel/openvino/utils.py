@@ -111,7 +111,7 @@ PREDEFINED_SD_DATASETS = {
 }
 
 
-NEED_CONVERT_TO_FAST_TOKENIZER: List[PreTrainedTokenizer] = [
+NEED_CONVERT_TO_FAST_TOKENIZER: List[type(PreTrainedTokenizer)] = [
     CLIPTokenizer,
 ]
 
@@ -122,7 +122,7 @@ def maybe_convert_tokenizer_to_fast(
     if isinstance(hf_tokenizer, PreTrainedTokenizerFast):
         return hf_tokenizer
 
-    if any(isinstance(type(hf_tokenizer), slow_class) for slow_class in NEED_CONVERT_TO_FAST_TOKENIZER):
+    if any(isinstance(hf_tokenizer, slow_class) for slow_class in NEED_CONVERT_TO_FAST_TOKENIZER):
         try:
             return AutoTokenizer.from_pretrained(tokenizer_path)
         except Exception:
