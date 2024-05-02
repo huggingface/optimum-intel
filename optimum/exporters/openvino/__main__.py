@@ -25,6 +25,7 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.openvino.convert import export_from_model, export_tokenizer
+from optimum.intel.openvino.utils import OV_TOKENIZER_FLOLDER
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
@@ -364,7 +365,7 @@ def main_export(
 
             if tokenizer is not None:
                 try:
-                    export_tokenizer(tokenizer, output)
+                    export_tokenizer(tokenizer, output / OV_TOKENIZER_FLOLDER)
                 except Exception as exception:
                     logger.warning(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
@@ -373,11 +374,11 @@ def main_export(
         else:
             tokenizer = getattr(model, "tokenizer", None)
             if tokenizer is not None:
-                export_tokenizer(tokenizer, output)
+                export_tokenizer(tokenizer, output / "tokenizer")
 
             tokenizer_2 = getattr(model, "tokenizer_2", None)
             if tokenizer_2 is not None:
-                export_tokenizer(tokenizer_2, output, suffix="_2")
+                export_tokenizer(tokenizer_2, output / "tokenizer_2")
     elif convert_tokenizer and not is_openvino_tokenizers_available():
         logger.warning("Tokenizer won't be converted.")
 

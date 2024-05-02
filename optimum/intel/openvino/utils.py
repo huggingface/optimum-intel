@@ -17,10 +17,13 @@ import json
 import logging
 import os
 from glob import glob
+from pathlib import Path
+from typing import List, Union
 
 import numpy as np
 from huggingface_hub import model_info
 from openvino.runtime import Core, Type, properties
+from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 
@@ -31,6 +34,7 @@ OV_ENCODER_NAME = "openvino_encoder_model.xml"
 OV_DECODER_NAME = "openvino_decoder_model.xml"
 OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
 
+OV_TOKENIZER_FLOLDER = "openvino_tokenizer"
 OV_TOKENIZER_NAME = "openvino_tokenizer{}.xml"
 OV_DETOKENIZER_NAME = "openvino_detokenizer{}.xml"
 
@@ -105,6 +109,26 @@ PREDEFINED_SD_DATASETS = {
     "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
     "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}},
 }
+
+
+NEED_CONVERT_TO_FAST_TOKENIZER: List[PreTrainedTokenizer] = [
+    CLIPTokenizer,
+]
+
+
+def maybe_convert_tokenizer_to_fast(
+    hf_tokenizer: PreTrainedTokenizer, tokenizer_path: Path
+) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
+    if isinstance(hf_tokenizer, PreTrainedTokenizerFast):
+        return hf_tokenizer
+
+    if any(isinstance(type(hf_tokenizer), slow_class) for slow_class in NEED_CONVERT_TO_FAST_TOKENIZER):
+        try:
+            return AutoTokenizer.from_pretrained(tokenizer_path)
+        except Exception:
+            return hf_tokenizer
+
+    return hf_tokenizer
 
 
 def use_external_data_format(num_parameters: int) -> bool:

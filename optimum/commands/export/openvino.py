@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Optional
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from ...exporters import TasksManager
+from ...exporters.openvino.convert import export_tokenizer
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
 from ..base import BaseOptimumCLICommand, CommandInfo
 
@@ -261,6 +262,14 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             model.save_pretrained(self.args.output)
 
+            output = Path(self.args.output)
+            tokenizer = getattr(model, "tokenizer", None)
+            if tokenizer is not None:
+                export_tokenizer(tokenizer, output / "tokenizer")
+
+            tokenizer_2 = getattr(model, "tokenizer_2", None)
+            if tokenizer_2 is not None:
+                export_tokenizer(tokenizer_2, output / "tokenizer_2")
         else:
             if self.args.convert_tokenizer:
                 logger.warning("`--convert-tokenizer` option is deprecated. Tokenizer will be converted by default.")

@@ -667,19 +667,20 @@ def export_tokenizer(
     output: Union[str, Path],
     suffix: Optional[str] = "",
 ):
-    from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME  # avoid circular imports
+    # avoid circular imports
+    from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME
+    from optimum.intel.openvino.utils import maybe_convert_tokenizer_to_fast
 
     try:
         from openvino_tokenizers import convert_tokenizer
     except ModuleNotFoundError:
-        # avoid this message before tokenizers are part of the openvino dependencies
-        # logger.info(
-        #     "Run `pip install openvino-tokenizers[transformers]` to get OpenVINO tokenizer/detokenizer models."
-        # )
         return
 
     if not isinstance(output, Path):
         output = Path(output)
+
+    if output.exists():
+        tokenizer = maybe_convert_tokenizer_to_fast(tokenizer, output)
 
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)
