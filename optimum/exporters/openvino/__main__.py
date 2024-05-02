@@ -355,10 +355,10 @@ def main_export(
         **kwargs_shapes,
     )
 
-    # avoid circular import
-    from optimum.intel.openvino.utils import OV_TOKENIZER_FLOLDER
     # hide openvino import when using other exporters
+    # avoid circular import
     from optimum.exporters.openvino.convert import export_tokenizer
+    from optimum.intel.openvino.utils import OV_TOKENIZER_FLOLDER
 
     if convert_tokenizer and is_openvino_tokenizers_available():
         if library_name != "diffusers":
