@@ -94,7 +94,7 @@ class QuantizationTest(INCTestMixin):
 
         quantized_model = None
         save_onnx_model = False
-        model_kwargs = {"use_cache": False} if task == "text-generation" else {}
+        model_kwargs = {"use_cache": False, "use_io_binding": False} if task == "text-generation" else {}
         quantization_config = PostTrainingQuantConfig(approach="dynamic")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -136,7 +136,7 @@ class QuantizationTest(INCTestMixin):
         quantized_model = None
         save_onnx_model = False
         quantization_config = PostTrainingQuantConfig(approach="static")
-        model_kwargs = {"use_cache": False} if task == "text-generation" else {}
+        model_kwargs = {"use_cache": False, "use_io_binding": False} if task == "text-generation" else {}
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             for backend in ["torch", "ort"]:
