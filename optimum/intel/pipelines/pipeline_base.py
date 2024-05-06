@@ -291,8 +291,6 @@ def pipeline(
     if load_feature_extractor and model_id and feature_extractor is None:
         feature_extractor = AutoFeatureExtractor.from_pretrained(model_id, **hub_kwargs, **model_kwargs)
 
-    if torch_dtype is not None:
-        kwargs["torch_dtype"] = torch_dtype
 
     return transformers_pipeline(
         task,
@@ -300,5 +298,6 @@ def pipeline(
         tokenizer=tokenizer,
         feature_extractor=feature_extractor,
         use_fast=use_fast,
+        torch_dtype=torch_dtype,
         **kwargs,
     )
