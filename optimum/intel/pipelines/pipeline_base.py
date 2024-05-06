@@ -240,7 +240,7 @@ def pipeline(
     if accelerator == "ipex":
         if task not in list(IPEX_SUPPORTED_TASKS.keys()):
             raise ValueError(
-                f"Task {task} is not supported for the ONNX Runtime pipeline. Supported tasks are { list(IPEX_SUPPORTED_TASKS.keys())}"
+                f"Task {task} is not supported for the IPEX pipeline. Supported tasks are { list(IPEX_SUPPORTED_TASKS.keys())}"
             )
 
     supported_tasks = IPEX_SUPPORTED_TASKS if accelerator == "ipex" else None
