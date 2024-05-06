@@ -98,8 +98,10 @@ def load_ipex_model(
     model,
     targeted_task,
     SUPPORTED_TASKS,
+    subfolder: str = "",
+    token: Optional[Union[bool, str]] = None,
+    revision: str = "main",
     model_kwargs: Optional[Dict[str, Any]] = None,
-    hub_kwargs: Optional[Dict[str, Any]] = None,
     **kwargs,
 ):
     export = kwargs.pop("export", True)
