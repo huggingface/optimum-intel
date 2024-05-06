@@ -139,9 +139,6 @@ MAPPING_LOADING_FUNC = {
 }
 
 
-if is_torch_available():
-    pass
-
 
 if TYPE_CHECKING:
     from transformers.modeling_utils import PreTrainedModel
