@@ -19,7 +19,16 @@ from packaging import version
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
-from optimum.exporters.onnx.model_configs import FalconOnnxConfig, GemmaOnnxConfig, LlamaOnnxConfig, PhiOnnxConfig
+from optimum.exporters.onnx.model_configs import (
+    FalconOnnxConfig,
+    GemmaOnnxConfig,
+    LlamaOnnxConfig,
+    MPTOnnxConfig,
+    PhiOnnxConfig,
+    UNetOnnxConfig,
+    VaeDecoderOnnxConfig,
+    VaeEncoderOnnxConfig,
+)
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -35,8 +44,10 @@ from .model_patcher import (
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
     GemmaModelPatcher,
+    InternLMPatcher,
     LlamaModelPatcher,
     MixtralModelPatcher,
+    MPTModelPatcher,
     Phi3ModelPatcher,
     QwenModelPatcher,
 )
@@ -431,6 +442,11 @@ class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return InternLMPatcher(self, model, model_kwargs=model_kwargs)
+
 
 @register_in_tasks_manager("orion", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
@@ -445,6 +461,16 @@ class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 class OlmoOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager(
+    "mpt", *["text-generation", "text-generation-with-past", "text-classification"], library_name="transformers"
+)
+class MPTOpenVINOConfig(MPTOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return MPTModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
@@ -510,3 +536,59 @@ class FalconOpenVINOConfig(FalconOnnxConfig):
         OVFalconDummyPastKeyValuesGenerator,
     ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = OVFalconDummyPastKeyValuesGenerator
+
+
+@register_in_tasks_manager("unet", *["semantic-segmentation"], library_name="diffusers")
+class UNetOpenVINOConfig(UNetOnnxConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
+            "timestep": {0: "steps"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+        }
+
+        # TODO : add text_image, image and image_embeds
+        if getattr(self._normalized_config, "addition_embed_type", None) == "text_time":
+            common_inputs["text_embeds"] = {0: "batch_size"}
+            common_inputs["time_ids"] = {0: "batch_size"}
+
+        if getattr(self._normalized_config, "time_cond_proj_dim", None) is not None:
+            common_inputs["timestep_cond"] = {0: "batch_size"}
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "out_sample": {0: "batch_size", 2: "height", 3: "width"},
+        }
+
+
+@register_in_tasks_manager("vae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+        }
+
+
+@register_in_tasks_manager("vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class VaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
+        }
