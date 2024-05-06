@@ -257,8 +257,8 @@ def pipeline(
         elif values["type"] not in ["multimodal", "audio", "video"]:
             raise ValueError(f"SUPPORTED_TASK {_task} contains invalid type {values['type']}")
 
-    load_tokenizer = False if task in no_tokenizer_tasks else True
-    load_feature_extractor = False if task in no_feature_extractor_tasks else True
+    load_tokenizer = task not in no_tokenizer_tasks
+    load_feature_extractor = task not in no_feature_extractor_tasks
 
     commit_hash = kwargs.pop("_commit_hash", None)
 
