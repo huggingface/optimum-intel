@@ -341,7 +341,7 @@ class OVQuantizer(OptimumQuantizer):
                 calibration_dataset = self._prepare_unet_dataset(
                     quantization_config.num_samples, dataset=calibration_dataset
                 )
-            elif Dataset is not None and isinstance(calibration_dataset, Dataset):
+            elif is_datasets_available() and isinstance(calibration_dataset, Dataset):
                 calibration_dataloader = self._get_calibration_dataloader(
                     calibration_dataset=calibration_dataset,
                     batch_size=batch_size,
@@ -374,7 +374,7 @@ class OVQuantizer(OptimumQuantizer):
                 from optimum.intel import OVModelForCausalLM
 
                 if isinstance(self.model, OVModelForCausalLM):
-                    calibration_dataset = self._prepare_gptq_dataset(quantization_config)
+                    calibration_dataset = self._prepare_builtin_dataset(quantization_config)
                 elif isinstance(self.model, OVStableDiffusionPipelineBase):
                     calibration_dataset = self._prepare_unet_dataset(
                         quantization_config.num_samples, dataset_name=quantization_config.dataset
@@ -392,6 +392,7 @@ class OVQuantizer(OptimumQuantizer):
                         self.model.unet.model, quantization_config, calibration_dataset
                     )
                 else:
+                    # This may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     self.model.model = _hybrid_quantization(self.model.model, quantization_config, calibration_dataset)
             else:
                 _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)
@@ -672,7 +673,7 @@ class OVQuantizer(OptimumQuantizer):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
 
-    def _prepare_gptq_dataset(self, quantization_config: OVWeightQuantizationConfig):
+    def _prepare_builtin_dataset(self, quantization_config: OVWeightQuantizationConfig):
         from optimum.gptq.data import get_dataset, prepare_dataset
 
         tokenizer = AutoTokenizer.from_pretrained(quantization_config.tokenizer)
@@ -721,7 +722,7 @@ class OVQuantizer(OptimumQuantizer):
         if dataset is not None:
             if isinstance(dataset, nncf.Dataset):
                 return dataset
-            if Dataset is not None and isinstance(dataset, Dataset):
+            if is_datasets_available() and isinstance(dataset, Dataset):
                 dataset = dataset.select_columns(["caption"])
 
             def transform_fn(data_item):
@@ -783,7 +784,7 @@ def _weight_only_quantization(
 
     dataset = None
     if calibration_dataset is not None:
-        if Dataset is not None and isinstance(calibration_dataset, Dataset):
+        if is_datasets_available() and isinstance(calibration_dataset, Dataset):
             raise ValueError(
                 "Providing calibration dataset as an instance of `datasets.Dataset` for OV weight-only "
                 "quantization is not supported. Please provide it as `nncf.Dataset` or as iterable of "
