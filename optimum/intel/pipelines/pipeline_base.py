@@ -235,7 +235,7 @@ def pipeline(
         )
 
     if accelerator not in MAPPING_LOADING_FUNC:
-        raise ValueError(f'Accelerator {accelerator} is not supported. Supported accelerator is "ipex".')
+        raise ValueError(f'Accelerator {accelerator} is not supported. Supported accelerator is {", ".join(MAPPING_LOADING_FUNC)}.')
 
     if accelerator == "ipex":
         if task not in list(IPEX_SUPPORTED_TASKS.keys()):
