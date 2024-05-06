@@ -286,9 +286,9 @@ def pipeline(
         model, task, supported_tasks, model_kwargs, hub_kwargs, **kwargs
     )
 
-    if load_tokenizer and model_id and tokenizer is None:
+    if load_tokenizer and tokenizer is None:
         tokenizer = AutoTokenizer.from_pretrained(model_id, **hub_kwargs, **model_kwargs)
-    if load_feature_extractor and model_id and feature_extractor is None:
+    if load_feature_extractor and feature_extractor is None:
         feature_extractor = AutoFeatureExtractor.from_pretrained(model_id, **hub_kwargs, **model_kwargs)
 
 
