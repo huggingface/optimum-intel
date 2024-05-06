@@ -15,6 +15,7 @@
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
+import torch
 from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer
 from transformers import pipeline as transformers_pipeline
 from transformers.feature_extraction_utils import PreTrainedFeatureExtractor
@@ -31,7 +32,6 @@ from transformers.pipelines.base import Pipeline
 from transformers.tokenization_utils import PreTrainedTokenizer
 from transformers.utils import (
     is_ipex_available,
-    is_torch_available,
     logging,
 )
 
@@ -98,13 +98,9 @@ def load_ipex_model(
     model,
     targeted_task,
     SUPPORTED_TASKS,
-    subfolder: str = "",
-    token: Optional[Union[bool, str]] = None,
-    revision: str = "main",
     model_kwargs: Optional[Dict[str, Any]] = None,
-    **kwargs,
+    hub_kwargs: Optional[Dict[str, Any]] = None,
 ):
-    export = kwargs.pop("export", True)
     if model_kwargs is None:
         model_kwargs = {}
 
@@ -118,15 +114,13 @@ def load_ipex_model(
         try:
             config = AutoConfig.from_pretrained(model)
             torchscript = getattr(config, "torchscript", None)
-            export = False if torchscript else export
+            export = False if torchscript else True
         except RuntimeError:
-            logger.warning(
-                "config file not found, please pass `export` to decide whether we should export this model. `export` defaullt to True"
-            )
-
+            logger.warning("We will use IPEXModel with export=True to export the model")
+            export = True
         model = ipex_model_class.from_pretrained(model, export=export, **model_kwargs, **hub_kwargs)
     elif isinstance(model, IPEXModel):
-        model_id = None
+        model_id = getattr(model.config, "name_or_path", None)
     else:
         raise ValueError(
             f"""Model {model} is not supported. Please provide a valid model name or path or a IPEXModel.
@@ -139,7 +133,6 @@ def load_ipex_model(
 MAPPING_LOADING_FUNC = {
     "ipex": load_ipex_model,
 }
-
 
 
 if TYPE_CHECKING:
@@ -160,8 +153,9 @@ def pipeline(
     accelerator: Optional[str] = "ort",
     revision: Optional[str] = None,
     trust_remote_code: Optional[bool] = None,
-    *model_kwargs,
-    **kwargs,
+    torch_dtype: Optional[Union[str, torch.dtype]] = None,
+    commit_hash: Optional[str] = None,
+    **model_kwargs,
 ) -> Pipeline:
     """
     Utility factory method to build a [`Pipeline`].
@@ -201,9 +195,6 @@ def pipeline(
         model_kwargs (`Dict[str, Any]`, *optional*):
             Additional dictionary of keyword arguments passed along to the model's `from_pretrained(...,
             **model_kwargs)` function.
-        kwargs (`Dict[str, Any]`, *optional*):
-            Additional keyword arguments passed along to the specific pipeline init (see the documentation for the
-            corresponding pipeline class for possible values).
 
     Returns:
         [`Pipeline`]: A suitable pipeline for the task.
@@ -235,7 +226,9 @@ def pipeline(
         )
 
     if accelerator not in MAPPING_LOADING_FUNC:
-        raise ValueError(f'Accelerator {accelerator} is not supported. Supported accelerator is {", ".join(MAPPING_LOADING_FUNC)}.')
+        raise ValueError(
+            f'Accelerator {accelerator} is not supported. Supported accelerator is {", ".join(MAPPING_LOADING_FUNC)}.'
+        )
 
     if accelerator == "ipex":
         if task not in list(IPEX_SUPPORTED_TASKS.keys()):
@@ -260,12 +253,10 @@ def pipeline(
     load_tokenizer = task not in no_tokenizer_tasks
     load_feature_extractor = task not in no_feature_extractor_tasks
 
-    commit_hash = kwargs.pop("_commit_hash", None)
-
     hub_kwargs = {
-        "revision": kwargs.pop("revision", None),
-        "token": kwargs.pop("use_auth_token", None),
-        "trust_remote_code": kwargs.pop("trust_remote_code", None),
+        "revision": revision,
+        "token": token,
+        "trust_remote_code": trust_remote_code,
         "_commit_hash": commit_hash,
     }
 
@@ -282,15 +273,12 @@ def pipeline(
 
     # Load the correct model if possible
     # Infer the framework from the model if not already defined
-    model, model_id = MAPPING_LOADING_FUNC[accelerator](
-        model, task, supported_tasks, model_kwargs, hub_kwargs, **kwargs
-    )
+    model, model_id = MAPPING_LOADING_FUNC[accelerator](model, task, supported_tasks, model_kwargs, hub_kwargs)
 
     if load_tokenizer and tokenizer is None:
         tokenizer = AutoTokenizer.from_pretrained(model_id, **hub_kwargs, **model_kwargs)
     if load_feature_extractor and feature_extractor is None:
         feature_extractor = AutoFeatureExtractor.from_pretrained(model_id, **hub_kwargs, **model_kwargs)
-
 
     return transformers_pipeline(
         task,
@@ -299,5 +287,4 @@ def pipeline(
         feature_extractor=feature_extractor,
         use_fast=use_fast,
         torch_dtype=torch_dtype,
-        **kwargs,
     )

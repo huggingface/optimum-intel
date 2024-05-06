@@ -22,7 +22,6 @@ from transformers import AutoTokenizer
 from transformers.pipelines import pipeline as transformers_pipeline
 
 from optimum.intel.ipex.modeling_base import (
-    IPEXModel,
     IPEXModelForAudioClassification,
     IPEXModelForCausalLM,
     IPEXModelForImageClassification,
