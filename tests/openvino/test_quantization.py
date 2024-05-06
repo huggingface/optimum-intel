@@ -413,8 +413,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         model = model_cls.from_pretrained(
             model_id,
             export=True,
-            quantization_config=OVWeightQuantizationConfig(bits=8, dataset=dataset, num_samples=3),
         )
+        quantizer = OVQuantizer(model)
+        quantization_config = OVWeightQuantizationConfig(bits=8, num_samples=3, quant_method=OVQuantizationMethod.HYBRID)
+        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config), calibration_dataset=dataset)
         num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
         self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
         self.assertEqual(expected_ov_int8, num_int8)
