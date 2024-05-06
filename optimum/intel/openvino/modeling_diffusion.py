@@ -341,7 +341,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             **kwargs,
         )
 
-
     @classmethod
     def _from_transformers(
         cls,
