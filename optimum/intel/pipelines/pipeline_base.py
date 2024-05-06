@@ -155,10 +155,12 @@ def pipeline(
     model: Optional[Union[str, "PreTrainedModel"]] = None,
     tokenizer: Optional[Union[str, PreTrainedTokenizer, "PreTrainedTokenizerFast"]] = None,
     feature_extractor: Optional[Union[str, PreTrainedFeatureExtractor]] = None,
-    accelerator: Optional[str] = "ipex",
     use_fast: bool = True,
-    torch_dtype=None,
-    model_kwargs: Dict[str, Any] = None,
+    token: Optional[Union[str, bool]] = None,
+    accelerator: Optional[str] = "ort",
+    revision: Optional[str] = None,
+    trust_remote_code: Optional[bool] = None,
+    *model_kwargs,
     **kwargs,
 ) -> Pipeline:
     """
