@@ -63,8 +63,6 @@ from .utils import (
 
 if is_datasets_available():
     from datasets import Dataset
-else:
-    Dataset = None
 
 register_module(ignored_algorithms=[])(Conv1D)
 
@@ -388,11 +386,21 @@ class OVQuantizer(OptimumQuantizer):
                 if calibration_dataset is None:
                     raise ValueError("Calibration dataset is required to run hybrid quantization.")
                 if isinstance(self.model, OVStableDiffusionPipelineBase):
+                    # Apply weight-only quantization to all SD submodels except UNet
+                    quantization_config_copy = copy.deepcopy(quantization_config)
+                    quantization_config_copy.dataset = None
+                    quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
+                    for sd_submodel_name in ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"]:
+                        sd_submodel = getattr(self.model, sd_submodel_name)
+                        if sd_submodel is not None:
+                            _weight_only_quantization(sd_submodel.model, quantization_config_copy)
+
+                    # Apply hybrid quantization to UNet
                     self.model.unet.model = _hybrid_quantization(
                         self.model.unet.model, quantization_config, calibration_dataset
                     )
                 else:
-                    # This may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
+                    # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     self.model.model = _hybrid_quantization(self.model.model, quantization_config, calibration_dataset)
             else:
                 _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)

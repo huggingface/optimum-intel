@@ -292,19 +292,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 else:
                     kwargs[name] = load_method(new_model_save_dir)
 
-        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
-
         unet_path = new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name
-        if quantization_config is not None and quantization_config.dataset is not None:
-            # load the UNet model uncompressed to apply hybrid quantization further
-            unet = cls.load_model(unet_path)
-            # Apply weights compression to other `components` without dataset
-            quantization_config_without_dataset = deepcopy(quantization_config)
-            quantization_config_without_dataset.dataset = None
-        else:
-            quantization_config_without_dataset = quantization_config
-            unet = cls.load_model(unet_path, quantization_config_without_dataset)
-
         components = {
             "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
             "vae_decoder": new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
@@ -312,13 +300,19 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             "text_encoder_2": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
         }
 
-        for key, value in components.items():
-            components[key] = cls.load_model(value, quantization_config_without_dataset) if value.is_file() else None
-
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
-        if quantization_config is not None and quantization_config.dataset is not None:
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        if quantization_config is None or quantization_config.dataset is None:
+            unet = cls.load_model(unet_path, quantization_config)
+            for key, value in components.items():
+                components[key] = cls.load_model(value, quantization_config) if value.is_file() else None
+        else:
+            # Load uncompressed models to apply hybrid quantization further
+            unet = cls.load_model(unet_path)
+            for key, value in components.items():
+                components[key] = cls.load_model(value) if value.is_file() else None
             sd_model = cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
 
             supported_pipelines = (
@@ -331,10 +325,10 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
             from optimum.intel import OVQuantizer
 
+            hybrid_quantization_config = deepcopy(quantization_config)
+            hybrid_quantization_config.quant_method = OVQuantizationMethod.HYBRID
             quantizer = OVQuantizer(sd_model)
-            quantization_config_copy = deepcopy(quantization_config)
-            quantization_config_copy.quant_method = OVQuantizationMethod.HYBRID
-            quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
+            quantizer.quantize(ov_config=OVConfig(quantization_config=hybrid_quantization_config))
 
             return sd_model
 
@@ -346,6 +340,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             **components,
             **kwargs,
         )
+
 
     @classmethod
     def _from_transformers(
