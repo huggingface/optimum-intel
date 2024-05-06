@@ -11,7 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import copy
+
 import importlib
 import logging
 import os
@@ -57,14 +57,13 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
-from .configuration import OVConfig, OVWeightQuantizationConfig, OVQuantizationMethod
+from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_NP_TYPE,
     OV_XML_FILE_NAME,
-    PREDEFINED_SD_DATASETS,
     _print_compiled_model_properties,
 )
 
@@ -300,7 +299,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             # load the UNet model uncompressed to apply hybrid quantization further
             unet = cls.load_model(unet_path)
             # Apply weights compression to other `components` without dataset
-            quantization_config_without_dataset = copy.deepcopy(quantization_config)
+            quantization_config_without_dataset = deepcopy(quantization_config)
             quantization_config_without_dataset.dataset = None
         else:
             quantization_config_without_dataset = quantization_config
@@ -333,7 +332,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             from optimum.intel import OVQuantizer
 
             quantizer = OVQuantizer(sd_model)
-            quantization_config_copy = copy.deepcopy(quantization_config)
+            quantization_config_copy = deepcopy(quantization_config)
             quantization_config_copy.quant_method = OVQuantizationMethod.HYBRID
             quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config_copy))
 

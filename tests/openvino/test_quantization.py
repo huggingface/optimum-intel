@@ -21,21 +21,17 @@ import unittest
 from collections import defaultdict
 from enum import Enum
 from functools import partial
-from typing import List, Union
+from typing import Union
 
 import evaluate
 import numpy as np
 import torch
 from datasets import load_dataset
-from nncf.quantization.advanced_parameters import OverflowFix
 from parameterized import parameterized
-import openvino.runtime as ov
 import nncf
 from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
-    AutoModelForCausalLM,
-    AutoModelForTokenClassification,
     AutoTokenizer,
     AutoProcessor,
     TrainingArguments,
@@ -415,7 +411,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             export=True,
         )
         quantizer = OVQuantizer(model)
-        quantization_config = OVWeightQuantizationConfig(bits=8, num_samples=3, quant_method=OVQuantizationMethod.HYBRID)
+        quantization_config = OVWeightQuantizationConfig(
+            bits=8, num_samples=3, quant_method=OVQuantizationMethod.HYBRID
+        )
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config), calibration_dataset=dataset)
         num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
         self.assertEqual(expected_num_fake_quantize, num_fake_quantize)

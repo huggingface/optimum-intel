@@ -50,7 +50,7 @@ from ...exporters.openvino.stateful import ensure_export_task_support_stateful, 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import DATASETS_IMPORT_ERROR, is_datasets_available
 from ..utils.modeling_utils import get_model_device
-from .configuration import OVConfig, OVQuantizationConfig, OVWeightQuantizationConfig, OVQuantizationMethod
+from .configuration import OVConfig, OVQuantizationConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
     MAX_ONNX_OPSET,
@@ -339,8 +339,8 @@ class OVQuantizer(OptimumQuantizer):
 
             if isinstance(self.model, OVStableDiffusionPipelineBase):
                 calibration_dataset = self._prepare_unet_dataset(
-                    quantization_config.num_samples,
-                    dataset=calibration_dataset)
+                    quantization_config.num_samples, dataset=calibration_dataset
+                )
             elif Dataset is not None and isinstance(calibration_dataset, Dataset):
                 calibration_dataloader = self._get_calibration_dataloader(
                     calibration_dataset=calibration_dataset,
@@ -351,14 +351,17 @@ class OVQuantizer(OptimumQuantizer):
 
                 if self.model.export_feature == "text-generation" and self.model.use_cache:
                     calibration_dataset = self._prepare_text_generation_dataset(
-                        quantization_config, calibration_dataloader)
+                        quantization_config, calibration_dataloader
+                    )
                 else:
                     calibration_dataset = nncf.Dataset(calibration_dataloader)
             elif isinstance(calibration_dataset, collections.abc.Iterable):
                 calibration_dataset = nncf.Dataset(calibration_dataset)
             elif not isinstance(calibration_dataset, nncf.Dataset):
-                raise ValueError("`calibration_dataset` must be either an `Iterable` object or an instance of "
-                                 f"`nncf.Dataset` or `datasets.Dataset`. Found: {type(calibration_dataset)}.")
+                raise ValueError(
+                    "`calibration_dataset` must be either an `Iterable` object or an instance of "
+                    f"`nncf.Dataset` or `datasets.Dataset`. Found: {type(calibration_dataset)}."
+                )
 
         if isinstance(quantization_config, OVWeightQuantizationConfig):
             if quantization_config.dataset is not None and calibration_dataset is not None:
@@ -374,8 +377,8 @@ class OVQuantizer(OptimumQuantizer):
                     calibration_dataset = self._prepare_gptq_dataset(quantization_config)
                 elif isinstance(self.model, OVStableDiffusionPipelineBase):
                     calibration_dataset = self._prepare_unet_dataset(
-                        quantization_config.num_samples,
-                        dataset_name=quantization_config.dataset)
+                        quantization_config.num_samples, dataset_name=quantization_config.dataset
+                    )
                 else:
                     raise ValueError(
                         f"Can't create weight compression calibration dataset from string for {type(self.model)}"
@@ -385,7 +388,9 @@ class OVQuantizer(OptimumQuantizer):
                 if calibration_dataset is None:
                     raise ValueError("Calibration dataset is required to run hybrid quantization.")
                 if isinstance(self.model, OVStableDiffusionPipelineBase):
-                    self.model.unet.model = _hybrid_quantization(self.model.unet.model, quantization_config, calibration_dataset)
+                    self.model.unet.model = _hybrid_quantization(
+                        self.model.unet.model, quantization_config, calibration_dataset
+                    )
                 else:
                     self.model.model = _hybrid_quantization(self.model.model, quantization_config, calibration_dataset)
             else:
@@ -672,18 +677,15 @@ class OVQuantizer(OptimumQuantizer):
 
         tokenizer = AutoTokenizer.from_pretrained(quantization_config.tokenizer)
         nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
-        calibration_dataset = get_dataset(
-            quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples
-        )
+        calibration_dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
         calibration_dataset = prepare_dataset(calibration_dataset)
         calibration_dataset = nncf.Dataset(calibration_dataset, lambda x: self.model.prepare_inputs(**x))
 
         return calibration_dataset
 
     def _prepare_text_generation_dataset(
-            self,
-            quantization_config: OVQuantizationConfig,
-            calibration_dataloader: OVDataLoader) -> nncf.Dataset:
+        self, quantization_config: OVQuantizationConfig, calibration_dataloader: OVDataLoader
+    ) -> nncf.Dataset:
         # TODO: this function is not covered by tests, remove if not relevant anymore or cover by tests otherwise
 
         # Prefetch past_key_values
@@ -705,10 +707,11 @@ class OVQuantizer(OptimumQuantizer):
         return calibration_dataset
 
     def _prepare_unet_dataset(
-            self,
-            num_samples: Optional[int] = None,
-            dataset_name: Optional[str] = None,
-            dataset: Optional[Union[Iterable, "Dataset"]] = None) -> nncf.Dataset:
+        self,
+        num_samples: Optional[int] = None,
+        dataset_name: Optional[str] = None,
+        dataset: Optional[Union[Iterable, "Dataset"]] = None,
+    ) -> nncf.Dataset:
         self.model.compile()
 
         size = self.model.unet.config.get("sample_size", 64) * self.model.vae_scale_factor
@@ -735,7 +738,9 @@ class OVQuantizer(OptimumQuantizer):
             from datasets import load_dataset
 
             dataset_metadata = PREDEFINED_SD_DATASETS[dataset_name]
-            dataset = load_dataset(dataset_name, split=dataset_metadata["split"], streaming=True).shuffle(seed=self.seed)
+            dataset = load_dataset(dataset_name, split=dataset_metadata["split"], streaming=True).shuffle(
+                seed=self.seed
+            )
             input_names = dataset_metadata["inputs"]
             dataset = dataset.select_columns(list(input_names.values()))
 
@@ -743,8 +748,10 @@ class OVQuantizer(OptimumQuantizer):
                 return {inp_name: data_item[column] for inp_name, column in input_names.items()}
 
         else:
-            raise ValueError("For UNet inputs collection either quantization_config.dataset or custom "
-                             "calibration_dataset must be provided.")
+            raise ValueError(
+                "For UNet inputs collection either quantization_config.dataset or custom "
+                "calibration_dataset must be provided."
+            )
 
         calibration_data = []
         try:
