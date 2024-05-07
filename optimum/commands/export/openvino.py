@@ -267,7 +267,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             if self.args.disable_convert_tokenizer:
                 return
 
-            # not export when using other exporters
+            # avoid import when using other exporters (IPEX, INC)
             from ...exporters.openvino.convert import export_tokenizer
 
             output = Path(self.args.output)
