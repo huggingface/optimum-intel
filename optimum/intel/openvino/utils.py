@@ -18,7 +18,7 @@ import logging
 import os
 from glob import glob
 from pathlib import Path
-from typing import List, Union
+from typing import Tuple, Union
 
 import numpy as np
 from huggingface_hub import model_info
@@ -34,7 +34,7 @@ OV_ENCODER_NAME = "openvino_encoder_model.xml"
 OV_DECODER_NAME = "openvino_decoder_model.xml"
 OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
 
-OV_TOKENIZER_FLOLDER = "openvino_tokenizer"
+OV_TOKENIZER_FOLDER = "openvino_tokenizer"
 OV_TOKENIZER_NAME = "openvino_tokenizer{}.xml"
 OV_DETOKENIZER_NAME = "openvino_detokenizer{}.xml"
 
@@ -111,9 +111,7 @@ PREDEFINED_SD_DATASETS = {
 }
 
 
-NEED_CONVERT_TO_FAST_TOKENIZER: List[type(PreTrainedTokenizer)] = [
-    CLIPTokenizer,
-]
+NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[type(PreTrainedTokenizer)] = (CLIPTokenizer,)
 
 
 def maybe_convert_tokenizer_to_fast(
@@ -122,7 +120,7 @@ def maybe_convert_tokenizer_to_fast(
     if isinstance(hf_tokenizer, PreTrainedTokenizerFast):
         return hf_tokenizer
 
-    if any(isinstance(hf_tokenizer, slow_class) for slow_class in NEED_CONVERT_TO_FAST_TOKENIZER):
+    if isinstance(hf_tokenizer, NEED_CONVERT_TO_FAST_TOKENIZER):
         try:
             return AutoTokenizer.from_pretrained(tokenizer_path)
         except Exception:

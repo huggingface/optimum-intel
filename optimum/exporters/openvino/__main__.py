@@ -358,7 +358,7 @@ def main_export(
     # hide openvino import when using other exporters
     # avoid circular import
     from optimum.exporters.openvino.convert import export_tokenizer
-    from optimum.intel.openvino.utils import OV_TOKENIZER_FLOLDER
+    from optimum.intel.openvino.utils import OV_TOKENIZER_FOLDER
 
     if convert_tokenizer and is_openvino_tokenizers_available():
         if library_name != "diffusers":
@@ -369,7 +369,7 @@ def main_export(
 
             if tokenizer is not None:
                 try:
-                    export_tokenizer(tokenizer, output / OV_TOKENIZER_FLOLDER)
+                    export_tokenizer(tokenizer, output / OV_TOKENIZER_FOLDER)
                 except Exception as exception:
                     logger.warning(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
