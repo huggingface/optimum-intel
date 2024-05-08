@@ -24,6 +24,7 @@ MODEL_NAMES = {
     "bert": "hf-internal-testing/tiny-random-bert",
     "bart": "hf-internal-testing/tiny-random-bart",
     "baichuan2": "katuni4ka/tiny-random-baichuan2",
+    "baichuan2-13b": "katuni4ka/tiny-random-baichuan2-13b",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
     "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
     "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",

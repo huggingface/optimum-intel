@@ -112,13 +112,16 @@ def _llama_attn_forward(
 
     return attn_output, past_key_value, attn_weights
 
+
 def padding_attn_mask(attn_mask, alignment):
     if attn_mask is None:
         return None
-    assert isinstance(attn_mask, torch.Tensor), f"attn mask is supposed to be a tensor, instead we got {type(attn_mask)}"
+    assert isinstance(
+        attn_mask, torch.Tensor
+    ), f"attn mask is supposed to be a tensor, instead we got {type(attn_mask)}"
     if attn_mask.device == torch.device("cpu"):
         return attn_mask
-    last_dim_size=  attn_mask.size(-1)
+    last_dim_size = attn_mask.size(-1)
     aligned_size = (last_dim_size + alignment - 1) // alignment * alignment
     mask_size = [*attn_mask.size()[:-1], aligned_size]
     new_attn_mask = torch.empty(mask_size, dtype=attn_mask.dtype, device=attn_mask.device).fill_(-65504.0)
@@ -191,9 +194,6 @@ def _llama_model_forward(
     all_self_attns = () if output_attentions else None
     next_decoder_cache = () if use_cache else None
 
-    # XPU
-    #if True:
-    #    past_key_values = []
     seqlen = hidden_states.size(1)
     head_dim = self.layers[0].attn.head_dim
     sin, cos = self.layers[0].attn.ipex_rope.get_sin_cos(seqlen, head_dim // 2)

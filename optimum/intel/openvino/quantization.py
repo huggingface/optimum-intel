@@ -16,6 +16,7 @@ import copy
 import inspect
 import logging
 import os
+import warnings
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
@@ -200,7 +201,7 @@ class OVQuantizer(OptimumQuantizer):
     def quantize(
         self,
         calibration_dataset: Optional[Union[datasets.Dataset, nncf.Dataset, Iterable]] = None,
-        save_directory: Union[str, Path] = None,
+        save_directory: Optional[Union[str, Path]] = None,
         ov_config: OVConfig = None,
         file_name: Optional[str] = None,
         batch_size: int = 1,
@@ -216,7 +217,7 @@ class OVQuantizer(OptimumQuantizer):
             calibration_dataset (`datasets.Dataset` or `nncf.Dataset` or `Iterable`, *optional*):
                 A collection of data samples to use for quantization calibration. Is optional for weight-only
                 quantization and is required for full quantization.
-            save_directory (`Union[str, Path]`):
+            save_directory (`Union[str, Path]`, *optional*):
                 The directory where the quantized model should be saved.
             ov_config (`OVConfig`, *optional*):
                 The configuration containing the parameters related to quantization. If not provided, 8-bit symmetric
@@ -263,10 +264,6 @@ class OVQuantizer(OptimumQuantizer):
                 "`weights_only` argument is deprecated and will be removed in v1.18.0. In the future please provide `ov_config.quantization_config` "
                 "as an instance of `OVWeightQuantizationConfig` for weight-only compression or as an instance of `OVQuantizationConfig` for full model quantization."
             )
-
-        if save_directory is None:
-            # TODO : can be set to self.model.config.name_or_path for OVModels when not provided
-            raise ValueError("`save_directory` needs to be specified")
 
         if ov_config is None:
             ov_config = OVConfig()
@@ -320,21 +317,41 @@ class OVQuantizer(OptimumQuantizer):
     def _quantize_ovbasemodel(
         self,
         ov_config: OVConfig,
-        save_directory: Union[str, Path],
+        save_directory: Union[str, Path] = None,
         calibration_dataset: Optional[Union[datasets.Dataset, nncf.Dataset, Iterable]] = None,
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         **kwargs,
     ):
-        save_directory = Path(save_directory)
-        save_directory.mkdir(parents=True, exist_ok=True)
+        if save_directory is not None:
+            save_directory = Path(save_directory)
+            save_directory.mkdir(parents=True, exist_ok=True)
 
         quantization_config = ov_config.quantization_config
         if isinstance(quantization_config, OVWeightQuantizationConfig):
+            if calibration_dataset is None and isinstance(quantization_config.dataset, str):
+                from optimum.intel import OVModelForCausalLM
+
+                if isinstance(self.model, OVModelForCausalLM):
+                    from optimum.gptq.data import get_dataset, prepare_dataset
+
+                    tokenizer = AutoTokenizer.from_pretrained(quantization_config.tokenizer)
+                    nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
+                    calibration_dataset = get_dataset(
+                        quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples
+                    )
+                    calibration_dataset = prepare_dataset(calibration_dataset)
+                    calibration_dataset = nncf.Dataset(calibration_dataset, lambda x: self.model.prepare_inputs(**x))
+                else:
+                    raise ValueError(
+                        f"Can't create weight compression calibration dataset from string for {type(self.model)}"
+                    )
+
             _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)
-            self.model.save_pretrained(save_directory)
-            ov_config.save_pretrained(save_directory)
+            if save_directory is not None:
+                self.model.save_pretrained(save_directory)
+                ov_config.save_pretrained(save_directory)
             return
         if not isinstance(quantization_config, OVQuantizationConfig):
             raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
@@ -386,8 +403,9 @@ class OVQuantizer(OptimumQuantizer):
             **kwargs,
         )
         self.model.model = quantized_model
-        self.model.save_pretrained(save_directory)
-        ov_config.save_pretrained(save_directory)
+        if save_directory is not None:
+            self.model.save_pretrained(save_directory)
+            ov_config.save_pretrained(save_directory)
 
     def _quantize_torchmodel(
         self,
@@ -400,6 +418,10 @@ class OVQuantizer(OptimumQuantizer):
         remove_unused_columns: bool = True,
         **kwargs,
     ):
+        if save_directory is None:
+            # TODO : can be set to self.model.config.name_or_path for OVModels when not provided
+            raise ValueError("`save_directory` needs to be specified")
+
         self._set_task()
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
@@ -478,9 +500,9 @@ class OVQuantizer(OptimumQuantizer):
                 subset_size=quantization_config.num_samples,
                 ignored_scope=quantization_config.get_ignored_scope_instance(),
                 model_type=nncf.ModelType(quantization_config.model_type),
-                preset=nncf.QuantizationPreset.PERFORMANCE
-                if quantization_config.sym
-                else nncf.QuantizationPreset.MIXED,
+                preset=(
+                    nncf.QuantizationPreset.PERFORMANCE if quantization_config.sym else nncf.QuantizationPreset.MIXED
+                ),
                 fast_bias_correction=quantization_config.fast_bias_correction,
                 advanced_parameters=nncf.AdvancedQuantizationParameters(
                     overflow_fix=OverflowFix(quantization_config.overflow_fix)
@@ -542,7 +564,8 @@ class OVQuantizer(OptimumQuantizer):
         dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
-        use_auth_token: bool = False,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
     ) -> datasets.Dataset:
         """
@@ -562,13 +585,25 @@ class OVQuantizer(OptimumQuantizer):
                 Processing function to apply to each example after loading dataset.
             preprocess_batch (`bool`, defaults to `True`):
                 Whether the `preprocess_function` should be batched.
-            use_auth_token (`bool`, defaults to `False`):
-                Whether to use the token generated when running `transformers-cli login`.
+            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+                Deprecated. Please use `token` instead.
+            token (Optional[Union[bool, str]], defaults to `None`):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `huggingface-cli login` (stored in `~/.huggingface`).
             cache_dir (`str`, *optional*):
                 Caching directory for a calibration dataset.
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         if not is_datasets_available():
             raise ValueError(DATASETS_IMPORT_ERROR.format("OVQuantizer.get_calibration_dataset"))
         from datasets import load_dataset
@@ -577,7 +612,7 @@ class OVQuantizer(OptimumQuantizer):
             dataset_name,
             name=dataset_config_name,
             split=dataset_split,
-            use_auth_token=use_auth_token,
+            token=token,
             cache_dir=cache_dir,
         )
 
@@ -646,14 +681,6 @@ def _weight_only_quantization(
             dataset = calibration_dataset
         else:
             dataset = nncf.Dataset(calibration_dataset)
-    elif config.dataset is not None and isinstance(config.dataset, str):
-        tokenizer = AutoTokenizer.from_pretrained(config.tokenizer)
-
-        from optimum.gptq.data import get_dataset, prepare_dataset
-
-        nsamples = config.num_samples if config.num_samples else 128
-        dataset = get_dataset(config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
-        dataset = prepare_dataset(dataset)
 
     sensitivity_metric = None
     if isinstance(config.sensitivity_metric, str):

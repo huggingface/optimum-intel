@@ -4,16 +4,9 @@ from typing import Optional, Tuple
 import intel_extension_for_pytorch as ipex
 
 
-
 class _IPEXLlamaAttention(nn.Module):
     def __init__(self, module, config, distributed=False) -> None:
         super().__init__()
-        # for k, v in module.__dict__.items():
-        #     setattr(self, k, v)
-        # for k, v in module.__class__.__dict__.items():
-        #     if k.startswith("__") or k.startswith("forward"):
-        #         continue
-        #     setattr(self.__class__, k, getattr(module.__class__, k))
         self.module = module
         self.config = config
         self.distributed = distributed
@@ -66,10 +59,10 @@ class _IPEXLlamaAttention(nn.Module):
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
             residual (`torch.Tensor`): residual tensor to the layer of shape `
         """
-       
+
         self.preprocess_for_optimize(hidden_states=hidden_states, layer_past=past_key_value, **kwargs)
 
-        query, key, value = self.qkv_gemm(hidden_states= hidden_states, **kwargs)
+        query, key, value = self.qkv_gemm(hidden_states=hidden_states, **kwargs)
 
         key, value = self.rope(key, value, position_ids, past_key_value, kwargs)
 
@@ -82,30 +75,20 @@ class _IPEXLlamaAttention(nn.Module):
         self.post_process_for_optimize()
         outputs = (attn_output, present)
         if output_attentions:
-            outputs += (attn_weight, )
+            outputs += (attn_weight,)
         else:
-            outputs += (None, )
+            outputs += (None,)
         return outputs
+
 
 class _IPEXLlamaMLP(nn.Module):
     def __init__(self, module, config, distributed=False) -> None:
         super().__init__()
-        # for k, v in module.__dict__.items():
-        #     setattr(self, k, v)
-        # for k, v in module.__class__.__dict__.items():
-        #     if k.startswith("__") or k.startswith("forward"):
-        #         continue
-        #     setattr(self.__class__, k, getattr(module.__class__, k))
         self.module = module
         self.config = config
         self.distributed = distributed
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        residual: torch.Tensor,
-        **kwargs
-    ):
+    def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor, **kwargs):
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
@@ -116,23 +99,22 @@ class _IPEXLlamaMLP(nn.Module):
 class _IPEXLlamaDecoderLayer(nn.Module):
     def __init__(self, module, config, distributed=False) -> None:
         super().__init__()
-        # for k, v in module.__dict__.items():
-        #     setattr(self, k, v)
-        # for k, v in module.__class__.__dict__.items():
-        #     if k.startswith("__") or k.startswith("forward"):
-        #         continue
-        #     setattr(self.__class__, k, getattr(module.__class__, k))
         self.layer_idx = module.self_attn.layer_idx
-        # TODO: add device check 
-        if False: 
-            self.attn = _IPEXLlamaAttention(module.self_attn, config, distributed)
-            self.mlp = _IPEXLlamaMLP(module.mlp, config, distributed)
-        else:
+        module_device = str(module.self_attn.q_proj.weight.device)
+        if "xpu" in module_device:
             from .xpu.xpu_modeling_llama import _IPEXLlamaAttentionXPU, _IPEXLlamaMLPXPU
+
             self.attn = _IPEXLlamaAttentionXPU(module.self_attn, config, distributed)
             self.mlp = _IPEXLlamaMLPXPU(module.mlp, config, distributed)
-        self.input_layernorm = ipex.llm.modules.RMSNorm(module.input_layernorm.weight, module.input_layernorm.variance_epsilon)
-        self.post_attention_layernorm = ipex.llm.modules.RMSNorm(module.post_attention_layernorm.weight, module.post_attention_layernorm.variance_epsilon)
+        else:
+            self.attn = _IPEXLlamaAttention(module.self_attn, config, distributed)
+            self.mlp = _IPEXLlamaMLP(module.mlp, config, distributed)
+        self.input_layernorm = ipex.llm.modules.RMSNorm(
+            module.input_layernorm.weight, module.input_layernorm.variance_epsilon
+        )
+        self.post_attention_layernorm = ipex.llm.modules.RMSNorm(
+            module.post_attention_layernorm.weight, module.post_attention_layernorm.variance_epsilon
+        )
 
     def preprocess_for_optimize(
         self,
@@ -142,18 +124,12 @@ class _IPEXLlamaDecoderLayer(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attention: Optional[bool] = True,
         use_cache: Optional[bool] = False,
-        **kwargs
+        **kwargs,
     ):
         return hidden_states, attention_mask, postion_ids, past_key_value
 
     def postprocess_for_optimize(
-        self,
-        hidden_states,
-        output_attention,
-        use_cache,
-        self_attn_weight,
-        present_key_value,
-        **kwargs
+        self, hidden_states, output_attention, use_cache, self_attn_weight, present_key_value, **kwargs
     ):
         outputs = (hidden_states,)
         if use_cache:
@@ -162,7 +138,6 @@ class _IPEXLlamaDecoderLayer(nn.Module):
             outputs += (self_attn_weight,)
 
         return outputs
-
 
     def forward(
         self,
@@ -189,13 +164,7 @@ class _IPEXLlamaDecoderLayer(nn.Module):
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
         outputs = self.preprocess_for_optimize(
-            hidden_states, 
-            attention_mask,
-            position_ids,
-            past_key_value,
-            output_attentions,
-            use_cache,
-            **kwargs
+            hidden_states, attention_mask, position_ids, past_key_value, output_attentions, use_cache, **kwargs
         )
         (hidden_states, attention_mask, position_ids, past_key_value) = outputs
         residual = hidden_states
@@ -220,15 +189,7 @@ class _IPEXLlamaDecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states, residual, **kwargs)
 
         outputs = self.postprocess_for_optimize(
-            hidden_states,
-            output_attentions,
-            use_cache,
-            self_attn_weight,
-            present_key_value,
-            **kwargs
+            hidden_states, output_attentions, use_cache, self_attn_weight, present_key_value, **kwargs
         )
 
         return outputs
-
-    
-

@@ -1,5 +1,5 @@
-
 from intel_extension_for_pytorch.transformers.models.xpu.optimize_transformers.ModuleReplacer import ModuleReplacer
+
 
 def update_patcher_info_on_xpu(patcher, model_name):
     patch_info = ModuleReplacer.get_patch_info_from_model(model_name)

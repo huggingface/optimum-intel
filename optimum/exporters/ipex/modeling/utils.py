@@ -11,6 +11,7 @@ from transformers.models.llama.modeling_llama import (
 
 from .xpu.utils import update_patcher_info_on_xpu
 
+
 def update_patcher_info_on_cpu(model_name):
     pass
 
@@ -75,7 +76,9 @@ class _IPEXPatcher:
         elif device.device_type == "cpu":
             update_patcher_info_on_cpu(model_name)
         else:
-            raise RuntimeError(f"Optimum-intel only support CPU and XPU device optimization. But we find this model on {device}.")
+            raise RuntimeError(
+                f"Optimum-intel only support CPU and XPU device optimization. But we find this model on {device}."
+            )
 
     def patch_model(self, model):
         # if isinstance(model, LlamaForCausalLM):
@@ -83,4 +86,3 @@ class _IPEXPatcher:
         self.patch_op_recursive(model)
         self.convert_function_recursive(model)
         self.convert_class_recursive(model)
-

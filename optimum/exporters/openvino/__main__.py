@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
@@ -57,6 +58,7 @@ def main_export(
     force_download: bool = False,
     local_files_only: bool = False,
     use_auth_token: Optional[Union[bool, str]] = None,
+    token: Optional[Union[bool, str]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
@@ -107,9 +109,11 @@ def main_export(
             cached versions if they exist.
         local_files_only (`Optional[bool]`, defaults to `False`):
             Whether or not to only look at local files (i.e., do not try to download the model).
-        use_auth_token (`Optional[str]`, defaults to `None`):
+        use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+            Deprecated. Please use `token` instead.
+        token (Optional[Union[bool, str]], defaults to `None`):
             The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-            when running `transformers-cli login` (stored in `~/.huggingface`).
+            when running `huggingface-cli login` (stored in `~/.huggingface`).
         model_kwargs (`Optional[Dict[str, Any]]`, defaults to `None`):
             Experimental usage: keyword arguments to pass to the model during
             the export. This argument should be used along the `custom_export_configs` argument
@@ -137,6 +141,15 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_ov/")
     ```
     """
+
+    if use_auth_token is not None:
+        warnings.warn(
+            "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+            FutureWarning,
+        )
+        if token is not None:
+            raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+        token = use_auth_token
 
     if compression_option is not None:
         logger.warning(
@@ -196,7 +209,7 @@ def main_export(
             subfolder=subfolder,
             revision=revision,
             cache_dir=cache_dir,
-            use_auth_token=use_auth_token,
+            token=token,
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
@@ -268,7 +281,7 @@ def main_export(
         subfolder=subfolder,
         revision=revision,
         cache_dir=cache_dir,
-        use_auth_token=use_auth_token,
+        token=token,
         local_files_only=local_files_only,
         force_download=force_download,
         trust_remote_code=trust_remote_code,

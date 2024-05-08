@@ -15,6 +15,7 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
@@ -61,8 +62,6 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama",)
 
 
 def _is_patched_with_ipex(model, task):
-    if is_ipex_version("<", "2.5.0"):
-        return False
 
     if isinstance(model, torch.jit.ScriptModule):
         for node in model.graph.nodes():
@@ -75,9 +74,9 @@ def _is_patched_with_ipex(model, task):
 
 
 def ipex_jit_trace(model, task, use_cache):
-    # Only support torch version >= 2.1.0 to support example_kwarg_inputs in jit.trace
-    if is_torch_version("<", "2.1.0"):
-        raise ImportError("`torch>=2.1.0` is needed to trace your model")
+    # Only support torch version >= 2.3.0 to support example_kwarg_inputs in jit.trace
+    if is_torch_version("<", "2.3.0"):
+        raise ImportError("`torch>=2.3.0` is needed to trace your model")
 
     if _is_patched_with_ipex(model, task):
         model = _patch_model(model)
@@ -152,6 +151,7 @@ class IPEXModel(OptimizedModel):
         config: PretrainedConfig,
         use_cache: bool = True,
         use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
@@ -159,37 +159,59 @@ class IPEXModel(OptimizedModel):
         local_files_only: bool = False,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         trust_remote_code: bool = False,
+        **kwargs,
     ):
-        if is_torch_version("<", "2.1.0"):
-            raise ImportError("`torch>=2.0.0` is needed to trace your model")
+        device_map = kwargs.pop("device_map", None)
+
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError(
+                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
+                )
+            token = use_auth_token
 
         task = cls.export_feature
         model_kwargs = {
             "revision": revision,
-            "use_auth_token": use_auth_token,
+            "token": token,
             "cache_dir": cache_dir,
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
             "torch_dtype": torch_dtype,
             "trust_remote_code": trust_remote_code,
+            "device_map": device_map,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        traced_model = ipex_jit_trace(model, task, use_cache)
 
-        config.torchscript = True
-        config.torch_dtype = torch_dtype
+        if "cpu" in str(model.device):
+            traced_model = ipex_jit_trace(model, task, use_cache)
+            config.torchscript = True
+            config.torch_dtype = torch_dtype
+            return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
+        else:
+            from optimum.exporters.ipex.model_patcher import _patch_model
 
-        return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
+            if _is_patched_with_ipex(model, task):
+                model = _patch_model(model)
+            else:
+                raise NotImplementedError(f"The given model is not support yet")
+
+            return model
 
     @classmethod
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str, None]] = None,
-        revision: Optional[Union[str, None]] = None,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: Optional[str] = WEIGHTS_NAME,
@@ -197,6 +219,17 @@ class IPEXModel(OptimizedModel):
         subfolder: str = "",
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError(
+                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
+                )
+            token = use_auth_token
+
         if not getattr(config, "torchscript", False):
             raise ValueError(
                 "`config.torchscript` should be set to `True`, if your model is not a TorchScript model and needs to be traced please set `export=True` when loading it with `.from_pretrained()`"
@@ -211,7 +244,7 @@ class IPEXModel(OptimizedModel):
             model_cache_path = hf_hub_download(
                 repo_id=model_id,
                 filename=file_name,
-                use_auth_token=use_auth_token,
+                token=token,
                 revision=revision,
                 cache_dir=cache_dir,
                 force_download=force_download,
