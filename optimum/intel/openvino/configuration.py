@@ -57,6 +57,7 @@ _DEFAULT_4BIT_CONFIGS = {
 
 class OVQuantizationMethod(str, Enum):
     DEFAULT = "default"
+    HYBRID = "hybrid"
 
 
 @dataclass

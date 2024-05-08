@@ -57,14 +57,13 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
-from .configuration import OVConfig, OVWeightQuantizationConfig
+from .configuration import OVConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
     OV_TO_NP_TYPE,
     OV_XML_FILE_NAME,
-    PREDEFINED_SD_DATASETS,
     _print_compiled_model_properties,
 )
 
@@ -293,21 +292,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 else:
                     kwargs[name] = load_method(new_model_save_dir)
 
-        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
-
         unet_path = new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name
-        if quantization_config is not None and quantization_config.dataset is not None:
-            # load the UNet model uncompressed to apply hybrid quantization further
-            unet = cls.load_model(unet_path)
-            # Apply weights compression to other `components` without dataset
-            weight_quantization_params = {
-                param: value for param, value in quantization_config.__dict__.items() if param != "dataset"
-            }
-            weight_quantization_config = OVWeightQuantizationConfig.from_dict(weight_quantization_params)
-        else:
-            weight_quantization_config = quantization_config
-            unet = cls.load_model(unet_path, weight_quantization_config)
-
         components = {
             "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
             "vae_decoder": new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
@@ -315,13 +300,19 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             "text_encoder_2": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
         }
 
-        for key, value in components.items():
-            components[key] = cls.load_model(value, weight_quantization_config) if value.is_file() else None
-
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
-        if quantization_config is not None and quantization_config.dataset is not None:
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        if quantization_config is None or quantization_config.dataset is None:
+            unet = cls.load_model(unet_path, quantization_config)
+            for key, value in components.items():
+                components[key] = cls.load_model(value, quantization_config) if value.is_file() else None
+        else:
+            # Load uncompressed models to apply hybrid quantization further
+            unet = cls.load_model(unet_path)
+            for key, value in components.items():
+                components[key] = cls.load_model(value) if value.is_file() else None
             sd_model = cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
 
             supported_pipelines = (
@@ -332,12 +323,14 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             if not isinstance(sd_model, supported_pipelines):
                 raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
 
-            nsamples = quantization_config.num_samples if quantization_config.num_samples else 200
-            unet_inputs = sd_model._prepare_unet_inputs(quantization_config.dataset, nsamples)
+            from optimum.intel import OVQuantizer
 
-            from .quantization import _hybrid_quantization
+            hybrid_quantization_config = deepcopy(quantization_config)
+            hybrid_quantization_config.quant_method = OVQuantizationMethod.HYBRID
+            quantizer = OVQuantizer(sd_model)
+            quantizer.quantize(ov_config=OVConfig(quantization_config=hybrid_quantization_config))
 
-            unet = _hybrid_quantization(sd_model.unet.model, weight_quantization_config, dataset=unet_inputs)
+            return sd_model
 
         return cls(
             unet=unet,
@@ -347,62 +340,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             **components,
             **kwargs,
         )
-
-    def _prepare_unet_inputs(
-        self,
-        dataset: Union[str, List[Any]],
-        num_samples: int,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
-        seed: Optional[int] = 42,
-        **kwargs,
-    ) -> Dict[str, Any]:
-        self.compile()
-
-        size = self.unet.config.get("sample_size", 64) * self.vae_scale_factor
-        height = height or min(size, 512)
-        width = width or min(size, 512)
-
-        if isinstance(dataset, str):
-            dataset = deepcopy(dataset)
-            available_datasets = PREDEFINED_SD_DATASETS.keys()
-            if dataset not in available_datasets:
-                raise ValueError(
-                    f"""You have entered a string value for dataset. You can only choose between
-                    {list(available_datasets)}, but the {dataset} was found"""
-                )
-
-            from datasets import load_dataset
-
-            dataset_metadata = PREDEFINED_SD_DATASETS[dataset]
-            dataset = load_dataset(dataset, split=dataset_metadata["split"], streaming=True).shuffle(seed=seed)
-            input_names = dataset_metadata["inputs"]
-            dataset = dataset.select_columns(list(input_names.values()))
-
-            def transform_fn(data_item):
-                return {inp_name: data_item[column] for inp_name, column in input_names.items()}
-
-        else:
-
-            def transform_fn(data_item):
-                return data_item if isinstance(data_item, (list, dict)) else [data_item]
-
-        from .quantization import InferRequestWrapper
-
-        calibration_data = []
-        self.unet.request = InferRequestWrapper(self.unet.request, calibration_data)
-
-        for inputs in dataset:
-            inputs = transform_fn(inputs)
-            if isinstance(inputs, dict):
-                self.__call__(**inputs, height=height, width=width)
-            else:
-                self.__call__(*inputs, height=height, width=width)
-            if len(calibration_data) >= num_samples:
-                break
-
-        self.unet.request = self.unet.request.request
-        return calibration_data[:num_samples]
 
     @classmethod
     def _from_transformers(
