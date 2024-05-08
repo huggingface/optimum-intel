@@ -62,8 +62,6 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama",)
 
 
 def _is_patched_with_ipex(model, task):
-    if is_ipex_version("<", "2.5.0"):
-        return False
 
     if isinstance(model, torch.jit.ScriptModule):
         for node in model.graph.nodes():
@@ -161,7 +159,9 @@ class IPEXModel(OptimizedModel):
         local_files_only: bool = False,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         trust_remote_code: bool = False,
+        **kwargs,
     ):
+        device_map = kwargs.pop("device_map", None)
         if use_auth_token is not None:
             warnings.warn(
                 "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
@@ -172,7 +172,6 @@ class IPEXModel(OptimizedModel):
                     "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
                 )
             token = use_auth_token
-
         if is_torch_version("<", "2.1.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
@@ -186,15 +185,25 @@ class IPEXModel(OptimizedModel):
             "force_download": force_download,
             "torch_dtype": torch_dtype,
             "trust_remote_code": trust_remote_code,
+            "device_map": device_map,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        traced_model = ipex_jit_trace(model, task, use_cache)
 
-        config.torchscript = True
-        config.torch_dtype = torch_dtype
+        if "cpu" in str(model.device):
+            traced_model = ipex_jit_trace(model, task, use_cache)
+            config.torchscript = True
+            config.torch_dtype = torch_dtype
+            return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
+        else:
+            from optimum.exporters.ipex.model_patcher import _patch_model
 
-        return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
+            if _is_patched_with_ipex(model, task):
+                model = _patch_model(model)
+            else:
+                raise NotImplementedError(f"The given model is not support yet")
+
+            return model
 
     @classmethod
     def _from_pretrained(

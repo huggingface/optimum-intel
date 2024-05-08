@@ -29,9 +29,7 @@ from .modeling_utils import (
     _llama_model_forward,
 )
 
-# from modeling.utils import _IPEXPatcher
 from .modeling.modeling_llama import _IPEXLlamaDecoderLayer
-
 
 _IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
 _IPEX_EXPORTED_TASK = ("text-generation",)
@@ -65,21 +63,24 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 
 def _patch_llama_model(model):
-    if is_ipex_version("<", "2.1.0"):
-        raise ImportError("Only ipex version > 2.1.0 supports RotaryEmbedding and IndirectAccessKVCache")
 
-    from intel_extension_for_pytorch.llm.modules import RotaryEmbedding
+    ipex_version = "2.1.0" if "xpu" in str(model.device) else "2.3.0"
+    if is_ipex_version("<", ipex_version):
+        raise ImportError(f"Only ipex version > {ipex_version} supports RotaryEmbedding and IndirectAccessKVCache")
 
-    ipex_rope = RotaryEmbedding(
-        model.config.max_position_embeddings,
-        model.config.hidden_size // model.config.num_attention_heads,
-        model.config.rope_theta,
-        model.config.architectures[0],
-    )
-    patch_op(model, LlamaAttention, "ipex_rope", ipex_rope)
     if "cpu" in str(model.device):
+        from intel_extension_for_pytorch.llm.modules import RotaryEmbedding
         from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCache
+
+        ipex_rope = RotaryEmbedding(
+            model.config.max_position_embeddings,
+            model.config.hidden_size // model.config.num_attention_heads,
+            model.config.rope_theta,
+            model.config.architectures[0],
+        )
         ipex_scale_dot_product = IndirectAccessKVCache(text_max_length=model.config.max_position_embeddings)
+
+        patch_op(model, LlamaAttention, "ipex_rope", ipex_rope)
         patch_op(model, LlamaAttention, "ipex_scale_dot_product", ipex_scale_dot_product)
 
         convert_functions(model, LlamaModel, "forward", _llama_model_forward)
@@ -96,6 +97,4 @@ def _patch_llama_model(model):
 def _patch_model(model):
     if isinstance(model, LlamaForCausalLM):
         model = _patch_llama_model(model)
-    # _IPEXPatcher.patch_model(model)
-        
     return model
