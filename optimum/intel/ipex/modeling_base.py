@@ -162,7 +162,6 @@ class IPEXModel(OptimizedModel):
         **kwargs,
     ):
         device_map = kwargs.pop("device_map", None)
-
         if use_auth_token is not None:
             warnings.warn(
                 "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
@@ -173,6 +172,8 @@ class IPEXModel(OptimizedModel):
                     "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
                 )
             token = use_auth_token
+        if is_torch_version("<", "2.1.0"):
+            raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
         task = cls.export_feature
         model_kwargs = {

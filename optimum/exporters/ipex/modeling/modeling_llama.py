@@ -11,27 +11,6 @@ class _IPEXLlamaAttention(nn.Module):
         self.config = config
         self.distributed = distributed
 
-    def epreprocess_for_optimize(self, hidden_states, layer_past, **kwargs):
-        pass
-
-    def qkv_gemm(self, hidden_states, **kwargs):
-        pass
-
-    def rope(self, query, key, value, position_ids, layer_past, **kwargs):
-        pass
-
-    def get_present(self, query, key, value, use_cache, **kwargs):
-        pass
-
-    def sdpa(self, query, key, value, attention_mask, past_key_value, **kwargs):
-        pass
-
-    def out_proj(self, hidden_states, residual, **kwargs):
-        pass
-
-    def post_process_for_optimize(self):
-        pass
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -59,26 +38,7 @@ class _IPEXLlamaAttention(nn.Module):
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
             residual (`torch.Tensor`): residual tensor to the layer of shape `
         """
-
-        self.preprocess_for_optimize(hidden_states=hidden_states, layer_past=past_key_value, **kwargs)
-
-        query, key, value = self.qkv_gemm(hidden_states=hidden_states, **kwargs)
-
-        key, value = self.rope(key, value, position_ids, past_key_value, kwargs)
-
-        present = self.get_present(query, key, value, use_cache)
-
-        attn_output, attn_weight = self.sdpa(query, key, value, attention_mask, past_key_value, kwargs)
-
-        attn_output = self.out_proj(attn_output, residual)
-
-        self.post_process_for_optimize()
-        outputs = (attn_output, present)
-        if output_attentions:
-            outputs += (attn_weight,)
-        else:
-            outputs += (None,)
-        return outputs
+        pass
 
 
 class _IPEXLlamaMLP(nn.Module):
