@@ -38,7 +38,8 @@ _DEFAULT_4BIT_CONFIGS = {
     "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
     "bigscience/bloomz-7b1": {"bits": 4, "sym": False, "group_size": 32, "ratio": 0.6},
     "togethercomputer/RedPajama-INCITE-7B-Instruct": {"bits": 4, "sym": False, "group_size": 128},
-    "HuggingFaceH4/zephyr-7b-beta": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.6},
+    "HuggingFaceH4/zephyr-7b-beta": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8, 
+                                     "dataset": "wikitext2", "awq": True},
     "meta-llama/Llama-2-7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.7},
     "meta-llama/Llama-2-7b-chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "meta-llama/Llama-2-13b-chat": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
@@ -57,6 +58,8 @@ _DEFAULT_4BIT_CONFIGS = {
     "lmsys/vicuna-7b-v1.5": {"bits": 4, "sym": False, "group_size": 128, "ratio": 1.0},
     "stabilityai/stablelm-tuned-alpha-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "mistralai/Mistral-7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.9},
+    "baichuan-inc/Baichuan2-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8, 
+                                       "dataset": "wikitext2", "awq": True},
 }
 
 
