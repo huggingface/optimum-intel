@@ -62,7 +62,9 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama",)
 
 
 def _is_patched_with_ipex(model, task):
-
+    ipex_version = "2.2.0" if "xpu" in str(model.device) else "2.5.0"
+    if is_ipex_version("<", ipex_version):
+        return False
     if isinstance(model, torch.jit.ScriptModule):
         for node in model.graph.nodes():
             # Jit will record the codes position so we can check if the node use ipex exporter.
@@ -172,8 +174,6 @@ class IPEXModel(OptimizedModel):
                     "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
                 )
             token = use_auth_token
-        if is_torch_version("<", "2.1.0"):
-            raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
         task = cls.export_feature
         model_kwargs = {
@@ -191,6 +191,8 @@ class IPEXModel(OptimizedModel):
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
 
         if "cpu" in str(model.device):
+            if is_torch_version("<", "2.1.0"):
+                raise ImportError("`torch>=2.1.0` is needed to trace your model")
             traced_model = ipex_jit_trace(model, task, use_cache)
             config.torchscript = True
             config.torch_dtype = torch_dtype
