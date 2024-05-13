@@ -778,14 +778,31 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model_with_cache
         gc.collect()
 
-    def test_beam_search(self):
-        model_id = MODEL_NAMES["llama"]
-        ov_model_stateful = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=True)
-        ov_model_stateless = OVModelForCausalLM.from_pretrained(model_id, export=True, use_cache=True, stateful=False)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
+    def test_beam_search(self, model_arch):
+        model_kwargs = {}
+        model_id = MODEL_NAMES[model_arch]
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {
+                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
+                "trust_remote_code": True,
+            }
+        # Qwen tokenizer does not support padding, chatgm testing model produces nan that incompatible with beam search
+        if model_arch in ["qwen", "chatglm"]:
+            return
 
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        tokenizer.pad_token = tokenizer.eos_token
+        ov_model_stateful = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, use_cache=True, stateful=True, **model_kwargs
+        )
+        ov_model_stateless = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, use_cache=True, stateful=False, **model_kwargs
+        )
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
         ov_model_stateful.generation_config.eos_token_id = None
         ov_model_stateless.generation_config.eos_token_id = None

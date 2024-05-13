@@ -12,12 +12,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import copy
+import warnings
 import logging
 import os
-import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -28,21 +28,10 @@ from openvino.runtime import Core, Tensor, Type
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
-from transformers.generation.beam_search import BeamScorer, ConstrainedBeamSearchScorer
 from transformers.generation.configuration_utils import GenerationConfig, GenerationMode
 from transformers.generation.logits_process import LogitsProcessorList
-from transformers.generation.stopping_criteria import (
-    EosTokenCriteria,
-    StoppingCriteriaList,
-    validate_stopping_criteria,
-)
-from transformers.generation.utils import (
-    GenerateBeamDecoderOnlyOutput,
-    GenerateBeamOutput,
-    GenerateOutput,
-    _split_model_inputs,
-    stack_model_outputs,
-)
+from transformers.generation.stopping_criteria import StoppingCriteriaList
+from transformers.generation.utils import GenerateOutput
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from optimum.utils.normalized_config import NormalizedConfigManager
@@ -398,7 +387,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         inputs = {}
         if not self.stateful:
             if past_key_values is not None:
-                if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
+                if (
+                    self.config.model_type not in MULTI_QUERY_ATTN_MODELS
+                    or self.config.model_type == "falcon"
+                    and self.config.new_decoder_architecture
+                ):
                     if self._pkv_precision == Type.bf16:
                         # numpy does not support bf16, pretending f16, should change to bf16
                         past_key_values = tuple(
@@ -491,9 +484,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             position_ids=position_ids,
             **kwargs,
         )
-
-        print(inputs["input_ids"].shape)
-
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
@@ -509,7 +499,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             if self.use_cache:
                 # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
                 past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
-                if self.config.model_type not in MULTI_QUERY_ATTN_MODELS:
+                if (
+                    self.config.model_type not in MULTI_QUERY_ATTN_MODELS
+                    or self.config.model_type == "falcon"
+                    and self.config.new_decoder_architecture
+                ):
                     # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
                     past_key_values = tuple(
                         past_key_values[i : i + self.num_pkv] for i in range(0, len(past_key_values), self.num_pkv)
@@ -561,21 +555,33 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         return model_inputs
 
     def _expand_outputs_for_generation(self, indicies, logits: torch.Tensor, past_key_values: Tuple):
+        batch_size = logits.shape[0]
         if indicies.shape[0] != 1:
             logits = logits[indicies]
             if past_key_values and not self.stateful:
-                past_key_values = tuple(
-                    tuple(
-                        past_state[indicies]
-                        if not self.config.model_type == "chatglm"
-                        else past_state[:, indicies, ...]
-                        for past_state in layer_past
+                if (
+                    self.config.model_type not in MULTI_QUERY_ATTN_MODELS
+                    or self.config.model_type == "falcon"
+                    and self.config.new_decoder_architecture
+                ):
+                    past_key_values = tuple(
+                        tuple(
+                            past_state[indicies]
+                            if not self.config.model_type == "chatglm"
+                            else past_state[:, indicies, ...]
+                            for past_state in layer_past
+                        )
+                        for layer_past in past_key_values
                     )
-                    for layer_past in past_key_values
-                )
-            if self.stateful:
-                self.next_beam_idx = self.next_beam_idx[indicies]
-                self._second_iter_beam_search = True
+                else:
+                    past_key_values = tuple([past_state[indicies] for past_state in past_key_values])
+        if self.stateful:
+            self.next_beam_idx = (
+                self.next_beam_idx[indicies]
+                if self.next_beam_idx is not None
+                else np.arange(batch_size, dtype=int)[indicies]
+            )
+        self._second_iter_beam_search = True
         return logits, past_key_values
 
     def _deduplicate_inputs(self, model_inputs: Dict):
@@ -591,12 +597,19 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 else:
                     shape = input_tensor.shape
                     dtype = input_tensor.element_type
-                    shape[0 if not self.config.model_type == "chatglm" else 1] = indicies.shape[0]
+                    upd_batch_size = indicies.shape[0]
+                    if self.config.model_type == "bloom":
+                        upd_batch_size *= self.config.num_attention_heads
+                    shape[0 if not self.config.model_type == "chatglm" else 1] = upd_batch_size
                     upd_model_inputs[input_name] = Tensor(dtype, shape)
-                print(f"{input_name}: {upd_model_inputs[input_name].shape}")
         upd_model_inputs["input_ids"] = unique_input_ids
         if "beam_idx" in model_inputs:
-            beam_idx = np.arange(unique_input_ids.shape[0], dtype=int)
+            beam_range = (
+                unique_input_ids.shape[0]
+                if self.config.model_type != "bloom"
+                else unique_input_ids.shape[0] * self.config.num_attention_heads
+            )
+            beam_idx = np.arange(beam_range, dtype=int)
             upd_model_inputs["beam_idx"] = beam_idx
         return upd_model_inputs, reverse_indicies
 
@@ -646,7 +659,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             return 0
         if self.stateful:
             return self._past_length
-        if self.config.model_type in MULTI_QUERY_ATTN_MODELS:
+        if self.config.model_type in MULTI_QUERY_ATTN_MODELS and not (
+            self.config.model_type == "falcon" and self.config.new_decoder_architecture
+        ):
             return past_key_values[0].shape[-2]
         seq_length_dim = -2
         if self.config.model_type == "chatglm":
@@ -677,9 +692,14 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             self._second_iter_beam_search = False
             return past_key_values
         else:
-            return tuple(
-                tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past) for layer_past in past_key_values
-            )
+            if self.config.model_type not in MULTI_QUERY_ATTN_MODELS and not (
+                self.config.model_type == "falcon" and self.config.new_decoder_architecture
+            ):
+                return tuple(
+                    tuple(np.take(past_state, beam_idx, 0) for past_state in layer_past)
+                    for layer_past in past_key_values
+                )
+            return tuple(np.take(past_state, beam_idx, 0) for past_state in past_key_values)
 
     def can_generate(self):
         """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
@@ -800,11 +820,12 @@ class OVBloomForCausalLM(OVModelForCausalLM):
         This is required to match `past_key_values` with the correct beam_idx at every generation step.
         """
         if self.stateful:
-            beam_idx = np.array(beam_idx)
             batch_size = beam_idx.shape[0]
+            beam_idx = np.array(beam_idx) if not self._second_iter_beam_search else self.next_beam_idx
             indices = np.array(range(batch_size * self.config.num_attention_heads))
             indices = indices.reshape([batch_size, self.config.num_attention_heads])
             self.next_beam_idx = np.take(indices, beam_idx, 0).flatten()
+            self._second_iter_beam_search = False
             return past_key_values
         else:
             standardized_past = self._convert_to_standard_cache(past_key_values, batch_size=len(beam_idx))
@@ -854,6 +875,24 @@ class OVBloomForCausalLM(OVModelForCausalLM):
             for layer_past in past_key_value
         )
 
+    def _expand_outputs_for_generation(self, indicies, logits: torch.Tensor, past_key_values: Tuple):
+        batch_size = logits.shape[0]
+        if indicies.shape[0] != 1:
+            logits = logits[indicies]
+            if past_key_values and not self.stateful:
+                pkv_standard = self._convert_to_standard_cache(past_key_values, batch_size)
+                pkv = tuple(tuple(past_state[indicies] for past_state in layer_past) for layer_past in pkv_standard)
+                past_key_values = self._convert_to_bloom_cache(pkv)
+
+        if self.stateful:
+            self.next_beam_idx = (
+                self.next_beam_idx[indicies]
+                if self.next_beam_idx is not None
+                else np.arange(batch_size, dtype=int)[indicies]
+            )
+        self._second_iter_beam_search = True
+        return logits, past_key_values
+
 
 class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
     # Adapted from transformers.models.gpt_bigcode.modeling_gpt_bigcode.GPTBigCodeForCausalLM._reorder_cache
@@ -861,7 +900,9 @@ class OVGPTBigCodeForCausalLM(OVModelForCausalLM):
         self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
     ) -> Tuple[Tuple[torch.Tensor]]:
         if self.stateful:
-            self.next_beam_idx = np.array(beam_idx)  # save beam_idx to be used as an input in the next iteration
+            # save beam_idx to be used as an input in the next iteration
+            self.next_beam_idx = np.array(beam_idx) if not self._second_iter_beam_search else self.next_beam_idx
+            self._second_iter_beam_search = False
             return past_key_values
         else:
             return tuple(np.take(layer_past, beam_idx, 0) for layer_past in past_key_values)
