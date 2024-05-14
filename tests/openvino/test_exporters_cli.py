@@ -39,7 +39,7 @@ from optimum.intel import (  # noqa
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
-from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
+from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, OV_TOKENIZER_FOLDER
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
 
 
@@ -140,7 +140,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 )
                 return
 
-            number_of_tokenizers = sum("tokenizer" in file for file in map(str, Path(tmpdir).rglob("*.xml")))
+            number_of_tokenizers = sum(
+                "tokenizer" in file for file in map(str, (Path(tmpdir) / OV_TOKENIZER_FOLDER).rglob("*.xml"))
+            )
             self.assertEqual(self.EXPECTED_NUMBER_OF_TOKENIZER_MODELS[model_type], number_of_tokenizers, output)
 
             if number_of_tokenizers == 1:
