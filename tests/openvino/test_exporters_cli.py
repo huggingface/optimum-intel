@@ -74,8 +74,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         "wav2vec2": 0,  # no tokenizer
         "bert": 1,  # no detokenizer
         "blenderbot": 2,
-        "stable-diffusion": 0,  # not supported
-        "stable-diffusion-xl": 0,  # not supported
+        "stable-diffusion": 2,
+        "stable-diffusion-xl": 4,
     }
 
     SUPPORTED_SD_HYBRID_ARCHITECTURES = (

@@ -226,6 +226,9 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             library_name = "transformers"
 
+        if self.args.convert_tokenizer:
+            logger.warning("`--convert-tokenizer` option is deprecated. Tokenizer will be converted by default.")
+
         if (
             library_name == "diffusers"
             and ov_config
@@ -261,10 +264,21 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             model.save_pretrained(self.args.output)
 
-        else:
-            if self.args.convert_tokenizer:
-                logger.warning("`--convert-tokenizer` option is deprecated. Tokenizer will be converted by default.")
+            if self.args.disable_convert_tokenizer:
+                return
 
+            # avoid import when using other exporters (IPEX, INC)
+            from ...exporters.openvino.convert import export_tokenizer
+
+            output = Path(self.args.output)
+            tokenizer = getattr(model, "tokenizer", None)
+            if tokenizer is not None:
+                export_tokenizer(tokenizer, output / "tokenizer")
+
+            tokenizer_2 = getattr(model, "tokenizer_2", None)
+            if tokenizer_2 is not None:
+                export_tokenizer(tokenizer_2, output / "tokenizer_2")
+        else:
             # TODO : add input shapes
             main_export(
                 model_name_or_path=self.args.model,
