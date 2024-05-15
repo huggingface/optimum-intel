@@ -194,7 +194,7 @@ class IPEXModel(OptimizedModel):
         traced_model = ipex_jit_trace(model, task, use_cache)
 
         config.torchscript = True
-        config.torch_dtype = model_kwargs.get("torch_dtype", None)
+        config.torch_dtype = torch_dtype
 
         return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
 
