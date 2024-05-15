@@ -92,7 +92,8 @@ if is_ipex_available():
             "type": "audio",
         },
     }
-
+else:
+    IPEX_SUPPORTED_TASKS = {}
 
 def load_ipex_model(
     model,
