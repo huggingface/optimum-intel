@@ -39,12 +39,12 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
+    is_torch_xpu_available,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
 from transformers.models.auto.auto_factory import _get_model_class as get_model_class
 from transformers.utils import WEIGHTS_NAME
-from transformers import is_torch_xpu_available
 
 from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
@@ -53,7 +53,7 @@ from optimum.utils import NormalizedConfigManager
 from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _patch_model
 from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
-from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
+from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
 
 
 logger = logging.getLogger(__name__)
@@ -129,13 +129,12 @@ class IPEXModel(OptimizedModel):
         **kwargs,
     ):
         OptimizedModel.__init__(self, model=model, config=config)
-        if device_map is None:
-            if is_torch_xpu_available(check_device=True):
-                self._device = torch.device("xpu:0")
-            elif torch.cuda.is_available():
-                self._device = torch.device("cuda:0")
-            else:
-                self._device = torch.device("cpu")
+        if is_torch_xpu_available(check_device=True):
+            self._device = torch.device("xpu:0")
+        elif torch.cuda.is_available():
+            self._device = torch.device("cuda:0")
+        else:
+            self._device = torch.device("cpu")
         self.model.to(self._device)
         self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model_save_dir = model_save_dir
@@ -326,7 +325,7 @@ class IPEXModel(OptimizedModel):
             use_cache = "past_key_values" in self.input_names
             dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
             if "cpu" not in str(self._device):
-                dummy_inputs = {name: tensor.to(self._device) for name, tensor in dummy_inputs.items()}
+                dummy_inputs = recursive_to_device(value=dummy_inputs, device=self._device)
             for _ in range(2):
                 self(**dummy_inputs)
 
