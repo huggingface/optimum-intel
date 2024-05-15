@@ -16,7 +16,29 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 import torch
-from transformers import AutoConfig, AutoFeatureExtractor, AutoTokenizer
+from transformers import (
+    AudioClassificationPipeline,
+    AutoConfig,
+    AutoFeatureExtractor,
+    AutomaticSpeechRecognitionPipeline,
+    AutoTokenizer,
+    FeatureExtractionPipeline,
+    FillMaskPipeline,
+    ImageClassificationPipeline,
+    ImageSegmentationPipeline,
+    ImageToTextPipeline,
+    Pipeline,
+    PreTrainedTokenizer,
+    PreTrainedTokenizerFast,
+    QuestionAnsweringPipeline,
+    SummarizationPipeline,
+    Text2TextGenerationPipeline,
+    TextClassificationPipeline,
+    TextGenerationPipeline,
+    TokenClassificationPipeline,
+    TranslationPipeline,
+    ZeroShotClassificationPipeline,
+)
 from transformers import pipeline as transformers_pipeline
 from transformers.feature_extraction_utils import PreTrainedFeatureExtractor
 from transformers.pipelines import (
@@ -32,7 +54,9 @@ from transformers.pipelines.base import Pipeline
 from transformers.tokenization_utils import PreTrainedTokenizer
 from transformers.utils import logging
 
-from optimum.intel.utils import is_ipex_available
+from optimum.intel.utils import is_ipex_available, is_openvino_available
+
+from ..utils.file_utils import find_files_matching_pattern
 
 
 if is_ipex_available():
@@ -95,6 +119,157 @@ else:
     IPEX_SUPPORTED_TASKS = {}
 
 
+if is_openvino_available():
+    from ..openvino import (
+        OVModelForAudioClassification,
+        OVModelForCausalLM,
+        OVModelForFeatureExtraction,
+        OVModelForImageClassification,
+        OVModelForMaskedLM,
+        OVModelForQuestionAnswering,
+        OVModelForSemanticSegmentation,
+        OVModelForSeq2SeqLM,
+        OVModelForSequenceClassification,
+        OVModelForSpeechSeq2Seq,
+        OVModelForTokenClassification,
+        OVModelForVision2Seq,
+    )
+    from ..openvino.modeling_base import OVBaseModel
+
+    OPENVINO_SUPPORTED_TASKS = {
+        "feature-extraction": {
+            "impl": FeatureExtractionPipeline,
+            "class": (OVModelForFeatureExtraction,),
+            "default": "distilbert-base-cased",
+            "type": "text",  # feature extraction is only supported for text at the moment
+        },
+        "fill-mask": {
+            "impl": FillMaskPipeline,
+            "class": (OVModelForMaskedLM,),
+            "default": "bert-base-cased",
+            "type": "text",
+        },
+        "image-classification": {
+            "impl": ImageClassificationPipeline,
+            "class": (OVModelForImageClassification,),
+            "default": "google/vit-base-patch16-224",
+            "type": "image",
+        },
+        "image-segmentation": {
+            "impl": ImageSegmentationPipeline,
+            "class": (OVModelForSemanticSegmentation,),
+            "default": "nvidia/segformer-b0-finetuned-ade-512-512",
+            "type": "image",
+        },
+        "question-answering": {
+            "impl": QuestionAnsweringPipeline,
+            "class": (OVModelForQuestionAnswering,),
+            "default": "distilbert-base-cased-distilled-squad",
+            "type": "text",
+        },
+        "text-classification": {
+            "impl": TextClassificationPipeline,
+            "class": (OVModelForSequenceClassification,),
+            "default": "distilbert-base-uncased-finetuned-sst-2-english",
+            "type": "text",
+        },
+        "text-generation": {
+            "impl": TextGenerationPipeline,
+            "class": (OVModelForCausalLM,),
+            "default": "distilgpt2",
+            "type": "text",
+        },
+        "token-classification": {
+            "impl": TokenClassificationPipeline,
+            "class": (OVModelForTokenClassification,),
+            "default": "dbmdz/bert-large-cased-finetuned-conll03-english",
+            "type": "text",
+        },
+        "zero-shot-classification": {
+            "impl": ZeroShotClassificationPipeline,
+            "class": (OVModelForSequenceClassification,),
+            "default": "facebook/bart-large-mnli",
+            "type": "text",
+        },
+        "summarization": {
+            "impl": SummarizationPipeline,
+            "class": (OVModelForSeq2SeqLM,),
+            "default": "t5-base",
+            "type": "text",
+        },
+        "translation": {
+            "impl": TranslationPipeline,
+            "class": (OVModelForSeq2SeqLM,),
+            "default": "t5-small",
+            "type": "text",
+        },
+        "text2text-generation": {
+            "impl": Text2TextGenerationPipeline,
+            "class": (OVModelForSeq2SeqLM,),
+            "default": "t5-small",
+            "type": "text",
+        },
+        "automatic-speech-recognition": {
+            "impl": AutomaticSpeechRecognitionPipeline,
+            "class": (OVModelForSpeechSeq2Seq,),
+            "default": "openai/whisper-tiny.en",
+            "type": "multimodal",
+        },
+        "image-to-text": {
+            "impl": ImageToTextPipeline,
+            "class": (OVModelForVision2Seq,),
+            "default": "nlpconnect/vit-gpt2-image-captioning",
+            "type": "multimodal",
+        },
+        "audio-classification": {
+            "impl": AudioClassificationPipeline,
+            "class": (OVModelForAudioClassification,),
+            "default": "superb/hubert-base-superb-ks",
+            "type": "audio",
+        },
+    }
+else:
+    OPENVINO_SUPPORTED_TASKS = {}
+
+
+def load_openvino_model(
+    model,
+    targeted_task,
+    SUPPORTED_TASKS,
+    subfolder: str = "",
+    token: Optional[Union[bool, str]] = None,
+    revision: str = "main",
+    model_kwargs: Optional[Dict[str, Any]] = None,
+    **kwargs,
+):
+    if model_kwargs is None:
+        model_kwargs = {}
+
+    if model is None:
+        model_id = SUPPORTED_TASKS[targeted_task]["default"]
+        model = SUPPORTED_TASKS[targeted_task]["class"][0].from_pretrained(model_id, export=True)
+    elif isinstance(model, str):
+        model_id = model
+        pattern = r"(.*)?openvino(.*)?\_model.xml"
+        ov_files = find_files_matching_pattern(
+            model,
+            pattern,
+            subfolder=subfolder,
+            use_auth_token=token,
+            revision=revision,
+        )
+        export = len(ov_files) == 0
+        model = SUPPORTED_TASKS[targeted_task]["class"][0].from_pretrained(model, export=export, **model_kwargs)
+    elif isinstance(model, OVBaseModel):
+        model_id = model.model_save_dir
+    else:
+        raise ValueError(
+            f"""Model {model} is not supported. Please provide a valid model either as string or ORTModel.
+            You can also provide non model then a default one will be used"""
+        )
+    return model, model_id
+
+
 def load_ipex_model(
     model,
     targeted_task,
@@ -132,6 +307,7 @@ def load_ipex_model(
 
 MAPPING_LOADING_FUNC = {
     "ipex": load_ipex_model,
+    "openvino": load_openvino_model,
 }
 
 
@@ -236,7 +412,7 @@ def pipeline(
                 f"Task {task} is not supported for the IPEX pipeline. Supported tasks are { list(IPEX_SUPPORTED_TASKS.keys())}"
             )
 
-    supported_tasks = IPEX_SUPPORTED_TASKS if accelerator == "ipex" else None
+    supported_tasks = IPEX_SUPPORTED_TASKS if accelerator == "ipex" else OPENVINO_SUPPORTED_TASKS
 
     no_feature_extractor_tasks = set()
     no_tokenizer_tasks = set()
