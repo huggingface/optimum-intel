@@ -113,8 +113,7 @@ def load_ipex_model(
         model_id = model
         try:
             config = AutoConfig.from_pretrained(model)
-            torchscript = getattr(config, "torchscript", None)
-            export = False if torchscript else True
+            export = not getattr(config, "torchscript", False)
         except RuntimeError:
             logger.warning("We will use IPEXModel with export=True to export the model")
             export = True
