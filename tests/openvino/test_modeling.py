@@ -556,6 +556,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "biogpt",
         "gpt_neox_japanese",
         "cohere",
+        "xglm"
     )
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (

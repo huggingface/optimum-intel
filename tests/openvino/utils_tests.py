@@ -119,6 +119,7 @@ MODEL_NAMES = {
     "whisper": "openai/whisper-tiny.en",
     "xlm": "hf-internal-testing/tiny-random-xlm",
     "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
+    "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM"
 }
 
 
