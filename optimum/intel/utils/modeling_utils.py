@@ -178,7 +178,7 @@ def recursive_to_device(value, device):
     if isinstance(value, (tuple, list)):
         return type(value)(recursive_to_device(v, device) for v in value)
     elif isinstance(value, dict):
-        return type(value)({k: recursive_to_device(v, device) for k, v in value.items()})
+        return {k: recursive_to_device(v, device) for k, v in value.items()}
     elif isinstance(value, torch.Tensor):
         return value.to(device)
     return value
