@@ -552,6 +552,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "orion",
         "falcon",
         "falcon-40b",
+        "persimmon",
+        "biogpt",
+        "gpt_neox_japanese",
+        "cohere",
     )
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
