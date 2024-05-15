@@ -951,7 +951,7 @@ class InternLMPatcher(DecoderModelPatcher):
                 block.attention.forward = block.attention._orig_forward
 
 
-# Adapted from Phi3Attention.forward
+# Adapted from https://github.com/huggingface/transformers/blob/ccdabc5642bf84849af93f591e207dc625c8e1e1/src/transformers/models/phi3/modeling_phi3.py#L426
 def _phi3_self_attn_sdpa_forward(
     self,
     hidden_states: torch.Tensor,
