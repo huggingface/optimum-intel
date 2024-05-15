@@ -592,3 +592,58 @@ class VaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
         return {
             "sample": {0: "batch_size", 2: "height", 3: "width"},
         }
+
+
+@register_in_tasks_manager(
+    "persimmon",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager("biogpt", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class BioGPTOpenVINOConfig(TextDecoderOnnxConfig):
+    # BioGPT does not require position_ids input.
+    DEFAULT_ONNX_OPSET = 13
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager(
+    "gpt-neox-japanese", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
+    # GPTNeoxJapanese does not require position_ids input.
+    DEFAULT_ONNX_OPSET = 13
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager(
+    "cohere",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class CohereOpenVINOConfig(LlamaOpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager("xglm", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class XGLMConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 13
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
+        num_attention_heads="attention_heads", hidden_size="d_model"
+    )
