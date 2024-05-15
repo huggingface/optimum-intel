@@ -31,6 +31,7 @@ from transformers.pipelines import (
 from transformers.pipelines.base import Pipeline
 from transformers.tokenization_utils import PreTrainedTokenizer
 from transformers.utils import logging
+
 from optimum.intel.utils import is_ipex_available
 
 
@@ -92,6 +93,7 @@ if is_ipex_available():
     }
 else:
     IPEX_SUPPORTED_TASKS = {}
+
 
 def load_ipex_model(
     model,
