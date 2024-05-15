@@ -688,7 +688,7 @@ class OVQuantizer(OptimumQuantizer):
         nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
         calibration_dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
         calibration_dataset = prepare_dataset(calibration_dataset)
-        calibration_dataset = nncf.Dataset(calibration_dataset, lambda x: self.model.prepare_inputs(**x)[0])
+        calibration_dataset = nncf.Dataset(calibration_dataset, lambda x: self.model.prepare_inputs(**x))
 
         return calibration_dataset
 

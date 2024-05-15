@@ -380,7 +380,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> Dict:
         batch_size = input_ids.shape[0]
-        duplication_indices = None
         if self.config.model_type == "bloom":
             batch_size *= self.config.num_attention_heads
 
@@ -463,9 +462,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
             )
 
-        if self._first_iter_beam_search:
-            inputs, duplication_indices = self._deduplicate_inputs(inputs)
-        return inputs, duplication_indices
+        return inputs
 
     def forward(
         self,
@@ -477,13 +474,16 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     ) -> CausalLMOutputWithPast:
         self.compile()
 
-        inputs, duplication_idicies = self.prepare_inputs(
+        inputs = self.prepare_inputs(
             input_ids=input_ids,
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             position_ids=position_ids,
             **kwargs,
         )
+
+        if self._first_iter_beam_search:
+            inputs, duplication_indices = self._deduplicate_inputs(inputs)
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
@@ -512,7 +512,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 past_key_values = None
 
         if self._first_iter_beam_search:
-            logits, past_key_values = self._expand_outputs_for_generation(duplication_idicies, logits, past_key_values)
+            logits, past_key_values = self._expand_outputs_for_generation(duplication_indices, logits, past_key_values)
             self._first_iter_beam_search = False
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
