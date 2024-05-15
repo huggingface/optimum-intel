@@ -161,6 +161,7 @@ class IPEXModel(OptimizedModel):
         local_files_only: bool = False,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         trust_remote_code: bool = False,
+        _commit_hash: str = None,
     ):
         if use_auth_token is not None:
             warnings.warn(
@@ -186,6 +187,7 @@ class IPEXModel(OptimizedModel):
             "force_download": force_download,
             "torch_dtype": torch_dtype,
             "trust_remote_code": trust_remote_code,
+            "_commit_hash": _commit_hash,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
