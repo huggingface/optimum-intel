@@ -622,7 +622,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "qwen":
             return
 
-        if not model_arch in ["chatglm", "persimmon"]:
+        if model_arch not in ["chatglm", "persimmon"]:
             tokenizer.pad_token_id = tokenizer.eos_token_id
 
         if model_arch == "persimmon":
