@@ -556,7 +556,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "biogpt",
         "gpt_neox_japanese",
         "cohere",
-        "xglm"
+        "xglm",
     )
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -622,8 +622,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "qwen":
             return
 
-        if model_arch != "chatglm":
+        if not model_arch in ["chatglm", "persimmon"]:
             tokenizer.pad_token_id = tokenizer.eos_token_id
+
+        if model_arch == "persimmon":
+            tokenizer.pad_token_id = tokenizer.bos_token_id
         # Compare batched generation
         tokenizer.padding_side = "left"
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
