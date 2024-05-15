@@ -39,6 +39,7 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
+    is_torch_xpu_available,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
@@ -52,7 +53,7 @@ from optimum.utils import NormalizedConfigManager
 from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _patch_model
 from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
-from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
+from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
 
 
 logger = logging.getLogger(__name__)
@@ -128,10 +129,14 @@ class IPEXModel(OptimizedModel):
         **kwargs,
     ):
         OptimizedModel.__init__(self, model=model, config=config)
-        # To do: add XPU support
-        self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
+        if is_torch_xpu_available(check_device=True):
+            self._device = torch.device("xpu:0")
+        elif torch.cuda.is_available():
+            self._device = torch.device("cuda:0")
+        else:
+            self._device = torch.device("cpu")
         self.model.to(self._device)
+        self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model_save_dir = model_save_dir
         self._is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
 
@@ -321,6 +326,8 @@ class IPEXModel(OptimizedModel):
         if not self._is_ipex_exported:
             use_cache = "past_key_values" in self.input_names
             dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
+            if self._device.type != "cpu":
+                dummy_inputs = recursive_to_device(value=dummy_inputs, device=self._device)
             for _ in range(2):
                 self(**dummy_inputs)
 
