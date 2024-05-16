@@ -124,7 +124,8 @@ def parse_args_openvino(parser: "ArgumentParser"):
         action="store_true",
         default=None,
         help=(
-            "Whether embeddings and last MatMul layers should be compressed to a primary precision (usually, INT4)."
+            "Whether embeddings and last MatMul layers should be compressed to INT4. If not provided an weight "
+            "compression is applied, they are compressed to INT8."
         ),
     )
     optional_group.add_argument(
