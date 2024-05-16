@@ -557,6 +557,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox_japanese",
         "cohere",
         "xglm",
+        "aquila",
+        "xverse",
+        "internlm",
     )
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -569,6 +572,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm2",
         "orion",
         "phi3",
+        "aquila",
+        "xverse",
+        "internlm",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -596,6 +602,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(ov_model.stateful, ov_model.config.model_type not in not_stateful)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
+        tokens.pop("token_type_ids", None)
 
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
@@ -630,6 +637,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # Compare batched generation
         tokenizer.padding_side = "left"
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        tokens.pop("token_type_ids", None)
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
@@ -853,6 +861,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        tokens.pop("token_type_ids", None)
         ov_model_stateful.generation_config.eos_token_id = None
         ov_model_stateless.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None

@@ -18,6 +18,7 @@ import torch
 
 MODEL_NAMES = {
     "albert": "hf-internal-testing/tiny-random-albert",
+    "aquila": "katuni4ka/tiny-random-aquila",
     "audio_spectrogram_transformer": "Ericwang/tiny-random-ast",
     "bge": "BAAI/bge-small-en-v1.5",
     "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
@@ -57,6 +58,7 @@ MODEL_NAMES = {
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "hubert": "hf-internal-testing/tiny-random-HubertModel",
     "ibert": "hf-internal-testing/tiny-random-ibert",
+    "internlm": "katuni4ka/tiny-random-internlm",
     "internlm2": "katuni4ka/tiny-random-internlm2",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "longt5": "hf-internal-testing/tiny-random-longt5",
@@ -120,6 +122,7 @@ MODEL_NAMES = {
     "xlm": "hf-internal-testing/tiny-random-xlm",
     "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
     "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
+    "xverse": "katuni4ka/tiny-random-xverse",
 }
 
 
