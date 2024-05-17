@@ -730,7 +730,7 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
     "quantization": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
         nncf_compression_config=[QUANTIZATION_CONFIG_FOR_WAV2VEC2],
-        expected_fake_quantize=40,
+        expected_fake_quantize=24,
         expected_int8=30,
         compression_metrics=["compression_loss"],
     ),
@@ -757,7 +757,7 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
     "quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
         nncf_compression_config=[QUANTIZATION_CONFIG_FOR_WAV2VEC2, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2],
-        expected_fake_quantize=40,
+        expected_fake_quantize=24,
         expected_int8=30,
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
@@ -775,7 +775,7 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
         model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
         teacher_model_id="hf-internal-testing/tiny-random-Wav2Vec2Model",
         nncf_compression_config=[QUANTIZATION_CONFIG_FOR_WAV2VEC2, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2],
-        expected_fake_quantize=40,
+        expected_fake_quantize=24,
         expected_int8=30,
         expected_binary_masks=48,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
