@@ -906,17 +906,17 @@ class OVTrainer(Trainer):
             output_path = os.path.join(output_dir, OV_XML_FILE_NAME)
             self.compression_controller.prepare_for_export()
             model_type = self.model.config.model_type.replace("_", "-")
-            onnx_config_class = TasksManager.get_exporter_config_constructor(
-                exporter="onnx",
+            exporter_config_class = TasksManager.get_exporter_config_constructor(
+                exporter="openvino",
                 model=self.model,
                 task=self.task,
                 model_type=model_type,
             )
 
             if self.task == "text-generation":
-                onnx_config = onnx_config_class(self.model.config, use_past=self.model.config.use_cache)
+                onnx_config = exporter_config_class(self.model.config, use_past=self.model.config.use_cache)
             else:
-                onnx_config = onnx_config_class(self.model.config)
+                onnx_config = exporter_config_class(self.model.config)
 
             num_parameters = self.model.num_parameters()
             save_as_external_data = use_external_data_format(num_parameters) or self.ov_config.save_onnx_model
