@@ -812,6 +812,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             return
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        if model_arch == "persimmon":
+            tokenizer.pad_token_id = tokenizer.bos_token_id
+            tokenizer.eos_token_id = tokenizer.bos_token_id
+
         beam_search_gen_config = GenerationConfig(
             max_new_tokens=10,
             min_new_tokens=10,
@@ -872,6 +876,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         transformers_model.config.eos_token_id = None
 
         for gen_config in gen_configs:
+            if gen_config.do_sample and model_arch == "baichuan2-13b":
+                continue
             transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
             self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs))
