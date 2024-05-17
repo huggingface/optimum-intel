@@ -614,7 +614,12 @@ def export_from_model(
         model.config.save_pretrained(output)
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
-            generation_config.save_pretrained(output)
+            try:
+                generation_config.save_pretrained(output)
+            except Exception as exception:
+                logger.warning(
+                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
+                )
 
         model_name_or_path = model.config._name_or_path
         maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
