@@ -454,7 +454,7 @@ def _llama_gemma_update_causal_mask_latest(
 
 
 # TODO : deprecate _llama_gemma_update_causal_mask_legacy when transformers>=4.41.0
-if is_transformers_version(">", "4.40.0"):
+if is_transformers_version(">", "4.40.2"):
     _llama_gemma_update_causal_mask = _llama_gemma_update_causal_mask_latest
 else:
     _llama_gemma_update_causal_mask = _llama_gemma_update_causal_mask_legacy
