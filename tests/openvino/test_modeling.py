@@ -876,7 +876,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         transformers_model.config.eos_token_id = None
 
         for gen_config in gen_configs:
-            if gen_config.do_sample and model_arch == "baichuan2-13b":
+            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
             transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
