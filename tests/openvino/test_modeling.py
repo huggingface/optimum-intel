@@ -558,6 +558,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "cohere",
         "xglm",
         "aquila",
+        "aquila2",
         "xverse",
         "internlm",
     )
@@ -573,6 +574,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "orion",
         "phi3",
         "aquila",
+        "aquila2",
         "xverse",
         "internlm",
     )

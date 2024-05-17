@@ -1099,7 +1099,7 @@ def _aquila_self_attn_sdpa_forward(
         )
     bsz, q_len, _ = hidden_states.size()
 
-    if self.config.pretraining_tp > 1:
+    if hasattr(self.config, "pretraining_tp") and self.config.pretraining_tp > 1:
         key_value_slicing = (self.num_key_value_heads * self.head_dim) // self.config.pretraining_tp
         query_slices = self.q_proj.weight.split((self.num_heads * self.head_dim) // self.config.pretraining_tp, dim=0)
         key_slices = self.k_proj.weight.split(key_value_slicing, dim=0)
@@ -1120,8 +1120,12 @@ def _aquila_self_attn_sdpa_forward(
         value_states = self.v_proj(hidden_states)
 
     query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-    key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-    value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+    key_states = key_states.view(
+        bsz, q_len, getattr(self, "num_key_value_heads", self.num_heads), self.head_dim
+    ).transpose(1, 2)
+    value_states = value_states.view(
+        bsz, q_len, getattr(self, "num_key_value_heads", self.num_heads), self.head_dim
+    ).transpose(1, 2)
 
     kv_seq_len = key_states.shape[-2]
     if past_key_value is not None:
@@ -1136,9 +1140,10 @@ def _aquila_self_attn_sdpa_forward(
 
     past_key_value = (key_states, value_states) if use_cache else None
 
-    # repeat k/v heads if n_kv_heads < n_heads
-    key_states = repeat_kv(key_states, self.num_key_value_groups)
-    value_states = repeat_kv(value_states, self.num_key_value_groups)
+    if hasattr(self, "num_key_value_groups"):
+        # repeat k/v heads if n_kv_heads < n_heads
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
 
     attn_output = torch.nn.functional.scaled_dot_product_attention(
         query_states, key_states, value_states, attention_mask, scale=(1 / math.sqrt(self.head_dim))
@@ -1148,7 +1153,7 @@ def _aquila_self_attn_sdpa_forward(
     attn_output = attn_output.transpose(1, 2).contiguous()
     attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
 
-    if self.config.pretraining_tp > 1:
+    if hasattr(self.config, "pretraining_tp") and self.config.pretraining_tp > 1:
         attn_output = attn_output.split(self.hidden_size // self.config.pretraining_tp, dim=2)
         o_proj_slices = self.o_proj.weight.split(self.hidden_size // self.config.pretraining_tp, dim=1)
         attn_output = sum([F.linear(attn_output[i], o_proj_slices[i]) for i in range(self.config.pretraining_tp)])
