@@ -559,9 +559,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if indicies.shape[0] != 1:
             logits = logits[indicies]
             if past_key_values and not self.stateful:
-                if (self.config.model_type not in MULTI_QUERY_ATTN_MODELS
-                    or (self.config.model_type == "falcon"
-                    and self.config.new_decoder_architecture)):
+                if self.config.model_type not in MULTI_QUERY_ATTN_MODELS or (
+                    self.config.model_type == "falcon" and self.config.new_decoder_architecture
+                ):
                     past_key_values = tuple(
                         tuple(
                             past_state[indicies]
