@@ -42,15 +42,18 @@ from optimum.utils.input_generators import (
 from optimum.utils.normalized_config import NormalizedTextConfig
 
 from .model_patcher import (
+    AquilaModelPatcher,
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
     GemmaModelPatcher,
-    InternLMPatcher,
+    InternLM2Patcher,
+    InternLMModelPatcher,
     LlamaModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
     Phi3ModelPatcher,
     QwenModelPatcher,
+    XverseModelPatcher,
 )
 
 
@@ -461,7 +464,7 @@ class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return InternLMPatcher(self, model, model_kwargs=model_kwargs)
+        return InternLM2Patcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("orion", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -501,6 +504,12 @@ class MPTOpenVINOConfig(MPTOnnxConfig):
     library_name="transformers",
 )
 class Phi3OpenVINOConfig(PhiOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        MistralDummyPastKeyValuesGenerator,
+    ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
@@ -608,3 +617,140 @@ class VaeDecoderOpenVINOConfig(VaeDecoderOnnxConfig):
         return {
             "sample": {0: "batch_size", 2: "height", 3: "width"},
         }
+
+
+@register_in_tasks_manager(
+    "persimmon",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager("biogpt", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class BioGPTOpenVINOConfig(TextDecoderOnnxConfig):
+    # BioGPT does not require position_ids input.
+    DEFAULT_ONNX_OPSET = 13
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager(
+    "gpt-neox-japanese", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
+    # GPTNeoxJapanese does not require position_ids input.
+    DEFAULT_ONNX_OPSET = 13
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager(
+    "cohere",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class CohereOpenVINOConfig(LlamaOpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager("xglm", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class XGLMConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 13
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
+        num_attention_heads="attention_heads", hidden_size="d_model"
+    )
+
+
+class AquilaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task,
+            normalized_config,
+            batch_size,
+            sequence_length,
+            random_batch_size_range,
+            random_sequence_length_range,
+            **kwargs,
+        )
+        self.num_key_value_heads = getattr(
+            normalized_config, "num_key_value_heads", normalized_config.num_attention_heads
+        )
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        shape = (
+            self.batch_size,
+            self.num_key_value_heads,
+            self.sequence_length,
+            self.hidden_size // self.num_attention_heads,
+        )
+        return [
+            (
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+            )
+            for _ in range(self.num_layers)
+        ]
+
+
+@register_in_tasks_manager("aquila", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class AquilaMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, AquilaDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = AquilaDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(num_key_value_heads="num_key_value_heads", allow_new=True)
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return AquilaModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("xverse", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class XverseMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return XverseModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("internlm", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class InternLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return InternLMModelPatcher(self, model, model_kwargs=model_kwargs)

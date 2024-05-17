@@ -18,6 +18,8 @@ import torch
 
 MODEL_NAMES = {
     "albert": "hf-internal-testing/tiny-random-albert",
+    "aquila": "katuni4ka/tiny-random-aquilachat",
+    "aquila2": "katuni4ka/tiny-random-aquila2",
     "audio_spectrogram_transformer": "Ericwang/tiny-random-ast",
     "bge": "BAAI/bge-small-en-v1.5",
     "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
@@ -26,11 +28,13 @@ MODEL_NAMES = {
     "baichuan2": "katuni4ka/tiny-random-baichuan2",
     "baichuan2-13b": "katuni4ka/tiny-random-baichuan2-13b",
     "bigbird_pegasus": "hf-internal-testing/tiny-random-bigbird_pegasus",
+    "biogpt": "hf-tiny-model-private/tiny-random-BioGptForCausalLM",
     "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
     "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",
     "bloom": "hf-internal-testing/tiny-random-BloomModel",
     "camembert": "hf-internal-testing/tiny-random-camembert",
     "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
+    "cohere": "hf-internal-testing/tiny-random-CohereForCausalLM",
     "chatglm": "katuni4ka/tiny-random-chatglm2",
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
     "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
@@ -51,9 +55,11 @@ MODEL_NAMES = {
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
+    "gpt_neox_japanese": "hf-internal-testing/tiny-random-GPTNeoXJapaneseForCausalLM",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
     "hubert": "hf-internal-testing/tiny-random-HubertModel",
     "ibert": "hf-internal-testing/tiny-random-ibert",
+    "internlm": "katuni4ka/tiny-random-internlm",
     "internlm2": "katuni4ka/tiny-random-internlm2",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "longt5": "hf-internal-testing/tiny-random-longt5",
@@ -78,6 +84,7 @@ MODEL_NAMES = {
     "olmo": "katuni4ka/tiny-random-olmo-hf",
     "orion": "katuni4ka/tiny-random-orion",
     "pegasus": "hf-internal-testing/tiny-random-pegasus",
+    "persimmon": "hf-internal-testing/tiny-random-PersimmonForCausalLM",
     "pix2struct": "fxmarty/pix2struct-tiny-random",
     "phi": "echarlaix/tiny-random-PhiForCausalLM",
     "phi3": "katuni4ka/tiny-random-phi3",
@@ -115,6 +122,8 @@ MODEL_NAMES = {
     "whisper": "openai/whisper-tiny.en",
     "xlm": "hf-internal-testing/tiny-random-xlm",
     "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
+    "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
+    "xverse": "katuni4ka/tiny-random-xverse",
 }
 
 
@@ -139,8 +148,6 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "stable-diffusion-xl": (366, 34, 42, 66),
     "stable-diffusion-xl-refiner": (366, 34, 42, 66),
 }
-
-_ARCHITECTURES_TO_EXPECTED_INT4_INT8 = {"opt125m": (62, 86)}
 
 
 def get_num_quantized_nodes(ov_model):
