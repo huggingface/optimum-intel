@@ -20,6 +20,7 @@ from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
+    CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
     LlamaOnnxConfig,
@@ -44,6 +45,7 @@ from .model_patcher import (
     AquilaModelPatcher,
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
+    CodeGenModelPatcher,
     GemmaModelPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
@@ -738,3 +740,15 @@ class InternLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return InternLMModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "codegen",
+    *["feature-extraction", "feature-extraction-with-past", "text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class CodeGenOpenVINOConfig(CodeGenOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return CodeGenModelPatcher(self, model, model_kwargs=model_kwargs)

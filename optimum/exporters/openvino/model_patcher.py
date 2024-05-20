@@ -43,6 +43,9 @@ if TYPE_CHECKING:
         from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
+BETTERTRANSFORMER_IGNORE = ("codegen",)
+
+
 def patch_model_with_bettertransformer(model):
     COLOR_RED = "\033[1;31m"
     COLOR_RESET = "\033[0m"
@@ -81,6 +84,10 @@ def patch_model_with_bettertransformer(model):
     # model already has required SDPA implementation
     if getattr(model, "_supports_sdpa", False) and getattr(model.config, "_attn_implementation", "eager") == "sdpa":
         return model
+
+    if model.config.model_type in BETTERTRANSFORMER_IGNORE:
+        return model
+
     try:
         model = model.to_bettertransformer()
     except Exception as e:
@@ -1328,3 +1335,24 @@ class InternLMModelPatcher(DecoderModelPatcher):
         for layer in self._model.model.layers:
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+class CodeGenModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        # whole codegen bettertransformer patch include attn.forward and does not cover codegen2.
+        # For avoiding breaking model on tracing stage, we reduce area of bettertransformer patch only for _attn.
+        from optimum.bettertransformer.models.attention import codegen_wrapped_scaled_dot_product
+
+        for layer in self._model.transformer.h:
+            if is_torch_version(">=", "2.1.0") and not self._model.config.output_attentions:
+                orig_self_attn_fwd = layer.attn._attn
+                layer.attn._attn = types.MethodType(codegen_wrapped_scaled_dot_product, layer.attn)
+                layer.attn._orig_attn = orig_self_attn_fwd
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for layer in self._model.transformer.h:
+            if hasattr(layer.attn, "_orig_attn"):
+                layer.attn._attn = layer.attn._orig_attn

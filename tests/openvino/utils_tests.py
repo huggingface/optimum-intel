@@ -37,6 +37,7 @@ MODEL_NAMES = {
     "cohere": "hf-internal-testing/tiny-random-CohereForCausalLM",
     "chatglm": "katuni4ka/tiny-random-chatglm2",
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
+    "codegen2": "katuni4ka/tiny-random-codegen2",
     "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
     "data2vec_vision": "hf-internal-testing/tiny-random-Data2VecVisionModel",
     "data2vec_audio": "hf-internal-testing/tiny-random-Data2VecAudioModel",
