@@ -41,6 +41,7 @@ MODEL_NAMES = {
     "data2vec_text": "hf-internal-testing/tiny-random-Data2VecTextModel",
     "data2vec_vision": "hf-internal-testing/tiny-random-Data2VecVisionModel",
     "data2vec_audio": "hf-internal-testing/tiny-random-Data2VecAudioModel",
+    "dbrx": "yujiepan/dbrx-tiny-random",
     "deberta": "hf-internal-testing/tiny-random-deberta",
     "deberta_v2": "hf-internal-testing/tiny-random-DebertaV2Model",
     "deit": "hf-internal-testing/tiny-random-deit",

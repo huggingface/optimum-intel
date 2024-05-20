@@ -1356,3 +1356,62 @@ class CodeGenModelPatcher(DecoderModelPatcher):
         for layer in self._model.transformer.h:
             if hasattr(layer.attn, "_orig_attn"):
                 layer.attn._attn = layer.attn._orig_attn
+
+
+def _dbrx_experts_forward(
+    self, x: torch.Tensor, weights: torch.Tensor, top_weights: torch.Tensor, top_experts: torch.LongTensor
+):
+    bsz, q_len, hidden_size = x.shape
+    x = x.view(-1, hidden_size)
+    out = torch.zeros_like(x)
+
+    expert_mask = torch.nn.functional.one_hot(top_experts, num_classes=self.moe_num_experts).permute(2, 1, 0)
+    # Chunk experts at once to avoid storing full parameter multiple times in autograd
+    w1_chunked = self.mlp.w1.view(self.mlp.moe_num_experts, self.mlp.ffn_hidden_size, self.mlp.hidden_size).chunk(
+        self.moe_num_experts, dim=0
+    )
+    v1_chunked = self.mlp.v1.view(self.mlp.moe_num_experts, self.mlp.ffn_hidden_size, self.mlp.hidden_size).chunk(
+        self.moe_num_experts, dim=0
+    )
+    w2_chunked = self.mlp.w2.view(self.mlp.moe_num_experts, self.mlp.ffn_hidden_size, self.mlp.hidden_size).chunk(
+        self.moe_num_experts, dim=0
+    )
+    w1_chunked = [w1.squeeze(dim=0) for w1 in w1_chunked]
+    v1_chunked = [v1.squeeze(dim=0) for v1 in v1_chunked]
+    w2_chunked = [w2.squeeze(dim=0) for w2 in w2_chunked]
+    for expert_idx in range(0, self.moe_num_experts):
+        topk_idx, token_idx = torch.where(expert_mask[expert_idx])
+
+        token_list = token_idx
+        topk_list = topk_idx
+
+        expert_tokens = x[None, token_list].reshape(-1, hidden_size)
+        expert_out = (
+            self.mlp(expert_tokens, w1_chunked[expert_idx], v1_chunked[expert_idx], w2_chunked[expert_idx])
+            * top_weights[token_list, topk_list, None]
+        )
+
+        out.index_add_(0, token_idx, expert_out)
+
+    out = out.reshape(bsz, q_len, hidden_size)
+    return out
+
+
+class DBRXModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        for block in self._model.transformer.blocks:
+            rotary_emb = block.norm_attn_norm.attn.rotary_emb
+            if rotary_emb.inv_freq is None:
+                inv_freq = 1.0 / (
+                    rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
+                )
+                rotary_emb.inv_freq = inv_freq
+            block.ffn.experts._orig_forward = block.ffn.experts.forward
+            block.ffn.experts.forward = types.MethodType(_dbrx_experts_forward, block.ffn.experts)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for block in self._model.transformer.blocks:
+            block.ffn.experts.forward = block.ffn.experts._orig_forward

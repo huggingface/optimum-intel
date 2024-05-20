@@ -46,6 +46,7 @@ from .model_patcher import (
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
+    DBRXModelPatcher,
     GemmaModelPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
@@ -752,3 +753,69 @@ class CodeGenOpenVINOConfig(CodeGenOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return CodeGenModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+class DBRXDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+        )
+        self.num_key_value_heads = normalized_config.num_key_value_heads
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        v_shape = (
+            self.batch_size,
+            self.num_key_value_heads,
+            self.sequence_length,
+            self.hidden_size // self.num_attention_heads,
+        )
+        k_shape = (
+            self.batch_size,
+            self.num_key_value_heads,
+            self.sequence_length,
+            self.hidden_size // self.num_attention_heads * 2,
+        )
+        return [
+            (
+                self.random_float_tensor(k_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(v_shape, framework=framework, dtype=float_dtype),
+            )
+            for _ in range(self.num_layers)
+        ]
+
+
+@register_in_tasks_manager(
+    "dbrx",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
+        num_attention_heads="n_heads",
+        hidden_size="d_model",
+        num_layers="n_layers",
+        num_key_value_heads="attn_config.kv_n_heads",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DBRXDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = DBRXDummyPastKeyValuesGenerator
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return DBRXModelPatcher(self, model, model_kwargs=model_kwargs)

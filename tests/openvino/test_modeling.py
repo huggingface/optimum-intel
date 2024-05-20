@@ -562,6 +562,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "aquila2",
         "xverse",
         "internlm",
+        "dbrx",
     )
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
