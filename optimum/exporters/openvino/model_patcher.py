@@ -673,6 +673,7 @@ def _baichuan13b_atten_forward(
     return attn_output, attn_weights, past_key_value
 
 
+# Adapted from https://huggingface.co/baichuan-inc/Baichuan-7B/blob/262c8cb58b6d3615c208d9230baa869fddee2adb/modeling_baichuan.py#L181
 def _baichuan7b_attn_forward(
     self,
     hidden_states: torch.Tensor,
@@ -1428,7 +1429,7 @@ class CodeGenModelPatcher(DecoderModelPatcher):
             if hasattr(layer.attn, "_orig_attn"):
                 layer.attn._attn = layer.attn._orig_attn
 
-
+# adapted from https://github.com/huggingface/transformers/blob/v4.40.2/src/transformers/models/dbrx/modeling_dbrx.py#L763
 def _dbrx_experts_forward(
     self, x: torch.Tensor, weights: torch.Tensor, top_weights: torch.Tensor, top_experts: torch.LongTensor
 ):
