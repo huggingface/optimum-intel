@@ -20,16 +20,20 @@ from tempfile import TemporaryDirectory, gettempdir
 from typing import Dict, Optional, Union
 
 import openvino
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, HfApi
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
+from transformers import AutoConfig
 
 from optimum.exporters.onnx import OnnxConfig
+from optimum.exporters.tasks import TasksManager
 from optimum.modeling_base import OptimizedModel
+from optimum.utils import CONFIG_NAME
+from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING
 
 from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available
@@ -524,3 +528,127 @@ class OVBaseModel(OptimizedModel):
         if isinstance(self, GenerationMixin):
             return True
         return False
+
+    @classmethod
+    @add_start_docstrings(FROM_PRETRAINED_START_DOCSTRING)
+    def from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        export: Optional[bool] = None,
+        force_download: bool = False,
+        use_auth_token: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        subfolder: str = "",
+        config: Optional[PretrainedConfig] = None,
+        local_files_only: bool = False,
+        trust_remote_code: bool = False,
+        revision: Optional[str] = None,
+        **kwargs,
+    ) -> "OptimizedModel":
+        """
+        Returns:
+            `OptimizedModel`: The loaded optimized model.
+        """
+        if isinstance(model_id, Path):
+            model_id = model_id.as_posix()
+
+        from_transformers = kwargs.pop("from_transformers", None)
+        if from_transformers is not None:
+            logger.warning(
+                "The argument `from_transformers` is deprecated, and will be removed in optimum 2.0.  Use `export` instead"
+            )
+            export = from_transformers
+
+        if len(model_id.split("@")) == 2:
+            if revision is not None:
+                logger.warning(
+                    f"The argument `revision` was set to {revision} but will be ignored for {model_id.split('@')[1]}"
+                )
+            model_id, revision = model_id.split("@")
+
+        library_name = TasksManager.infer_library_from_model(
+            model_id, subfolder, revision, cache_dir, use_auth_token=use_auth_token
+        )
+
+        if library_name == "timm":
+            config = PretrainedConfig.from_pretrained(model_id, subfolder, revision)
+
+        if config is None:
+            if os.path.isdir(os.path.join(model_id, subfolder)) and cls.config_name == CONFIG_NAME:
+                if CONFIG_NAME in os.listdir(os.path.join(model_id, subfolder)):
+                    config = AutoConfig.from_pretrained(
+                        os.path.join(model_id, subfolder, CONFIG_NAME), trust_remote_code=trust_remote_code
+                    )
+                elif CONFIG_NAME in os.listdir(model_id):
+                    config = AutoConfig.from_pretrained(
+                        os.path.join(model_id, CONFIG_NAME), trust_remote_code=trust_remote_code
+                    )
+                    logger.info(
+                        f"config.json not found in the specified subfolder {subfolder}. Using the top level config.json."
+                    )
+                else:
+                    raise OSError(f"config.json not found in {model_id} local folder")
+            else:
+                config = cls._load_config(
+                    model_id,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    use_auth_token=use_auth_token,
+                    force_download=force_download,
+                    subfolder=subfolder,
+                    trust_remote_code=trust_remote_code,
+                )
+        elif isinstance(config, (str, os.PathLike)):
+            config = cls._load_config(
+                config,
+                revision=revision,
+                cache_dir=cache_dir,
+                use_auth_token=use_auth_token,
+                force_download=force_download,
+                subfolder=subfolder,
+                trust_remote_code=trust_remote_code,
+            )
+        
+        if export is None:
+            export = cls._check_export_status(model_id, revision, subfolder)
+
+        if not export and trust_remote_code:
+            logger.warning(
+                "The argument `trust_remote_code` is to be used along with export=True. It will be ignored."
+            )
+        elif export and trust_remote_code is None:
+            trust_remote_code = False
+
+
+        from_pretrained_method = cls._from_transformers if export else cls._from_pretrained
+
+        return from_pretrained_method(
+            model_id=model_id,
+            config=config,
+            revision=revision,
+            cache_dir=cache_dir,
+            force_download=force_download,
+            use_auth_token=use_auth_token,
+            subfolder=subfolder,
+            local_files_only=local_files_only,
+            trust_remote_code=trust_remote_code,
+            **kwargs,
+        )
+
+    @classmethod
+    def _check_export_status(cls, model_id: Union[str, Path], revision: Optional[str] = None, subfolder: str = ""):
+        model_dir = Path(model_id)
+        if subfolder is not None:
+            model_dir = model_dir / subfolder
+        if model_dir.is_dir():
+            return not (model_dir / OV_XML_FILE_NAME).exists() or not (model_dir / OV_XML_FILE_NAME.replace(".xml", ".bin")).exists()
+            
+        hf_api =  HfApi()
+        try:
+            model_info = hf_api.model_info(model_id, revision=revision or "main")
+            normalized_subfolder = None if subfolder is None else Path(subfolder).as_posix()
+            model_files = [file.rfilename for file in model_info.siblings if normalized_subfolder is None or file.rfilename.startswith(normalized_subfolder)]
+            ov_model_path = OV_XML_FILE_NAME if subfolder is None else f"{normalized_subfolder}/{OV_XML_FILE_NAME}"
+            return not ov_model_path in model_files or not ov_model_path.replace(".xml", ".bin") in model_files
+        except Exception:
+            return True
