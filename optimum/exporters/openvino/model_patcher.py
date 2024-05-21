@@ -1468,6 +1468,7 @@ def _dbrx_experts_forward(
     return out
 
 
+# adapted from https://github.com/huggingface/transformers/blob/v4.40.2/src/transformers/models/dbrx/modeling_dbrx.py#L1228
 def _dbrx_update_causal_mask_legacy(
     self, attention_mask: Optional[torch.Tensor], input_tensor: torch.Tensor, cache_position: torch.Tensor
 ) -> Optional[torch.Tensor]:
@@ -1479,6 +1480,9 @@ def _dbrx_update_causal_mask_legacy(
         return None
 
     dtype, device = input_tensor.dtype, input_tensor.device
+    # difference with original modeling
+    # using minimum from dtype with larger bandwith (floa32) may lead to overflow
+    # during execution on platforms with default lower precision (bfloat16, float16)
     min_dtype = torch.finfo(torch.float16).min
     sequence_length = input_tensor.shape[1]
     if hasattr(self.blocks[0].norm_attn_norm.attn, "past_key_value"):  # static cache
@@ -1487,7 +1491,9 @@ def _dbrx_update_causal_mask_legacy(
         target_length = (
             attention_mask.shape[-1] if isinstance(attention_mask, torch.Tensor) else cache_position[-1] + 1
         )
-
+    # difference with original modeling
+    # removed target_length = int(target_length).
+    # Casting to int leads to constant folding during tracing that makes impossible to use model for sequence of different length
     causal_mask = torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
     if sequence_length != 1:
         causal_mask = torch.triu(causal_mask, diagonal=1)
@@ -1535,6 +1541,7 @@ def _dbrx_update_causal_mask_legacy(
     return causal_mask
 
 
+# adopted from https://github.com/huggingface/transformers/blob/1b3dba9417eebe16b7c206d1dfca6a4c7f11dbec/src/transformers/models/dbrx/modeling_dbrx.py#L1204
 def _dbrx_update_causal_mask_latest(
     self,
     attention_mask: torch.Tensor,
@@ -1631,6 +1638,8 @@ else:
 class DBRXModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
+        # dbrx has some accuracy issues with bf16 with transformers >= 4.40
+        # fill causal mask in slightly different way for avoid overflow on some platforms
         self._model.transformer._orig_update_causal_mask = self._model.transformer._update_causal_mask
         self._model.transformer._update_causal_mask = types.MethodType(
             _dbrx_update_causal_mask, self._model.transformer
@@ -1638,11 +1647,13 @@ class DBRXModelPatcher(DecoderModelPatcher):
 
         for block in self._model.transformer.blocks:
             rotary_emb = block.norm_attn_norm.attn.rotary_emb
+            # initialize inv_freq for torchscript tracing
             if rotary_emb.inv_freq is None:
                 inv_freq = 1.0 / (
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
                 )
                 rotary_emb.inv_freq = inv_freq
+            # remove continue-operator from iteration loop over experts
             block.ffn.experts._orig_forward = block.ffn.experts.forward
             block.ffn.experts.forward = types.MethodType(_dbrx_experts_forward, block.ffn.experts)
 
