@@ -232,6 +232,8 @@ class OVExportCommand(BaseOptimumCLICommand):
                 and self.args.sym is None
                 and self.args.all_layers is None
                 and self.args.dataset is None
+                and self.args.num_samples is None
+                and self.args.awq is None
                 and self.args.sensitivity_metric is None
                 and self.args.model in _DEFAULT_4BIT_CONFIGS
             ):
