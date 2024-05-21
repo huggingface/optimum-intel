@@ -130,11 +130,10 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
-        "--quant-method",
-        type=str,
+        "--awq",
+        action="store_true",
         default=None,
-        choices=["default", "awq", "hybrid"],
-        help=("The quantization method to apply. Can be one of the following: ['default', 'awq', 'hybrid']."),
+        help="Whether to apply AWQ algorithm. To run AWQ, please also provide a dataset.",
     )
     optional_group.add_argument(
         "--sensitivity-metric",
@@ -150,7 +149,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         "--num-samples",
         type=int,
         default=None,
-        help=("The maximum number of samples composing the calibration dataset for quantization."),
+        help="The maximum number of samples to take from the dataset for quantization.",
     )
     optional_group.add_argument(
         "--disable-stateful",
@@ -233,7 +232,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                 and self.args.sym is None
                 and self.args.all_layers is None
                 and self.args.dataset is None
-                and self.args.quant_method is None
                 and self.args.sensitivity_metric is None
                 and self.args.model in _DEFAULT_4BIT_CONFIGS
             ):
@@ -247,7 +245,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "all_layers": None if is_int8 else self.args.all_layers,
                     "dataset": self.args.dataset,
                     "num_samples": self.args.num_samples,
-                    "quant_method": self.args.quant_method,
+                    "quant_method": "awq" if self.args.awq else None,
                     "sensitivity_metric": self.args.sensitivity_metric,
                 }
 

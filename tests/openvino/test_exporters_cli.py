@@ -92,7 +92,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         (
             "text-generation-with-past",
             "llama_awq",
-            "int4 --ratio 1.0 --sym --group-size 16 --quant-method awq --dataset wikitext2 --num-samples 100 "
+            "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
             4,
             28,
