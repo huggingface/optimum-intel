@@ -28,7 +28,6 @@ from optimum.exporters.onnx.model_configs import (
     UNetOnnxConfig,
     VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
-    Wav2Vec2OnnxConfig,
 )
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
@@ -89,21 +88,6 @@ if TYPE_CHECKING:
 
 
 register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_existing=True)
-
-
-@register_in_tasks_manager(
-    "wav2vec2",
-    *[
-        "feature-extraction",
-        "automatic-speech-recognition",
-        "audio-classification",
-        "audio-frame-classification",
-        "audio-xvector",
-    ],
-    library_name="transformers",
-)
-class Wav2Vec2OpenVINOConfig(Wav2Vec2OnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
 
 
 @register_in_tasks_manager("baichuan", *["text-generation", "text-generation-with-past"], library_name="transformers")
