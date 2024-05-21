@@ -673,6 +673,71 @@ def _baichuan13b_atten_forward(
     return attn_output, attn_weights, past_key_value
 
 
+def _baichuan7b_attn_forward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_value: Optional[Tuple[torch.Tensor]] = None,
+    output_attentions: bool = False,
+    use_cache: bool = False,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    def rotate_half(x):
+        """Rotates half the hidden dims of the input."""
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
+        # The first two dimensions of cos and sin are always 1, so we can `squeeze` them.
+        cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
+        sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
+        cos = cos[position_ids].unsqueeze(1)  # [bs, 1, seq_len, dim]
+        sin = sin[position_ids].unsqueeze(1)  # [bs, 1, seq_len, dim]
+        q_embed = (q * cos) + (rotate_half(q) * sin)
+        k_embed = (k * cos) + (rotate_half(k) * sin)
+        return q_embed, k_embed
+
+    bsz, q_len, _ = hidden_states.size()
+
+    proj = self.W_pack(hidden_states)
+    proj = proj.unflatten(-1, (3, self.hidden_size)).unsqueeze(0).transpose(0, -2).squeeze(-2)
+    query_states = proj[0].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    key_states = proj[1].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+    value_states = proj[2].view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+
+    kv_seq_len = key_states.shape[-2]
+    if past_key_value is not None:
+        kv_seq_len += past_key_value[0].shape[-2]
+    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+    # [bsz, nh, t, hd]
+
+    if past_key_value is not None:
+        # reuse k, v, self_attention
+        key_states = torch.cat([past_key_value[0], key_states], dim=2)
+        value_states = torch.cat([past_key_value[1], value_states], dim=2)
+
+    past_key_value = (key_states, value_states) if use_cache else None
+    if not output_attentions:
+        attn_weights = None
+        attn_output = F.scaled_dot_product_attention(
+            query_states, key_states, value_states, attn_mask=attention_mask, scale=1 / math.sqrt(self.head_dim)
+        )
+    else:
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+        attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_output = torch.matmul(attn_weights, value_states)
+
+    attn_output = attn_output.transpose(1, 2)
+    attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+    attn_output = self.o_proj(attn_output)
+
+    return attn_output, attn_weights, past_key_value
+
+
 class BaichuanModelPatcher(DecoderModelPatcher):
     def __init__(
         self,
@@ -720,13 +785,18 @@ class BaichuanModelPatcher(DecoderModelPatcher):
             for layer in self._model.model.layers:
                 layer.self_attn._orig_forward = layer.self_attn.forward
                 layer.self_attn.forward = types.MethodType(_baichuan13b_atten_forward, layer.self_attn)
+        else:
+            for layer in self._model.model.layers:
+                layer.self_attn._orig_forward = layer.self_attn.forward
+                layer.self_attn.forward = types.MethodType(_baichuan7b_attn_forward, layer.self_attn)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         if hasattr(self._model, "_orig_forward"):
             self._model.forward = self._model._orig_forward
 
-            for layer in self._model.model.layers:
+        for layer in self._model.model.layers:
+            if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
