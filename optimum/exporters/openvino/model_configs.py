@@ -786,22 +786,16 @@ class DBRXDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         self.num_key_value_heads = normalized_config.num_key_value_heads
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        v_shape = (
+        shape = (
             self.batch_size,
             self.num_key_value_heads,
             self.sequence_length,
             self.hidden_size // self.num_attention_heads,
         )
-        k_shape = (
-            self.batch_size,
-            self.num_key_value_heads,
-            self.sequence_length,
-            self.hidden_size // self.num_attention_heads * 2,
-        )
         return [
             (
-                self.random_float_tensor(k_shape, framework=framework, dtype=float_dtype),
-                self.random_float_tensor(v_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
             )
             for _ in range(self.num_layers)
         ]
