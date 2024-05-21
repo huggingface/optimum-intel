@@ -203,7 +203,7 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
-        from ...exporters.openvino.__main__ import main_export, infer_task
+        from ...exporters.openvino.__main__ import infer_task, main_export
         from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, OVConfig
 
         if self.args.fp16:
@@ -321,10 +321,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 export_tokenizer(tokenizer_2, output / "tokenizer_2")
         else:
             task = infer_task(self.args.task, self.args.model)
-            quantization_config = ov_config.quantization_config
+            quantization_config = ov_config.quantization_config if ov_config else None
             quantize_after_export = (
                 task.startswith("text-generation")
-                and quantization_config is not None
+                and quantization_config
                 and hasattr(quantization_config, "dataset")
                 and quantization_config.dataset is not None
             )
