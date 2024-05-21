@@ -15,6 +15,7 @@
 
 import logging
 import sys
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -129,6 +130,29 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--quant-method",
+        type=str,
+        default=None,
+        choices=["default", "awq", "hybrid"],
+        help=("The quantization method to apply. Can be one of the following: ['default', 'awq', 'hybrid']."),
+    )
+    optional_group.add_argument(
+        "--sensitivity-metric",
+        type=str,
+        default=None,
+        help=(
+            "The sensitivity metric for assigning quantization precision to layers. Can be one of the following: "
+            "['weight_quantization_error', 'hessian_input_activation', 'mean_activation_variance', "
+            "'max_activation_variance', 'mean_activation_magnitude']."
+        ),
+    )
+    optional_group.add_argument(
+        "--num-samples",
+        type=int,
+        default=None,
+        help=("The maximum number of samples composing the calibration dataset for quantization."),
+    )
+    optional_group.add_argument(
         "--disable-stateful",
         action="store_true",
         help=(
@@ -180,7 +204,7 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
-        from ...exporters.openvino.__main__ import main_export
+        from ...exporters.openvino.__main__ import main_export, infer_task
         from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, OVConfig
 
         if self.args.fp16:
@@ -208,6 +232,9 @@ class OVExportCommand(BaseOptimumCLICommand):
                 and self.args.group_size is None
                 and self.args.sym is None
                 and self.args.all_layers is None
+                and self.args.dataset is None
+                and self.args.quant_method is None
+                and self.args.sensitivity_metric is None
                 and self.args.model in _DEFAULT_4BIT_CONFIGS
             ):
                 quantization_config = _DEFAULT_4BIT_CONFIGS[self.args.model]
@@ -218,6 +245,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "sym": self.args.sym or False,
                     "group_size": -1 if is_int8 else self.args.group_size,
                     "all_layers": None if is_int8 else self.args.all_layers,
+                    "dataset": self.args.dataset,
+                    "num_samples": self.args.num_samples,
+                    "quant_method": self.args.quant_method,
+                    "sensitivity_metric": self.args.sensitivity_metric,
                 }
 
             if self.args.weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:
@@ -226,7 +257,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                 )
                 quantization_config["sym"] = "asym" not in self.args.weight_format
                 quantization_config["group_size"] = 128 if "128" in self.args.weight_format else 64
-            quantization_config["dataset"] = self.args.dataset
             ov_config = OVConfig(quantization_config=quantization_config)
 
         library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
@@ -290,6 +320,19 @@ class OVExportCommand(BaseOptimumCLICommand):
             if tokenizer_2 is not None:
                 export_tokenizer(tokenizer_2, output / "tokenizer_2")
         else:
+            task = infer_task(self.args.task, self.args.model)
+            quantization_config = ov_config.quantization_config
+            quantize_after_export = (
+                task.startswith("text-generation")
+                and quantization_config is not None
+                and hasattr(quantization_config, "dataset")
+                and quantization_config.dataset is not None
+            )
+            if quantize_after_export:
+                # In order to quantize a text-generation model with a dataset, an instance of OVModelForCausalLM is
+                # required. That's why the quantization is skipped during export and applied explicitly after export.
+                ov_config.quantization_config = None
+
             # TODO : add input shapes
             main_export(
                 model_name_or_path=self.args.model,
@@ -305,3 +348,19 @@ class OVExportCommand(BaseOptimumCLICommand):
                 library_name=library_name,
                 # **input_shapes,
             )
+
+            if quantize_after_export:
+                from optimum.intel import OVModelForCausalLM, OVQuantizer
+
+                model = OVModelForCausalLM.from_pretrained(self.args.output)
+                quantizer = OVQuantizer(model)
+                quantization_config.tokenizer = quantization_config.tokenizer or str(self.args.output)
+                # TODO: set save_directory=self.args.output once OV is updated to 2024.3
+                quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    import shutil
+
+                    model.save_pretrained(temp_dir)
+                    ov_config.save_pretrained(self.args.output)
+                    shutil.copy(f"{temp_dir}/openvino_model.xml", f"{self.args.output}/openvino_model.xml")
+                    shutil.copy(f"{temp_dir}/openvino_model.bin", f"{self.args.output}/openvino_model.bin")

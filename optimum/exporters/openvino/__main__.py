@@ -44,6 +44,22 @@ _COMPRESSION_OPTIONS = {
 logger = logging.getLogger(__name__)
 
 
+def infer_task(task, model_name_or_path):
+    task = TasksManager.map_from_synonym(task)
+    if task == "auto":
+        try:
+            task = TasksManager.infer_task_from_model(model_name_or_path)
+        except KeyError as e:
+            raise KeyError(
+                f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+            )
+        except RequestsConnectionError as e:
+            raise RequestsConnectionError(
+                f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+            )
+    return task
+
+
 def main_export(
     model_name_or_path: str,
     output: Union[str, Path],
@@ -174,7 +190,7 @@ def main_export(
             ov_config = OVConfig(quantization_config=q_config)
 
     original_task = task
-    task = TasksManager.map_from_synonym(task)
+    task = infer_task(task, model_name_or_path)
     framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
     library_name_is_not_provided = library_name is None
     library_name = TasksManager.infer_library_from_model(
@@ -187,18 +203,6 @@ def main_export(
             "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
         )
         library_name = "transformers"
-
-    if task == "auto":
-        try:
-            task = TasksManager.infer_task_from_model(model_name_or_path)
-        except KeyError as e:
-            raise KeyError(
-                f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
-        except RequestsConnectionError as e:
-            raise RequestsConnectionError(
-                f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
 
     do_gptq_patching = False
     custom_architecture = False
