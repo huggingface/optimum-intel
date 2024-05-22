@@ -355,7 +355,10 @@ class OVExportCommand(BaseOptimumCLICommand):
             if quantize_after_export:
                 from optimum.intel import OVModelForCausalLM, OVQuantizer
 
-                model = OVModelForCausalLM.from_pretrained(self.args.output)
+                model = OVModelForCausalLM.from_pretrained(
+                    self.args.output,
+                    trust_remote_code=self.args.trust_remote_code
+                )
                 quantizer = OVQuantizer(model)
                 quantization_config.tokenizer = quantization_config.tokenizer or str(self.args.output)
                 # TODO: set save_directory=self.args.output once OV is updated to 2024.3
