@@ -133,7 +133,10 @@ def parse_args_openvino(parser: "ArgumentParser"):
         "--awq",
         action="store_true",
         default=None,
-        help="Whether to apply AWQ algorithm. To run AWQ, please also provide a dataset.",
+        help=(
+            "Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires "
+            "additional time for tuning weights on a calibration dataset. To run AWQ, please also provide a dataset."
+        ),
     )
     optional_group.add_argument(
         "--sensitivity-metric",
