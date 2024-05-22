@@ -19,11 +19,12 @@ import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+import tempfile
 
 import onnx
 from transformers.utils import is_tf_available, is_torch_available
 
-from openvino.runtime import Model, PartialShape, save_model
+from openvino.runtime import Model, PartialShape, save_model, Core
 from openvino.runtime.exceptions import OVTypeError
 from openvino.runtime.utils.types import get_element_type
 from openvino.tools.ovc import convert_model
@@ -58,6 +59,7 @@ from .utils import (
 
 
 logger = logging.getLogger(__name__)
+core = Core()
 
 if is_torch_available():
     import torch.nn as nn
@@ -412,11 +414,24 @@ def export_pytorch(
 
         if stateful:
             patch_stateful(model.config, ov_model)
+        if ov_config.quantization_config:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                tmp_output = Path(temp_dir) / output.name
+                _save_model(ov_model, tmp_output, ov_config=None)
+                clear_class_registry()
+                del ov_model
+                del model
+                gc.collect()
 
-        _save_model(ov_model, output, ov_config=ov_config)
-        clear_class_registry()
-        del model
-        gc.collect()
+                ov_model = core.read_model(tmp_output)
+                _save_model(ov_model, output, ov_config)
+        else:
+            _save_model(ov_model, output, ov_config)
+            clear_class_registry()
+            del ov_model
+            del model
+            gc.collect()
+
     return input_names, output_names, False
 
 
