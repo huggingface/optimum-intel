@@ -907,7 +907,7 @@ class OVTrainer(Trainer):
             self.compression_controller.prepare_for_export()
             model_type = self.model.config.model_type.replace("_", "-")
             exporter_config_class = TasksManager.get_exporter_config_constructor(
-                exporter="openvino",
+                exporter="onnx",
                 model=self.model,
                 task=self.task,
                 model_type=model_type,
