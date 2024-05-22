@@ -797,7 +797,9 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
 
         self.feature_extractor = AutoFeatureExtractor.from_pretrained(desc.model_id)
         self.tokenizer = self.feature_extractor
-        self.model = AutoModelForAudioClassification.from_pretrained(desc.model_id, num_labels=self.num_labels)
+        self.model = AutoModelForAudioClassification.from_pretrained(
+            desc.model_id, num_labels=self.num_labels, attn_implementation="eager"
+        )
         self.teacher_model = None
         if desc.teacher_model_id:
             self.teacher_model = AutoModelForAudioClassification.from_pretrained(
