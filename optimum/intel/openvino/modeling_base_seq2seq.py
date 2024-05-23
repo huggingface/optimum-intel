@@ -20,8 +20,8 @@ from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
 import openvino
-from huggingface_hub import HfApi, hf_hub_download
-from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from huggingface_hub import HfApi, hf_hub_download, try_to_load_from_cache
+from huggingface_hub.constants import HF_HUB_OFFLINE, HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
@@ -364,7 +364,14 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         raise NotImplementedError
 
     @classmethod
-    def _check_export_status(cls, model_id: Union[str, Path], revision: Optional[str] = None, subfolder: str = ""):
+    def _check_export_status(
+        cls,
+        model_id: Union[str, Path],
+        revision: Optional[str] = None,
+        subfolder: str = "",
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        local_files_only: bool = HF_HUB_OFFLINE,
+    ):
         model_dir = Path(model_id)
         if subfolder is not None:
             model_dir = model_dir / subfolder
@@ -377,19 +384,40 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             ).exists()
             return not encoder_exists or not decoder_exists
 
-        hf_api = HfApi()
-        try:
-            model_info = hf_api.model_info(model_id, revision=revision or "main")
-            normalized_subfolder = None if subfolder is None else Path(subfolder).as_posix()
-            model_files = [
-                file.rfilename
-                for file in model_info.siblings
-                if normalized_subfolder is None or file.rfilename.startswith(normalized_subfolder)
-            ]
-            for model_name in [OV_ENCODER_NAME, OV_DECODER_NAME]:
-                ov_model_path = model_name if subfolder is None else f"{normalized_subfolder}/{model_name}"
-                if ov_model_path not in model_files or ov_model_path.replace(".xml", ".bin") not in model_files:
-                    return True
-            return False
-        except Exception:
-            return True
+        cache_status = []
+        normalized_subfolder = None if subfolder is None else Path(subfolder).as_posix()
+
+        for model_name in [OV_ENCODER_NAME, OV_DECODER_NAME]:
+            ov_model_path = model_name if subfolder is None else f"{normalized_subfolder}/{model_name}"
+            cache_model_path = try_to_load_from_cache(
+                model_id, ov_model_path, cache_dir=cache_dir, revision=revision or "main", repo_type="model"
+            )
+            cache_bin_path = try_to_load_from_cache(
+                model_id,
+                ov_model_path.replace(".xml", ".bin"),
+                cache_dir=cache_dir,
+                revision=revision or "main",
+                repo_type="model",
+            )
+
+            cache_status.append(cache_model_path is not None and cache_bin_path is not None)
+
+        if not all(cache_status) and not local_files_only:
+            hf_api = HfApi()
+            try:
+                model_info = hf_api.model_info(model_id, revision=revision or "main")
+                normalized_subfolder = None if subfolder is None else Path(subfolder).as_posix()
+                model_files = [
+                    file.rfilename
+                    for file in model_info.siblings
+                    if normalized_subfolder is None or file.rfilename.startswith(normalized_subfolder)
+                ]
+                for model_name in [OV_ENCODER_NAME, OV_DECODER_NAME]:
+                    ov_model_path = model_name if subfolder is None else f"{normalized_subfolder}/{model_name}"
+                    if ov_model_path not in model_files or ov_model_path.replace(".xml", ".bin") not in model_files:
+                        return True
+                return False
+            except Exception:
+                return True
+
+        return not all(cache_status)
