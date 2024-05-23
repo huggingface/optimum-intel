@@ -406,14 +406,14 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             hf_api = HfApi()
             try:
                 model_info = hf_api.model_info(model_id, revision=revision or "main")
-                normalized_subfolder = None if subfolder is None else Path(subfolder).as_posix()
+                normalized_subfolder = None if not subfolder else Path(subfolder).as_posix()
                 model_files = [
                     file.rfilename
                     for file in model_info.siblings
                     if normalized_subfolder is None or file.rfilename.startswith(normalized_subfolder)
                 ]
                 for model_name in [OV_ENCODER_NAME, OV_DECODER_NAME]:
-                    ov_model_path = model_name if subfolder is None else f"{normalized_subfolder}/{model_name}"
+                    ov_model_path = model_name if not subfolder else f"{normalized_subfolder}/{model_name}"
                     if ov_model_path not in model_files or ov_model_path.replace(".xml", ".bin") not in model_files:
                         return True
                 return False

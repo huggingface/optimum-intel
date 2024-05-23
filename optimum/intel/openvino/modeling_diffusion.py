@@ -424,7 +424,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
         def check_model_part_status(model_id, subfolder, revision):
             model_dir = Path(model_id)
-            if subfolder is not None:
+            if subfolder:
                 model_dir = model_dir / subfolder
             if model_dir.is_dir():
                 return (
@@ -432,8 +432,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                     or not (model_dir / OV_XML_FILE_NAME.replace(".xml", ".bin")).exists()
                 )
 
-            normalized_subfolder = None if subfolder is None else Path(subfolder).as_posix()
-            ov_model_path = OV_XML_FILE_NAME if subfolder is None else f"{normalized_subfolder}/{OV_XML_FILE_NAME}"
+            normalized_subfolder = None if not subfolder else Path(subfolder).as_posix()
+            ov_model_path = OV_XML_FILE_NAME if not subfolder else f"{normalized_subfolder}/{OV_XML_FILE_NAME}"
             cache_model_path = try_to_load_from_cache(
                 model_id, ov_model_path, cache_dir=cache_dir, revision=revision or "main", repo_type="model"
             )
@@ -455,9 +455,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                         for file in model_info.siblings
                         if normalized_subfolder is None or file.rfilename.startswith(normalized_subfolder)
                     ]
-                    ov_model_path = (
-                        OV_XML_FILE_NAME if subfolder is None else f"{normalized_subfolder}/{OV_XML_FILE_NAME}"
-                    )
+                    ov_model_path = OV_XML_FILE_NAME if not subfolder else f"{normalized_subfolder}/{OV_XML_FILE_NAME}"
                     return ov_model_path not in model_files or ov_model_path.replace(".xml", ".bin") not in model_files
                 except Exception:
                     return True
