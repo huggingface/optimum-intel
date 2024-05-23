@@ -15,7 +15,6 @@
 
 import logging
 import sys
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -357,17 +356,12 @@ class OVExportCommand(BaseOptimumCLICommand):
             if quantize_after_export:
                 from optimum.intel import OVModelForCausalLM, OVQuantizer
 
+                # TODO: remove disabling mmap once OV is updated to 2024.3
                 model = OVModelForCausalLM.from_pretrained(
-                    self.args.output, trust_remote_code=self.args.trust_remote_code
+                    self.args.output, trust_remote_code=self.args.trust_remote_code, ov_config={"ENABLE_MMAP": "NO"}
                 )
                 quantizer = OVQuantizer(model)
                 quantization_config.tokenizer = quantization_config.tokenizer or str(self.args.output)
-                # TODO: set save_directory=self.args.output once OV is updated to 2024.3
-                quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    import shutil
-
-                    model.save_pretrained(temp_dir)
-                    ov_config.save_pretrained(self.args.output)
-                    shutil.copy(f"{temp_dir}/openvino_model.xml", f"{self.args.output}/openvino_model.xml")
-                    shutil.copy(f"{temp_dir}/openvino_model.bin", f"{self.args.output}/openvino_model.bin")
+                quantizer.quantize(
+                    ov_config=OVConfig(quantization_config=quantization_config), save_directory=self.args.output
+                )

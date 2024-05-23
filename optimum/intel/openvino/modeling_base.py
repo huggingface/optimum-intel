@@ -103,6 +103,7 @@ class OVBaseModel(OptimizedModel):
     def load_model(
         file_name: Union[str, Path],
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        ov_core_properties: Optional[Dict] = None,
     ):
         """
         Loads the model.
@@ -112,6 +113,8 @@ class OVBaseModel(OptimizedModel):
                 The path of the model ONNX or XML file.
             quantization_config (`OVWeightQuantizationConfig` or `Dict`, *optional*):
                 Quantization config to apply after model is loaded.
+            ov_core_properties (`Dict`, *optional*):
+                OpenVINO core properties to set before model loading.
         """
 
         def fix_op_names_duplicates(model: openvino.runtime.Model):
@@ -128,6 +131,8 @@ class OVBaseModel(OptimizedModel):
 
         if isinstance(file_name, str):
             file_name = Path(file_name)
+        if ov_core_properties:
+            core.set_property(ov_core_properties)
         model = core.read_model(file_name) if not file_name.suffix == ".onnx" else convert_model(file_name)
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
