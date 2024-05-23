@@ -14,6 +14,7 @@
 """Defines the command line for the export with OpenVINO."""
 
 import logging
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -337,6 +338,9 @@ class OVExportCommand(BaseOptimumCLICommand):
                 # In order to quantize a text-generation model with a dataset, an instance of OVModelForCausalLM is
                 # required. That's why the quantization is skipped during export and applied explicitly after export.
                 ov_config.quantization_config = None
+                # Export intermediate model with f16 weights to save up disk space
+                original_dtype_value = ov_config.dtype
+                ov_config.dtype = "fp16"
 
             # TODO : add input shapes
             main_export(
@@ -355,19 +359,23 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
 
             if quantize_after_export:
-                from optimum.intel import OVModelForCausalLM, OVQuantizer
+                try:
+                    from optimum.intel import OVModelForCausalLM, OVQuantizer
 
-                model = OVModelForCausalLM.from_pretrained(
-                    self.args.output, trust_remote_code=self.args.trust_remote_code
-                )
-                quantizer = OVQuantizer(model)
-                quantization_config.tokenizer = quantization_config.tokenizer or str(self.args.output)
-                # TODO: set save_directory=self.args.output once OV is updated to 2024.3
-                quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    import shutil
-
-                    model.save_pretrained(temp_dir)
-                    ov_config.save_pretrained(self.args.output)
-                    shutil.copy(f"{temp_dir}/openvino_model.xml", f"{self.args.output}/openvino_model.xml")
-                    shutil.copy(f"{temp_dir}/openvino_model.bin", f"{self.args.output}/openvino_model.bin")
+                    ov_config.dtype = original_dtype_value
+                    model = OVModelForCausalLM.from_pretrained(
+                        self.args.output, trust_remote_code=self.args.trust_remote_code
+                    )
+                    quantizer = OVQuantizer(model)
+                    quantization_config.tokenizer = quantization_config.tokenizer or str(self.args.output)
+                    # TODO: set save_directory=self.args.output once OV is updated to 2024.3
+                    quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        model.save_pretrained(temp_dir)
+                        ov_config.save_pretrained(self.args.output)
+                        shutil.copy(f"{temp_dir}/openvino_model.xml", f"{self.args.output}/openvino_model.xml")
+                        shutil.copy(f"{temp_dir}/openvino_model.bin", f"{self.args.output}/openvino_model.bin")
+                except Exception as e:
+                    # Delete non-compressed model if compression failed for some reason
+                    shutil.rmtree(str(self.args.output))
+                    raise e
