@@ -527,6 +527,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bloom",
         "chatglm",
         "codegen",
+        "codegen2",
         # "data2vec-text", # TODO : enable when enabled in exporters
         "gemma",
         "gpt2",
@@ -561,6 +562,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "aquila2",
         "xverse",
         "internlm",
+        "dbrx",
+        "qwen2-moe",
     )
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -577,6 +580,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "aquila2",
         "xverse",
         "internlm",
+        "codegen2",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
