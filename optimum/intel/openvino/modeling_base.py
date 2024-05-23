@@ -20,20 +20,18 @@ from tempfile import TemporaryDirectory, gettempdir
 from typing import Dict, Optional, Union
 
 import openvino
-from huggingface_hub import hf_hub_download, HfApi
+from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
-from transformers import GenerationConfig, PretrainedConfig
+from transformers import AutoConfig, GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
-from transformers import AutoConfig
 
 from optimum.exporters.onnx import OnnxConfig
 from optimum.exporters.tasks import TasksManager
-from optimum.modeling_base import OptimizedModel
+from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 from optimum.utils import CONFIG_NAME
-from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING
 
 from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available
@@ -608,7 +606,7 @@ class OVBaseModel(OptimizedModel):
                 subfolder=subfolder,
                 trust_remote_code=trust_remote_code,
             )
-        
+
         if export is None:
             export = cls._check_export_status(model_id, revision, subfolder)
 
@@ -618,7 +616,6 @@ class OVBaseModel(OptimizedModel):
             )
         elif export and trust_remote_code is None:
             trust_remote_code = False
-
 
         from_pretrained_method = cls._from_transformers if export else cls._from_pretrained
 
@@ -641,14 +638,21 @@ class OVBaseModel(OptimizedModel):
         if subfolder is not None:
             model_dir = model_dir / subfolder
         if model_dir.is_dir():
-            return not (model_dir / OV_XML_FILE_NAME).exists() or not (model_dir / OV_XML_FILE_NAME.replace(".xml", ".bin")).exists()
-            
-        hf_api =  HfApi()
+            return (
+                not (model_dir / OV_XML_FILE_NAME).exists()
+                or not (model_dir / OV_XML_FILE_NAME.replace(".xml", ".bin")).exists()
+            )
+
+        hf_api = HfApi()
         try:
             model_info = hf_api.model_info(model_id, revision=revision or "main")
             normalized_subfolder = None if subfolder is None else Path(subfolder).as_posix()
-            model_files = [file.rfilename for file in model_info.siblings if normalized_subfolder is None or file.rfilename.startswith(normalized_subfolder)]
+            model_files = [
+                file.rfilename
+                for file in model_info.siblings
+                if normalized_subfolder is None or file.rfilename.startswith(normalized_subfolder)
+            ]
             ov_model_path = OV_XML_FILE_NAME if subfolder is None else f"{normalized_subfolder}/{OV_XML_FILE_NAME}"
-            return not ov_model_path in model_files or not ov_model_path.replace(".xml", ".bin") in model_files
+            return ov_model_path not in model_files or ov_model_path.replace(".xml", ".bin") not in model_files
         except Exception:
             return True

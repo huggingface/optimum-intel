@@ -20,7 +20,7 @@ from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
 import openvino
-from huggingface_hub import hf_hub_download, HfApi
+from huggingface_hub import HfApi, hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import GenerationConfig, PretrainedConfig
@@ -363,25 +363,32 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
     def forward(self, *args, **kwargs):
         raise NotImplementedError
 
-
     @classmethod
     def _check_export_status(cls, model_id: Union[str, Path], revision: Optional[str] = None, subfolder: str = ""):
         model_dir = Path(model_id)
         if subfolder is not None:
             model_dir = model_dir / subfolder
         if model_dir.is_dir():
-            encoder_exists =  (model_dir / OV_ENCODER_NAME).exists() and (model_dir / OV_ENCODER_NAME.replace(".xml", ".bin")).exists()
-            decoder_exists = (model_dir / OV_DECODER_NAME).exists() and (model_dir / OV_DECODER_NAME.replace(".xml", ".bin")).exists()
+            encoder_exists = (model_dir / OV_ENCODER_NAME).exists() and (
+                model_dir / OV_ENCODER_NAME.replace(".xml", ".bin")
+            ).exists()
+            decoder_exists = (model_dir / OV_DECODER_NAME).exists() and (
+                model_dir / OV_DECODER_NAME.replace(".xml", ".bin")
+            ).exists()
             return not encoder_exists or not decoder_exists
-            
-        hf_api =  HfApi()
+
+        hf_api = HfApi()
         try:
             model_info = hf_api.model_info(model_id, revision=revision or "main")
             normalized_subfolder = None if subfolder is None else Path(subfolder).as_posix()
-            model_files = [file.rfilename for file in model_info.siblings if normalized_subfolder is None or file.rfilename.startswith(normalized_subfolder)]
+            model_files = [
+                file.rfilename
+                for file in model_info.siblings
+                if normalized_subfolder is None or file.rfilename.startswith(normalized_subfolder)
+            ]
             for model_name in [OV_ENCODER_NAME, OV_DECODER_NAME]:
                 ov_model_path = model_name if subfolder is None else f"{normalized_subfolder}/{model_name}"
-                if not ov_model_path in model_files or not ov_model_path.replace(".xml", ".bin") in model_files:
+                if ov_model_path not in model_files or ov_model_path.replace(".xml", ".bin") not in model_files:
                     return True
             return False
         except Exception:
