@@ -748,16 +748,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         load_in_4bit = quantization_config.bits == 4 if quantization_config else False
 
-        ov_config = kwargs.get("ov_config", None)
-        ov_core_properties = {}
-        if ov_config and "ENABLE_MMAP" in ov_config:
-            ov_core_properties["ENABLE_MMAP"] = ov_config["ENABLE_MMAP"]
-            del ov_config["ENABLE_MMAP"]
-
         model = cls.load_model(
             model_cache_path,
             quantization_config=None if load_in_4bit else quantization_config,
-            ov_core_properties=ov_core_properties,
         )
 
         model_type = config.model_type.replace("_", "-")
