@@ -63,6 +63,7 @@ MODEL_NAMES = {
     "ibert": "hf-internal-testing/tiny-random-ibert",
     "internlm": "katuni4ka/tiny-random-internlm",
     "internlm2": "katuni4ka/tiny-random-internlm2",
+    "jais": "katuni4ka/tiny-random-jais",
     "levit": "hf-internal-testing/tiny-random-LevitModel",
     "longt5": "hf-internal-testing/tiny-random-longt5",
     "llama": "fxmarty/tiny-llama-fast-tokenizer",

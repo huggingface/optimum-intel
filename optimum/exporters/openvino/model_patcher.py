@@ -1771,3 +1771,101 @@ class DBRXModelPatcher(DecoderModelPatcher):
         self._model.transformer._update_causal_mask = self._model.transformer._orig_update_causal_mask
         for block in self._model.transformer.blocks:
             block.ffn.experts.forward = block.ffn.experts._orig_forward
+
+
+def _persimmon_self_attn_sdpa_forward(
+    self,
+    hidden_states: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    position_ids: Optional[torch.LongTensor] = None,
+    past_key_value: Optional[Cache] = None,
+    output_attentions: bool = False,
+    use_cache: bool = False,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+    from transformers.models.persimmon.modeling_persimmon import apply_rotary_pos_emb
+
+    if output_attentions:
+        return self._orig_forward(
+            hidden_states, attention_mask, position_ids, past_key_value, output_attentions, use_cache
+        )
+
+    bsz, q_len, _ = hidden_states.size()
+
+    # [batch_size, seq_length, 3 x hidden_size]
+    fused_qkv = self.query_key_value(hidden_states)
+
+    # 3 x [batch_size, seq_length, num_heads, head_dim]
+    (query_states, key_states, value_states) = self._split_heads(fused_qkv)
+
+    if self.qk_layernorm:
+        query_states = self.q_layernorm(query_states)
+        key_states = self.k_layernorm(key_states)
+
+    # [batch_size, num_heads, seq_length, head_dim] -> [batch_size, seq_length, num_heads, head_dim]
+    query_states = query_states.transpose(1, 2)
+    value_states = value_states.transpose(1, 2)
+    key_states = key_states.transpose(1, 2)
+
+    kv_seq_len = key_states.shape[-2]
+    if past_key_value is not None:
+        if self.layer_idx is None:
+            raise ValueError(
+                f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                "with a layer index."
+            )
+        kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
+    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+
+    # Partial rotary embedding
+    query_rot, query_pass = (
+        query_states[..., : self.rotary_emb.dim],
+        query_states[..., self.rotary_emb.dim :],
+    )
+    key_rot, key_pass = (
+        key_states[..., : self.rotary_emb.dim],
+        key_states[..., self.rotary_emb.dim :],
+    )
+    # [batch_size, seq_length, num_heads, head_dim // config.partial_rotary_factor]
+    query_rot, key_rot = apply_rotary_pos_emb(query_rot, key_rot, cos, sin, position_ids)
+
+    # [batch_size, seq_length, num_heads, head_dim]
+    query_states = torch.cat((query_rot, query_pass), dim=-1)
+    key_states = torch.cat((key_rot, key_pass), dim=-1)
+
+    if past_key_value is not None:
+        # Specific to RoPE models with partial rotation
+        cache_kwargs = {"sin": sin, "cos": cos, "partial_rotation_size": self.rotary_emb.dim}
+        key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+    attn_output = F.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        attention_mask,
+        scale=1 / math.sqrt(self.head_dim),
+        dropout_p=self.attention_dropout.p,
+    )
+
+    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+
+    attn_output = self.dense(attn_output)
+
+    return attn_output, None, past_key_value
+
+
+class PersimmonModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.model.layers:
+            if is_torch_version(">=", "2.1.0"):
+                orig_self_attn_fwd = layer.self_attn.forward
+                layer.self_attn.forward = types.MethodType(_persimmon_self_attn_sdpa_forward, layer.self_attn)
+                layer.self_attn._orig_forward = orig_self_attn_fwd
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for layer in self._model.model.layers:
+            if hasattr(layer.self_attn, "_orig_forward"):
+                layer.self_attn.forward = layer.self_attn._orig_forward
