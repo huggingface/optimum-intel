@@ -77,7 +77,10 @@ class OVQuantizerTest(unittest.TestCase):
         (OVModelForSequenceClassification, "bert", 22, 35),
         (OVModelForCausalLM, "gpt2", 41, 3),
     )
-    SUPPORTED_ARCHITECTURES_OV_MODEL = ((OVModelForSequenceClassification, "bert", 32, 35),)
+    SUPPORTED_ARCHITECTURES_OV_MODEL = (
+        (OVModelForSequenceClassification, "bert", 32, 35),
+        # (OVModelForCausalLM, "gpt2", 31, 3),
+    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
     def test_automodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
