@@ -58,11 +58,6 @@ def padding_attn_mask(attn_mask, alignment):
     new_attn_mask[..., :last_dim_size] = attn_mask
     return new_attn_mask
 
-# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
-def _llama_layer_norm_forward(self, hidden_states):
-    return torch.ops.torch_ipex.rmsnorm(hidden_states, self.weight, self.variance_epsilon)
-
-
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L1130
 def _llama_model_forward(
     self,
@@ -129,8 +124,8 @@ def _llama_model_forward(
     next_decoder_cache = () if use_cache else None
 
     seqlen = hidden_states.size(1)
-    head_dim = self.layers[0].attn.head_dim
-    sin, cos = self.layers[0].attn.ipex_rope.get_sin_cos(seqlen, head_dim // 2)
+    head_dim = self.layers[0].self_attn.head_dim
+    sin, cos = self.layers[0].self_attn.ipex_rope.get_sin_cos(seqlen, head_dim // 2)
     sin = sin.squeeze()[position_ids].unsqueeze(2)
     cos = cos.squeeze()[position_ids].unsqueeze(2)
     sin_cos = {"sin": sin, "cos": cos}
@@ -213,7 +208,128 @@ class _IPEXLlamaAttentionRef(nn.Module):
                 module.config.architectures[0],
             )
             
-            
+    def qkv_gemm(self, hidden_states):
+        bsz, seq_len, _ = hidden_states.size()
+        if self.module_device == "xpu":
+            if self.num_key_value_heads == self.num_heads:
+                query = torch.empty(
+                    (bsz, seq_len, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device
+                )
+                key = torch.empty(
+                    (bsz, seq_len, self.num_heads * self.head_dim),
+                    dtype=hidden_states.dtype,
+                    device=hidden_states.device
+                )
+                value = torch.empty(
+                    (bsz, seq_len, self.num_heads * self.head_dim),
+                    dtype=hidden_states.dtype,
+                    device=hidden_states.device
+                )
+                torch.ops.torch_ipex.mm_qkv_out(
+                    hidden_states,
+                    self.qkv_proj_weight,
+                    self.qkv_proj_bias,
+                    query,
+                    key,
+                    value,
+                )
+            else:
+                query = torch.empty(
+                    (bsz, seq_len, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device
+                )
+                key = torch.empty(
+                    (bsz, seq_len, self.num_key_value_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device
+                )
+                value = torch.empty(
+                    (bsz, seq_len, self.num_key_value_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device
+                )
+                torch.ops.torch_ipex.mm_qkv_group_out(
+                    hidden_states, self.qkv_proj_weight, self.qkv_proj_bias, query, key, value
+                )
+        else:
+            query = self.q_proj(hidden_states)
+            key = self.k_proj(hidden_states)
+            value = self.v_proj(hidden_states)
+
+        query = query.view(bsz, seq_len, self.num_heads, self.head_dim)
+        key = key.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        value = value.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        
+        return query, key, value
+    
+    def rope(self, query, key, kv_seq_len, position_ids, **kwargs):
+        if self.module_device == "xpu":
+            sin = kwargs.pop("sin", None)
+            cos = kwargs.pop("cos", None)
+            self.ipex_rope.apply_embedding(query, sin, cos, self.head_dim // 2, key)
+        else:
+            key = self.ipex_rope(
+                key,
+                position_ids,
+                self.num_key_value_heads,
+                self.head_dim,
+                self.head_dim // 2,
+                self.head_dim,
+                kv_seq_len,
+            )
+            query = self.ipex_rope(
+                query,
+                position_ids,
+                self.num_heads,
+                self.head_dim,
+                self.head_dim // 2,
+                self.head_dim,
+                kv_seq_len,
+            )
+        
+        return query, key 
+    
+    def sdpa(self, query, key, value, past_key_value, attention_mask, use_cache):
+        
+        if self.module_device == "xpu":
+            scale = 1.0 / math.sqrt(self.head_dim)
+            is_causal = False
+            attn_output = torch.xpu.IpexSDP(
+                query, key, value, None, attention_mask, None, scale, 1.0, 0.0, is_causal, False
+            )
+            attn_weights = None
+            past_key_value = (key, value) if use_cache else None
+        else:
+            if use_cache:
+                # This ipex op pre-allocates buffers for past_key_values and use beam index history
+                # which to decide which beam should be used to make attention scale dot more efficient.
+                (attn_output, attn_weights, past_key_value) = self.ipex_scale_dot_product(
+                    query,
+                    key,
+                    value,
+                    math.sqrt(self.head_dim),
+                    past_key_value,
+                    None,
+                    attention_mask,
+                )
+            else:
+                value_states = value.transpose(1, 2)
+                query_states = query.transpose(1, 2)
+                key_states = key.transpose(1, 2)
+
+                past_key_value = None
+                # repeat k/v heads if n_kv_heads < n_heads
+                key_states = repeat_kv(key_states, self.num_key_value_groups)
+                value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+                attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+
+                if attention_mask is not None:
+                    attn_weights = torch.tensor(attn_weights) + torch.tensor(attention_mask)
+                    attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
+
+                # upcast attention to fp32
+                attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+                attn_output = torch.matmul(attn_weights, value_states)
+        
+        return attn_output, attn_weights, past_key_value
+    
+        
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -242,82 +358,36 @@ class _IPEXLlamaAttentionRef(nn.Module):
             residual (`torch.Tensor`): residual tensor to the layer of shape `
         """
         bsz, seq_len, _ = hidden_states.size()
-
-        query = self.q_proj(hidden_states)
-        key = self.k_proj(hidden_states)
-        value = self.v_proj(hidden_states)
-
         kv_seq_len = seq_len + past_key_value[0].size(-2) if past_key_value is not None else seq_len
-
-        query = query.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
-        key = key.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
-        value = value.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
-        # Use ipex op to rotary position embedding more efficient.
-        key = self.ipex_rope(
-            key,
-            position_ids,
-            self.num_key_value_heads,
-            self.head_dim,
-            self.head_dim // 2,
-            self.head_dim,
-            kv_seq_len,
-        )
-        query = self.ipex_rope(
-            query,
-            position_ids,
-            self.num_heads,
-            self.head_dim,
-            self.head_dim // 2,
-            self.head_dim,
-            kv_seq_len,
-        )
-
-        if use_cache:
-            # This ipex op pre-allocates buffers for past_key_values and use beam index history
-            # which to decide which beam should be used to make attention scale dot more efficient.
-            (attn_output, attn_weights, past_key_value) = self.ipex_scale_dot_product(
-                query,
-                key,
-                value,
-                math.sqrt(self.head_dim),
-                past_key_value,
-                None,
-                attention_mask,
-            )
+        
+        query, key, value = self.qkv_gemm(hidden_states)
+        query, key = self.rope(query, key, kv_seq_len, position_ids, **kwargs)
+        
+        if self.module_device == "xpu":
+            if past_key_value is not None:
+                key = torch.cat([past_key_value[0].transpose(1, 2), key], dim=1)
+                value = torch.cat([past_key_value[1].transpose(1, 2), value], dim=1)
+            query = query.transpose(1, 2)
+            key = key.transpose(1, 2)
+            value = value.transpose(1, 2)
+        
+        attn_output, attn_weights, past_key_value= self.sdpa(query, key, value, past_key_value, attention_mask, use_cache)
+        attn_output = attn_output.transpose(1, 2).view(bsz, seq_len, self.hidden_size)
+        
+        if self.module_device == "xpu":
+            attn_output = matmul_add_add(attn_output, self.o_proj_weight, self.o_proj_bias, residual).view([bsz, seq_len, self.hidden_size])
         else:
-            value_states = value.transpose(1, 2)
-            query_states = query.transpose(1, 2)
-            key_states = key.transpose(1, 2)
-            kv_seq_len = key_states.shape[-2]
-
-            past_key_value = None
-            # repeat k/v heads if n_kv_heads < n_heads
-            key_states = repeat_kv(key_states, self.num_key_value_groups)
-            value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-
-            if attention_mask is not None:
-                attn_weights = torch.tensor(attn_weights) + torch.tensor(attention_mask)
-                attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
-
-            # upcast attention to fp32
-            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-            attn_output = torch.matmul(attn_weights, value_states)
-
-        attn_output = attn_output.transpose(1, 2)
-        attn_output = attn_output.reshape(bsz, seq_len, self.hidden_size)
-
-        if hasattr(self, "mha_linear_add"):
-            attn_output = self.mha_linear_add(attn_output, residual)
-        else:
-            attn_output = self.o_proj(attn_output)
-            attn_output = residual + attn_output
-
+            if hasattr(self, "mha_linear_add"):
+                attn_output = self.mha_linear_add(attn_output, residual)
+            else:
+                attn_output = self.o_proj(attn_output)
+                attn_output = residual + attn_output
+            
         if not output_attentions:
             attn_weights = None
 
         return attn_output, past_key_value, attn_weights
+    
     
     def port_parameters(self, module):
         self.qkv_proj_bias = None
@@ -373,10 +443,6 @@ class _IPEXLlamaAttentionRef(nn.Module):
 
 class _IPEXLlamaMLPRef(nn.Module):
     def __init__(self, module, config, distributed=False) -> None:
-        if is_ipex_version("<", "2.3.0"):
-            raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
-        from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
-
         super().__init__()
         for k, v in module.__dict__.items():
             setattr(self, k, v)
@@ -391,6 +457,7 @@ class _IPEXLlamaMLPRef(nn.Module):
             self.port_parameter(module)
             torch.xpu.empty_cache()
         else:
+            from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
             if not self.distributed:
                 self.mlp_linear_add = LinearAdd(module.down_proj)
                 del self.__dict__["_modules"]["down_proj"]
@@ -444,7 +511,24 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
         self.distributed = distributed
         self.self_attn = _IPEXLlamaAttentionRef(module.self_attn, config, distributed)
         self.mlp = _IPEXLlamaMLPRef(module.mlp, config, distributed)
-
+        self.module_device = module.mlp.gate_proj.weight.device.type
+        from intel_extension_for_pytorch.llm.modules import RMSNorm
+        if self.module_device == "xpu":
+            self.input_layernorm = RMSNorm(
+                self.input_layernorm.weight, self.input_layernorm.variance_epsilon
+            )
+            self.post_attention_layernorm = RMSNorm(
+                self.post_attention_layernorm.weight, self.post_attention_layernorm.variance_epsilon
+            )
+        else:
+            self.input_layernorm = RMSNorm(
+                self.hidden_size, self.input_layernorm.variance_epsilon, self.input_layernorm.weight 
+            )
+            self.post_attention_layernorm = RMSNorm(
+                self.hidden_size, self.post_attention_layernorm.variance_epsilon, self.post_attention_layernorm.weight 
+            )
+            
+        
     def forward(
         self,
         hidden_states: torch.Tensor,

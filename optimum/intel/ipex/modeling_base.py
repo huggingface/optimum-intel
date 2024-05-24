@@ -546,8 +546,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if "position_ids" in self.input_names or not self.input_names:
             inputs["position_ids"] = position_ids
 
-        if self.use_cache and self._device.type == "cpu":
-            if past_key_values is None:
+        if self.use_cache:
+            if past_key_values is None and self._device.type == "cpu":
                 past_key_values = self._prepare_past_key_values(input_ids)
 
             inputs["past_key_values"] = past_key_values
