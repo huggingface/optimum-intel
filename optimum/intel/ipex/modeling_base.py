@@ -71,7 +71,7 @@ def _is_patched_with_ipex(model, task):
                 return True
         return False
     else:
-        ipex_version = "2.2.0" if "xpu" in str(model.device) else "2.5.0"
+        ipex_version = "2.1.0" if "xpu" in str(model.device) else "2.5.0"
         if is_ipex_version("<", ipex_version):
             return False
         return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES and task in _IPEX_EXPORTED_TASK

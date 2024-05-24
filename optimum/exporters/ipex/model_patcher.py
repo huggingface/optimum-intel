@@ -64,7 +64,7 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 def _patch_llama_model(model):
 
-    ipex_version = "2.2.0" if "xpu" in str(model.device) else "2.5.0"
+    ipex_version = "2.1.0" if "xpu" in str(model.device) else "2.5.0"
     if is_ipex_version("<", ipex_version):
         raise ImportError(f"Only ipex version >= {ipex_version} supports RotaryEmbedding and IndirectAccessKVCache")
 
