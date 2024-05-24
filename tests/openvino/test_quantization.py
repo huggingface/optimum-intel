@@ -73,12 +73,16 @@ _TASK_TO_DATASET = {
 
 
 class OVQuantizerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
+    SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
+        (OVModelForSequenceClassification, "bert", 32, 35),
+        (OVModelForCausalLM, "gpt2", 41, 3),
+    )
+    SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
         (OVModelForCausalLM, "gpt2", 31, 3),
     )
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
     def test_automodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
@@ -123,7 +127,7 @@ class OVQuantizerTest(unittest.TestCase):
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL)
     def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
