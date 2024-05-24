@@ -139,11 +139,11 @@ class OVQuantizerTest(unittest.TestCase):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            transformers_model = model_cls.from_pretrained(model_id, export=True, stateful=False)
+            ov_model = model_cls.from_pretrained(model_id, export=True)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
-            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
+            quantizer = OVQuantizer.from_pretrained(ov_model, task=task)
 
             calibration_dataset = quantizer.get_calibration_dataset(
                 dataset_name,

@@ -348,11 +348,6 @@ class OVQuantizer(OptimumQuantizer):
                     data_collator=data_collator,
                 )
                 if self.model.export_feature == "text-generation" and self.model.use_cache:
-                    if self.model.stateful:
-                        raise ValueError(
-                            "Currently, only non-stateful models are supported for quantization, to export such model you can do : `.from_pretrained(export=True, stateful=False)`"
-                        )
-
                     calibration_dataset = self._prepare_text_generation_dataset(
                         quantization_config, calibration_dataloader
                     )
