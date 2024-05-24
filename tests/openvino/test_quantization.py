@@ -79,7 +79,7 @@ class OVQuantizerTest(unittest.TestCase):
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
-        (OVModelForCausalLM, "gpt2", 31, 3),
+        (OVModelForCausalLM, "gpt2", 31, 22),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
@@ -132,8 +132,6 @@ class OVQuantizerTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
-        if "gpt2" in model_id:
-            expected_int8 -= 1
 
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
