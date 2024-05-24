@@ -93,22 +93,22 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
                 (bs, seqlen, self.num_heads * self.head_dim), dtype=hidden_states.dtype, device=hidden_states.device
             )
             key = torch.empty(
-                (bs, prev_seqlen + seqlen, self.num_heads * self.head_dim),
+                (bs, seqlen, self.num_heads * self.head_dim),
                 dtype=hidden_states.dtype,
-                device=hidden_states.device,
+                device=hidden_states.device
             )
             value = torch.empty(
-                (bs, prev_seqlen + seqlen, self.num_heads * self.head_dim),
+                (bs, seqlen, self.num_heads * self.head_dim),
                 dtype=hidden_states.dtype,
-                device=hidden_states.device,
+                device=hidden_states.device
             )
             torch.ops.torch_ipex.mm_qkv_out(
                 hidden_states,
                 self.qkv_proj_weight,
                 self.qkv_proj_bias,
                 query,
-                key[:, prev_seqlen:, :],
-                value[:, prev_seqlen:, :],
+                key,
+                value,
             )
         else:
             query = torch.empty(
@@ -125,21 +125,17 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
             )
 
         query = query.view([bs, seqlen, self.num_heads, self.head_dim])
-        key = key.view([bs, seqlen + prev_seqlen, self.num_kv_heads, self.head_dim])
+        key = key.view([bs, seqlen, self.num_kv_heads, self.head_dim])
 
-        if hasattr(kwargs, "sin") and hasattr(kwargs, "cos"):
-            print("cache sin cos")
-            sin = kwargs["sin"]
-            cos = kwargs["cos"]
-        else:
-            sin, cos = self.ipex_rope.get_sin_cos(seqlen, self.head_dim // 2)
-            sin = sin.squeeze()[position_ids].unsqueeze(2)
-            cos = cos.squeeze()[position_ids].unsqueeze(2)
-        self.ipex_rope.apply_embedding(query, sin, cos, self.head_dim // 2, key[:, prev_seqlen:, :, :])
-        value = value.view([bs, seqlen + prev_seqlen, self.num_kv_heads, self.head_dim])
+
+        sin = kwargs.pop("sin", None)
+        cos = kwargs.pop("cos", None)
+     
+        self.ipex_rope.apply_embedding(query, sin, cos, self.head_dim // 2, key)
+        value = value.view([bs, seqlen, self.num_kv_heads, self.head_dim])
         if past_key_value is not None:
-            value[:, :prev_seqlen, :, :] = past_key_value[1].transpose(1, 2)
-            key[:, :prev_seqlen, :, :] = past_key_value[0].transpose(1, 2)
+            key = torch.cat([past_key_value[0].transpose(1, 2), key], dim=1)
+            value = torch.cat([past_key_value[1].transpose(1, 2), value], dim=1)
 
         query = query.transpose(1, 2)
         key = key.transpose(1, 2)
