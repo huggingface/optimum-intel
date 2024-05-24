@@ -696,7 +696,6 @@ class OVQuantizer(OptimumQuantizer):
     def _prepare_text_generation_dataset(
         self, quantization_config: OVQuantizationConfig, calibration_dataloader: OVDataLoader
     ) -> nncf.Dataset:
-
         # Prefetch past_key_values
         self.model.update_pkv_precision(True)
         self.model.compile()
