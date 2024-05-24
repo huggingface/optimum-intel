@@ -32,12 +32,6 @@ def matmul_add_add(attn_output, weight, bias=None, residual=None):
     return attn_output
 
 
-def reference_elimination(c, b):
-    for item in gc.get_objects():
-        if isinstance(item, torch.Tensor) and item.data_ptr() == c.data_ptr() and item is not c:
-            item.data = b
-
-
 class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
     def __init__(self, module, config, distributed=False, optimized_module=None) -> None:
         super().__init__(module, config, distributed)
@@ -166,11 +160,8 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
             k_proj = module.k_proj.weight.transpose(0, 1)
             v_proj = module.v_proj.weight.transpose(0, 1)
             self.qkv_proj_weight = torch.stack([q_proj, k_proj, v_proj]).contiguous().view([3, -1, q_proj.shape[-1]])
-            reference_elimination(module.q_proj.weight.data, self.qkv_proj_weight[0, :, :].transpose(0, 1))
             module.q_proj.weight.data = self.qkv_proj_weight[0, :, :].transpose(0, 1)
-            reference_elimination(module.k_proj.weight.data, self.qkv_proj_weight[1, :, :].transpose(0, 1))
             module.k_proj.weight.data = self.qkv_proj_weight[1, :, :].transpose(0, 1)
-            reference_elimination(module.v_proj.weight.data, self.qkv_proj_weight[2, :, :].transpose(0, 1))
             module.v_proj.weight.data = self.qkv_proj_weight[2, :, :].transpose(0, 1)
             if module.q_proj.bias is not None:
                 self.qkv_proj_bias = (
@@ -178,11 +169,8 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
                     .contiguous()
                     .view([3, -1])
                 )
-                reference_elimination(module.q_proj.bias.data, self.qkv_proj_bias[0])
                 module.q_proj.bias.data = self.qkv_proj_bias[0]
-                reference_elimination(module.k_proj.bias.data, self.qkv_proj_bias[1])
                 module.k_proj.bias.data = self.qkv_proj_bias[1]
-                reference_elimination(module.v_proj.bias.data, self.qkv_proj_bias[2])
                 module.v_proj.bias.data = self.qkv_proj_bias[2]
         else:
             group = self.num_heads // self.num_kv_heads
@@ -192,25 +180,11 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
             self.qkv_proj_weight = torch.cat([q_proj, k_proj, v_proj], dim=1).view(
                 [self.num_kv_heads, group + 2, self.head_dim, self.embed_dim]
             )
-            reference_elimination(
-                module.q_proj.data,
-                self.qkv_proj_weight[:, :group, :, :].view(
-                    [self.num_kv_heads * group * self.head_dim, self.embed_dim]
-                ),
-            )
             module.q_proj.data = self.qkv_proj_weight[:, :group, :, :].view(
                 [self.num_kv_heads * group * self.head_dim, self.embed_dim]
             )
-            reference_elimination(
-                module.k_proj.data,
-                self.qkv_proj_weight[:, group, :, :].view([self.num_kv_heads * self.head_dim, self.embed_dim]),
-            )
             module.k_proj.data = self.qkv_proj_weight[:, group, :, :].view(
                 [self.num_kv_heads * self.head_dim, self.embed_dim]
-            )
-            reference_elimination(
-                module.v_proj.data,
-                self.qkv_proj_weight[:, group + 1, :, :].view([self.num_kv_heads * self.head_dim, self.embed_dim]),
             )
             module.v_proj.data = self.qkv_proj_weight[:, group + 1, :, :].view(
                 [self.num_kv_heads * self.head_dim, self.embed_dim]
@@ -222,16 +196,10 @@ class _IPEXLlamaAttentionXPU(_IPEXLlamaAttention):
                 self.qkv_proj_bias = torch.cat([q_bias, k_bias, v_bias], dim=1).view(
                     [self.num_kv_heads, group + 2, self.head_dim]
                 )
-                reference_elimination(module.q_proj.bias.data, self.qkv_proj_bias[:, :group, self.head_dim].view(-1))
                 module.q_proj.bias.data = self.qkv_proj_bias[:, :group, self.head_dim].view(-1)
-                reference_elimination(module.k_proj.bias.data, self.qkv_proj_bias[:, group, self.head_dim].view(-1))
                 module.k_proj.bias.data = self.qkv_proj_bias[:, group, self.head_dim].view(-1)
-                reference_elimination(
-                    module.v_proj.bias.data, self.qkv_proj_bias[:, group + 1, self.head_dim].view(-1)
-                )
                 module.v_proj.bias.data = self.qkv_proj_bias[:, group + 1, self.head_dim].view(-1)
         self.o_proj_weight = module.o_proj.weight.transpose(0, 1).contiguous()
-        reference_elimination(module.o_proj.weight.data, self.o_proj_weight.transpose(0, 1))
         module.o_proj.weight.data = self.o_proj_weight.transpose(0, 1)
         self.o_proj_bias = module.o_proj.bias
 
@@ -243,7 +211,8 @@ class _IPEXLlamaMLPXPU(_IPEXLlamaMLP):
         if optimized_module is not None:
             self.mlp_impl = optimized_module
         self.port_parameter(module)
-
+        torch.xpu.empty_cache()
+        
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
         """
         Args:
@@ -256,13 +225,10 @@ class _IPEXLlamaMLPXPU(_IPEXLlamaMLP):
 
     def port_parameter(self, module):
         self.up_proj_weight = module.up_proj.weight.transpose(0, 1).contiguous()
-        reference_elimination(module.up_proj.weight.data, self.up_proj_weight.transpose(0, 1))
         module.up_proj.weight.data = self.up_proj_weight.transpose(0, 1)
         self.gate_proj_weight = module.gate_proj.weight.transpose(0, 1).contiguous()
-        reference_elimination(module.gate_proj.weight.data, self.gate_proj_weight.transpose(0, 1))
         module.gate_proj.weight.data = self.gate_proj_weight.transpose(0, 1)
         self.down_proj_weight = module.down_proj.weight.transpose(0, 1).contiguous()
-        reference_elimination(module.down_proj.weight.data, self.down_proj_weight.transpose(0, 1))
         module.down_proj.weight.data = self.down_proj_weight.transpose(0, 1)
         self.up_proj_bias = module.up_proj.bias
         self.gate_proj_bias = module.gate_proj.bias
