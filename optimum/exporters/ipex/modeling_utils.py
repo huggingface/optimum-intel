@@ -122,13 +122,15 @@ def _llama_model_forward(
     all_hidden_states = () if output_hidden_states else None
     all_self_attns = () if output_attentions else None
     next_decoder_cache = () if use_cache else None
-
-    seqlen = hidden_states.size(1)
-    head_dim = self.layers[0].self_attn.head_dim
-    sin, cos = self.layers[0].self_attn.ipex_rope.get_sin_cos(seqlen, head_dim // 2)
-    sin = sin.squeeze()[position_ids].unsqueeze(2)
-    cos = cos.squeeze()[position_ids].unsqueeze(2)
-    sin_cos = {"sin": sin, "cos": cos}
+    if hidden_states.device.type == "xpu":
+        seqlen = hidden_states.size(1)
+        head_dim = self.layers[0].self_attn.head_dim
+        sin, cos = self.layers[0].self_attn.ipex_rope.get_sin_cos(seqlen, head_dim // 2)
+        sin = sin.squeeze()[position_ids].unsqueeze(2)
+        cos = cos.squeeze()[position_ids].unsqueeze(2)
+        decoder_layer_kwargs = {"sin": sin, "cos": cos}
+    else:
+        decoder_layer_kwargs = {}
     for idx, decoder_layer in enumerate(self.layers):
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
@@ -142,7 +144,7 @@ def _llama_model_forward(
             past_key_value=past_key_value,
             output_attentions=output_attentions,
             use_cache=use_cache,
-            **sin_cos,
+            **decoder_layer_kwargs,
         )
 
         hidden_states = layer_outputs[0]
@@ -182,7 +184,7 @@ class _IPEXLlamaAttentionRef(nn.Module):
             setattr(self.__class__, k, getattr(module.__class__, k))
         self.config = config
         self.distributed = distributed
-        self.module_device = module.q_proj.weight.device.type
+        self.module_device = next(module.parameters()).device.type
         if self.module_device == "xpu":
             from intel_extension_for_pytorch.transformers.models.xpu.fusions.mha_fusion import _IPEXRopeXPU
 
@@ -448,7 +450,7 @@ class _IPEXLlamaMLPRef(nn.Module):
             setattr(self.__class__, k, getattr(module.__class__, k))
         self.config = config
         self.distributed = distributed
-        self.module_device = module.down_proj.weight.device.type
+        self.module_device = next(module.parameters()).device.type
         if self.module_device == "xpu":
             self.port_parameter(module)
             torch.xpu.empty_cache()
@@ -510,8 +512,8 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
             setattr(self.__class__, k, getattr(module.__class__, k))
         self.distributed = distributed
         self.self_attn = _IPEXLlamaAttentionRef(module.self_attn, config, distributed)
+        self.module_device = next(module.parameters()).device.type
         self.mlp = _IPEXLlamaMLPRef(module.mlp, config, distributed)
-        self.module_device = module.mlp.gate_proj.weight.device.type
         from intel_extension_for_pytorch.llm.modules import RMSNorm
 
         if self.module_device == "xpu":
