@@ -139,8 +139,6 @@ class _IPEXLlamaAttentionRef(nn.Module):
             raise ImportError(
                 "Only ipex version > 2.3.0 supports LinearAdd, IndirectAccessKVCacheAttention, RotaryEmbedding"
             )
-        from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCacheAttention, LinearAdd, RotaryEmbedding
-
         super().__init__()
         for k, v in module.__dict__.items():
             setattr(self, k, v)
@@ -150,6 +148,8 @@ class _IPEXLlamaAttentionRef(nn.Module):
             setattr(self.__class__, k, getattr(module.__class__, k))
         self.config = config
         self.distributed = distributed
+        from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCacheAttention, LinearAdd, RotaryEmbedding
+
         if not self.distributed:
             self.mha_linear_add = LinearAdd(self.o_proj)
             del self.__dict__["_modules"]["o_proj"]
@@ -196,11 +196,11 @@ class _IPEXLlamaAttentionRef(nn.Module):
         key = self.k_proj(hidden_states)
         value = self.v_proj(hidden_states)
 
-        kv_seq_len = seq_len + past_key_value[0].size(-2) if past_key_value is not None else seq_len
-
-        query = query.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        query = query.view(bsz, seq_len, self.num_heads, self.head_dim)
         key = key.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
         value = value.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+
+        kv_seq_len = seq_len + past_key_value[0].size(-2) if past_key_value is not None else seq_len
         # Use ipex op to rotary position embedding more efficient.
         key = self.ipex_rope(
             key,
@@ -269,11 +269,10 @@ class _IPEXLlamaAttentionRef(nn.Module):
         return attn_output, past_key_value, attn_weights
 
 
-class _IPEXLlamaMLP(nn.Module):
+class _IPEXLlamaMLPRef(nn.Module):
     def __init__(self, module, config, distributed=False) -> None:
         if is_ipex_version("<", "2.3.0"):
             raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
-        from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
 
         super().__init__()
         for k, v in module.__dict__.items():
@@ -284,6 +283,8 @@ class _IPEXLlamaMLP(nn.Module):
             setattr(self.__class__, k, getattr(module.__class__, k))
         self.config = config
         self.distributed = distributed
+        from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
+
         if not self.distributed:
             self.mlp_linear_add = LinearAdd(module.down_proj)
             del self.__dict__["_modules"]["down_proj"]
@@ -322,7 +323,7 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
             setattr(self.__class__, k, getattr(module.__class__, k))
         self.distributed = distributed
         self.self_attn = _IPEXLlamaAttentionRef(module.self_attn, config, distributed)
-        self.mlp = _IPEXLlamaMLP(module.mlp, config, distributed)
+        self.mlp = _IPEXLlamaMLPRef(module.mlp, config, distributed)
 
     def forward(
         self,
