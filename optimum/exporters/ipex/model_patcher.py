@@ -16,7 +16,6 @@ from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaForCausalLM,
     LlamaModel,
-    LlamaRMSNorm,
 )
 
 from optimum.intel.utils.import_utils import is_ipex_version
@@ -26,7 +25,6 @@ from .modeling_utils import (
     _llama_model_forward,
 )
 
-from .modeling.modeling_llama import _IPEXLlamaDecoderLayer
 
 _IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
 _IPEX_EXPORTED_TASK = ("text-generation",)
@@ -60,7 +58,7 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 
 def _patch_llama_model(model):
-    ipex_version = "2.1.0" if "xpu" in str(model.device) else "2.5.0"
+    ipex_version = "2.2.0" if "xpu" in str(model.device) else "2.3.0"
     if is_ipex_version("<", ipex_version):
         raise ImportError(f"Only ipex version >= {ipex_version} supports llama model patching")
 
