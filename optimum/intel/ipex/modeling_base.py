@@ -140,10 +140,12 @@ class IPEXModel(OptimizedModel):
         self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model_save_dir = model_save_dir
         self._is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
-
-        self.input_names = {
-            inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
-        }
+        if self._device.type == "cpu":
+            self.input_names = {
+                inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
+            }
+        else:
+            self.input_names = {"past_key_values": None, "position_ids": None}
         # Registers the IPEXModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -169,7 +171,6 @@ class IPEXModel(OptimizedModel):
         trust_remote_code: bool = False,
         _commit_hash: str = None,
     ):
-        device_map = kwargs.pop("device_map", None)
         if use_auth_token is not None:
             warnings.warn(
                 "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
@@ -196,22 +197,15 @@ class IPEXModel(OptimizedModel):
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
 
-        if "cpu" in str(model.device):
-            if is_torch_version("<", "2.1.0"):
-                raise ImportError("`torch>=2.1.0` is needed to trace your model")
-            traced_model = ipex_jit_trace(model, task, use_cache)
-            config.torchscript = True
-            config.torch_dtype = torch_dtype
-            return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
-        else:
-            from optimum.exporters.ipex.model_patcher import _patch_model
-
+        if is_torch_xpu_available(check_device=True):
+            model.to("xpu:0")
             if _is_patched_with_ipex(model, task):
                 model = _patch_model(model)
-            else:
-                raise NotImplementedError(f"The given model is not support yet")
-
-            return model
+        else:
+            model = ipex_jit_trace(model, task, use_cache)
+            config.torchscript = True
+            config.torch_dtype = torch_dtype
+        return cls(model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
 
     @classmethod
     def _from_pretrained(
@@ -462,7 +456,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
 
-        if self._is_ipex_exported:
+        if self._is_ipex_exported and self._device.type == "cpu":
             self._reorder_cache = _ipex_reorder_cache
         else:
             # Check if _reorder_cache is a static method
@@ -552,7 +546,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         if "position_ids" in self.input_names or not self.input_names:
             inputs["position_ids"] = position_ids
 
-        if self.use_cache:
+        if self.use_cache and self._device.type == "cpu":
             if past_key_values is None:
                 past_key_values = self._prepare_past_key_values(input_ids)
 
