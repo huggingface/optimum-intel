@@ -39,6 +39,7 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
+    is_torch_xpu_available,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
@@ -52,7 +53,7 @@ from optimum.utils import NormalizedConfigManager
 from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _patch_model
 from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
-from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
+from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
 
 
 logger = logging.getLogger(__name__)
@@ -62,18 +63,17 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama",)
 
 
 def _is_patched_with_ipex(model, task):
+    ipex_version = "2.1.0" if model.device.type == "xpu" else "2.3.0"
+    if is_ipex_version("<", ipex_version):
+        return False
+
     if isinstance(model, torch.jit.ScriptModule):
-        if is_ipex_version("<", "2.5.0"):
-            return False
         for node in model.graph.nodes():
             # Jit will record the codes position so we can check if the node use ipex exporter.
             if "torch_ipex::rotary_position_embedding" in node.__str__():
                 return True
         return False
     else:
-        ipex_version = "2.1.0" if "xpu" in str(model.device) else "2.5.0"
-        if is_ipex_version("<", ipex_version):
-            return False
         return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES and task in _IPEX_EXPORTED_TASK
 
 
@@ -130,10 +130,14 @@ class IPEXModel(OptimizedModel):
         **kwargs,
     ):
         OptimizedModel.__init__(self, model=model, config=config)
-        # To do: add XPU support
-        self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
+        if is_torch_xpu_available(check_device=True):
+            self._device = torch.device("xpu:0")
+        elif torch.cuda.is_available():
+            self._device = torch.device("cuda:0")
+        else:
+            self._device = torch.device("cpu")
         self.model.to(self._device)
+        self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model_save_dir = model_save_dir
         self._is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
 
@@ -163,7 +167,7 @@ class IPEXModel(OptimizedModel):
         local_files_only: bool = False,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         trust_remote_code: bool = False,
-        **kwargs,
+        _commit_hash: str = None,
     ):
         device_map = kwargs.pop("device_map", None)
         if use_auth_token is not None:
@@ -187,7 +191,7 @@ class IPEXModel(OptimizedModel):
             "force_download": force_download,
             "torch_dtype": torch_dtype,
             "trust_remote_code": trust_remote_code,
-            "device_map": device_map,
+            "_commit_hash": _commit_hash,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
@@ -332,6 +336,8 @@ class IPEXModel(OptimizedModel):
         if not self._is_ipex_exported:
             use_cache = "past_key_values" in self.input_names
             dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
+            if self._device.type != "cpu":
+                dummy_inputs = recursive_to_device(value=dummy_inputs, device=self._device)
             for _ in range(2):
                 self(**dummy_inputs)
 

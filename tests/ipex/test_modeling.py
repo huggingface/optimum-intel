@@ -45,52 +45,10 @@ from optimum.intel import (
 )
 from optimum.intel.utils.import_utils import is_ipex_version
 from optimum.utils.testing_utils import grid_parameters
+from utils_tests import MODEL_NAMES
 
 
 SEED = 42
-
-MODEL_NAMES = {
-    "albert": "hf-internal-testing/tiny-random-albert",
-    "beit": "hf-internal-testing/tiny-random-BeitForImageClassification",
-    "bert": "hf-internal-testing/tiny-random-bert",
-    "bart": "hf-internal-testing/tiny-random-bart",
-    "blenderbot-small": "hf-internal-testing/tiny-random-BlenderbotModel",
-    "blenderbot": "hf-internal-testing/tiny-random-BlenderbotModel",
-    "bloom": "hf-internal-testing/tiny-random-BloomModel",
-    "convbert": "hf-internal-testing/tiny-random-ConvBertForSequenceClassification",
-    "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
-    "convnext": "hf-internal-testing/tiny-random-convnext",
-    "distilbert": "hf-internal-testing/tiny-random-distilbert",
-    "electra": "hf-internal-testing/tiny-random-electra",
-    "flaubert": "hf-internal-testing/tiny-random-flaubert",
-    "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
-    "gpt2": "hf-internal-testing/tiny-random-gpt2",
-    "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
-    "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
-    "gptj": "hf-internal-testing/tiny-random-GPTJModel",
-    "levit": "hf-internal-testing/tiny-random-LevitModel",
-    "llama": "fxmarty/tiny-llama-fast-tokenizer",
-    "llama2": "Jiqing/tiny_random_llama2",
-    "marian": "sshleifer/tiny-marian-en-de",
-    "mbart": "hf-internal-testing/tiny-random-mbart",
-    "mistral": "echarlaix/tiny-random-mistral",
-    "mobilenet_v1": "google/mobilenet_v1_0.75_192",
-    "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
-    "mobilevit": "hf-internal-testing/tiny-random-mobilevit",
-    "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
-    "mt5": "stas/mt5-tiny-random",
-    "opt": "hf-internal-testing/tiny-random-OPTModel",
-    "phi": "echarlaix/tiny-random-PhiForCausalLM",
-    "resnet": "hf-internal-testing/tiny-random-resnet",
-    "roberta": "hf-internal-testing/tiny-random-roberta",
-    "roformer": "hf-internal-testing/tiny-random-roformer",
-    "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
-    "t5": "hf-internal-testing/tiny-random-t5",
-    "unispeech": "hf-internal-testing/tiny-random-unispeech",
-    "vit": "hf-internal-testing/tiny-random-vit",
-    "wav2vec2": "anton-l/wav2vec2-random-tiny-classifier",
-    "xlm": "hf-internal-testing/tiny-random-xlm",
-}
 
 
 class Timer(object):
@@ -260,22 +218,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         outputs = pipe("This is a sample", max_length=10)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_assisted_decoding(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
-        tokens = tokenizer("This is a sample input", return_tensors="pt")
-        ipex_output = ipex_model.generate(**tokens, do_sample=False)
-        ipex_output_assisted = ipex_model.generate(**tokens, do_sample=False, assistant_model=transformers_model)
-        transformers_output = transformers_model.generate(**tokens, do_sample=False)
-        transformers_output_assisted = transformers_model.generate(
-            **tokens, do_sample=False, assistant_model=ipex_model
-        )
-        self.assertTrue(torch.equal(ipex_output, ipex_output_assisted))
-        self.assertTrue(torch.equal(transformers_output, transformers_output_assisted))
 
     @parameterized.expand(
         grid_parameters(

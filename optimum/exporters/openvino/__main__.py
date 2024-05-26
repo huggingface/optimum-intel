@@ -24,7 +24,7 @@ from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-from optimum.exporters.openvino.convert import export_from_model, export_tokenizer
+from optimum.exporters.openvino.convert import export_from_model
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
@@ -219,6 +219,10 @@ def main_export(
         model_type = config.model_type.replace("_", "-")
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
+            if custom_export_configs is None:
+                raise ValueError(
+                    f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the model type {model_type} to be supported natively in the OpenVINO export."
+                )
         elif task not in TasksManager.get_supported_tasks_for_model_type(
             model_type, exporter="openvino", library_name=library_name
         ):
@@ -232,6 +236,7 @@ def main_export(
             raise ValueError(
                 f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the task {task} to be supported in the ONNX export for {model_type}."
             )
+
         if is_transformers_version(">=", "4.36") and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED:
             loading_kwargs["attn_implementation"] = "eager"
         # there are some difference between remote and in library representation of past key values for some models,
@@ -355,6 +360,9 @@ def main_export(
         **kwargs_shapes,
     )
 
+    # hide openvino import when using other exporters
+    from optimum.exporters.openvino.convert import export_tokenizer
+
     if convert_tokenizer and is_openvino_tokenizers_available():
         if library_name != "diffusers":
             tokenizer = next(
@@ -373,11 +381,11 @@ def main_export(
         else:
             tokenizer = getattr(model, "tokenizer", None)
             if tokenizer is not None:
-                export_tokenizer(tokenizer, output)
+                export_tokenizer(tokenizer, output / "tokenizer")
 
             tokenizer_2 = getattr(model, "tokenizer_2", None)
             if tokenizer_2 is not None:
-                export_tokenizer(tokenizer_2, output, suffix="_2")
+                export_tokenizer(tokenizer_2, output / "tokenizer_2")
     elif convert_tokenizer and not is_openvino_tokenizers_available():
         logger.warning("Tokenizer won't be converted.")
 

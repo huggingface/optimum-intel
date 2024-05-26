@@ -24,94 +24,24 @@ from transformers.models.llama.modeling_llama import repeat_kv
 from optimum.intel.utils.import_utils import is_ipex_version
 
 
-# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
-def _llama_layer_norm_forward(self, hidden_states):
-    return torch.ops.torch_ipex.rmsnorm(hidden_states, self.weight, self.variance_epsilon)
-
-
-# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L321
-def _llama_attn_forward(
-    self,
-    hidden_states: torch.Tensor,
-    attention_mask: Optional[torch.Tensor] = None,
-    position_ids: Optional[torch.LongTensor] = None,
-    past_key_value: Optional[Tuple[torch.Tensor]] = None,
-    output_attentions: bool = False,
-    use_cache: bool = False,
-    **kwargs,
-) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-    bsz, q_len, _ = hidden_states.size()
-
-    query = self.q_proj(hidden_states)
-    key = self.k_proj(hidden_states)
-    value = self.v_proj(hidden_states)
-
-    kv_seq_len = q_len + past_key_value[0].size(-2) if past_key_value is not None else q_len
-
-    query = query.view(bsz, q_len, self.num_heads, self.head_dim)
-    key = key.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
-    value = value.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
-    # Use ipex op to rotary position embedding more efficient.
-    key = self.ipex_rope(
-        key,
-        position_ids,
-        self.num_key_value_heads,
-        self.head_dim,
-        self.head_dim // 2,
-        self.head_dim,
-        kv_seq_len,
-    )
-    query = self.ipex_rope(
-        query,
-        position_ids,
-        self.num_heads,
-        self.head_dim,
-        self.head_dim // 2,
-        self.head_dim,
-        kv_seq_len,
-    )
-
-    if use_cache:
-        # This ipex op pre-allocates buffers for past_key_values and use beam index history
-        # which to decide which beam should be used to make attention scale dot more efficient.
-        (attn_output, attn_weights, past_key_value) = self.ipex_scale_dot_product(
-            query,
-            key,
-            value,
-            math.sqrt(self.head_dim),
-            past_key_value,
-            None,
-            attention_mask,
-        )
+def matmul_add_add(attn_output, weight, bias=None, residual=None):
+    seq_len, bs, _ = attn_output.size()
+    if residual is None:
+        attn_output = torch.matmul(attn_output, weight)
+        if bias is not None:
+            attn_output += bias
     else:
-        value_states = value.transpose(1, 2)
-        query_states = query.transpose(1, 2)
-        key_states = key.transpose(1, 2)
-        kv_seq_len = key_states.shape[-2]
-
-        past_key_value = None
-        # repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-
-        if attention_mask is not None:
-            attn_weights = torch.tensor(attn_weights) + torch.tensor(attention_mask)
-            attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
-
-        # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_output = torch.matmul(attn_weights, value_states)
-
-    attn_output = attn_output.transpose(1, 2)
-    attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
-
-    if not output_attentions:
-        attn_weights = None
-
-    return attn_output, past_key_value, attn_weights
-
+        if bias is not None:
+            attn_output = torch.ops.torch_ipex.mm_bias_resadd(attn_output, weight, bias, 1.0, residual, 1.0)
+        else:
+            attn_output = torch.addmm(
+                residual.flatten(0, -2),
+                attn_output.flatten(0, -2),
+                weight,
+                beta=1.0,
+            )
+    attn_output = attn_output.view(seq_len, bs, -1)
+    return attn_output
 
 def padding_attn_mask(attn_mask, alignment):
     if attn_mask is None:
@@ -127,6 +57,10 @@ def padding_attn_mask(attn_mask, alignment):
     new_attn_mask = torch.empty(mask_size, dtype=attn_mask.dtype, device=attn_mask.device).fill_(-65504.0)
     new_attn_mask[..., :last_dim_size] = attn_mask
     return new_attn_mask
+
+# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
+def _llama_layer_norm_forward(self, hidden_states):
+    return torch.ops.torch_ipex.rmsnorm(hidden_states, self.weight, self.variance_epsilon)
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L1130
@@ -241,12 +175,147 @@ def _llama_model_forward(
     )
 
 
-# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L694
-class _IPEXLlamaDecoderLayerRef(nn.Module):
-    def __init__(self, module, config, distributed=False):
-        if is_ipex_version("<", "2.5.0"):
-            raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
+# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L321
+class _IPEXLlamaAttentionRef(nn.Module):
+    def __init__(self, module, config, distributed=False) -> None:
+        if is_ipex_version("<", "2.3.0"):
+            raise ImportError(
+                "Only ipex version > 2.3.0 supports LinearAdd, IndirectAccessKVCacheAttention, RotaryEmbedding"
+            )
+        from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCacheAttention, LinearAdd, RotaryEmbedding
 
+        super().__init__()
+        for k, v in module.__dict__.items():
+            setattr(self, k, v)
+        for k, v in module.__class__.__dict__.items():
+            if k.startswith("__") or k.startswith("forward"):
+                continue
+            setattr(self.__class__, k, getattr(module.__class__, k))
+        self.config = config
+        self.distributed = distributed
+        if not self.distributed:
+            self.mha_linear_add = LinearAdd(self.o_proj)
+            del self.__dict__["_modules"]["o_proj"]
+        self.ipex_scale_dot_product = IndirectAccessKVCacheAttention(
+            text_max_length=module.config.max_position_embeddings
+        )
+        self.ipex_rope = RotaryEmbedding(
+            module.config.max_position_embeddings,
+            module.config.hidden_size // module.config.num_attention_heads,
+            module.config.rope_theta,
+            module.config.architectures[0],
+        )
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        output_attentions: bool = False,
+        use_cache: bool = False,
+        cache_position: Optional[torch.LongTensor] = None,
+        residual: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        """
+        Args:
+            hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
+            attention_mask (`torch.FloatTensor`, *optional*):
+                attention mask of size `(batch_size, sequence_length)` if flash attention is used or `(batch_size, 1,
+                query_sequence_length, key_sequence_length)` if default attention is used.
+            output_attentions (`bool`, *optional*):
+                Whether or not to return the attentions tensors of all attention layers. See `attentions` under
+                returned tensors for more detail.
+            use_cache (`bool`, *optional*):
+                If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
+                (see `past_key_values`).
+            past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
+            residual (`torch.Tensor`): residual tensor to the layer of shape `
+        """
+        bsz, seq_len, _ = hidden_states.size()
+
+        query = self.q_proj(hidden_states)
+        key = self.k_proj(hidden_states)
+        value = self.v_proj(hidden_states)
+
+        kv_seq_len = seq_len + past_key_value[0].size(-2) if past_key_value is not None else seq_len
+
+        query = query.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        key = key.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        value = value.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        # Use ipex op to rotary position embedding more efficient.
+        key = self.ipex_rope(
+            key,
+            position_ids,
+            self.num_key_value_heads,
+            self.head_dim,
+            self.head_dim // 2,
+            self.head_dim,
+            kv_seq_len,
+        )
+        query = self.ipex_rope(
+            query,
+            position_ids,
+            self.num_heads,
+            self.head_dim,
+            self.head_dim // 2,
+            self.head_dim,
+            kv_seq_len,
+        )
+
+        if use_cache:
+            # This ipex op pre-allocates buffers for past_key_values and use beam index history
+            # which to decide which beam should be used to make attention scale dot more efficient.
+            (attn_output, attn_weights, past_key_value) = self.ipex_scale_dot_product(
+                query,
+                key,
+                value,
+                math.sqrt(self.head_dim),
+                past_key_value,
+                None,
+                attention_mask,
+            )
+        else:
+            value_states = value.transpose(1, 2)
+            query_states = query.transpose(1, 2)
+            key_states = key.transpose(1, 2)
+            kv_seq_len = key_states.shape[-2]
+
+            past_key_value = None
+            # repeat k/v heads if n_kv_heads < n_heads
+            key_states = repeat_kv(key_states, self.num_key_value_groups)
+            value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+
+            if attention_mask is not None:
+                attn_weights = torch.tensor(attn_weights) + torch.tensor(attention_mask)
+                attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
+
+            # upcast attention to fp32
+            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+            attn_output = torch.matmul(attn_weights, value_states)
+
+        attn_output = attn_output.transpose(1, 2)
+        attn_output = attn_output.reshape(bsz, seq_len, self.hidden_size)
+
+        if hasattr(self, "mha_linear_add"):
+            attn_output = self.mha_linear_add(attn_output, residual)
+        else:
+            attn_output = self.o_proj(attn_output)
+            attn_output = residual + attn_output
+
+        if not output_attentions:
+            attn_weights = None
+
+        return attn_output, past_key_value, attn_weights
+
+
+class _IPEXLlamaMLP(nn.Module):
+    def __init__(self, module, config, distributed=False) -> None:
+        if is_ipex_version("<", "2.3.0"):
+            raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
         from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
 
         super().__init__()
@@ -256,15 +325,47 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
             if k.startswith("__") or k.startswith("forward"):
                 continue
             setattr(self.__class__, k, getattr(module.__class__, k))
+        self.config = config
         self.distributed = distributed
         if not self.distributed:
-            self.mha_linear_add = LinearAdd(module.self_attn.o_proj)
-            self.mlp_linear_add = LinearAdd(module.mlp.down_proj)
-            del self.__dict__["_modules"]["self_attn"].o_proj
-            del self.__dict__["_modules"]["mlp"].down_proj
-        self.linear_silu_mul = Linear2SiluMul(module.mlp.gate_proj, module.mlp.up_proj)
-        del self.__dict__["_modules"]["mlp"].gate_proj
-        del self.__dict__["_modules"]["mlp"].up_proj
+            self.mlp_linear_add = LinearAdd(module.down_proj)
+            del self.__dict__["_modules"]["down_proj"]
+        self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
+        del self.__dict__["_modules"]["gate_proj"]
+        del self.__dict__["_modules"]["up_proj"]
+
+    def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
+        """
+        Args:
+            hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
+        """
+        if hasattr(self, "linear_silu_mul"):
+            mlp_gate = self.linear_silu_mul(hidden_states)
+            if hasattr(self, "mlp_linear_add"):
+                hidden_states = self.mlp_linear_add(mlp_gate, residual)
+            else:
+                hidden_states = self.down_proj(mlp_gate)
+                hidden_states = residual + hidden_states
+        else:
+            hidden_states = self.down_proj(self.act_fn(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
+            hidden_states = residual + hidden_states
+
+        return hidden_states
+
+
+# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L694
+class _IPEXLlamaDecoderLayerRef(nn.Module):
+    def __init__(self, module, config, distributed=False):
+        super().__init__()
+        for k, v in module.__dict__.items():
+            setattr(self, k, v)
+        for k, v in module.__class__.__dict__.items():
+            if k.startswith("__") or k.startswith("forward"):
+                continue
+            setattr(self.__class__, k, getattr(module.__class__, k))
+        self.distributed = distributed
+        self.self_attn = _IPEXLlamaAttentionRef(module.self_attn, config, distributed)
+        self.mlp = _IPEXLlamaMLP(module.mlp, config, distributed)
 
     def forward(
         self,
@@ -302,24 +403,15 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
             past_key_value=past_key_value,
             output_attentions=output_attentions,
             use_cache=use_cache,
+            cache_position=None,
+            residual=residual,
+            **kwargs,
         )
-        if not self.distributed:
-            hidden_states = self.mha_linear_add(hidden_states, residual)
-        else:
-            hidden_states = self.self_attn.o_proj(hidden_states)
-            hidden_states = residual + hidden_states
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-
-        mlp_gate = self.linear_silu_mul(hidden_states)
-
-        if not self.distributed:
-            hidden_states = self.mlp_linear_add(mlp_gate, residual)
-        else:
-            hidden_states = self.mlp.down_proj(mlp_gate)
-            hidden_states = residual + hidden_states
+        hidden_states = self.mlp(hidden_states, residual, **kwargs)
 
         outputs = (hidden_states,)
 

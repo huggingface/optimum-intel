@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 from transformers.models.llama.modeling_llama import (
-    LlamaAttention,
     LlamaDecoderLayer,
     LlamaForCausalLM,
     LlamaModel,
@@ -24,7 +23,6 @@ from optimum.intel.utils.import_utils import is_ipex_version
 
 from .modeling_utils import (
     _IPEXLlamaDecoderLayerRef,
-    _llama_attn_forward,
     _llama_layer_norm_forward,
     _llama_model_forward,
 )
@@ -63,34 +61,13 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 
 def _patch_llama_model(model):
-
     ipex_version = "2.1.0" if "xpu" in str(model.device) else "2.5.0"
     if is_ipex_version("<", ipex_version):
-        raise ImportError(f"Only ipex version >= {ipex_version} supports RotaryEmbedding and IndirectAccessKVCache")
+        raise ImportError(f"Only ipex version >= {ipex_version} supports llama model patching")
 
-    if "cpu" in str(model.device):
-        from intel_extension_for_pytorch.llm.modules import RotaryEmbedding
-        from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCache
-
-        ipex_rope = RotaryEmbedding(
-            model.config.max_position_embeddings,
-            model.config.hidden_size // model.config.num_attention_heads,
-            model.config.rope_theta,
-            model.config.architectures[0],
-        )
-        ipex_scale_dot_product = IndirectAccessKVCache(text_max_length=model.config.max_position_embeddings)
-
-        patch_op(model, LlamaAttention, "ipex_rope", ipex_rope)
-        patch_op(model, LlamaAttention, "ipex_scale_dot_product", ipex_scale_dot_product)
-
-        convert_functions(model, LlamaModel, "forward", _llama_model_forward)
-        convert_functions(model, LlamaAttention, "forward", _llama_attn_forward)
-        convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
-
-        convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayerRef, model.config)
-    else:
-        convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayer, model.config)
-        convert_functions(model, LlamaModel, "forward", _llama_model_forward)
+    convert_functions(model, LlamaModel, "forward", _llama_model_forward)
+    convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
+    convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayerRef, model.config)
     return model
 
 
