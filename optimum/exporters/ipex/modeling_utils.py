@@ -448,7 +448,7 @@ class _IPEXLlamaMLPRef(nn.Module):
             setattr(self.__class__, k, getattr(module.__class__, k))
         self.config = config
         self.distributed = distributed
-        self.module_device = module.gate_proj.weight.device.type
+        self.module_device = module.down_proj.weight.device.type
         if self.module_device == "xpu":
             self.port_parameter(module)
             torch.xpu.empty_cache()
