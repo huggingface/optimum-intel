@@ -22,6 +22,7 @@ from typing import Dict, Optional, Union
 import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from huggingface_hub.utils import EntryNotFoundError
 from neural_compressor.utils.pytorch import load
 from transformers import (
     AutoConfig,
@@ -40,6 +41,7 @@ from transformers import (
 )
 from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
+from transformers.utils import SAFE_WEIGHTS_NAME, WEIGHTS_NAME
 from transformers.utils.generic import ContextManagers
 
 from optimum.intel.generation import BaseModelForCausalLM
@@ -47,7 +49,7 @@ from optimum.intel.generation import BaseModelForCausalLM
 from ...modeling_base import OptimizedModel
 from ..utils.import_utils import _torch_version, is_itrex_available, is_torch_version
 from .configuration import INCConfig
-from .utils import WEIGHTS_NAME
+from .utils import QUANTIZATION_CONFIG_NAME
 
 
 logger = logging.getLogger(__name__)
@@ -125,27 +127,70 @@ class INCModel(OptimizedModel):
             model_id = model_id or model_name_or_path
 
         model_path = Path(model_id)
-
+        model_cache_path = None
+        is_local = False
         if model_path.is_dir():
-            model_cache_path = model_path / file_name
+            is_local = True
+
+            if (model_path / subfolder / SAFE_WEIGHTS_NAME).is_file():
+                file_name = SAFE_WEIGHTS_NAME
+            elif not (model_path / subfolder / file_name).is_file():
+                raise EnvironmentError(
+                    f"Error no file named {SAFE_WEIGHTS_NAME} or {file_name} found in directory {model_path / subfolder}"
+                )
+            model_cache_path = model_path / subfolder / file_name
         else:
-            model_cache_path = hf_hub_download(
-                repo_id=model_id,
-                filename=file_name,
-                subfolder=subfolder,
-                token=token,
-                revision=revision,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                local_files_only=local_files_only,
-            )
+            # Try download safetensors if exist
+            try:
+                model_cache_path = hf_hub_download(
+                    repo_id=model_id,
+                    filename=SAFE_WEIGHTS_NAME,
+                    subfolder=subfolder,
+                    token=token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
+            except EntryNotFoundError:
+                pass
+
+            if model_cache_path is None:
+                model_cache_path = hf_hub_download(
+                    repo_id=model_id,
+                    filename=file_name,
+                    subfolder=subfolder,
+                    token=token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
 
         model_save_dir = Path(model_cache_path).parent
         inc_config = None
         msg = None
         if is_itrex_available():
-            try:
-                quantization_config = PretrainedConfig.from_pretrained(model_save_dir / "quantize_config.json")
+            quantization_config_path = None
+            if is_local:
+                quantization_config_path = model_path / subfolder / QUANTIZATION_CONFIG_NAME
+            else:
+                try:
+                    quantization_config_path = hf_hub_download(
+                        repo_id=model_id,
+                        filename=QUANTIZATION_CONFIG_NAME,
+                        subfolder=subfolder,
+                        token=token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                    )
+                except EntryNotFoundError:
+                    pass
+
+            if quantization_config_path and Path(quantization_config_path).is_file():
+                quantization_config = PretrainedConfig.from_pretrained(quantization_config_path)
                 algorithm = getattr(quantization_config, "quant_method", None)
                 if algorithm in {"rtn", "gptq", "awq", "autoround"}:
                     from intel_extension_for_transformers.transformers.modeling.modeling_auto import (
@@ -163,10 +208,10 @@ class INCModel(OptimizedModel):
                         local_files_only=local_files_only,
                         subfolder=subfolder,
                         trust_remote_code=trust_remote_code,
+                        use_neural_speed=False,
                         **kwargs,
                     )
-            except EnvironmentError:
-                msg = "The model is not quantized with weight-only quantization."
+
         try:
             inc_config = INCConfig.from_pretrained(model_id)
             if not is_torch_version("==", inc_config.torch_version):
