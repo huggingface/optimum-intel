@@ -178,7 +178,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "mpt",
         "opt",
     )
-    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama",)
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2",)
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
