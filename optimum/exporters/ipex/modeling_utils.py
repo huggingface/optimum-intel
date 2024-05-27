@@ -16,6 +16,7 @@ import math
 from typing import List, Optional, Tuple, Union
 
 import torch
+from intel_extension_for_pytorch.llm.functional import rms_norm
 from torch import nn
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
@@ -56,6 +57,11 @@ def padding_attn_mask(attn_mask, alignment):
     new_attn_mask = torch.empty(mask_size, dtype=attn_mask.dtype, device=attn_mask.device).fill_(-65504.0)
     new_attn_mask[..., :last_dim_size] = attn_mask
     return new_attn_mask
+
+
+# Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
+def _llama_layer_norm_forward(self, hidden_states):
+    return rms_norm(hidden_states, self.weight, self.variance_epsilon)
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L1130
@@ -173,7 +179,7 @@ def _llama_model_forward(
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L321
-class _IPEXLlamaAttentionRef(nn.Module):
+class _IPEXLlamaAttention(nn.Module):
     def __init__(self, module, config, distributed=False) -> None:
         super().__init__()
         for k, v in module.__dict__.items():
@@ -322,7 +328,7 @@ class _IPEXLlamaAttentionRef(nn.Module):
                 attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
                 attn_output = torch.matmul(attn_weights, value_states)
 
-        return attn_output, attn_weights, past_key_value
+        return attn_output, past_key_value, attn_weights
 
     def forward(
         self,
@@ -365,7 +371,7 @@ class _IPEXLlamaAttentionRef(nn.Module):
             key = key.transpose(1, 2)
             value = value.transpose(1, 2)
 
-        attn_output, attn_weights, past_key_value = self.sdpa(
+        attn_output, past_key_value, attn_weights = self.sdpa(
             query, key, value, past_key_value, attention_mask, use_cache
         )
         attn_output = attn_output.transpose(1, 2).view(bsz, seq_len, self.hidden_size)
@@ -384,7 +390,7 @@ class _IPEXLlamaAttentionRef(nn.Module):
         if not output_attentions:
             attn_weights = None
 
-        return attn_output, past_key_value, attn_weights
+        return attn_output, attn_weights, past_key_value
 
     def port_parameters(self, module):
         self.qkv_proj_bias = None
@@ -439,7 +445,7 @@ class _IPEXLlamaAttentionRef(nn.Module):
         self.o_proj_bias = module.o_proj.bias
 
 
-class _IPEXLlamaMLPRef(nn.Module):
+class _IPEXLlamaMLP(nn.Module):
     def __init__(self, module, config, distributed=False) -> None:
         super().__init__()
         for k, v in module.__dict__.items():
@@ -501,7 +507,7 @@ class _IPEXLlamaMLPRef(nn.Module):
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L694
-class _IPEXLlamaDecoderLayerRef(nn.Module):
+class _IPEXLlamaDecoderLayer(nn.Module):
     def __init__(self, module, config, distributed=False):
         super().__init__()
         for k, v in module.__dict__.items():
@@ -511,23 +517,8 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
                 continue
             setattr(self.__class__, k, getattr(module.__class__, k))
         self.distributed = distributed
-        self.self_attn = _IPEXLlamaAttentionRef(module.self_attn, config, distributed)
-        self.module_device = next(module.parameters()).device.type
-        self.mlp = _IPEXLlamaMLPRef(module.mlp, config, distributed)
-        from intel_extension_for_pytorch.llm.modules import RMSNorm
-
-        if self.module_device == "xpu":
-            self.input_layernorm = RMSNorm(self.input_layernorm.weight, self.input_layernorm.variance_epsilon)
-            self.post_attention_layernorm = RMSNorm(
-                self.post_attention_layernorm.weight, self.post_attention_layernorm.variance_epsilon
-            )
-        else:
-            self.input_layernorm = RMSNorm(
-                self.hidden_size, self.input_layernorm.variance_epsilon, self.input_layernorm.weight
-            )
-            self.post_attention_layernorm = RMSNorm(
-                self.hidden_size, self.post_attention_layernorm.variance_epsilon, self.post_attention_layernorm.weight
-            )
+        self.self_attn = _IPEXLlamaAttention(module.self_attn, config, distributed)
+        self.mlp = _IPEXLlamaMLP(module.mlp, config, distributed)
 
     def forward(
         self,
@@ -558,7 +549,7 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, present_key_value, self_attn_weights = self.self_attn(
+        hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,

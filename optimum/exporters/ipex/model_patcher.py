@@ -16,12 +16,14 @@ from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaForCausalLM,
     LlamaModel,
+    LlamaRMSNorm,
 )
 
 from optimum.intel.utils.import_utils import is_ipex_version
 
 from .modeling_utils import (
-    _IPEXLlamaDecoderLayerRef,
+    _IPEXLlamaDecoderLayer,
+    _llama_layer_norm_forward,
     _llama_model_forward,
 )
 
@@ -63,7 +65,8 @@ def _patch_llama_model(model):
         raise ImportError(f"Only ipex version >= {ipex_version} supports llama model patching")
 
     convert_functions(model, LlamaModel, "forward", _llama_model_forward)
-    convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayerRef, model.config)
+    convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
+    convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayer, model.config)
     return model
 
 
