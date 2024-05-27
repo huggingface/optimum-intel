@@ -79,12 +79,15 @@ from .utils import (
 )
 
 
+_ITREX_EXCLUDED_VERSION = "1.4.2"
+
 if is_itrex_available():
     if is_itrex_version("<", ITREX_MINIMUM_VERSION):
         raise ImportError(
             f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_itrex_version}, "
             f"but only version {ITREX_MINIMUM_VERSION} or higher is supported."
         )
+
     from intel_extension_for_transformers.transformers.llm.quantization.utils import convert_to_quantized_model
     from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
     from intel_extension_for_transformers.transformers.utils.config import (
@@ -226,6 +229,12 @@ class INCQuantizer(OptimumQuantizer):
 
         # ITREX Weight Only Quantization
         if not isinstance(quantization_config, PostTrainingQuantConfig):
+            if is_itrex_version("==", _ITREX_EXCLUDED_VERSION):
+                raise ImportError(
+                    f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_itrex_version}, "
+                    f"but {_ITREX_EXCLUDED_VERSION} is not compatible."
+                )
+
             # check neural-compressor version
             if is_neural_compressor_version("<", NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION):
                 raise ImportError(
