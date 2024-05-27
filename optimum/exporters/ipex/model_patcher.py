@@ -16,7 +16,6 @@ from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaForCausalLM,
     LlamaModel,
-    LlamaRMSNorm,
 )
 
 from optimum.intel.utils.import_utils import is_ipex_version
