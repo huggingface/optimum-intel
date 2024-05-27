@@ -244,7 +244,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             }
         )
     )
-    @unittest.skipIf(is_ipex_version("<", "2.5.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version >= 2.3.0 supports ipex model patching")
     def test_ipex_patching_beam_search(self, test_name, model_arch, use_cache):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -271,6 +271,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
                 self.assertIsInstance(outputs, torch.Tensor)
                 self.assertEqual(outputs, transformers_outputs)
 
+    @unittest.skip("CPU IPEXModel only supports with past_key_values.")
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
