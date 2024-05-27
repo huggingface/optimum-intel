@@ -50,6 +50,7 @@ from .model_patcher import (
     GemmaModelPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
+    JaisModelPatcher,
     LlamaModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
@@ -804,3 +805,8 @@ class JaisOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return JaisModelPatcher(self, model, model_kwargs=model_kwargs)

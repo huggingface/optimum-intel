@@ -1869,3 +1869,124 @@ class PersimmonModelPatcher(DecoderModelPatcher):
         for layer in self._model.model.layers:
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+def _jais_attn_forward(
+    self,
+    hidden_states: Optional[Tuple[torch.FloatTensor]],
+    layer_past: Optional[Tuple[torch.Tensor]] = None,
+    attention_mask: Optional[torch.FloatTensor] = None,
+    head_mask: Optional[torch.FloatTensor] = None,
+    encoder_hidden_states: Optional[torch.Tensor] = None,
+    encoder_attention_mask: Optional[torch.FloatTensor] = None,
+    use_cache: Optional[bool] = False,
+    output_attentions: Optional[bool] = False,
+    position_bias: Optional[torch.FloatTensor] = None,
+) -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor]], ...]:
+    if encoder_hidden_states is not None:
+        if not hasattr(self, "q_attn"):
+            raise ValueError(
+                "If class is used as cross attention, the weights `q_attn` have to be defined. "
+                "Please make sure to instantiate class with `JAISAttention(..., is_cross_attention=True)`."
+            )
+
+        query = self.q_attn(hidden_states)
+        key, value = self.c_attn(encoder_hidden_states).split(self.split_size, dim=2)
+        attention_mask = encoder_attention_mask
+    else:
+        query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
+
+    query = self._split_heads(query, self.num_heads, self.head_dim)
+    key = self._split_heads(key, self.num_heads, self.head_dim)
+    value = self._split_heads(value, self.num_heads, self.head_dim)
+
+    if layer_past is not None:
+        past_key, past_value = layer_past
+        key = torch.cat((past_key, key), dim=-2)
+        value = torch.cat((past_value, value), dim=-2)
+
+    if use_cache is True:
+        present = (key, value)
+    else:
+        present = None
+
+    if self.reorder_and_upcast_attn:
+        attn_output, attn_weights = self._upcast_and_reordered_attn(
+            query, key, value, attention_mask, head_mask, position_bias
+        )
+    else:
+        # Difference with original: override attn realization with sdpa if not output_attentions
+        if not output_attentions:
+            attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask, position_bias)
+        else:
+            attn_output, attn_weights = self._orig_attn(query, key, value, attention_mask, head_mask, position_bias)
+
+    attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
+    attn_output = self.c_proj(attn_output)
+    attn_output = self.resid_dropout(attn_output)
+
+    outputs = (attn_output, present)
+    if output_attentions:
+        outputs += (attn_weights,)
+
+    return outputs
+
+
+def _jais_attn(self, query, key, value, attention_mask=None, head_mask=None, position_bias=None):
+    scale = 1.0
+    if self.scale_attn_weights:
+        scale = 1 / self.head_dim**self.attn_scale_power
+
+    # Layer-wise attention scaling
+    if self.scale_attn_by_inverse_layer_idx:
+        scale = scale / float(self.layer_idx + 1)
+
+    query_length = query.size(-2)
+    attention_mask_sdpa = torch.ones(
+        (query.shape[0], query.shape[1], query.shape[2], key.shape[2]),
+        dtype=query.dtype,
+    )
+
+    if not self.is_cross_attention:
+        # if only "normal" attention layer implements causal mask
+        query_length, key_length = query.size(-2), key.size(-2)
+        causal_mask = self.bias[:, :, key_length - query_length : key_length, :key_length]
+        mask_value = torch.finfo(torch.float16).min
+        attention_mask_sdpa.masked_fill_(~causal_mask, mask_value)
+
+    if attention_mask is not None:
+        # Apply the attention mask
+        attention_mask_sdpa = attention_mask_sdpa + attention_mask
+
+    if position_bias is not None:
+        attention_mask_sdpa += position_bias.type_as(attention_mask_sdpa).unsqueeze(0)
+
+    # Mask heads if we want to
+    if head_mask is not None:
+        attention_mask_sdpa = attention_mask_sdpa * head_mask
+
+    attn_output = F.scaled_dot_product_attention(
+        query, key, value, attention_mask_sdpa, dropout_p=self.attn_dropout.p, scale=scale
+    )
+
+    return attn_output, None
+
+
+class JaisModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        for layer in self._model.transformer.h:
+            if is_torch_version(">=", "2.1.0"):
+                orig_self_attn_fwd = layer.attn._attn
+                layer.attn._attn = types.MethodType(_jais_attn, layer.attn)
+                layer.attn._orig_attn = orig_self_attn_fwd
+                layer.attn._orig_forward = layer.attn.forward
+                layer.attn.forward = types.MethodType(_jais_attn_forward, layer.attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for layer in self._model.transformer.h:
+            if hasattr(layer.attn, "_orig_attn"):
+                layer.attn._attn = layer.attn._orig_attn
+                layer.attn.forward = layer.attn._orig_forward

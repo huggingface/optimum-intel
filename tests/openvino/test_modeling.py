@@ -564,6 +564,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm",
         "dbrx",
         "qwen2-moe",
+        "jais",
     )
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
