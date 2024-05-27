@@ -178,7 +178,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "mpt",
         "opt",
     )
-    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama",)
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2",)
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
@@ -220,7 +220,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @unittest.skip("CPU IPEXModel does not support assisted decoding for now.")
+    @unittest.skipIf(is_ipex_version(">=", "2.3.0"), reason="CPU IPEXModel does not support assisted decoding when ipex version >= 2.3.0")
     def test_assisted_decoding(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -236,20 +236,12 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         self.assertTrue(torch.equal(ipex_output, ipex_output_assisted))
         self.assertTrue(torch.equal(transformers_output, transformers_output_assisted))
 
-    @parameterized.expand(
-        grid_parameters(
-            {
-                "model_arch": IPEX_PATCHED_SUPPORTED_ARCHITECTURES,
-                "use_cache": [True, False],
-            }
-        )
-    )
+    @parameterized.expand(IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
     @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version >= 2.3.0 supports ipex model patching")
-    def test_ipex_patching_beam_search(self, test_name, model_arch, use_cache):
+    def test_ipex_patching_beam_search(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache)
-        self.assertEqual(model.use_cache, use_cache)
+        model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
         trasnformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -260,7 +252,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             GenerationConfig(max_new_tokens=4, num_beams=4, do_sample=True),
             GenerationConfig(max_new_tokens=4, num_beams=8, do_sample=True),
             GenerationConfig(max_new_tokens=4, num_beams=32, do_sample=True),
-            GenerationConfig(max_new_tokens=4, do_sample=not use_cache, top_p=1.0, top_k=5, penalty_alpha=0.6),
+            GenerationConfig(max_new_tokens=4, do_sample=True, top_p=1.0, top_k=5, penalty_alpha=0.6),
             GenerationConfig(max_new_tokens=4, do_sample=True, top_p=0.9, top_k=0),
         )
         for text in texts:
@@ -271,7 +263,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
                 self.assertIsInstance(outputs, torch.Tensor)
                 self.assertEqual(outputs, transformers_outputs)
 
-    @unittest.skip("CPU IPEXModel only supports with past_key_values.")
+    @unittest.skipIf(is_ipex_version(">=", "2.3.0"), reason="CPU IPEXModel only supports with past_key_values for ipex version >= 2.3.0")
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
