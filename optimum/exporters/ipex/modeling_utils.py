@@ -133,7 +133,7 @@ def _llama_model_forward(
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L321
-class _IPEXLlamaAttentionRef(nn.Module):
+class _IPEXLlamaAttention(nn.Module):
     def __init__(self, module, config, distributed=False) -> None:
         if is_ipex_version("<", "2.3.0"):
             raise ImportError(
@@ -266,10 +266,10 @@ class _IPEXLlamaAttentionRef(nn.Module):
         if not output_attentions:
             attn_weights = None
 
-        return attn_output, past_key_value, attn_weights
+        return attn_output, attn_weights, past_key_value
 
 
-class _IPEXLlamaMLPRef(nn.Module):
+class _IPEXLlamaMLP(nn.Module):
     def __init__(self, module, config, distributed=False) -> None:
         if is_ipex_version("<", "2.3.0"):
             raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
@@ -312,7 +312,7 @@ class _IPEXLlamaMLPRef(nn.Module):
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L694
-class _IPEXLlamaDecoderLayerRef(nn.Module):
+class _IPEXLlamaDecoderLayer(nn.Module):
     def __init__(self, module, config, distributed=False):
         super().__init__()
         for k, v in module.__dict__.items():
@@ -322,8 +322,8 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
                 continue
             setattr(self.__class__, k, getattr(module.__class__, k))
         self.distributed = distributed
-        self.self_attn = _IPEXLlamaAttentionRef(module.self_attn, config, distributed)
-        self.mlp = _IPEXLlamaMLPRef(module.mlp, config, distributed)
+        self.self_attn = _IPEXLlamaAttention(module.self_attn, config, distributed)
+        self.mlp = _IPEXLlamaMLP(module.mlp, config, distributed)
 
     def forward(
         self,
@@ -354,7 +354,7 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, present_key_value, self_attn_weights = self.self_attn(
+        hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
