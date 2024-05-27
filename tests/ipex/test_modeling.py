@@ -171,7 +171,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "gpt2",
         "gpt_neo",
         "gpt_neox",
-        "llama",
         "llama2",
         "mistral",
         # "phi",
@@ -242,7 +241,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
-        trasnformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         # Test with batch_size is 1 and 2.
