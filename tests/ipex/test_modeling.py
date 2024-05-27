@@ -219,6 +219,23 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skip("CPU IPEXModel does not support assisted decoding for now.")
+    def test_assisted_decoding(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        ipex_output = ipex_model.generate(**tokens, do_sample=False)
+        ipex_output_assisted = ipex_model.generate(**tokens, do_sample=False, assistant_model=transformers_model)
+        transformers_output = transformers_model.generate(**tokens, do_sample=False)
+        transformers_output_assisted = transformers_model.generate(
+            **tokens, do_sample=False, assistant_model=ipex_model
+        )
+        self.assertTrue(torch.equal(ipex_output, ipex_output_assisted))
+        self.assertTrue(torch.equal(transformers_output, transformers_output_assisted))
+
     @parameterized.expand(
         grid_parameters(
             {
