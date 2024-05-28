@@ -89,7 +89,7 @@ class INCModelingTest(unittest.TestCase):
         outputs = inc_model(**model_inputs)
         with tempfile.TemporaryDirectory() as tmpdirname:
             inc_model.save_pretrained(tmpdirname)
-            loaded_model = model_class.from_pretrained(tmpdirname, file_name=WEIGHTS_NAME)
+            loaded_model = model_class.from_pretrained(tmpdirname)
             outputs_loaded = loaded_model(**model_inputs)
 
         if task == "feature-extraction":
@@ -148,7 +148,7 @@ class INCModelingTest(unittest.TestCase):
         self.assertTrue(torch.equal(outputs_with_pkv, outputs_without_pkv))
 
     @unittest.skipIf(not is_itrex_available(), reason="ITREX not available")
-    def test_load_woq_itrex_model(self):
+    def test_saving_loading_woq_itrex_model(self):
         model_name = "echarlaix/tiny-random-PhiForCausalLM"
         subfolder = "itrex"
         model = INCModelForCausalLM.from_pretrained(model_name, revision="itrex", subfolder=subfolder)
@@ -163,6 +163,33 @@ class INCModelingTest(unittest.TestCase):
             self.assertIn(SAFE_WEIGHTS_NAME, folder_contents)
             self.assertIn(QUANTIZATION_CONFIG_NAME, folder_contents)
             loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir, subfolder=subfolder)
+
+        with torch.no_grad():
+            outputs = model(**tokens)
+            loaded_outputs = loaded_model(**tokens)
+
+        self.assertTrue("logits" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.logits, torch.Tensor)
+        self.assertTrue("past_key_values" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.past_key_values, tuple)
+        self.assertTrue(torch.allclose(outputs.logits, loaded_outputs.logits, atol=1e-5))
+
+    def test_saving_loading_inc_model(self):
+        model_name = "echarlaix/tiny-random-PhiForCausalLM"
+        subfolder = "inc"
+        model = INCModelForCausalLM.from_pretrained(model_name, revision="inc", subfolder=subfolder)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, revision="inc")
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_save_dir = Path(tmp_dir) / subfolder
+            model.save_pretrained(model_save_dir)
+            folder_contents = os.listdir(model_save_dir)
+            self.assertIn(WEIGHTS_NAME, folder_contents)
+            self.assertIn("inc_config.json", folder_contents)
+            loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir, subfolder=subfolder)
+            self.assertIsInstance(loaded_model.inc_config, INCConfig)
 
         with torch.no_grad():
             outputs = model(**tokens)

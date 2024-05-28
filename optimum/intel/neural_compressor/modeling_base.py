@@ -261,10 +261,9 @@ class INCModel(OptimizedModel):
             elif isinstance(self._q_config, dict):
                 state_dict = self.model.state_dict()
                 state_dict["best_configure"] = self._q_config
-                self.model.save_pretrained(save_directory, state_dict=state_dict)
+                torch.save(state_dict, os.path.join(save_directory, WEIGHTS_NAME))
         else:
-            output_path = os.path.join(save_directory, WEIGHTS_NAME)
-            torch.jit.save(self.model, output_path)
+            torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
 
         if self.inc_config:
             self.inc_config.save_pretrained(save_directory)
