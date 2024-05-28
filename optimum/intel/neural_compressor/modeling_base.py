@@ -211,7 +211,7 @@ class INCModel(OptimizedModel):
                     )
 
         try:
-            inc_config = INCConfig.from_pretrained(model_id)
+            inc_config = INCConfig.from_pretrained(model_id, subfolder=subfolder, revision=revision)
             if not is_torch_version("==", inc_config.torch_version):
                 msg = f"Quantized model was obtained with torch version {inc_config.torch_version} but {_torch_version} was found."
                 logger.warning(f"{msg}")
