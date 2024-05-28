@@ -565,6 +565,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "dbrx",
         "qwen2-moe",
         "jais",
+        "snowflake",
     )
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -582,6 +583,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "xverse",
         "internlm",
         "codegen2",
+        "snowflake",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -623,7 +625,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         set_seed(SEED)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch == "qwen":
+        if model_arch in ["qwen", "snowflake"]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
@@ -870,6 +872,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_id, export=True, use_cache=True, stateful=False, **model_kwargs
         )
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+
+        if model_arch == "snowflake":
+            transformers_model.to(torch.float32)
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
         tokens.pop("token_type_ids", None)

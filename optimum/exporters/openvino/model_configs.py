@@ -43,6 +43,7 @@ from optimum.utils.normalized_config import NormalizedTextConfig
 
 from .model_patcher import (
     AquilaModelPatcher,
+    ArcticModelPatcher,
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
@@ -810,3 +811,11 @@ class JaisOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return JaisModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("arctic", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return ArcticModelPatcher(self, model, model_kwargs=model_kwargs)
