@@ -29,7 +29,8 @@ except Exception as error:
 INSTALL_REQUIRE = [
     "torch>=1.11",
     "transformers>=4.36.0,<4.42.0",
-    "optimum~=1.19",
+    # "optimum~=1.20",
+    "optimum @ git+https://github.com/huggingface/optimum.git",
     "datasets>=1.4.0",
     "sentencepiece",
     "scipy",
