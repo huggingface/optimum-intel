@@ -40,7 +40,6 @@ from transformers import (
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
-from optimum.intel.utils.import_utils import _itrex_version, _torch_version, is_itrex_version, is_torch_version
 from optimum.onnxruntime import ORTModel
 from optimum.onnxruntime.modeling_decoder import ORTModelForCausalLM
 from optimum.onnxruntime.modeling_seq2seq import ORTModelForConditionalGeneration
