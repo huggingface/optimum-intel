@@ -55,7 +55,7 @@ QUANTIZED_MODEL_NAMES_TO_TASK = (
 
 
 MODEL_NAMES_TO_TASK = (
-    ("hf-internal-testing/tiny-random-gpt2", "text-generation"),
+    ("hf-internal-testing/tiny-random-GPT2LMHeadModel", "text-generation"),
     ("hf-internal-testing/tiny-random-BertForMaskedLM", "fill-mask"),
     ("hf-internal-testing/tiny-random-DistilBertForSequenceClassification", "text-classification"),
     ("hf-internal-testing/tiny-random-DebertaV2Model", "feature-extraction"),
