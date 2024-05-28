@@ -171,7 +171,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "gpt2",
         "gpt_neo",
         "gpt_neox",
-        "llama",
         "llama2",
         "mistral",
         # "phi",
@@ -220,7 +219,10 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @unittest.skipIf(is_ipex_version(">=", "2.3.0"), reason="CPU IPEXModel does not support assisted decoding when ipex version >= 2.3.0")
+    @unittest.skipIf(
+        is_ipex_version(">=", "2.3.0"),
+        reason="CPU IPEXModel does not support assisted decoding when ipex version >= 2.3.0",
+    )
     def test_assisted_decoding(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -242,7 +244,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
-        trasnformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         # Test with batch_size is 1 and 2.
@@ -261,7 +262,10 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
                 outputs = model.generate(**tokens, generation_config=generation_config)
                 self.assertIsInstance(outputs, torch.Tensor)
 
-    @unittest.skipIf(is_ipex_version(">=", "2.3.0"), reason="CPU IPEXModel only supports with past_key_values for ipex version >= 2.3.0")
+    @unittest.skipIf(
+        is_ipex_version(">=", "2.3.0"),
+        reason="CPU IPEXModel only supports with past_key_values for ipex version >= 2.3.0",
+    )
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
