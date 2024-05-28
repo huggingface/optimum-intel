@@ -16,10 +16,12 @@
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 import torch
 from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline, set_seed
+from transformers.utils import SAFE_WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
 from optimum.intel import (  # noqa
@@ -37,7 +39,8 @@ from optimum.intel import (  # noqa
     INCStableDiffusionPipeline,
     INCTrainer,
 )
-from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS, WEIGHTS_NAME
+from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS, QUANTIZATION_CONFIG_NAME, WEIGHTS_NAME
+from optimum.intel.utils.import_utils import is_itrex_available
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -143,3 +146,30 @@ class INCModelingTest(unittest.TestCase):
         self.assertEqual(outputs_with_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertEqual(outputs_without_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertTrue(torch.equal(outputs_with_pkv, outputs_without_pkv))
+
+    @unittest.skipIf(not is_itrex_available(), reason="ITREX not available")
+    def test_load_woq_itrex_model(self):
+        model_name = "echarlaix/tiny-random-PhiForCausalLM"
+        subfolder = "itrex"
+        model = INCModelForCausalLM.from_pretrained(model_name, revision="itrex", subfolder=subfolder)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, revision="itrex")
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_save_dir = Path(tmp_dir) / subfolder
+            model.save_pretrained(model_save_dir)
+            folder_contents = os.listdir(model_save_dir)
+            self.assertIn(SAFE_WEIGHTS_NAME, folder_contents)
+            self.assertIn(QUANTIZATION_CONFIG_NAME, folder_contents)
+            loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir, subfolder=subfolder)
+
+        with torch.no_grad():
+            outputs = model(**tokens)
+            loaded_outputs = loaded_model(**tokens)
+
+        self.assertTrue("logits" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.logits, torch.Tensor)
+        self.assertTrue("past_key_values" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.past_key_values, tuple)
+        self.assertTrue(torch.allclose(outputs.logits, loaded_outputs.logits, atol=1e-5))

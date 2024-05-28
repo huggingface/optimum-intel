@@ -47,7 +47,6 @@ from transformers import (
 from utils_tests import MODEL_NAMES, SEED, INCTestMixin, _generate_dataset
 from optimum.intel.utils.import_utils import is_torch_version, is_itrex_available
 
-
 from optimum.intel import (
     INCConfig,
     INCModelForCausalLM,
@@ -553,19 +552,3 @@ class WeightOnlyQuantizationTest(INCTestMixin):
         self.assertIsInstance(loaded_outputs.past_key_values, tuple)
 
         # self.assertTrue(torch.allclose(quantizer_outputs.logits, loaded_outputs.logits, equal_nan=True, atol=1e-4))
-
-    @unittest.skipIf(not is_itrex_available(), reason="ITREX not available")
-    def test_load_woq_model(self):
-        model_name = "echarlaix/tiny-random-PhiForCausalLM"
-        model = INCModelForCausalLM.from_pretrained(model_name, revision="itrex", subfolder="itrex")
-        tokenizer = AutoTokenizer.from_pretrained(model_name, revision="itrex")
-        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        tokens = tokenizer("This is a sample output", return_tensors="pt")
-
-        with torch.no_grad():
-            loaded_outputs = model(**tokens)
-
-        self.assertTrue("logits" in loaded_outputs)
-        self.assertIsInstance(loaded_outputs.logits, torch.Tensor)
-        self.assertTrue("past_key_values" in loaded_outputs)
-        self.assertIsInstance(loaded_outputs.past_key_values, tuple)

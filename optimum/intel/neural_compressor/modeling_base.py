@@ -121,17 +121,12 @@ class INCModel(OptimizedModel):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
-        model_name_or_path = kwargs.pop("model_name_or_path", None)
-        if model_name_or_path is not None:
-            logger.warning("`model_name_or_path` is deprecated please use `model_id`")
-            model_id = model_id or model_name_or_path
-
         model_path = Path(model_id)
+        is_local = model_path.is_dir()
         model_cache_path = None
-        is_local = False
-        if model_path.is_dir():
-            is_local = True
-
+        inc_config = None
+        msg = None
+        if is_local:
             if (model_path / subfolder / SAFE_WEIGHTS_NAME).is_file():
                 file_name = SAFE_WEIGHTS_NAME
             elif not (model_path / subfolder / file_name).is_file():
@@ -168,8 +163,7 @@ class INCModel(OptimizedModel):
                 )
 
         model_save_dir = Path(model_cache_path).parent
-        inc_config = None
-        msg = None
+
         if is_itrex_available():
             quantization_config_path = None
             if is_local:
@@ -199,7 +193,7 @@ class INCModel(OptimizedModel):
 
                     _BaseQBitsAutoModelClass.ORIG_MODEL = cls.auto_model_class
 
-                    return _BaseQBitsAutoModelClass.from_pretrained(
+                    model = _BaseQBitsAutoModelClass.from_pretrained(
                         pretrained_model_name_or_path=model_id,
                         token=token,
                         revision=revision,
@@ -210,6 +204,10 @@ class INCModel(OptimizedModel):
                         trust_remote_code=trust_remote_code,
                         use_neural_speed=False,
                         **kwargs,
+                    )
+
+                    return cls(
+                        model, config=config, model_save_dir=model_save_dir, q_config=quantization_config, **kwargs
                     )
 
         try:
@@ -254,14 +252,18 @@ class INCModel(OptimizedModel):
         )
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
-        output_path = os.path.join(save_directory, WEIGHTS_NAME)
-
         if isinstance(self.model, torch.nn.Module):
-            state_dict = self.model.state_dict()
-            if self._q_config:
+            # For ITREX model
+            if isinstance(self._q_config, PretrainedConfig):
+                self._q_config.to_json_file(os.path.join(save_directory, QUANTIZATION_CONFIG_NAME))
+                self.model.save_pretrained(save_directory)
+            # For INC model the state dictionary needs to be modified to include the quantization parameters
+            elif isinstance(self._q_config, dict):
+                state_dict = self.model.state_dict()
                 state_dict["best_configure"] = self._q_config
-            torch.save(state_dict, output_path)
+                self.model.save_pretrained(save_directory, state_dict=state_dict)
         else:
+            output_path = os.path.join(save_directory, WEIGHTS_NAME)
             torch.jit.save(self.model, output_path)
 
         if self.inc_config:
