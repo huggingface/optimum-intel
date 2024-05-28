@@ -44,6 +44,15 @@ if _transformers_available:
         _transformers_available = False
 
 
+_deepspeed_available = importlib.util.find_spec("deepspeed") is not None
+_deepspeed_version = "N/A"
+if _deepspeed_available:
+    try:
+        _deepspeed_version = importlib_metadata.version("deepspeed")
+    except importlib_metadata.PackageNotFoundError:
+        _deepspeed_available = False
+
+
 _torch_available = importlib.util.find_spec("torch") is not None
 _torch_version = "N/A"
 if _torch_available:
@@ -153,6 +162,10 @@ if _accelerate_available:
 
 def is_transformers_available():
     return _transformers_available
+
+
+def is_deepspeed_available():
+    return _deepspeed_available
 
 
 def is_neural_compressor_available():
@@ -300,6 +313,15 @@ def is_transformers_version(operation: str, version: str):
     if not _transformers_available:
         return False
     return compare_versions(parse(_transformers_version), operation, version)
+
+
+def is_deepspeed_version(operation: str, version: str):
+    """
+    Compare the current Deepspeed version to a given reference with an operation.
+    """
+    if not _deepspeed_available:
+        return False
+    return compare_versions(parse(_deepspeed_version), operation, version)
 
 
 def is_optimum_version(operation: str, version: str):

@@ -219,7 +219,7 @@ def _llama_model_forward(
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L694
 class _IPEXLlamaDecoderLayerRef(nn.Module):
     def __init__(self, module, config, distributed=False):
-        if is_ipex_version("<", "2.5.0"):
+        if is_ipex_version("<", "2.3.0"):
             raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
 
         from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
@@ -278,7 +278,7 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
         )
-        if not self.distributed:
+        if hasattr(self, "mha_linear_add"):
             hidden_states = self.mha_linear_add(hidden_states, residual)
         else:
             hidden_states = self.self_attn.o_proj(hidden_states)
@@ -288,12 +288,15 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
 
-        mlp_gate = self.linear_silu_mul(hidden_states)
-
-        if not self.distributed:
-            hidden_states = self.mlp_linear_add(mlp_gate, residual)
+        if hasattr(self, "linear_silu_mul"):
+            mlp_gate = self.linear_silu_mul(hidden_states)
+            if hasattr(self, "mlp_linear_add"):
+                hidden_states = self.mlp_linear_add(mlp_gate, residual)
+            else:
+                hidden_states = self.mlp.down_proj(mlp_gate)
+                hidden_states = residual + hidden_states
         else:
-            hidden_states = self.mlp.down_proj(mlp_gate)
+            hidden_states = self.mlp(hidden_states)
             hidden_states = residual + hidden_states
 
         outputs = (hidden_states,)

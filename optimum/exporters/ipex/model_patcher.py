@@ -20,7 +20,7 @@ from transformers.models.llama.modeling_llama import (
     LlamaRMSNorm,
 )
 
-from optimum.intel.utils.import_utils import is_ipex_version
+from optimum.intel.utils.import_utils import is_ipex_version, is_deepspeed_version
 
 from .modeling_utils import (
     _IPEXLlamaDecoderLayerRef,
@@ -32,6 +32,7 @@ from .modeling_utils import (
 
 _IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
 _IPEX_EXPORTED_TASK = ("text-generation",)
+_distributed = False
 
 
 def convert_func(m, func_name, new_function):
@@ -62,10 +63,10 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 
 def _patch_llama_model(model):
-    if is_ipex_version("<", "2.5.0"):
-        raise ImportError("Only ipex version > 2.3.0 supports RotaryEmbedding and IndirectAccessKVCache")
+    if is_ipex_version("<", "2.3.0"):
+        raise ImportError("Only ipex version > 2.3.0 supports RotaryEmbedding and IndirectAccessKVCacheAttention")
 
-    from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCache, RotaryEmbedding
+    from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCacheAttention, RotaryEmbedding
 
     ipex_rope = RotaryEmbedding(
         model.config.max_position_embeddings,
@@ -73,7 +74,7 @@ def _patch_llama_model(model):
         model.config.rope_theta,
         model.config.architectures[0],
     )
-    ipex_scale_dot_product = IndirectAccessKVCache(text_max_length=model.config.max_position_embeddings)
+    ipex_scale_dot_product = IndirectAccessKVCacheAttention(text_max_length=model.config.max_position_embeddings)
     patch_op(model, LlamaAttention, "ipex_rope", ipex_rope)
     patch_op(model, LlamaAttention, "ipex_scale_dot_product", ipex_scale_dot_product)
 
@@ -81,7 +82,13 @@ def _patch_llama_model(model):
     convert_functions(model, LlamaAttention, "forward", _llama_attn_forward)
     convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
 
-    convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayerRef, model.config)
+    global _distributed
+    if is_deepspeed_version(">=", "0.14"):
+        from deepspeed.module_inject.layers import LinearAllreduce, LinearLayer
+
+        ds_layers = [LinearAllreduce, LinearLayer]
+        is_distributed(model, ds_layers)
+    convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayerRef, model.config, _distributed)
     return model
 
 
@@ -89,3 +96,12 @@ def _patch_model(model):
     if isinstance(model, LlamaForCausalLM):
         model = _patch_llama_model(model)
     return model
+
+
+def is_distributed(m, ds_layers):
+    for _, sub_m in m.named_children():
+        for layer in ds_layers:
+            if isinstance(sub_m, layer):
+                global _distributed
+                _distributed = True
+        is_distributed(sub_m, ds_layers)

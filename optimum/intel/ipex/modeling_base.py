@@ -39,6 +39,7 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
+    PreTrainedModel,
     is_torch_xpu_available,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
@@ -63,7 +64,7 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama",)
 
 
 def _is_patched_with_ipex(model, task):
-    if is_ipex_version("<", "2.5.0"):
+    if is_ipex_version("<", "2.3.0"):
         return False
 
     if isinstance(model, torch.jit.ScriptModule):
@@ -202,6 +203,18 @@ class IPEXModel(OptimizedModel):
         config.torch_dtype = torch_dtype
 
         return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
+
+    @classmethod
+    def _from_model(
+        cls,
+        model: PreTrainedModel,
+    ):
+        config = model.config
+        use_cache = model.config.use_cache
+        traced_model = ipex_jit_trace(model, cls.export_feature, use_cache)
+        config.torchscript = True
+
+        return cls(traced_model, config=config, use_cache=use_cache, warmup=False)
 
     @classmethod
     def _from_pretrained(
