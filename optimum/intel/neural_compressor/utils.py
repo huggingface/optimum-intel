@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 CONFIG_NAME = "best_configure.yaml"
+QUANTIZATION_CONFIG_NAME = "quantize_config.json"
 
 NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
 NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION = "2.3.0"
