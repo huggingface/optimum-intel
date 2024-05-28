@@ -15,31 +15,24 @@
 # limitations under the License.
 
 
-import gc
 import json
-import math
-import pathlib
-import sys
-import os
-import time
 import logging
-from argparse import ArgumentParser
+import os
+import sys
 from pathlib import Path
-import torch
-import re
+
 import deepspeed
-from deepspeed.accelerator import get_accelerator
 import deepspeed.comm as dist
+import torch
+from deepspeed.accelerator import get_accelerator
 from huggingface_hub import snapshot_download
-from transformers.utils import is_offline_mode
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
-    T5ForConditionalGeneration,
-    AutoProcessor,
-    TextStreamer,
 )
+from transformers.utils import is_offline_mode
+
 
 sys.path.append(sys.path[0] + "/../../")
 logger = logging.getLogger(__name__)
@@ -150,6 +143,7 @@ model = deepspeed.init_inference(
 model = model.module
 
 from optimum.intel import IPEXModelForCausalLM
+
 
 model = IPEXModelForCausalLM._from_model(model.eval())
 

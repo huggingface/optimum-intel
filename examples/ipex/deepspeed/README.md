@@ -16,7 +16,7 @@ limitations under the License.
 
 ## Run language generation with deepspeed
 
-This script run IPEXModel with deepspeed autpTP.
+This script run IPEXModel with deepspeed AutpTP.
 
 ```bash
 deepspeed --bind_cores_to_rank run_generation_deepspeed.py

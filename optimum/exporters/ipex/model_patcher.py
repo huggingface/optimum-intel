@@ -20,7 +20,7 @@ from transformers.models.llama.modeling_llama import (
     LlamaRMSNorm,
 )
 
-from optimum.intel.utils.import_utils import is_ipex_version, is_deepspeed_version
+from optimum.intel.utils.import_utils import is_deepspeed_version, is_ipex_version
 
 from .modeling_utils import (
     _IPEXLlamaDecoderLayerRef,
