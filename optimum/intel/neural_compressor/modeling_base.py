@@ -258,9 +258,10 @@ class INCModel(OptimizedModel):
                 self._q_config.to_json_file(os.path.join(save_directory, QUANTIZATION_CONFIG_NAME))
                 self.model.save_pretrained(save_directory)
             # For INC model the state dictionary needs to be modified to include the quantization parameters
-            elif isinstance(self._q_config, dict):
+            else:
                 state_dict = self.model.state_dict()
-                state_dict["best_configure"] = self._q_config
+                if isinstance(self._q_config, dict):
+                    state_dict["best_configure"] = self._q_config
                 torch.save(state_dict, os.path.join(save_directory, WEIGHTS_NAME))
         else:
             torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
