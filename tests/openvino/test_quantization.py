@@ -79,7 +79,8 @@ class OVQuantizerTest(unittest.TestCase):
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
-        # (OVModelForCausalLM, "gpt2", 31, 3),
+        (OVModelForCausalLM, "gpt2", 31, 3),
+        # (OVModelForCausalLM, "gpt2", 31, 22),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
@@ -132,18 +133,16 @@ class OVQuantizerTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
-        if "gpt2" in model_id:
-            expected_int8 -= 1
 
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            transformers_model = model_cls.from_pretrained(model_id, export=True)
+            ov_model = model_cls.from_pretrained(model_id, export=True)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
-            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
+            quantizer = OVQuantizer.from_pretrained(ov_model, task=task)
 
             calibration_dataset = quantizer.get_calibration_dataset(
                 dataset_name,
