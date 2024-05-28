@@ -228,10 +228,8 @@ class INCQuantizer(OptimumQuantizer):
 
         # ITREX Weight Only Quantization
         if not isinstance(quantization_config, PostTrainingQuantConfig):
-            if (
-                is_itrex_version("==", "1.4.2")
-                and not is_torch_version("==", "2.3.0")
-                and parse(torch.__version__).local != "cpu"
+            if is_itrex_version("==", "1.4.2") and (
+                is_torch_version("!=", "2.3.0") or parse(_torch_version).local != "cpu"
             ):
                 raise ImportError(
                     f"Found an incompatible version of `intel-extension-for-transformers` and `torch`. Found version itrex {_itrex_version} and torch {_torch_version}, "
