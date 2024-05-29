@@ -1679,7 +1679,7 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         inputs = preprocessor(images=image, return_tensors="pt")
 
-        transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
+        transformers_model = AutoModelForImageClassification.from_pretrained(model_id, attn_implementation="eager")
         transformers_model.eval()
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs, output_attentions=True)
