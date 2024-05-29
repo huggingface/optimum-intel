@@ -233,7 +233,7 @@ class INCQuantizer(OptimumQuantizer):
             ):
                 raise ImportError(
                     f"Found an incompatible version of `intel-extension-for-transformers` and `torch`. Found version itrex {_itrex_version} and torch {_torch_version}, "
-                    f"but torch 2.3.0+cpu is compatible with ITREX v1.4.2."
+                    f"but only torch 2.3.0+cpu is compatible with ITREX v1.4.2."
                 )
 
             # check neural-compressor version
