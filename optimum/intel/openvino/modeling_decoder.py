@@ -409,7 +409,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             elif self.use_cache:
                 for input_name in self.key_value_input_names:
                     model_inputs = self.model.input(input_name)
-                    dtype = OV_TO_NP_TYPE[model_inputs.get_element_type().get_type_name()]
+                    # dtype = OV_TO_NP_TYPE[model_inputs.get_element_type().get_type_name()]
                     shape = model_inputs.get_partial_shape()
                     if self.config.model_type == "chatglm":
                         shape[0] = 0
