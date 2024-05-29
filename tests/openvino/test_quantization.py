@@ -79,8 +79,7 @@ class OVQuantizerTest(unittest.TestCase):
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
-        (OVModelForCausalLM, "gpt2", 31, 3),
-        # (OVModelForCausalLM, "gpt2", 31, 22),
+        (OVModelForCausalLM, "gpt2", 31, 22),
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
