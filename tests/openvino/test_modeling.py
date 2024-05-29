@@ -877,14 +877,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model_stateless.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
 
-        for gen_config in gen_configs:
+        for idx, gen_config in enumerate(gen_configs):
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
             transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
-            self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs))
+            self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs), f"generation config : {idx}")
             ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
-            self.assertTrue(torch.allclose(ov_stateless_outputs, transformers_outputs))
+            self.assertTrue(torch.allclose(ov_stateless_outputs, transformers_outputs), f"generation config : {idx}")
 
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
