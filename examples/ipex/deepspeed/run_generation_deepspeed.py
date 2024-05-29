@@ -23,6 +23,7 @@ from pathlib import Path
 
 import deepspeed
 import deepspeed.comm as dist
+import intel_extension_for_pytorch as ipex
 import torch
 from deepspeed.accelerator import get_accelerator
 from huggingface_hub import snapshot_download
@@ -33,9 +34,12 @@ from transformers import (
 )
 from transformers.utils import is_offline_mode
 
+from optimum.intel import IPEXModelForCausalLM
+
 
 sys.path.append(sys.path[0] + "/../../")
 logger = logging.getLogger(__name__)
+
 
 torch._C._jit_set_texpr_fuser_enabled(False)
 try:
@@ -124,8 +128,6 @@ def write_checkpoints_json():
         json.dump(data, open(checkpoints_json, "w"))
 
 
-kwargs = dict(replace_with_kernel_inject=False)
-
 repo_root = get_repo_root(model_name)
 
 write_checkpoints_json()
@@ -137,14 +139,10 @@ model = deepspeed.init_inference(
     base_dir=repo_root,
     dtype=torch.bfloat16,
     checkpoint=checkpoints_json,
-    **kwargs,
+    replace_with_kernel_inject=False,
 )
 
 model = model.module
-
-from optimum.intel import IPEXModelForCausalLM
-
-
 model = IPEXModelForCausalLM._from_model(model.eval())
 
 input_tokens = tokenizer.batch_encode_plus(
