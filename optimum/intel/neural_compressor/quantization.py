@@ -29,6 +29,7 @@ from neural_compressor.experimental.export import torch_to_int8_onnx
 from neural_compressor.model.onnx_model import ONNXModel
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
+from packaging.version import parse
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import (
     DataCollator,
@@ -78,8 +79,6 @@ from .utils import (
     INCDataLoader,
 )
 
-
-_ITREX_EXCLUDED_VERSION = "1.4.2"
 
 if is_itrex_available():
     if is_itrex_version("<", ITREX_MINIMUM_VERSION):
@@ -229,10 +228,12 @@ class INCQuantizer(OptimumQuantizer):
 
         # ITREX Weight Only Quantization
         if not isinstance(quantization_config, PostTrainingQuantConfig):
-            if is_itrex_version("==", _ITREX_EXCLUDED_VERSION):
+            if is_itrex_version("==", "1.4.2") and (
+                is_torch_version("!=", "2.3.0") or parse(_torch_version).local != "cpu"
+            ):
                 raise ImportError(
-                    f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_itrex_version}, "
-                    f"but {_ITREX_EXCLUDED_VERSION} is not compatible."
+                    f"Found an incompatible version of `intel-extension-for-transformers` and `torch`. Found version itrex {_itrex_version} and torch {_torch_version}, "
+                    f"but only torch 2.3.0+cpu is compatible with ITREX v1.4.2."
                 )
 
             # check neural-compressor version
