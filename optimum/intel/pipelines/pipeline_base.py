@@ -150,7 +150,7 @@ def pipeline(
     feature_extractor: Optional[Union[str, PreTrainedFeatureExtractor]] = None,
     use_fast: bool = True,
     token: Optional[Union[str, bool]] = None,
-    accelerator: Optional[str] = "ort",
+    accelerator: Optional[str] = "ipex",
     revision: Optional[str] = None,
     trust_remote_code: Optional[bool] = None,
     torch_dtype: Optional[Union[str, torch.dtype]] = None,
