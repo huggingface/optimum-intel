@@ -51,7 +51,7 @@ _DEFAULT_4BIT_CONFIGS = {
     "meta-llama/Llama-2-13b-chat": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "stabilityai/stablelm-3b-4e1t": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "stablelm-epoch-3b-preview": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
-    "stabilityai/stable-zephyr-3b-dpo": {"bits": 4, "sym": False, "group_size": 128, "ratio": 1.0},
+    "stabilityai/stablelm-zephyr-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 1.0},
     "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
     "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
