@@ -420,7 +420,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                             shape[2] = 0
                         else:
                             shape[1] = 0
-                    inputs[input_name] = np.empty([dim.get_length() for dim in shape], dtype=dtype)
+                    inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
         else:
             # past_key_values are not used explicitly, instead they are handled inside the model
             if past_key_values is None:
