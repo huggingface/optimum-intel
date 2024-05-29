@@ -16,14 +16,14 @@ import copy
 import inspect
 import logging
 import types
+import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
-from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
 from neural_compressor.model.onnx_model import ONNXModel
@@ -47,14 +47,14 @@ from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME
 from ..utils.import_utils import (
-    INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR,
-    _intel_extension_for_transformers_version,
+    ITREX_IMPORT_ERROR,
     _ipex_version,
+    _itrex_version,
     _neural_compressor_version,
     _torch_version,
-    is_intel_extension_for_transformers_available,
-    is_intel_extension_for_transformers_version,
     is_ipex_version,
+    is_itrex_available,
+    is_itrex_version,
     is_neural_compressor_version,
     is_torch_version,
 )
@@ -69,17 +69,25 @@ from .modeling_base import (  # noqa
     INCModelForTokenClassification,
     INCModelForVision2Seq,
 )
-from .utils import INCDataLoader, _cfgs_to_fx_cfgs
+from .utils import (
+    IPEX_MINIMUM_VERSION,
+    ITREX_MINIMUM_TORCH_VERSION,
+    ITREX_MINIMUM_VERSION,
+    NEURAL_COMPRESSOR_MINIMUM_VERSION,
+    NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION,
+    INCDataLoader,
+)
 
 
-INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION = "1.4.0"
+_ITREX_EXCLUDED_VERSION = "1.4.2"
 
-if is_intel_extension_for_transformers_available():
-    if is_intel_extension_for_transformers_version("!=", INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION):
+if is_itrex_available():
+    if is_itrex_version("<", ITREX_MINIMUM_VERSION):
         raise ImportError(
-            f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_intel_extension_for_transformers_version}, "
-            f"but only version {INTEL_EXTENSION_FOR_TRANSFORMERS_MINIMUM_VERSION} is supported."
+            f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_itrex_version}, "
+            f"but only version {ITREX_MINIMUM_VERSION} or higher is supported."
         )
+
     from intel_extension_for_transformers.transformers.llm.quantization.utils import convert_to_quantized_model
     from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
     from intel_extension_for_transformers.transformers.utils.config import (
@@ -92,10 +100,6 @@ if is_intel_extension_for_transformers_available():
 
 logger = logging.getLogger(__name__)
 
-NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
-NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION = "2.3.0"
-IPEX_MINIMUM_VERSION = "2.1.0"
-ITREX_MINIMUM_TORCH_VERSION = "2.2.0"
 
 if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
     raise ImportError(
@@ -225,14 +229,20 @@ class INCQuantizer(OptimumQuantizer):
 
         # ITREX Weight Only Quantization
         if not isinstance(quantization_config, PostTrainingQuantConfig):
+            if is_itrex_version("==", _ITREX_EXCLUDED_VERSION):
+                raise ImportError(
+                    f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_itrex_version}, "
+                    f"but {_ITREX_EXCLUDED_VERSION} is not compatible."
+                )
+
             # check neural-compressor version
             if is_neural_compressor_version("<", NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION):
                 raise ImportError(
                     f"Found an incompatible version of neural-compressor. Found version {_neural_compressor_version}, "
                     f"but only version {NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION} or higher supports weight-only quantization."
                 )
-            if not is_intel_extension_for_transformers_available():
-                raise ImportError(INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR.format("Weight only quantization"))
+            if not is_itrex_available():
+                raise ImportError(ITREX_IMPORT_ERROR.format("Weight only quantization"))
 
             if is_torch_version("<", ITREX_MINIMUM_TORCH_VERSION):
                 raise ImportError(
@@ -446,7 +456,8 @@ class INCQuantizer(OptimumQuantizer):
         dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
-        use_auth_token: bool = False,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
     ) -> Dataset:
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -465,16 +476,28 @@ class INCQuantizer(OptimumQuantizer):
                 Processing function to apply to each example after loading dataset.
             preprocess_batch (`bool`, defaults to `True`):
                 Whether the `preprocess_function` should be batched.
-            use_auth_token (`bool`, defaults to `False`):
-                Whether to use the token generated when running `transformers-cli login`.
+            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+                Deprecated. Please use `token` instead.
+            token (Optional[Union[bool, str]], defaults to `None`):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `huggingface-cli login` (stored in `~/.huggingface`).
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         calibration_dataset = load_dataset(
             dataset_name,
             name=dataset_config_name,
             split=dataset_split,
-            use_auth_token=use_auth_token,
+            token=token,
         )
 
         if num_samples is not None:
@@ -514,70 +537,3 @@ class INCQuantizer(OptimumQuantizer):
     def _remove_unused_columns(self, dataset: Dataset):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
-
-
-# Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
-def _apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> torch.nn.Module:
-    """
-    Apply Intel Neural Compressor quantization steps on the given model.
-
-    Arguments:
-        q_config (`Dict`):
-            Dictionary containing all quantization information such as approach, dtype, scheme and granularity.
-        model (`torch.nn.Module`):
-            Model to quantize.
-    Returns:
-        q_model (`torch.nn.Module`):
-            Quantized model.
-    """
-    from torch.quantization import add_observer_, convert
-    from torch.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_fx
-
-    approach = q_config.get("approach")
-    framework = q_config.get("framework")
-
-    if approach not in SUPPORTED_QUANT_MODE:
-        raise ValueError(
-            "Unknown quantization approach. Supported approach are " + ", ".join(SUPPORTED_QUANT_MODE.keys())
-        )
-
-    quant_mode = INCQuantizationMode(approach)
-    q_model = copy.deepcopy(model)
-    q_model.eval()
-
-    if framework == "pytorch_fx":
-        op_cfgs = _cfg_to_qconfig(q_config, approach)
-        fx_op_cfgs = _cfgs_to_fx_cfgs(op_cfgs, approach)
-
-        if not q_config["fx_sub_module_list"]:
-            if quant_mode == INCQuantizationMode.AWARE_TRAINING:
-                q_model.train()
-                q_model = prepare_qat_fx(q_model, fx_op_cfgs)
-            else:
-                q_model = prepare_fx(q_model, fx_op_cfgs)
-            q_model = convert_fx(q_model)
-
-        else:
-            sub_module_list = q_config["fx_sub_module_list"]
-            if q_config["approach"] == "quant_aware_training":
-                q_model.train()
-                PyTorch_FXAdaptor.prepare_sub_graph(sub_module_list, fx_op_cfgs, q_model, prefix="", is_qat=True)
-            else:
-                PyTorch_FXAdaptor.prepare_sub_graph(sub_module_list, fx_op_cfgs, q_model, prefix="")
-            PyTorch_FXAdaptor.convert_sub_graph(sub_module_list, q_model, prefix="")
-
-    else:
-        if quant_mode == INCQuantizationMode.DYNAMIC:
-            q_mapping = torch.quantization.quantization_mappings.get_default_dynamic_quant_module_mappings()
-            op_cfgs = _cfg_to_qconfig(q_config, approach)
-        else:
-            q_mapping = torch.quantization.quantization_mappings.get_default_static_quant_module_mappings()
-            op_cfgs = _cfg_to_qconfig(q_config)
-
-        _propagate_qconfig(q_model, op_cfgs, approach=approach)
-
-        if quant_mode != INCQuantizationMode.DYNAMIC:
-            add_observer_(q_model)
-        q_model = convert(q_model, mapping=q_mapping, inplace=True)
-
-    return q_model

@@ -14,6 +14,7 @@
 
 import gc
 import os
+import subprocess
 import tempfile
 import time
 import unittest
@@ -246,6 +247,15 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(np.array_equal(pipeline_outputs, outputs))
         del pipeline
         gc.collect()
+
+    def test_load_model_from_hub_private_with_token(self):
+        subprocess.run("huggingface-cli logout", shell=True)
+
+        # a fine-grained read-only token of private repo "IlyasMoutawwakil/test-hub-bert"
+        token = "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"
+
+        loaded_model = OVModelForMaskedLM.from_pretrained("IlyasMoutawwakil/test-hub-bert", use_auth_token=token)
+        self.assertIsInstance(loaded_model.config, PretrainedConfig)
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
@@ -510,12 +520,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "bart",
         "baichuan2",
+        "baichuan2-13b",
         "gpt_bigcode",
         "blenderbot",
         "blenderbot-small",
         "bloom",
         "chatglm",
         "codegen",
+        "codegen2",
         # "data2vec-text", # TODO : enable when enabled in exporters
         "gemma",
         "gpt2",
@@ -528,6 +540,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral",
         "mixtral",
         "mpt",
+        "olmo",
         "opt",
         "pegasus",
         "qwen",
@@ -535,22 +548,50 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "stablelm",
         "starcoder2",
         "phi",
+        "phi3",
         "internlm2",
         "orion",
         "falcon",
+        "falcon-40b",
+        "persimmon",
+        "biogpt",
+        "gpt_neox_japanese",
+        "cohere",
+        "xglm",
+        "aquila",
+        "aquila2",
+        "xverse",
+        "internlm",
+        "dbrx",
+        "qwen2-moe",
     )
     GENERATION_LENGTH = 100
-    REMOTE_CODE_MODELS = ("chatglm", "minicpm", "baichuan2", "jais", "qwen", "internlm2", "olmo", "orion")
+    REMOTE_CODE_MODELS = (
+        "chatglm",
+        "minicpm",
+        "baichuan2",
+        "baichuan2-13b",
+        "jais",
+        "qwen",
+        "internlm2",
+        "orion",
+        "phi3",
+        "aquila",
+        "aquila2",
+        "xverse",
+        "internlm",
+        "codegen2",
+    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
-        not_stateful = ["gpt_bigcode"]
+        not_stateful = []
         if is_openvino_version("<", "2024.0"):
             not_stateful.append("mixtral")
 
         if is_openvino_version("<", "2024.1"):
-            not_stateful.extend(["llama", "gemma"])
+            not_stateful.extend(["llama", "gemma", "gpt_bigcode"])
 
         if "gptq" in model_arch:
             self.skipTest("GPTQ model loading unsupported with AutoModelForCausalLM")
@@ -567,6 +608,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(ov_model.stateful, ov_model.config.model_type not in not_stateful)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
+        tokens.pop("token_type_ids", None)
 
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
@@ -593,11 +635,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "qwen":
             return
 
-        if model_arch != "chatglm":
+        if model_arch not in ["chatglm", "persimmon"]:
             tokenizer.pad_token_id = tokenizer.eos_token_id
+
+        if model_arch == "persimmon":
+            tokenizer.pad_token_id = tokenizer.bos_token_id
         # Compare batched generation
         tokenizer.padding_side = "left"
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        tokens.pop("token_type_ids", None)
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
@@ -753,6 +799,94 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(outs_step2.logits, outs_without_attn_mask_step2.logits))
         del model_with_cache
         gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
+    def test_beam_search(self, model_arch):
+        model_kwargs = {}
+        model_id = MODEL_NAMES[model_arch]
+        if model_arch in self.REMOTE_CODE_MODELS:
+            model_kwargs = {
+                "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
+                "trust_remote_code": True,
+            }
+        # Qwen tokenizer does not support padding, chatgm testing model produces nan that incompatible with beam search
+        if model_arch in ["qwen", "chatglm"]:
+            return
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        if model_arch == "persimmon":
+            tokenizer.pad_token_id = tokenizer.bos_token_id
+            tokenizer.eos_token_id = tokenizer.bos_token_id
+
+        beam_search_gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=4,
+            do_sample=False,
+            eos_token_id=None,
+        )
+        beam_sample_gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=4,
+            do_sample=True,
+            eos_token_id=None,
+            top_k=1,
+        )
+
+        group_beam_search_gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=4,
+            do_sample=False,
+            eos_token_id=None,
+            num_beam_groups=2,
+            diversity_penalty=0.0000001,
+        )
+        force_word = "cat"
+        force_words_ids = [tokenizer([force_word], add_special_tokens=False).input_ids]
+        constrained_beam_search_gen_config = GenerationConfig(
+            max_new_tokens=10,
+            min_new_tokens=10,
+            num_beams=4,
+            do_sample=False,
+            eos_token_id=None,
+            force_words_ids=force_words_ids,
+        )
+
+        gen_configs = [
+            beam_search_gen_config,
+            beam_sample_gen_config,
+            group_beam_search_gen_config,
+            constrained_beam_search_gen_config,
+        ]
+        ov_model_stateful = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, use_cache=True, stateful=True, **model_kwargs
+        )
+        ov_model_stateless = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, use_cache=True, stateful=False, **model_kwargs
+        )
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        tokens.pop("token_type_ids", None)
+        ov_model_stateful.generation_config.eos_token_id = None
+        ov_model_stateless.generation_config.eos_token_id = None
+        transformers_model.generation_config.eos_token_id = None
+        ov_model_stateful.config.eos_token_id = None
+        ov_model_stateless.config.eos_token_id = None
+        transformers_model.config.eos_token_id = None
+
+        for gen_config in gen_configs:
+            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
+                continue
+            transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+            ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
+            self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs))
+            ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
+            self.assertTrue(torch.allclose(ov_stateless_outputs, transformers_outputs))
 
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):

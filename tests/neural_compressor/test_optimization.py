@@ -45,8 +45,7 @@ from transformers import (
     set_seed,
 )
 from utils_tests import MODEL_NAMES, SEED, INCTestMixin, _generate_dataset
-from optimum.intel.utils.import_utils import is_torch_version, is_intel_extension_for_transformers_available
-
+from optimum.intel.utils.import_utils import is_torch_version, is_itrex_available
 
 from optimum.intel import (
     INCConfig,
@@ -70,12 +69,13 @@ set_seed(SEED)
 
 
 class QuantizationTest(INCTestMixin):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
+    SUPPORTED_ARCHITECTURES_STATIC = (
+        ("text-generation", "gpt_neo", 17),
         ("text-classification", "bert", 21),
-        # ("text-generation", "bloom", 21),
+        ("text-generation", "bloom", 21),
     )
 
-    SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS + (
+    SUPPORTED_ARCHITECTURES_DYNAMIC = SUPPORTED_ARCHITECTURES_STATIC + (
         ("fill-mask", "bert", 22),
         ("token-classification", "albert", 26),
     )
@@ -88,12 +88,14 @@ class QuantizationTest(INCTestMixin):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_DYNAMIC)
     def test_dynamic_quantization(self, task, model_arch, expected_quantized_matmuls):
         model_name = MODEL_NAMES[model_arch]
-        quantization_config = PostTrainingQuantConfig(approach="dynamic")
         model_class = ORT_SUPPORTED_TASKS[task]["class"][0]
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-        save_onnx_model = False
+
         quantized_model = None
+        save_onnx_model = False
         model_kwargs = {"use_cache": False, "use_io_binding": False} if task == "text-generation" else {}
+        quantization_config = PostTrainingQuantConfig(approach="dynamic")
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             for backend in ["torch", "ort"]:
                 if backend == "torch":
@@ -104,8 +106,8 @@ class QuantizationTest(INCTestMixin):
                 quantizer = INCQuantizer.from_pretrained(model, task=task)
                 quantizer.quantize(
                     quantization_config=quantization_config,
-                    save_directory=tmp_dir,
                     save_onnx_model=save_onnx_model,
+                    save_directory=tmp_dir,
                 )
                 if backend == "torch":
                     quantized_model = quantizer._quantized_model
@@ -121,7 +123,7 @@ class QuantizationTest(INCTestMixin):
                 load_inc_model=True,
             )
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_STATIC)
     def test_static_quantization(self, task, model_arch, expected_quantized_matmuls):
         num_samples = 10
         model_name = MODEL_NAMES[model_arch]
@@ -130,28 +132,26 @@ class QuantizationTest(INCTestMixin):
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        save_onnx_model = False
-        op_type_dict = (
-            {"Embedding": {"weight": {"dtype": ["fp32"]}, "activation": {"dtype": ["fp32"]}}}
-            if save_onnx_model
-            else None
-        )
-        quantization_config = PostTrainingQuantConfig(approach="static", op_type_dict=op_type_dict)
         quantized_model = None
+        save_onnx_model = False
+        quantization_config = PostTrainingQuantConfig(approach="static")
+        model_kwargs = {"use_cache": False, "use_io_binding": False} if task == "text-generation" else {}
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             for backend in ["torch", "ort"]:
                 if backend == "torch":
                     model = model_class.auto_model_class.from_pretrained(model_name)
                 else:
-                    model = model_class.from_pretrained(model_name, export=True)
+                    model = model_class.from_pretrained(model_name, export=True, **model_kwargs)
+
                 quantizer = INCQuantizer.from_pretrained(model, task=task)
                 calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
+
                 quantizer.quantize(
                     quantization_config=quantization_config,
                     calibration_dataset=calibration_dataset,
-                    save_directory=tmp_dir,
                     save_onnx_model=save_onnx_model,
+                    save_directory=tmp_dir,
                 )
                 if backend == "torch":
                     quantized_model = quantizer._quantized_model
@@ -511,7 +511,7 @@ class WeightOnlyQuantizationTest(INCTestMixin):
     )
 
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
-    @unittest.skipIf(not is_intel_extension_for_transformers_available(), reason="ITREX not available")
+    @unittest.skipIf(not is_itrex_available(), reason="ITREX not available")
     def test_weight_only_quantization(self, methodology, weight_dtype):
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
 

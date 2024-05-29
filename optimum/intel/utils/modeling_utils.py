@@ -169,3 +169,16 @@ def get_model_device(model: torch.nn.Module) -> torch.device:
         # The model had no parameters at all, doesn't matter which device to choose
         device = torch.device("cpu")
     return device
+
+
+def recursive_to_device(value, device):
+    """
+    Recursivley move the tensor element in `value` to `device`
+    """
+    if isinstance(value, (tuple, list)):
+        return type(value)(recursive_to_device(v, device) for v in value)
+    elif isinstance(value, dict):
+        return {k: recursive_to_device(v, device) for k, v in value.items()}
+    elif isinstance(value, torch.Tensor):
+        return value.to(device)
+    return value

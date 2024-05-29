@@ -47,6 +47,7 @@ from optimum.intel import (
     OVStableDiffusionXLPipeline,
 )
 from optimum.intel.openvino.modeling_base import OVBaseModel
+from optimum.intel.utils.import_utils import _transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 
@@ -115,6 +116,9 @@ class ExportModelTest(unittest.TestCase):
 
                 if task == "text-generation":
                     self.assertEqual(ov_model.stateful, stateful and use_cache)
+                    self.assertEqual(
+                        ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
+                    )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):

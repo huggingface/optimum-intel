@@ -20,9 +20,10 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
+import onnx
 from transformers.utils import is_tf_available, is_torch_available
 
-from openvino.runtime import PartialShape, save_model
+from openvino.runtime import Model, PartialShape, save_model
 from openvino.runtime.exceptions import OVTypeError
 from openvino.runtime.utils.types import get_element_type
 from openvino.tools.ovc import convert_model
@@ -32,6 +33,14 @@ from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
 from optimum.exporters.utils import _get_submodels_and_export_configs
+from optimum.intel.utils.import_utils import (
+    _nncf_version,
+    _optimum_intel_version,
+    _optimum_version,
+    _timm_version,
+    _torch_version,
+    _transformers_version,
+)
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
 
@@ -81,6 +90,8 @@ def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
 
         compress_to_fp16 = ov_config.dtype == "fp16"
 
+    library_name = TasksManager.infer_library_from_model(Path(path).parent)
+    model = _add_version_info_to_model(model, library_name)
     save_model(model, path, compress_to_fp16)
 
 
@@ -347,6 +358,7 @@ def export_pytorch(
 
             with patcher:
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
+                sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
                 inputs = config.ordered_inputs(model)
                 input_names = list(inputs.keys())
                 output_names = list(config.outputs.keys())
@@ -376,7 +388,6 @@ def export_pytorch(
                 ov_config=ov_config,
             )
 
-        sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
         ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
         if not ordered_dummy_inputs:
             ordered_dummy_inputs = dummy_inputs
@@ -392,7 +403,7 @@ def export_pytorch(
             inp_tensor.get_tensor().set_names({input_name})
             inp_data = flatten_inputs[idx]
             static_shape = PartialShape(inp_data.shape)
-            dims = inputs[input_name]
+            dims = inputs.get(input_name, [])
             for dim in dims:
                 static_shape[dim] = -1
             inp_tensor.get_node().set_partial_shape(static_shape)
@@ -536,7 +547,7 @@ def export_from_model(
     # TODO: support onnx_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
         raise ValueError(
-            f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the model type {model_type} to be supported natively in the ONNX export."
+            f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the model type {model_type} to be supported natively in the OpenVINO export."
         )
 
     if task.startswith("text-generation") and model.config.is_encoder_decoder:
@@ -603,7 +614,12 @@ def export_from_model(
         model.config.save_pretrained(output)
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
-            generation_config.save_pretrained(output)
+            try:
+                generation_config.save_pretrained(output)
+            except Exception as exception:
+                logger.warning(
+                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
+                )
 
         model_name_or_path = model.config._name_or_path
         maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
@@ -656,19 +672,20 @@ def export_tokenizer(
     output: Union[str, Path],
     suffix: Optional[str] = "",
 ):
-    from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME  # avoid circular imports
+    # avoid circular imports
+    from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME
+    from optimum.intel.openvino.utils import maybe_convert_tokenizer_to_fast
 
     try:
         from openvino_tokenizers import convert_tokenizer
     except ModuleNotFoundError:
-        # avoid this message before tokenizers are part of the openvino dependencies
-        # logger.info(
-        #     "Run `pip install openvino-tokenizers[transformers]` to get OpenVINO tokenizer/detokenizer models."
-        # )
         return
 
     if not isinstance(output, Path):
         output = Path(output)
+
+    if output.exists():
+        tokenizer = maybe_convert_tokenizer_to_fast(tokenizer, output)
 
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)
@@ -689,3 +706,34 @@ def export_tokenizer(
 
     for model, file_name in zip(converted, (OV_TOKENIZER_NAME, OV_DETOKENIZER_NAME)):
         save_model(model, output / file_name.format(suffix))
+
+
+def _add_version_info_to_model(model: Model, library_name: Optional[str] = None):
+    """
+    Add dependency versions to OpenVINO model
+    """
+    try:
+        model.set_rt_info(_transformers_version, ["optimum", "transformers_version"])
+        model.set_rt_info(_torch_version, ["optimum", "pytorch_version"])
+        model.set_rt_info(_optimum_intel_version, ["optimum", "optimum_intel_version"])
+        model.set_rt_info(_optimum_version, ["optimum", "optimum_version"])
+
+        if any("token_embeddings" in output.get_names() for output in model.outputs):
+            import sentence_transformers
+
+            model.set_rt_info(sentence_transformers.__version__, ["optimum", "sentence_transformers_version"])
+        if library_name == "diffusers":
+            model.set_rt_info(_optimum_version, ["optimum", "diffusers_version"])
+        elif library_name == "timm":
+            model.set_rt_info(_timm_version, ["optimum", "timm_version"])
+        rt_info = model.get_rt_info()
+        if "nncf" in rt_info:
+            model.set_rt_info(_nncf_version, ["optimum", "nncf_version"])
+        input_model = rt_info["conversion_parameters"].get("input_model", None)
+        if input_model is not None and "onnx" in input_model.value:
+            model.set_rt_info(onnx.__version__, ["optimum", "onnx_version"])
+
+    except Exception:
+        pass
+
+    return model

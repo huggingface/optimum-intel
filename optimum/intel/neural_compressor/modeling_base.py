@@ -14,12 +14,15 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Optional, Union
 
 import torch
 from huggingface_hub import hf_hub_download
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from huggingface_hub.utils import EntryNotFoundError
 from neural_compressor.utils.pytorch import load
 from transformers import (
     AutoConfig,
@@ -38,18 +41,15 @@ from transformers import (
 )
 from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
+from transformers.utils import SAFE_WEIGHTS_NAME, WEIGHTS_NAME
 from transformers.utils.generic import ContextManagers
 
 from optimum.intel.generation import BaseModelForCausalLM
 
 from ...modeling_base import OptimizedModel
-from ..utils.import_utils import (
-    _torch_version,
-    is_intel_extension_for_transformers_available,
-    is_torch_version,
-)
+from ..utils.import_utils import _torch_version, is_itrex_available, is_torch_version
 from .configuration import INCConfig
-from .utils import WEIGHTS_NAME
+from .utils import QUANTIZATION_CONFIG_NAME
 
 
 logger = logging.getLogger(__name__)
@@ -101,66 +101,117 @@ class INCModel(OptimizedModel):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str, None]] = None,
-        revision: Optional[Union[str, None]] = None,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: str = WEIGHTS_NAME,
         local_files_only: bool = False,
         subfolder: str = "",
         trust_remote_code: bool = False,
         **kwargs,
     ):
-        model_name_or_path = kwargs.pop("model_name_or_path", None)
-        if model_name_or_path is not None:
-            logger.warning("`model_name_or_path` is deprecated please use `model_id`")
-            model_id = model_id or model_name_or_path
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
 
         model_path = Path(model_id)
-
-        if model_path.is_dir():
-            model_cache_path = model_path / file_name
-        else:
-            model_cache_path = hf_hub_download(
-                repo_id=model_id,
-                filename=file_name,
-                subfolder=subfolder,
-                use_auth_token=use_auth_token,
-                revision=revision,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                local_files_only=local_files_only,
-            )
-
-        model_save_dir = Path(model_cache_path).parent
+        is_local = model_path.is_dir()
+        model_cache_path = None
         inc_config = None
         msg = None
-        if is_intel_extension_for_transformers_available():
+        if is_local:
+            if (model_path / subfolder / SAFE_WEIGHTS_NAME).is_file():
+                file_name = SAFE_WEIGHTS_NAME
+            elif not (model_path / subfolder / file_name).is_file():
+                raise EnvironmentError(
+                    f"Error no file named {SAFE_WEIGHTS_NAME} or {file_name} found in directory {model_path / subfolder}"
+                )
+            model_cache_path = model_path / subfolder / file_name
+        else:
+            # Try download safetensors if exist
             try:
-                quantization_config = PretrainedConfig.from_pretrained(model_save_dir / "quantize_config.json")
+                model_cache_path = hf_hub_download(
+                    repo_id=model_id,
+                    filename=SAFE_WEIGHTS_NAME,
+                    subfolder=subfolder,
+                    token=token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
+            except EntryNotFoundError:
+                pass
+
+            if model_cache_path is None:
+                model_cache_path = hf_hub_download(
+                    repo_id=model_id,
+                    filename=file_name,
+                    subfolder=subfolder,
+                    token=token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
+
+        model_save_dir = Path(model_cache_path).parent
+
+        if is_itrex_available():
+            quantization_config_path = None
+            if is_local:
+                quantization_config_path = model_path / subfolder / QUANTIZATION_CONFIG_NAME
+            else:
+                try:
+                    quantization_config_path = hf_hub_download(
+                        repo_id=model_id,
+                        filename=QUANTIZATION_CONFIG_NAME,
+                        subfolder=subfolder,
+                        token=token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                    )
+                except EntryNotFoundError:
+                    pass
+
+            if quantization_config_path and Path(quantization_config_path).is_file():
+                quantization_config = PretrainedConfig.from_pretrained(quantization_config_path)
                 algorithm = getattr(quantization_config, "quant_method", None)
-                if algorithm in {"rtn", "gptq", "awq", "autoaround"}:
+                if algorithm in {"rtn", "gptq", "awq", "autoround"}:
                     from intel_extension_for_transformers.transformers.modeling.modeling_auto import (
                         _BaseQBitsAutoModelClass,
                     )
 
                     _BaseQBitsAutoModelClass.ORIG_MODEL = cls.auto_model_class
 
-                    return _BaseQBitsAutoModelClass.from_pretrained(
+                    model = _BaseQBitsAutoModelClass.from_pretrained(
                         pretrained_model_name_or_path=model_id,
-                        use_auth_token=use_auth_token,
+                        token=token,
                         revision=revision,
                         force_download=force_download,
                         cache_dir=cache_dir,
                         local_files_only=local_files_only,
                         subfolder=subfolder,
                         trust_remote_code=trust_remote_code,
+                        use_neural_speed=False,
                         **kwargs,
                     )
-            except EnvironmentError:
-                msg = "The model is not quantized with weight-only quantization."
+
+                    return cls(
+                        model, config=config, model_save_dir=model_save_dir, q_config=quantization_config, **kwargs
+                    )
+
         try:
-            inc_config = INCConfig.from_pretrained(model_id)
+            inc_config = INCConfig.from_pretrained(model_id, subfolder=subfolder, revision=revision)
             if not is_torch_version("==", inc_config.torch_version):
                 msg = f"Quantized model was obtained with torch version {inc_config.torch_version} but {_torch_version} was found."
                 logger.warning(f"{msg}")
@@ -201,15 +252,19 @@ class INCModel(OptimizedModel):
         )
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
-        output_path = os.path.join(save_directory, WEIGHTS_NAME)
-
         if isinstance(self.model, torch.nn.Module):
-            state_dict = self.model.state_dict()
-            if self._q_config:
-                state_dict["best_configure"] = self._q_config
-            torch.save(state_dict, output_path)
+            # For ITREX model
+            if isinstance(self._q_config, PretrainedConfig):
+                self._q_config.to_json_file(os.path.join(save_directory, QUANTIZATION_CONFIG_NAME))
+                self.model.save_pretrained(save_directory)
+            # For INC model the state dictionary needs to be modified to include the quantization parameters
+            else:
+                state_dict = self.model.state_dict()
+                if isinstance(self._q_config, dict):
+                    state_dict["best_configure"] = self._q_config
+                torch.save(state_dict, os.path.join(save_directory, WEIGHTS_NAME))
         else:
-            torch.jit.save(self.model, output_path)
+            torch.jit.save(self.model, os.path.join(save_directory, WEIGHTS_NAME))
 
         if self.inc_config:
             self.inc_config.save_pretrained(save_directory)

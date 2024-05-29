@@ -47,6 +47,7 @@ from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.constant import ONNX_WEIGHTS_NAME
 from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
 from optimum.pipelines import ORT_SUPPORTED_TASKS
+from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
 
 if is_ipex_available():
     from optimum.intel import (
@@ -80,7 +81,7 @@ MODEL_NAMES = {
     "electra": "hf-internal-testing/tiny-random-electra",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
-    "gpt2": "hf-internal-testing/tiny-random-gpt2",
+    "gpt2": "hf-internal-testing/tiny-random-GPT2LMHeadModel",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
     "gpt_neox": "hf-internal-testing/tiny-random-GPTNeoXForCausalLM",
     "gptj": "hf-internal-testing/tiny-random-GPTJModel",
@@ -135,6 +136,13 @@ def _generate_dataset(quantizer, tokenizer, num_samples=10):
         num_samples=num_samples,
         dataset_split="train",
     )
+    model_type = quantizer._original_model.config.model_type.replace("_", "-")
+    if model_type in MODEL_TYPES_REQUIRING_POSITION_IDS:
+        dataset = dataset.map(
+            lambda x: {
+                "position_ids": np.arange(len(x["input_ids"])),
+            }
+        )
     return dataset
 
 
@@ -187,6 +195,9 @@ class INCTestMixin(unittest.TestCase):
 
             self.assertEqual(expected_quantized_matmuls, num_quantized_matmul)
             ort_model = ORT_SUPPORTED_TASKS[task]["class"][0].from_pretrained(save_directory, **model_kwargs)
+            model_type = ort_model.config.model_type.replace("_", "-")
+            if model_type in MODEL_TYPES_REQUIRING_POSITION_IDS:
+                tokens["position_ids"] = torch.arange(len(tokens["input_ids"])).unsqueeze(0)
             ort_outputs = ort_model(**tokens)
             self.assertTrue("logits" in ort_outputs)
             # self.assertTrue(torch.allclose(ort_outputs.logits, outputs, atol=1e-2))

@@ -13,16 +13,18 @@
 #  limitations under the License.
 
 import logging
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
-from optimum.exporters.openvino.convert import export_from_model, export_tokenizer
+from optimum.exporters.openvino.convert import export_from_model
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
 
@@ -48,7 +50,7 @@ def main_export(
     task: str = "auto",
     device: str = "cpu",
     framework: Optional[str] = None,
-    cache_dir: Optional[str] = None,
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
     trust_remote_code: bool = False,
     pad_token_id: Optional[int] = None,
     subfolder: str = "",
@@ -56,6 +58,7 @@ def main_export(
     force_download: bool = False,
     local_files_only: bool = False,
     use_auth_token: Optional[Union[bool, str]] = None,
+    token: Optional[Union[bool, str]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
@@ -106,9 +109,11 @@ def main_export(
             cached versions if they exist.
         local_files_only (`Optional[bool]`, defaults to `False`):
             Whether or not to only look at local files (i.e., do not try to download the model).
-        use_auth_token (`Optional[str]`, defaults to `None`):
+        use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+            Deprecated. Please use `token` instead.
+        token (Optional[Union[bool, str]], defaults to `None`):
             The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-            when running `transformers-cli login` (stored in `~/.huggingface`).
+            when running `huggingface-cli login` (stored in `~/.huggingface`).
         model_kwargs (`Optional[Dict[str, Any]]`, defaults to `None`):
             Experimental usage: keyword arguments to pass to the model during
             the export. This argument should be used along the `custom_export_configs` argument
@@ -136,6 +141,15 @@ def main_export(
     >>> main_export("gpt2", output="gpt2_ov/")
     ```
     """
+
+    if use_auth_token is not None:
+        warnings.warn(
+            "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+            FutureWarning,
+        )
+        if token is not None:
+            raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+        token = use_auth_token
 
     if compression_option is not None:
         logger.warning(
@@ -195,7 +209,7 @@ def main_export(
             subfolder=subfolder,
             revision=revision,
             cache_dir=cache_dir,
-            use_auth_token=use_auth_token,
+            token=token,
             local_files_only=local_files_only,
             force_download=force_download,
             trust_remote_code=trust_remote_code,
@@ -205,6 +219,10 @@ def main_export(
         model_type = config.model_type.replace("_", "-")
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
             custom_architecture = True
+            if custom_export_configs is None:
+                raise ValueError(
+                    f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the model type {model_type} to be supported natively in the OpenVINO export."
+                )
         elif task not in TasksManager.get_supported_tasks_for_model_type(
             model_type, exporter="openvino", library_name=library_name
         ):
@@ -218,6 +236,7 @@ def main_export(
             raise ValueError(
                 f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the task {task} to be supported in the ONNX export for {model_type}."
             )
+
         if is_transformers_version(">=", "4.36") and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED:
             loading_kwargs["attn_implementation"] = "eager"
         # there are some difference between remote and in library representation of past key values for some models,
@@ -267,7 +286,7 @@ def main_export(
         subfolder=subfolder,
         revision=revision,
         cache_dir=cache_dir,
-        use_auth_token=use_auth_token,
+        token=token,
         local_files_only=local_files_only,
         force_download=force_download,
         trust_remote_code=trust_remote_code,
@@ -341,6 +360,9 @@ def main_export(
         **kwargs_shapes,
     )
 
+    # hide openvino import when using other exporters
+    from optimum.exporters.openvino.convert import export_tokenizer
+
     if convert_tokenizer and is_openvino_tokenizers_available():
         if library_name != "diffusers":
             tokenizer = next(
@@ -359,11 +381,11 @@ def main_export(
         else:
             tokenizer = getattr(model, "tokenizer", None)
             if tokenizer is not None:
-                export_tokenizer(tokenizer, output)
+                export_tokenizer(tokenizer, output / "tokenizer")
 
             tokenizer_2 = getattr(model, "tokenizer_2", None)
             if tokenizer_2 is not None:
-                export_tokenizer(tokenizer_2, output, suffix="_2")
+                export_tokenizer(tokenizer_2, output / "tokenizer_2")
     elif convert_tokenizer and not is_openvino_tokenizers_available():
         logger.warning("Tokenizer won't be converted.")
 

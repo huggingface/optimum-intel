@@ -33,6 +33,7 @@ logger = logging.getLogger(__name__)
 STR_OPERATION_TO_FUNC = {">": op.gt, ">=": op.ge, "==": op.eq, "!=": op.ne, "<=": op.le, "<": op.lt}
 
 _optimum_version = importlib_metadata.version("optimum")
+_optimum_intel_version = importlib_metadata.version("optimum-intel")
 
 _transformers_available = importlib.util.find_spec("transformers") is not None
 _transformers_version = "N/A"
@@ -61,14 +62,14 @@ if _neural_compressor_available:
         _neural_compressor_available = False
 
 
-_intel_extension_for_transformers_available = importlib.util.find_spec("intel_extension_for_transformers") is not None
-_intel_extension_for_transformers_version = "N/A"
-if _intel_extension_for_transformers_available:
+_itrex_available = importlib.util.find_spec("intel_extension_for_transformers") is not None
+_itrex_version = "N/A"
+if _itrex_available:
     try:
-        _intel_extension_for_transformers_version = importlib_metadata.version("intel_extension_for_transformers")
+        _itrex_version = importlib_metadata.version("intel_extension_for_transformers")
         logging.warn("`transformers` version >= 4.31 is requirements by intel-extension-for-transformers.")
     except importlib_metadata.PackageNotFoundError:
-        _intel_extension_for_transformers_available = False
+        _itrex_available = False
 
 
 _ipex_available = importlib.util.find_spec("intel_extension_for_pytorch") is not None
@@ -158,8 +159,8 @@ def is_neural_compressor_available():
     return _neural_compressor_available
 
 
-def is_intel_extension_for_transformers_available():
-    return _intel_extension_for_transformers_available
+def is_itrex_available():
+    return _itrex_available
 
 
 def is_ipex_available():
@@ -314,13 +315,13 @@ def is_neural_compressor_version(operation: str, version: str):
     return compare_versions(parse(_neural_compressor_version), operation, version)
 
 
-def is_intel_extension_for_transformers_version(operation: str, version: str):
+def is_itrex_version(operation: str, version: str):
     """
     Compare the current intel_extension_for_transformers version to a given reference with an operation.
     """
-    if not _intel_extension_for_transformers_available:
+    if not _itrex_available:
         return False
-    return compare_versions(parse(_intel_extension_for_transformers_version), operation, version)
+    return compare_versions(parse(_itrex_version), operation, version)
 
 
 def is_openvino_version(operation: str, version: str):
@@ -396,7 +397,7 @@ NEURAL_COMPRESSOR_IMPORT_ERROR = """
 `pip install neural-compressor`. Please note that you may need to restart your runtime after installation.
 """
 
-INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR = """
+ITREX_IMPORT_ERROR = """
 {0} requires the intel-extension-for-transformers library but it was not found in your environment. You can install it with pip:
 `pip install intel-extension-for-transformers` and `pip install peft`. Please note that you may need to restart your runtime after installation.
 """
@@ -418,10 +419,7 @@ BACKENDS_MAPPING = OrderedDict(
         ("nncf", (is_nncf_available, NNCF_IMPORT_ERROR)),
         ("openvino", (is_openvino_available, OPENVINO_IMPORT_ERROR)),
         ("neural_compressor", (is_neural_compressor_available, NEURAL_COMPRESSOR_IMPORT_ERROR)),
-        (
-            "intel_extension_for_transformers",
-            (is_intel_extension_for_transformers_available, INTEL_EXTENSION_FOR_TRANSFORMERS_IMPORT_ERROR),
-        ),
+        ("itrex", (is_itrex_available, ITREX_IMPORT_ERROR)),
         ("accelerate", (is_accelerate_available, ACCELERATE_IMPORT_ERROR)),
     ]
 )
