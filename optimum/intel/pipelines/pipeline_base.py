@@ -25,7 +25,6 @@ from transformers import (
     FeatureExtractionPipeline,
     FillMaskPipeline,
     ImageClassificationPipeline,
-    ImageSegmentationPipeline,
     ImageToTextPipeline,
     Pipeline,
     PreTrainedTokenizer,
@@ -54,9 +53,14 @@ from transformers.pipelines.base import Pipeline
 from transformers.tokenization_utils import PreTrainedTokenizer
 from transformers.utils import logging
 
-from optimum.intel.utils import is_ipex_available, is_openvino_available
+from optimum.intel.utils.import_utils import (
+    IPEX_IMPORT_ERROR,
+    OPENVINO_IMPORT_ERROR,
+    is_ipex_available,
+    is_openvino_available,
+)
 
-from ..utils.file_utils import find_files_matching_pattern
+from ...utils.file_utils import find_files_matching_pattern
 
 
 if is_ipex_available():
@@ -127,7 +131,6 @@ if is_openvino_available():
         OVModelForImageClassification,
         OVModelForMaskedLM,
         OVModelForQuestionAnswering,
-        OVModelForSemanticSegmentation,
         OVModelForSeq2SeqLM,
         OVModelForSequenceClassification,
         OVModelForSpeechSeq2Seq,
@@ -153,12 +156,6 @@ if is_openvino_available():
             "impl": ImageClassificationPipeline,
             "class": (OVModelForImageClassification,),
             "default": "google/vit-base-patch16-224",
-            "type": "image",
-        },
-        "image-segmentation": {
-            "impl": ImageSegmentationPipeline,
-            "class": (OVModelForSemanticSegmentation,),
-            "default": "nvidia/segformer-b0-finetuned-ade-512-512",
             "type": "image",
         },
         "question-answering": {
@@ -410,12 +407,23 @@ def pipeline(
         raise ValueError(msg + f" Supported list of `accelerator` is : {', '.join(MAPPING_LOADING_FUNC)}.")
 
     if accelerator == "ipex":
-        if task not in list(IPEX_SUPPORTED_TASKS.keys()):
+        if not is_ipex_available():
+            raise RuntimeError(IPEX_IMPORT_ERROR.format("`accelerator=ipex`"))
+        if task not in IPEX_SUPPORTED_TASKS:
             raise ValueError(
-                f"Task {task} is not supported for the IPEX pipeline. Supported tasks are { list(IPEX_SUPPORTED_TASKS.keys())}"
+                f"Task {task} is not supported for the IPEX pipeline. Supported tasks are {', '.join(IPEX_SUPPORTED_TASKS)}"
             )
+        supported_tasks = IPEX_SUPPORTED_TASKS
 
-    supported_tasks = IPEX_SUPPORTED_TASKS if accelerator == "ipex" else OPENVINO_SUPPORTED_TASKS
+    if accelerator == "openvino":
+        if not is_openvino_available():
+            raise RuntimeError(OPENVINO_IMPORT_ERROR.format("`accelerator=openvino`"))
+
+        if task not in OPENVINO_SUPPORTED_TASKS:
+            raise ValueError(
+                f"Task {task} is not supported for the OpenVINO pipeline. Supported tasks are {', '.join(OPENVINO_SUPPORTED_TASKS)}"
+            )
+        supported_tasks = OPENVINO_SUPPORTED_TASKS
 
     no_feature_extractor_tasks = set()
     no_tokenizer_tasks = set()
