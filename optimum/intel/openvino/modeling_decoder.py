@@ -587,11 +587,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
         for input_name, input_tensor in model_inputs.items():
             if input_name not in ["input_ids", "beam_idx"]:
-                if not isinstance(input_tensor, Tensor):
+                if input_name not in self.key_value_input_names:
                     upd_model_inputs[input_name] = input_tensor[indicies]
                 else:
-                    shape = input_tensor.shape
-                    dtype = input_tensor.element_type
+                    shape = input_tensor.shape if isinstance(input_tensor, Tensor) else list(input_tensor.shape)
+                    dtype = input_tensor.element_type if isinstance(input_tensor, Tensor) else Type(input_tensor.dtype)
                     upd_batch_size = indicies.shape[0]
                     if self.config.model_type == "bloom":
                         upd_batch_size *= self.config.num_attention_heads
