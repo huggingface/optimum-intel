@@ -19,7 +19,7 @@ import torch
 from torch import nn
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
-from transformers.models.llama.modeling_llama import repeat_kv
+from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
 
 from optimum.intel.utils.import_utils import is_ipex_version
 
@@ -51,27 +51,27 @@ def _llama_attn_forward(
     query = query.view(bsz, q_len, self.num_heads, self.head_dim)
     key = key.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
     value = value.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
-    # Use ipex op to rotary position embedding more efficient.
-    key = self.ipex_rope(
-        key,
-        position_ids,
-        self.num_key_value_heads,
-        self.head_dim,
-        self.head_dim // 2,
-        self.head_dim,
-        kv_seq_len,
-    )
-    query = self.ipex_rope(
-        query,
-        position_ids,
-        self.num_heads,
-        self.head_dim,
-        self.head_dim // 2,
-        self.head_dim,
-        kv_seq_len,
-    )
 
     if use_cache:
+        # Use ipex op to rotary position embedding more efficient.
+        key = self.ipex_rope(
+            key,
+            position_ids,
+            self.num_key_value_heads,
+            self.head_dim,
+            self.head_dim // 2,
+            self.head_dim,
+            kv_seq_len,
+        )
+        query = self.ipex_rope(
+            query,
+            position_ids,
+            self.num_heads,
+            self.head_dim,
+            self.head_dim // 2,
+            self.head_dim,
+            kv_seq_len,
+        )
         # This ipex op pre-allocates buffers for past_key_values and use beam index history
         # which to decide which beam should be used to make attention scale dot more efficient.
         (attn_output, attn_weights, past_key_value) = self.ipex_scale_dot_product(
@@ -87,6 +87,8 @@ def _llama_attn_forward(
         value_states = value.transpose(1, 2)
         query_states = query.transpose(1, 2)
         key_states = key.transpose(1, 2)
+        cos, sin = self.rotary_emb(value_states, position_ids)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
         kv_seq_len = key_states.shape[-2]
 
         past_key_value = None

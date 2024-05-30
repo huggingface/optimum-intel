@@ -83,7 +83,10 @@ def ipex_jit_trace(model, task, use_cache):
 
     if _is_patched_with_ipex(model, task):
         model = _patch_model(model)
+        # Todo: integerate in prepare_jit_inputs.
         sample_inputs = get_dummy_input(model, return_dict=True)
+        if not use_cache:
+            sample_inputs.pop("past_key_values")
         # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
         _enable_tpp()
     else:
@@ -193,6 +196,7 @@ class IPEXModel(OptimizedModel):
             "torch_dtype": torch_dtype,
             "trust_remote_code": trust_remote_code,
             "_commit_hash": _commit_hash,
+            "use_cache": use_cache,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
