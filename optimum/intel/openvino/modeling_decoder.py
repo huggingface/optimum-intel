@@ -28,10 +28,10 @@ from openvino.runtime import Core, Tensor, Type
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
-from transformers.generation.configuration_utils import GenerationConfig, GenerationMode
+from transformers.generation.configuration_utils import GenerationConfig
 from transformers.generation.logits_process import LogitsProcessorList
 from transformers.generation.stopping_criteria import StoppingCriteriaList
-from transformers.generation.utils import GenerateOutput
+from transformers.generation.utils import GenerateOutput, GenerationMode
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from optimum.utils.normalized_config import NormalizedConfigManager
@@ -42,7 +42,7 @@ from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import _DEFAULT_4BIT_CONFIGS, OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
+from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
 
 if TYPE_CHECKING:
@@ -386,10 +386,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         inputs = {}
         if not self.stateful:
             if past_key_values is not None:
-                if (
-                    self.config.model_type not in MULTI_QUERY_ATTN_MODELS
-                    or self.config.model_type == "falcon"
-                    and self.config.new_decoder_architecture
+                if self.config.model_type not in MULTI_QUERY_ATTN_MODELS or (
+                    self.config.model_type == "falcon" and self.config.new_decoder_architecture
                 ):
                     if self._pkv_precision == Type.bf16:
                         # numpy does not support bf16, pretending f16, should change to bf16
@@ -411,6 +409,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             elif self.use_cache:
                 for input_name in self.key_value_input_names:
                     model_inputs = self.model.input(input_name)
+                    dtype = OV_TO_NP_TYPE[model_inputs.get_element_type().get_type_name()]
                     shape = model_inputs.get_partial_shape()
                     if self.config.model_type == "chatglm":
                         shape[0] = 0
@@ -421,7 +420,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                             shape[2] = 0
                         else:
                             shape[1] = 0
-                    inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
+                    inputs[input_name] = np.empty([dim.get_length() for dim in shape], dtype=dtype)
         else:
             # past_key_values are not used explicitly, instead they are handled inside the model
             if past_key_values is None:
@@ -499,10 +498,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             if self.use_cache:
                 # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
                 past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
-                if (
-                    self.config.model_type not in MULTI_QUERY_ATTN_MODELS
-                    or self.config.model_type == "falcon"
-                    and self.config.new_decoder_architecture
+                if self.config.model_type not in MULTI_QUERY_ATTN_MODELS or (
+                    self.config.model_type == "falcon" and self.config.new_decoder_architecture
                 ):
                     # Tuple of tuple of length `n_layers`, with each tuple of length equal to 2 (k/v of self-attention)
                     past_key_values = tuple(
@@ -559,10 +556,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if indicies.shape[0] != 1:
             logits = logits[indicies]
             if past_key_values and not self.stateful:
-                if (
-                    self.config.model_type not in MULTI_QUERY_ATTN_MODELS
-                    or self.config.model_type == "falcon"
-                    and self.config.new_decoder_architecture
+                if self.config.model_type not in MULTI_QUERY_ATTN_MODELS or (
+                    self.config.model_type == "falcon" and self.config.new_decoder_architecture
                 ):
                     past_key_values = tuple(
                         tuple(
@@ -581,7 +576,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 if self.next_beam_idx is not None
                 else np.arange(batch_size, dtype=int)[indicies]
             )
-        self._second_iter_beam_search = True
+            self._second_iter_beam_search = True
         return logits, past_key_values
 
     def _deduplicate_inputs(self, model_inputs: Dict):
@@ -692,7 +687,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             self._second_iter_beam_search = False
             return past_key_values
         else:
-            if self.config.model_type not in MULTI_QUERY_ATTN_MODELS and not (
+            if self.config.model_type not in MULTI_QUERY_ATTN_MODELS or (
                 self.config.model_type == "falcon" and self.config.new_decoder_architecture
             ):
                 return tuple(

@@ -527,6 +527,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "bloom",
         "chatglm",
         "codegen",
+        "codegen2",
         # "data2vec-text", # TODO : enable when enabled in exporters
         "gemma",
         "gpt2",
@@ -552,6 +553,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "orion",
         "falcon",
         "falcon-40b",
+        "persimmon",
+        "biogpt",
+        "gpt_neox_japanese",
+        "cohere",
+        "xglm",
+        "aquila",
+        "aquila2",
+        "xverse",
+        "internlm",
+        "dbrx",
+        "qwen2-moe",
     )
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -564,6 +576,11 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm2",
         "orion",
         "phi3",
+        "aquila",
+        "aquila2",
+        "xverse",
+        "internlm",
+        "codegen2",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -591,6 +608,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(ov_model.stateful, ov_model.config.model_type not in not_stateful)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
         tokens = tokenizer("This is a sample output", return_tensors="pt")
+        tokens.pop("token_type_ids", None)
 
         ov_outputs = ov_model(**tokens)
         self.assertTrue("logits" in ov_outputs)
@@ -617,11 +635,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "qwen":
             return
 
-        if model_arch != "chatglm":
+        if model_arch not in ["chatglm", "persimmon"]:
             tokenizer.pad_token_id = tokenizer.eos_token_id
+
+        if model_arch == "persimmon":
+            tokenizer.pad_token_id = tokenizer.bos_token_id
         # Compare batched generation
         tokenizer.padding_side = "left"
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        tokens.pop("token_type_ids", None)
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None
@@ -794,6 +816,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             return
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
+        if model_arch == "persimmon":
+            tokenizer.pad_token_id = tokenizer.bos_token_id
+            tokenizer.eos_token_id = tokenizer.bos_token_id
+
         beam_search_gen_config = GenerationConfig(
             max_new_tokens=10,
             min_new_tokens=10,
@@ -845,6 +871,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
+        tokens.pop("token_type_ids", None)
         ov_model_stateful.generation_config.eos_token_id = None
         ov_model_stateless.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
@@ -853,6 +880,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         transformers_model.config.eos_token_id = None
 
         for gen_config in gen_configs:
+            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
+                continue
             transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
             self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs))
@@ -1650,7 +1679,7 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         inputs = preprocessor(images=image, return_tensors="pt")
 
-        transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
+        transformers_model = AutoModelForImageClassification.from_pretrained(model_id, attn_implementation="eager")
         transformers_model.eval()
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs, output_attentions=True)

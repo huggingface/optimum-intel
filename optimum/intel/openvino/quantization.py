@@ -48,7 +48,7 @@ from ...exporters.openvino import export, export_pytorch_via_onnx
 from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
 from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import DATASETS_IMPORT_ERROR, is_datasets_available
+from ..utils.import_utils import DATASETS_IMPORT_ERROR, is_datasets_available, is_diffusers_available
 from ..utils.modeling_utils import get_model_device
 from .configuration import OVConfig, OVQuantizationConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
@@ -325,7 +325,8 @@ class OVQuantizer(OptimumQuantizer):
         remove_unused_columns: bool = True,
         **kwargs,
     ):
-        from optimum.intel.openvino.modeling_diffusion import OVStableDiffusionPipelineBase
+        if is_diffusers_available():
+            from optimum.intel.openvino.modeling_diffusion import OVStableDiffusionPipelineBase
 
         if save_directory is not None:
             save_directory = Path(save_directory)
@@ -335,7 +336,7 @@ class OVQuantizer(OptimumQuantizer):
         if calibration_dataset is not None:
             # Process custom calibration dataset
 
-            if isinstance(self.model, OVStableDiffusionPipelineBase):
+            if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
                 calibration_dataset = self._prepare_unet_dataset(
                     quantization_config.num_samples, dataset=calibration_dataset
                 )
@@ -346,7 +347,6 @@ class OVQuantizer(OptimumQuantizer):
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
                 )
-
                 if self.model.export_feature == "text-generation" and self.model.use_cache:
                     calibration_dataset = self._prepare_text_generation_dataset(
                         quantization_config, calibration_dataloader
@@ -373,7 +373,7 @@ class OVQuantizer(OptimumQuantizer):
 
                 if isinstance(self.model, OVModelForCausalLM):
                     calibration_dataset = self._prepare_builtin_dataset(quantization_config)
-                elif isinstance(self.model, OVStableDiffusionPipelineBase):
+                elif is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
                     calibration_dataset = self._prepare_unet_dataset(
                         quantization_config.num_samples, dataset_name=quantization_config.dataset
                     )
@@ -385,7 +385,7 @@ class OVQuantizer(OptimumQuantizer):
             if quantization_config.quant_method == OVQuantizationMethod.HYBRID:
                 if calibration_dataset is None:
                     raise ValueError("Calibration dataset is required to run hybrid quantization.")
-                if isinstance(self.model, OVStableDiffusionPipelineBase):
+                if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
                     # Apply weight-only quantization to all SD submodels except UNet
                     quantization_config_copy = copy.deepcopy(quantization_config)
                     quantization_config_copy.dataset = None
@@ -429,6 +429,7 @@ class OVQuantizer(OptimumQuantizer):
             ),
             **kwargs,
         )
+
         self.model.model = quantized_model
         if save_directory is not None:
             self.model.save_pretrained(save_directory)
@@ -695,8 +696,6 @@ class OVQuantizer(OptimumQuantizer):
     def _prepare_text_generation_dataset(
         self, quantization_config: OVQuantizationConfig, calibration_dataloader: OVDataLoader
     ) -> nncf.Dataset:
-        # TODO: this function is not covered by tests, remove if not relevant anymore or cover by tests otherwise
-
         # Prefetch past_key_values
         self.model.update_pkv_precision(True)
         self.model.compile()
@@ -704,15 +703,16 @@ class OVQuantizer(OptimumQuantizer):
 
         num_samples = quantization_config.num_samples or 200
 
-        self.model.request = InferRequestWrapper(self.model.model.request, collected_inputs)
+        self.model.request = InferRequestWrapper(self.model.request, collected_inputs)
         try:
             for data in calibration_dataloader:
                 self.model.generate(**data, max_new_tokens=1)
                 if len(collected_inputs) >= num_samples:
                     break
         finally:
-            self.model.model.request = self.model.model.request.request
+            self.model.request = self.model.request.request
         calibration_dataset = nncf.Dataset(collected_inputs)
+
         return calibration_dataset
 
     def _prepare_unet_dataset(
