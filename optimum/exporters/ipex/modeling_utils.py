@@ -22,6 +22,7 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.models.llama.modeling_llama import repeat_kv
 
 from optimum.intel.utils.import_utils import is_ipex_version
+from optimum.intel.utils.modeling_utils import setattr_from_module
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
@@ -140,12 +141,7 @@ class _IPEXLlamaAttention(nn.Module):
                 "Only ipex version > 2.3.0 supports LinearAdd, IndirectAccessKVCacheAttention, RotaryEmbedding"
             )
         super().__init__()
-        for k, v in module.__dict__.items():
-            setattr(self, k, v)
-        for k, v in module.__class__.__dict__.items():
-            if k.startswith("__") or k.startswith("forward"):
-                continue
-            setattr(self.__class__, k, getattr(module.__class__, k))
+        setattr_from_module(self, module)
         self.config = config
         self.distributed = distributed
         from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCacheAttention, LinearAdd, RotaryEmbedding
@@ -281,12 +277,7 @@ class _IPEXLlamaMLP(nn.Module):
             raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
 
         super().__init__()
-        for k, v in module.__dict__.items():
-            setattr(self, k, v)
-        for k, v in module.__class__.__dict__.items():
-            if k.startswith("__") or k.startswith("forward"):
-                continue
-            setattr(self.__class__, k, getattr(module.__class__, k))
+        setattr_from_module(self, module)
         self.config = config
         self.distributed = distributed
         from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
@@ -322,12 +313,7 @@ class _IPEXLlamaMLP(nn.Module):
 class _IPEXLlamaDecoderLayer(nn.Module):
     def __init__(self, module, config, distributed=False):
         super().__init__()
-        for k, v in module.__dict__.items():
-            setattr(self, k, v)
-        for k, v in module.__class__.__dict__.items():
-            if k.startswith("__") or k.startswith("forward"):
-                continue
-            setattr(self.__class__, k, getattr(module.__class__, k))
+        setattr_from_module(self, module)
         self.distributed = distributed
         self.self_attn = _IPEXLlamaAttention(module.self_attn, config, distributed)
         self.mlp = _IPEXLlamaMLP(module.mlp, config, distributed)

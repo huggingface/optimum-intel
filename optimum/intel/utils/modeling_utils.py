@@ -182,3 +182,12 @@ def recursive_to_device(value, device):
     elif isinstance(value, torch.Tensor):
         return value.to(device)
     return value
+
+
+def setattr_from_module(new_module, module):
+    for k, v in module.__dict__.items():
+        setattr(new_module, k, v)
+    for k, v in module.__class__.__dict__.items():
+        if k.startswith("__") or k.startswith("forward"):
+            continue
+        setattr(new_module.__class__, k, getattr(module.__class__, k))
