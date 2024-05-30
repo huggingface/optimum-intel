@@ -196,7 +196,6 @@ class IPEXModel(OptimizedModel):
             "torch_dtype": torch_dtype,
             "trust_remote_code": trust_remote_code,
             "_commit_hash": _commit_hash,
-            "use_cache": use_cache,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
