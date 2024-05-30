@@ -124,7 +124,7 @@ def write_checkpoints_json():
     checkpoint_files = get_checkpoint_files(model_name)
     if local_rank == 0:
         # model.config.model_type.upper()
-        data = {"type": "BLOOM", "checkpoints": checkpoint_files, "version": 1.0}
+        data = {"type": "ds_model", "checkpoints": checkpoint_files, "version": 1.0}
         json.dump(data, open(checkpoints_json, "w"))
 
 
@@ -133,6 +133,7 @@ repo_root = get_repo_root(model_name)
 write_checkpoints_json()
 dist.barrier()
 
+print(model)
 model = deepspeed.init_inference(
     model,
     mp_size=world_size,
@@ -141,7 +142,8 @@ model = deepspeed.init_inference(
     checkpoint=checkpoints_json,
     replace_with_kernel_inject=False,
 )
-
+print(model)
+print(model.module)
 model = model.module
 model = IPEXModelForCausalLM._from_model(model.eval())
 

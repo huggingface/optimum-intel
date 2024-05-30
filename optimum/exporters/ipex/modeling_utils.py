@@ -218,7 +218,7 @@ def _llama_model_forward(
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L694
 class _IPEXLlamaDecoderLayerRef(nn.Module):
-    def __init__(self, module, config, distributed=False):
+    def __init__(self, module, config):
         if is_ipex_version("<", "2.3.0"):
             raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
 
@@ -231,8 +231,11 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
             if k.startswith("__") or k.startswith("forward"):
                 continue
             setattr(self.__class__, k, getattr(module.__class__, k))
-        self.distributed = distributed
-        if not self.distributed:
+        # LinearAllreduce cannot use fused op LinearAdd
+        if module.self_attn.o_proj.__class__.__name__ not in [
+            "LinearAllreduce",
+            "LinearLayer",
+        ] or module.mlp.down_proj.__class__.__name__ not in ["LinearAllreduce", "LinearLayer"]:
             self.mha_linear_add = LinearAdd(module.self_attn.o_proj)
             self.mlp_linear_add = LinearAdd(module.mlp.down_proj)
             del self.__dict__["_modules"]["self_attn"].o_proj

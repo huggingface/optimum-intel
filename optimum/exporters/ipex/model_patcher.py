@@ -20,7 +20,7 @@ from transformers.models.llama.modeling_llama import (
     LlamaRMSNorm,
 )
 
-from optimum.intel.utils.import_utils import is_deepspeed_version, is_ipex_version
+from optimum.intel.utils.import_utils import is_ipex_version
 
 from .modeling_utils import (
     _IPEXLlamaDecoderLayerRef,
@@ -32,7 +32,6 @@ from .modeling_utils import (
 
 _IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
 _IPEX_EXPORTED_TASK = ("text-generation",)
-_distributed = False
 
 
 def convert_func(m, func_name, new_function):
@@ -47,12 +46,12 @@ def convert_functions(m, target_m, new_function_name, new_function):
         convert_functions(sub_m, target_m, new_function_name, new_function)
 
 
-def convert_class(m, target_m, new_class, config, distributed=False):
+def convert_class(m, target_m, new_class, config):
     for name, sub_m in m.named_children():
         if isinstance(sub_m, target_m):
-            new_m = new_class(sub_m, config, distributed)
+            new_m = new_class(sub_m, config)
             setattr(m, name, new_m)
-        convert_class(sub_m, target_m, new_class, config, distributed)
+        convert_class(sub_m, target_m, new_class, config)
 
 
 def patch_op(m, target_m, new_op_name, new_op):
@@ -82,13 +81,7 @@ def _patch_llama_model(model):
     convert_functions(model, LlamaAttention, "forward", _llama_attn_forward)
     convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
 
-    global _distributed
-    if is_deepspeed_version(">=", "0.14"):
-        from deepspeed.module_inject.layers import LinearAllreduce, LinearLayer
-
-        ds_layers = [LinearAllreduce, LinearLayer]
-        is_distributed(model, ds_layers)
-    convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayerRef, model.config, _distributed)
+    convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayerRef, model.config)
     return model
 
 
@@ -96,12 +89,3 @@ def _patch_model(model):
     if isinstance(model, LlamaForCausalLM):
         model = _patch_llama_model(model)
     return model
-
-
-def is_distributed(m, ds_layers):
-    for _, sub_m in m.named_children():
-        for layer in ds_layers:
-            if isinstance(sub_m, layer):
-                global _distributed
-                _distributed = True
-        is_distributed(sub_m, ds_layers)
