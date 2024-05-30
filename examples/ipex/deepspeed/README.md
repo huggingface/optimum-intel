@@ -16,56 +16,25 @@ limitations under the License.
 
 ## Run language generation with deepspeed
 
-This script run IPEXModel with deepspeed AutpTP.
+This script shows how to run IPEXModel with deepspeed AutpTP.
 
 Please run the fowllowing commands to setup environment.
 
-Docker-based environment setup
+1. Get the ipex docker image: `docker pull intel/intel-extension-for-pytorch:2.3.0-pip-base`.
+2. Go into the container and install oneapi and other libs by the following scirpt:
 ```bash
-# Get the Intel® Extension for PyTorch\* source code
-git clone https://github.com/intel/intel-extension-for-pytorch.git
-cd intel-extension-for-pytorch
-git checkout v2.3.0+cpu
-git submodule sync
-git submodule update --init --recursive
+apt update && apt install -y gpg-agent
 
-# Build an image with the provided Dockerfile by installing from Intel® Extension for PyTorch\* prebuilt wheel files
-DOCKER_BUILDKIT=1 docker build -f examples/cpu/inference/python/llm/Dockerfile -t ipex-llm:2.3.0 .
+wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null && echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | tee /etc/apt/sources.list.d/oneAPI.list
 
-# Run the container with command below, please mount the current folder or copy the python script `run_generation_deepspeed.py`
-docker run --rm -it --privileged ipex-llm:2.3.0 bash
+apt-get update && apt install -y intel-basekit
 
-# When the command prompt shows inside the docker container, enter llm examples directory
-cd llm
+apt install -y numactl && apt-get install -y python3-dev
 
-# Activate environment variables
-source ./tools/env_activate.sh
+pip install transformers deepspeed
 ```
-
-Conda-based environment setup
-```bash
-# Get the Intel® Extension for PyTorch\* source code
-git clone https://github.com/intel/intel-extension-for-pytorch.git
-cd intel-extension-for-pytorch
-git checkout v2.3.0+cpu
-git submodule sync
-git submodule update --init --recursive
-
-# GCC 12.3 is required. Installation can be taken care of by the environment configuration script.
-# Create a conda environment
-conda create -n llm python=3.10 -y
-conda activate llm
-
-# Setup the environment with the provided script
-# A sample "prompt.json" file for benchmarking is also downloaded
-cd examples/cpu/inference/python/llm
-bash ./tools/env_setup.sh 7
-
-# Activate environment variables
-source ./tools/env_activate.sh
-```
-
-Then run the script with the following command.
+3. Install optimum-intel.
+4. Run the script with the following command.
 ```bash
 deepspeed --bind_cores_to_rank run_generation_deepspeed.py
 ```
