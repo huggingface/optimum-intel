@@ -150,7 +150,7 @@ def pipeline(
     feature_extractor: Optional[Union[str, PreTrainedFeatureExtractor]] = None,
     use_fast: bool = True,
     token: Optional[Union[str, bool]] = None,
-    accelerator: Optional[str] = "ipex",
+    accelerator: Optional[str] = None,
     revision: Optional[str] = None,
     trust_remote_code: Optional[bool] = None,
     torch_dtype: Optional[Union[str, torch.dtype]] = None,
@@ -226,9 +226,12 @@ def pipeline(
         )
 
     if accelerator not in MAPPING_LOADING_FUNC:
-        raise ValueError(
-            f'Accelerator {accelerator} is not supported. Supported accelerator is {", ".join(MAPPING_LOADING_FUNC)}.'
-        )
+        if accelerator is None:
+            msg = "Impossible to instantiate a pipeline without specifying an `accelerator`."
+        else:
+            msg = f"`accelerator` {accelerator} is not supported."
+
+        raise ValueError(msg + f" Supported list of `accelerator` is : {', '.join(MAPPING_LOADING_FUNC)}.")
 
     if accelerator == "ipex":
         if task not in list(IPEX_SUPPORTED_TASKS.keys()):
