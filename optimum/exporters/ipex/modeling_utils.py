@@ -232,14 +232,13 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
                 continue
             setattr(self.__class__, k, getattr(module.__class__, k))
         # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-        if module.self_attn.o_proj.__class__.__name__ not in [
-            "LinearAllreduce",
-            "LinearLayer",
-        ] or module.mlp.down_proj.__class__.__name__ not in ["LinearAllreduce", "LinearLayer"]:
+        if module.self_attn.o_proj.__class__.__name__ not in ["LinearAllreduce","LinearLayer"]:
             self.mha_linear_add = LinearAdd(module.self_attn.o_proj)
-            self.mlp_linear_add = LinearAdd(module.mlp.down_proj)
             del self.__dict__["_modules"]["self_attn"].o_proj
+        if module.mlp.down_proj.__class__.__name__ not in ["LinearAllreduce", "LinearLayer"]:
+            self.mlp_linear_add = LinearAdd(module.mlp.down_proj)
             del self.__dict__["_modules"]["mlp"].down_proj
+
         self.linear_silu_mul = Linear2SiluMul(module.mlp.gate_proj, module.mlp.up_proj)
         del self.__dict__["_modules"]["mlp"].gate_proj
         del self.__dict__["_modules"]["mlp"].up_proj
