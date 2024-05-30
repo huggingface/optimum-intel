@@ -231,7 +231,7 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
             if k.startswith("__") or k.startswith("forward"):
                 continue
             setattr(self.__class__, k, getattr(module.__class__, k))
-        # LinearAllreduce cannot use fused op LinearAdd
+        # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
         if module.self_attn.o_proj.__class__.__name__ not in [
             "LinearAllreduce",
             "LinearLayer",
