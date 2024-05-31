@@ -258,7 +258,9 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             GenerationConfig(max_new_tokens=4, num_beams=4, do_sample=False),
             GenerationConfig(max_new_tokens=4, num_beams=8, do_sample=False),
             GenerationConfig(max_new_tokens=4, num_beams=32, do_sample=False),
-            GenerationConfig(max_new_tokens=4, do_sample=False, top_p=0.9, top_k=0),
+            GenerationConfig(
+                max_new_tokens=4, do_sample=False, top_p=0.9, top_k=0, pad_token_id=tokenizer.eos_token_id
+            ),
         )
         for text in texts:
             tokens = tokenizer(text, padding=True, return_tensors="pt")
