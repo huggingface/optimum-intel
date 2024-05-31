@@ -14,9 +14,7 @@
 """Defines the command line for the export with OpenVINO."""
 
 import logging
-import shutil
 import sys
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -276,12 +274,12 @@ class OVExportCommand(BaseOptimumCLICommand):
         if self.args.convert_tokenizer:
             logger.warning("`--convert-tokenizer` option is deprecated. Tokenizer will be converted by default.")
 
-        if (
-            library_name == "diffusers"
-            and ov_config
-            and ov_config.quantization_config
-            and ov_config.quantization_config.dataset is not None
-        ):
+        quantization_config = ov_config.quantization_config if ov_config else None
+        quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None
+        task = infer_task(self.args.task, self.args.model)
+        model = None
+
+        if library_name == "diffusers" and quantize_with_dataset:
             if not is_diffusers_available():
                 raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
 
@@ -306,42 +304,17 @@ class OVExportCommand(BaseOptimumCLICommand):
             else:
                 raise NotImplementedError(f"Quantization in hybrid mode isn't supported for class {class_name}.")
 
-            model = model_cls.from_pretrained(
-                self.args.model, export=True, quantization_config=ov_config.quantization_config
+            model = model_cls.from_pretrained(self.args.model, export=True, quantization_config=quantization_config)
+            model.save_pretrained(self.args.output)
+        elif task.startswith("text-generation") and quantize_with_dataset:
+            from optimum.intel import OVModelForCausalLM
+
+            # To quantize a text-generation model with a dataset, an instantiated OVModelForCausalLM is required
+            model = OVModelForCausalLM.from_pretrained(
+                self.args.model, export=True, quantization_config=quantization_config
             )
             model.save_pretrained(self.args.output)
-
-            if self.args.disable_convert_tokenizer:
-                return
-
-            # avoid import when using other exporters (IPEX, INC)
-            from ...exporters.openvino.convert import export_tokenizer
-
-            output = Path(self.args.output)
-            tokenizer = getattr(model, "tokenizer", None)
-            if tokenizer is not None:
-                export_tokenizer(tokenizer, output / "tokenizer")
-
-            tokenizer_2 = getattr(model, "tokenizer_2", None)
-            if tokenizer_2 is not None:
-                export_tokenizer(tokenizer_2, output / "tokenizer_2")
         else:
-            task = infer_task(self.args.task, self.args.model)
-            quantization_config = ov_config.quantization_config if ov_config else None
-            quantize_after_export = (
-                task.startswith("text-generation")
-                and quantization_config
-                and hasattr(quantization_config, "dataset")
-                and quantization_config.dataset is not None
-            )
-            if quantize_after_export:
-                # In order to quantize a text-generation model with a dataset, an instance of OVModelForCausalLM is
-                # required. That's why the quantization is skipped during export and applied explicitly after export.
-                ov_config.quantization_config = None
-                # Export intermediate model with f16 weights to save up disk space
-                original_dtype_value = ov_config.dtype
-                ov_config.dtype = "fp16"
-
             # TODO : add input shapes
             main_export(
                 model_name_or_path=self.args.model,
@@ -358,24 +331,11 @@ class OVExportCommand(BaseOptimumCLICommand):
                 # **input_shapes,
             )
 
-            if quantize_after_export:
-                try:
-                    from optimum.intel import OVModelForCausalLM, OVQuantizer
+        if model and not self.args.disable_convert_tokenizer:
+            # avoid import when using other exporters (IPEX, INC)
+            from ...exporters.openvino.convert import export_tokenizer
 
-                    ov_config.dtype = original_dtype_value
-                    model = OVModelForCausalLM.from_pretrained(
-                        self.args.output, trust_remote_code=self.args.trust_remote_code
-                    )
-                    quantizer = OVQuantizer(model)
-                    quantization_config.tokenizer = quantization_config.tokenizer or str(self.args.output)
-                    # TODO: set save_directory=self.args.output once OV is updated to 2024.3
-                    quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        model.save_pretrained(temp_dir)
-                        ov_config.save_pretrained(self.args.output)
-                        shutil.copy(f"{temp_dir}/openvino_model.xml", f"{self.args.output}/openvino_model.xml")
-                        shutil.copy(f"{temp_dir}/openvino_model.bin", f"{self.args.output}/openvino_model.bin")
-                except Exception as e:
-                    # Delete non-compressed model if compression failed for some reason
-                    shutil.rmtree(str(self.args.output))
-                    raise e
+            for tokenizer_name in ("tokenizer", "tokenizer_2"):
+                tokenizer = getattr(model, tokenizer_name, None)
+                if tokenizer is not None:
+                    export_tokenizer(tokenizer, self.args.output / tokenizer_name)

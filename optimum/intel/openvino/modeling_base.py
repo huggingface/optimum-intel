@@ -132,6 +132,7 @@ class OVBaseModel(OptimizedModel):
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
 
+        # TODO: remove this way of applying quantization; instead apply it after instance of OVModel* is loaded
         if quantization_config:
             if not is_nncf_available():
                 raise ImportError(
