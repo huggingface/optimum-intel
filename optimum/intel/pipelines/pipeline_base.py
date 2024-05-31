@@ -233,30 +233,27 @@ def load_openvino_model(
     model,
     targeted_task,
     SUPPORTED_TASKS,
-    subfolder: str = "",
-    token: Optional[Union[bool, str]] = None,
-    revision: str = "main",
+    hub_kwargs: Optional[Dict[str, Any]] = None,
     model_kwargs: Optional[Dict[str, Any]] = None,
-    **kwargs,
 ):
-    if model_kwargs is None:
-        model_kwargs = {}
+    hub_kwargs = hub_kwargs or {}
+    model_kwargs = model_kwargs or {}
+    ov_model_class = SUPPORTED_TASKS[targeted_task]["class"][0]
 
     if model is None:
         model_id = SUPPORTED_TASKS[targeted_task]["default"]
-        model = SUPPORTED_TASKS[targeted_task]["class"][0].from_pretrained(model_id, export=True)
+        model = ov_model_class.from_pretrained(model_id, export=True, **hub_kwargs, **model_kwargs)
     elif isinstance(model, str):
         model_id = model
         pattern = r"(.*)?openvino(.*)?\_model.xml"
         ov_files = find_files_matching_pattern(
             model,
             pattern,
-            subfolder=subfolder,
-            use_auth_token=token,
-            revision=revision,
+            use_auth_token=hub_kwargs.get("token", None),
+            revision=hub_kwargs.get("revision", None),
         )
         export = len(ov_files) == 0
-        model = SUPPORTED_TASKS[targeted_task]["class"][0].from_pretrained(model, export=export, **model_kwargs)
+        model = ov_model_class.from_pretrained(model, export=export, **hub_kwargs, **model_kwargs)
     elif isinstance(model, OVBaseModel):
         model_id = model.model_save_dir
     else:
@@ -271,17 +268,16 @@ def load_ipex_model(
     model,
     targeted_task,
     SUPPORTED_TASKS,
-    model_kwargs: Optional[Dict[str, Any]] = None,
     hub_kwargs: Optional[Dict[str, Any]] = None,
+    model_kwargs: Optional[Dict[str, Any]] = None,
 ):
-    if model_kwargs is None:
-        model_kwargs = {}
-
+    hub_kwargs = hub_kwargs or {}
+    model_kwargs = model_kwargs or {}
     ipex_model_class = SUPPORTED_TASKS[targeted_task]["class"][0]
 
     if model is None:
         model_id = SUPPORTED_TASKS[targeted_task]["default"]
-        model = ipex_model_class.from_pretrained(model_id, export=True, **model_kwargs, **hub_kwargs)
+        model = ipex_model_class.from_pretrained(model_id, export=True, **hub_kwargs, **model_kwargs)
     elif isinstance(model, str):
         model_id = model
         try:
@@ -290,7 +286,7 @@ def load_ipex_model(
         except RuntimeError:
             logger.warning("We will use IPEXModel with export=True to export the model")
             export = True
-        model = ipex_model_class.from_pretrained(model, export=export, **model_kwargs, **hub_kwargs)
+        model = ipex_model_class.from_pretrained(model, export=export, **hub_kwargs, **model_kwargs)
     elif isinstance(model, IPEXModel):
         model_id = getattr(model.config, "name_or_path", None)
     else:
@@ -327,8 +323,8 @@ def pipeline(
     revision: Optional[str] = None,
     trust_remote_code: Optional[bool] = None,
     torch_dtype: Optional[Union[str, torch.dtype]] = None,
-    commit_hash: Optional[str] = None,
-    **model_kwargs,
+    model_kwargs: Dict[str, Any] = None,
+    **kwargs,
 ) -> Pipeline:
     """
     Utility factory method to build a [`Pipeline`].
@@ -381,8 +377,11 @@ def pipeline(
     >>> pipe = pipeline('text-generation', 'gpt2', torch_dtype=torch.bfloat16)
     >>> pipe("Describe a real-world application of AI in sustainable energy.")
     ```"""
+
     if model_kwargs is None:
         model_kwargs = {}
+
+    commit_hash = kwargs.pop("_commit_hash", None)
 
     if task is None and model is None:
         raise RuntimeError(
@@ -409,21 +408,17 @@ def pipeline(
     if accelerator == "ipex":
         if not is_ipex_available():
             raise RuntimeError(IPEX_IMPORT_ERROR.format("`accelerator=ipex`"))
-        if task not in IPEX_SUPPORTED_TASKS:
-            raise ValueError(
-                f"Task {task} is not supported for the IPEX pipeline. Supported tasks are {', '.join(IPEX_SUPPORTED_TASKS)}"
-            )
         supported_tasks = IPEX_SUPPORTED_TASKS
 
     if accelerator == "openvino":
         if not is_openvino_available():
             raise RuntimeError(OPENVINO_IMPORT_ERROR.format("`accelerator=openvino`"))
-
-        if task not in OPENVINO_SUPPORTED_TASKS:
-            raise ValueError(
-                f"Task {task} is not supported for the OpenVINO pipeline. Supported tasks are {', '.join(OPENVINO_SUPPORTED_TASKS)}"
-            )
         supported_tasks = OPENVINO_SUPPORTED_TASKS
+
+    if task not in supported_tasks:
+        raise ValueError(
+            f"Task {task} is not supported for the {accelerator} pipelines. Supported tasks are {', '.join(supported_tasks)}"
+        )
 
     no_feature_extractor_tasks = set()
     no_tokenizer_tasks = set()
@@ -450,6 +445,7 @@ def pipeline(
     if isinstance(model, Path):
         model = str(model)
 
+    tokenizer_kwargs = model_kwargs.copy()
     if torch_dtype is not None:
         if "torch_dtype" in model_kwargs:
             raise ValueError(
@@ -458,20 +454,25 @@ def pipeline(
             )
         model_kwargs["torch_dtype"] = torch_dtype
 
-    # Load the correct model if possible
-    # Infer the framework from the model if not already defined
-    model, model_id = MAPPING_LOADING_FUNC[accelerator](model, task, supported_tasks, model_kwargs, hub_kwargs)
+    # Load the correct model and convert it to the expected format if needed
+    model, model_id = MAPPING_LOADING_FUNC[accelerator](
+        model,
+        task,
+        SUPPORTED_TASKS=supported_tasks,
+        hub_kwargs=hub_kwargs,
+        model_kwargs=model_kwargs,
+        **kwargs,
+    )
 
     if load_tokenizer and tokenizer is None:
-        tokenizer = AutoTokenizer.from_pretrained(model_id, **hub_kwargs, **model_kwargs)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=use_fast, **hub_kwargs, **tokenizer_kwargs)
     if load_feature_extractor and feature_extractor is None:
-        feature_extractor = AutoFeatureExtractor.from_pretrained(model_id, **hub_kwargs, **model_kwargs)
+        feature_extractor = AutoFeatureExtractor.from_pretrained(model_id, **hub_kwargs, **tokenizer_kwargs)
 
     return transformers_pipeline(
         task,
         model=model,
         tokenizer=tokenizer,
         feature_extractor=feature_extractor,
-        use_fast=use_fast,
         torch_dtype=torch_dtype,
     )

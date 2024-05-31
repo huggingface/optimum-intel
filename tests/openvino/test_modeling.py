@@ -78,6 +78,7 @@ from optimum.intel import (
     OVStableDiffusionPipeline,
 )
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
+from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
 from optimum.intel.openvino.utils import _print_compiled_model_properties
@@ -118,6 +119,27 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.OV_DECODER_MODEL_ID = "helenai/gpt2-ov"
         self.OV_SEQ2SEQ_MODEL_ID = "echarlaix/t5-small-openvino"
         self.OV_DIFFUSION_MODEL_ID = "hf-internal-testing/tiny-stable-diffusion-openvino"
+
+    def test_openvino_pipeline(self):
+        model_id = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
+
+        # verify could load both pytorch and openvino model (export argument should automatically infered)
+        ov_exported_pipe = optimum_pipeline("text-classification", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline("text-classification", self.OV_MODEL_ID, accelerator="openvino")
+        self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
+        self.assertIsInstance(ov_pipe.model, OVBaseModel)
+
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            ov_exported_pipe.save_pretrained(tmpdirname)
+            folder_contents = os.listdir(tmpdirname)
+            self.assertTrue(OV_XML_FILE_NAME in folder_contents)
+            self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
+            ov_exported_pipe = optimum_pipeline("text-classification", tmpdirname, accelerator="openvino")
+            self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
+
+        del ov_exported_pipe
+        del ov_pipe
+        gc.collect()
 
     def test_load_from_hub_and_save_model(self):
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID)
