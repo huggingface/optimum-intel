@@ -40,17 +40,7 @@ from transformers import (
 )
 from transformers import pipeline as transformers_pipeline
 from transformers.feature_extraction_utils import PreTrainedFeatureExtractor
-from transformers.pipelines import (
-    AudioClassificationPipeline,
-    FillMaskPipeline,
-    ImageClassificationPipeline,
-    QuestionAnsweringPipeline,
-    TextClassificationPipeline,
-    TextGenerationPipeline,
-    TokenClassificationPipeline,
-)
 from transformers.pipelines.base import Pipeline
-from transformers.tokenization_utils import PreTrainedTokenizer
 from transformers.utils import logging
 
 from optimum.intel.utils.import_utils import (
