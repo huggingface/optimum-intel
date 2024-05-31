@@ -297,8 +297,8 @@ class PipelineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdirname:
             ov_exported_pipe.save_pretrained(tmpdirname)
             folder_contents = os.listdir(tmpdirname)
-            self.assertTrue(OV_XML_FILE_NAME in folder_contents)
-            self.assertTrue(OV_XML_FILE_NAME.replace(".xml", ".bin") in folder_contents)
+            self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
+            self.assertTrue(OV_DECODER_WITH_PAST_NAME.replace(".xml", ".bin") in folder_contents)
             ov_exported_pipe = optimum_pipeline("text2text-generation", tmpdirname, accelerator="openvino")
             self.assertIsInstance(ov_exported_pipe.model, OVBaseModel)
 
