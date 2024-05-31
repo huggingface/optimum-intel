@@ -247,23 +247,26 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True, use_cache=use_cache)
+        trasnformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         self.assertEqual(model.use_cache, use_cache)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
         # Test with batch_size is 1 and 2.
         texts = ["This is a sample", ["This is the first input", "This is the second input"]]
         generation_configs = (
-            GenerationConfig(max_new_tokens=4, num_beams=2, do_sample=True),
-            GenerationConfig(max_new_tokens=4, num_beams=4, do_sample=True),
-            GenerationConfig(max_new_tokens=4, num_beams=8, do_sample=True),
-            GenerationConfig(max_new_tokens=4, num_beams=32, do_sample=True),
-            GenerationConfig(max_new_tokens=4, do_sample=True, top_p=0.9, top_k=0),
+            GenerationConfig(max_new_tokens=4, num_beams=2, do_sample=False),
+            GenerationConfig(max_new_tokens=4, num_beams=4, do_sample=False),
+            GenerationConfig(max_new_tokens=4, num_beams=8, do_sample=False),
+            GenerationConfig(max_new_tokens=4, num_beams=32, do_sample=False),
+            GenerationConfig(max_new_tokens=4, do_sample=False, top_p=0.9, top_k=0),
         )
         for text in texts:
             tokens = tokenizer(text, padding=True, return_tensors="pt")
             for generation_config in generation_configs:
                 outputs = model.generate(**tokens, generation_config=generation_config)
+                transformers_outputs = trasnformers_model.generate(**tokens, generation_config=generation_config)
                 self.assertIsInstance(outputs, torch.Tensor)
+                self.assertTrue(torch.equal(outputs, transformers_outputs))
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
