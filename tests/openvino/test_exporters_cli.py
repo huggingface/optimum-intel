@@ -217,7 +217,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             _, num_int8, num_int4 = get_num_quantized_nodes(model)
             self.assertEqual(expected_int8, num_int8)
             self.assertEqual(expected_int4, num_int4)
-            self.assertTrue("--quant-method awq" not in option or b"Applying AWQ" in result.stdout)
+            self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
 
     def test_exporters_cli_help(self):
         subprocess.run(
