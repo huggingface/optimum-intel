@@ -81,6 +81,7 @@ from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, O
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
 from optimum.intel.openvino.utils import _print_compiled_model_properties
+from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
@@ -304,29 +305,36 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
+        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, compile=False)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
-        text = "This restaurant is awesome"
-        outputs = pipe(text)
+        inputs = "This restaurant is awesome"
+        outputs = pipe(inputs)
         self.assertTrue(model.is_dynamic)
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertIsInstance(outputs[0]["label"], str)
+
+        ov_pipe = optimum_pipeline("text-classification", model_id, accelerator="openvino")
+        ov_outputs = ov_pipe(inputs)
+        self.assertEqual(outputs["score"], ov_outputs["score"])
+        del ov_pipe
+
         if model_arch == "bert":
             # Test FP16 conversion
             model.half()
             model.to("cpu")
             model.compile()
-            outputs = pipe(text)
+            outputs = pipe(inputs)
             self.assertGreaterEqual(outputs[0]["score"], 0.0)
             self.assertIsInstance(outputs[0]["label"], str)
             # Test static shapes
             model.reshape(1, 25)
             model.compile()
-            outputs = pipe(text)
+            outputs = pipe(inputs)
             self.assertTrue(not model.is_dynamic)
             self.assertGreaterEqual(outputs[0]["score"], 0.0)
             self.assertIsInstance(outputs[0]["label"], str)
@@ -380,6 +388,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_pipeline(self, model_arch):
+        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
         model.eval()
@@ -391,7 +400,11 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
+        ov_pipe = optimum_pipeline("question-answering", model_id, accelerator="openvino")
+        ov_outputs = ov_pipe(question, context)
+        self.assertEqual(outputs["score"], ov_outputs["score"])
         del model
+        del ov_pipe
         gc.collect()
 
     @pytest.mark.run_slow
@@ -451,14 +464,20 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_pipeline(self, model_arch):
+        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForTokenClassification.from_pretrained(model_id, export=True)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
-        outputs = pipe("My Name is Arthur and I live in Lyon.")
+        inputs = "My Name is Arthur and I live in"
+        outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
+        ov_pipe = optimum_pipeline("token-classification", model_id, accelerator="openvino")
+        ov_outputs = ov_pipe(inputs)
+        self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
+        del ov_pipe
         del model
         del pipe
         gc.collect()
@@ -503,14 +522,20 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_pipeline(self, model_arch):
+        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForFeatureExtraction.from_pretrained(model_id, export=True)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
-        outputs = pipe("My Name is Arthur and I live in Lyon.")
+        inputs = "My Name is Arthur and I live in"
+        outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(all(isinstance(item, float) for item in row) for row in outputs[0]))
+        ov_pipe = optimum_pipeline("feature-extraction", model_id, accelerator="openvino")
+        ov_outputs = ov_pipe(inputs)
+        self.assertEqual(outputs[-1][-1][-1], ov_outputs[-1][-1][-1])
+        del ov_pipe
         del pipe
         del model
         gc.collect()
@@ -668,6 +693,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_pipeline(self, model_arch):
+        set_seed(SEED)
         model_kwargs = {}
         model_id = MODEL_NAMES[model_arch]
         if model_arch in self.REMOTE_CODE_MODELS:
@@ -689,9 +715,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model.half()
         model.compile()
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-        outputs = pipe("This is a sample", max_length=20)
+        inputs = "My name is Arthur and I live in"
+        outputs = pipe(inputs, max_length=20)
         self.assertEqual(pipe.device, model.device)
-        self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
+        self.assertTrue(all(inputs in item["generated_text"] for item in outputs))
+
+        ov_pipe = optimum_pipeline("text-generation", model_id, accelerator="openvino")
+        ov_outputs = ov_pipe(inputs)
+        self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
+        del ov_pipe
         del pipe
         del model
         gc.collect()
@@ -935,14 +967,21 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
+        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForMaskedLM.from_pretrained(model_id, export=True)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
-        outputs = pipe(f"This is a {tokenizer.mask_token}.")
+        inputs = f"This is a {tokenizer.mask_token}."
+        outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
+
+        ov_pipe = optimum_pipeline("fill-mask", model_id, accelerator="openvino")
+        ov_outputs = ov_pipe(inputs)
+        self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
+        del ov_pipe
         del pipe
         del model
         gc.collect()
@@ -995,15 +1034,21 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_pipeline(self, model_arch):
+        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForImageClassification.from_pretrained(model_id, export=True)
         model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
-        outputs = pipe("http://images.cocodataset.org/val2017/000000039769.jpg")
+        inputs = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
+        ov_pipe = optimum_pipeline("image-classification", model_id, accelerator="openvino")
+        ov_outputs = ov_pipe(inputs)
+        self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
+        del ov_pipe
         del model
         del pipe
         gc.collect()
@@ -1091,6 +1136,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
+        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, compile=False)
@@ -1101,24 +1147,27 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
         # Text2Text generation
         pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-        text = "This is a test"
-        outputs = pipe(text)
+        inputs = "This is a test"
+        outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
 
         # Summarization
         pipe = pipeline("summarization", model=model, tokenizer=tokenizer)
-        text = "This is a test"
-        outputs = pipe(text)
+        outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["summary_text"], str)
 
         # Translation
         pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
-        text = "This is a test"
-        outputs = pipe(text)
+        outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["translation_text"], str)
+
+        ov_pipe = optimum_pipeline("translation_en_to_fr", model_id, accelerator="openvino")
+        ov_outputs = ov_pipe(inputs)
+        self.assertEqual(outputs[-1]["translation_text"], ov_outputs[-1]["translation_text"])
+        del ov_pipe
         del pipe
         del model
         gc.collect()
@@ -1228,14 +1277,21 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
+        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForAudioClassification.from_pretrained(model_id, export=True)
         model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
-        outputs = pipe([np.random.random(16000)])
+        inputs = [np.random.random(16000)]
+        outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
+
+        ov_pipe = optimum_pipeline("audio-classification", model_id, accelerator="openvino")
+        ov_outputs = ov_pipe(inputs)
+        self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
+        del ov_pipe
         del pipe
         del model
         gc.collect()
@@ -1539,21 +1595,25 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
+        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
         model.eval()
         processor = get_preprocessor(model_id)
-        GenerationConfig.from_pretrained(model_id)
         pipe = pipeline(
             "automatic-speech-recognition",
             model=model,
             tokenizer=processor.tokenizer,
             feature_extractor=processor.feature_extractor,
         )
-        data = self._generate_random_audio_data()
-        outputs = pipe(data)
+        inputs = self._generate_random_audio_data()
+        outputs = pipe(inputs)
         self.assertIsInstance(outputs["text"], str)
 
+        ov_pipe = optimum_pipeline("automatic-speech-recognition", model_id, accelerator="openvino")
+        ov_outputs = ov_pipe(inputs)
+        self.assertEqual(outputs["text"], ov_outputs["text"])
+        del ov_pipe
         del pipe
         del model
         gc.collect()
@@ -1640,7 +1700,8 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_pipeline_image_to_text(self, model_arch: str):
+    def test_pipeline(self, model_arch: str):
+        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True, compile=False)
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
@@ -1654,10 +1715,13 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
             tokenizer=tokenizer,
             feature_extractor=feature_extractor,
         )
-        data = self._get_sample_image()
-        outputs = pipe(data, max_new_tokens=3)
+        inputs = self._get_sample_image()
+        outputs = pipe(inputs, max_new_tokens=3)
         self.assertEqual(pipe.device, ov_model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
+        ov_pipe = optimum_pipeline("image-to-text", model_id, accelerator="openvino")
+        ov_outputs = ov_pipe(inputs)
+        self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
 
         gc.collect()
 
