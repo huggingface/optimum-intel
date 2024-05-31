@@ -40,7 +40,6 @@ from transformers import (
 )
 from transformers import pipeline as transformers_pipeline
 from transformers.feature_extraction_utils import PreTrainedFeatureExtractor
-from transformers.pipelines.base import Pipeline
 from transformers.utils import logging
 
 from optimum.intel.utils.import_utils import (
