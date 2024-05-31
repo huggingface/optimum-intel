@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import logging
 import math
 from typing import List, Optional, Tuple, Union
 
@@ -21,7 +22,10 @@ from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_m
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
 
-from optimum.intel.utils.import_utils import is_ipex_version
+from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
+
+
+logger = logging.getLogger(__name__)
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
@@ -223,6 +227,10 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
     def __init__(self, module, config, distributed=False):
         if is_ipex_version("<", "2.3.0"):
             raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
+        if is_transformers_version("<", "4.38.2") or is_transformers_version(">", "4.41.2"):
+            logger.warning(
+                "The verified transformers version is 4.38.2 ~ 4.41.2. It may cause unexpected error if out of this interval"
+            )
 
         from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
 
