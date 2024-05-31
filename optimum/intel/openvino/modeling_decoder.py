@@ -761,6 +761,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             config=config,
             model_save_dir=model_cache_path.parent,
             compile=enable_compilation,
+            quantization_config=quantization_config,
             **kwargs,
         )
 
