@@ -364,7 +364,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
 
         ov_pipe = optimum_pipeline("text-classification", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
-        self.assertEqual(outputs["score"], ov_outputs["score"])
+        self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
         del ov_pipe
 
         if model_arch == "bert":
@@ -1334,7 +1334,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
 
         ov_pipe = optimum_pipeline("audio-classification", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
-        self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
+        self.assertEqual(outputs[-1][-1]["score"], ov_outputs[-1][-1]["score"])
         del ov_pipe
         del pipe
         del model
