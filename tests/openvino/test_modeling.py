@@ -261,7 +261,7 @@ class OVModelIntegrationTest(unittest.TestCase):
 
 
 class PipelineTest(unittest.TestCase):
-    def test_load_from_hub(self):
+    def test_load_model_from_hub(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
 
         # verify could load both pytorch and openvino model (export argument should automatically infered)
