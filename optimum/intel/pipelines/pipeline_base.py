@@ -20,6 +20,7 @@ from transformers import (
     AudioClassificationPipeline,
     AutoConfig,
     AutoFeatureExtractor,
+    AutoImageProcessor,
     AutomaticSpeechRecognitionPipeline,
     AutoTokenizer,
     FeatureExtractionPipeline,
@@ -456,7 +457,10 @@ def pipeline(
     if load_tokenizer and tokenizer is None:
         tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=use_fast, **hub_kwargs, **tokenizer_kwargs)
     if load_feature_extractor and feature_extractor is None:
-        feature_extractor = AutoFeatureExtractor.from_pretrained(model_id, **hub_kwargs, **tokenizer_kwargs)
+        try:
+            feature_extractor = AutoFeatureExtractor.from_pretrained(model_id, **hub_kwargs, **tokenizer_kwargs)
+        except Exception:
+            feature_extractor = AutoImageProcessor.from_pretrained(model_id, **hub_kwargs, **tokenizer_kwargs)
 
     return transformers_pipeline(
         task,
