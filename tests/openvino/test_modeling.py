@@ -1183,6 +1183,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
+        inputs = "This is a test"
         model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, compile=False)
         model.eval()
         model.half()
@@ -1203,7 +1204,6 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
         # Text2Text generation
         pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-        inputs = "This is a test"
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
