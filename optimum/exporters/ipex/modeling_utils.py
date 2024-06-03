@@ -159,6 +159,75 @@ class _IPEXLlamaAttention(nn.Module):
             module.config.architectures[0],
         )
 
+    def qkv_gemm(self, hidden_states):
+        bsz, seq_len, _ = hidden_states.size()
+
+        query = self.q_proj(hidden_states)
+        key = self.k_proj(hidden_states)
+        value = self.v_proj(hidden_states)
+
+        query = query.view(bsz, seq_len, self.num_heads, self.head_dim)
+        key = key.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        value = value.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+
+        return query, key, value
+
+    def rope(self, query, key, kv_seq_len, position_ids):
+        key = self.ipex_rope(
+            key,
+            position_ids,
+            self.num_key_value_heads,
+            self.head_dim,
+            self.head_dim // 2,
+            self.head_dim,
+            kv_seq_len,
+        )
+        query = self.ipex_rope(
+            query,
+            position_ids,
+            self.num_heads,
+            self.head_dim,
+            self.head_dim // 2,
+            self.head_dim,
+            kv_seq_len,
+        )
+        return query, key
+
+    def sdpa(self, query, key, value, past_key_value, attention_mask, use_cache):
+        if use_cache:
+            # This ipex op pre-allocates buffers for past_key_values and use beam index history
+            # which to decide which beam should be used to make attention scale dot more efficient.
+            (attn_output, attn_weights, past_key_value) = self.ipex_scale_dot_product(
+                query,
+                key,
+                value,
+                math.sqrt(self.head_dim),
+                past_key_value,
+                None,
+                attention_mask,
+            )
+        else:
+            value_states = value.transpose(1, 2)
+            query_states = query.transpose(1, 2)
+            key_states = key.transpose(1, 2)
+
+            past_key_value = None
+            # repeat k/v heads if n_kv_heads < n_heads
+            key_states = repeat_kv(key_states, self.num_key_value_groups)
+            value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+
+            if attention_mask is not None:
+                attn_weights = torch.tensor(attn_weights) + torch.tensor(attention_mask)
+                attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
+
+            # upcast attention to fp32
+            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+            attn_output = torch.matmul(attn_weights, value_states)
+
+        return attn_output, past_key_value, attn_weights
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -193,71 +262,15 @@ class _IPEXLlamaAttention(nn.Module):
             residual (`torch.Tensor`): residual tensor to the layer of shape (batch, seq_len, embed_dim)`
         """
         bsz, seq_len, _ = hidden_states.size()
-
-        query = self.q_proj(hidden_states)
-        key = self.k_proj(hidden_states)
-        value = self.v_proj(hidden_states)
-
-        query = query.view(bsz, seq_len, self.num_heads, self.head_dim)
-        key = key.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
-        value = value.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
-
         kv_seq_len = seq_len + past_key_value[0].size(-2) if past_key_value is not None else seq_len
-        # Use ipex op to rotary position embedding more efficient.
-        key = self.ipex_rope(
-            key,
-            position_ids,
-            self.num_key_value_heads,
-            self.head_dim,
-            self.head_dim // 2,
-            self.head_dim,
-            kv_seq_len,
+
+        query, key, value = self.qkv_gemm(hidden_states)
+        query, key = self.rope(query, key, kv_seq_len, position_ids)
+
+        attn_output, past_key_value, attn_weights = self.sdpa(
+            query, key, value, past_key_value, attention_mask, use_cache
         )
-        query = self.ipex_rope(
-            query,
-            position_ids,
-            self.num_heads,
-            self.head_dim,
-            self.head_dim // 2,
-            self.head_dim,
-            kv_seq_len,
-        )
-
-        if use_cache:
-            # This ipex op pre-allocates buffers for past_key_values and use beam index history
-            # which to decide which beam should be used to make attention scale dot more efficient.
-            (attn_output, attn_weights, past_key_value) = self.ipex_scale_dot_product(
-                query,
-                key,
-                value,
-                math.sqrt(self.head_dim),
-                past_key_value,
-                None,
-                attention_mask,
-            )
-        else:
-            value_states = value.transpose(1, 2)
-            query_states = query.transpose(1, 2)
-            key_states = key.transpose(1, 2)
-            kv_seq_len = key_states.shape[-2]
-
-            past_key_value = None
-            # repeat k/v heads if n_kv_heads < n_heads
-            key_states = repeat_kv(key_states, self.num_key_value_groups)
-            value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-
-            if attention_mask is not None:
-                attn_weights = torch.tensor(attn_weights) + torch.tensor(attention_mask)
-                attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
-
-            # upcast attention to fp32
-            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-            attn_output = torch.matmul(attn_weights, value_states)
-
-        attn_output = attn_output.transpose(1, 2)
-        attn_output = attn_output.reshape(bsz, seq_len, self.hidden_size)
+        attn_output = attn_output.transpose(1, 2).view(bsz, seq_len, self.hidden_size)
 
         if hasattr(self, "mha_linear_add"):
             attn_output = self.mha_linear_add(attn_output, residual)
