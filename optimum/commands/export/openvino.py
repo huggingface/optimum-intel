@@ -311,7 +311,10 @@ class OVExportCommand(BaseOptimumCLICommand):
 
             # To quantize a text-generation model with a dataset, an instantiated OVModelForCausalLM is required
             model = OVModelForCausalLM.from_pretrained(
-                self.args.model, export=True, quantization_config=quantization_config
+                self.args.model,
+                export=True,
+                quantization_config=quantization_config,
+                stateful=not self.args.disable_stateful,
             )
             model.save_pretrained(self.args.output)
         else:
