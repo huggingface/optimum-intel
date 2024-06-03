@@ -172,25 +172,26 @@ class _IPEXLlamaAttention(nn.Module):
 
         return query, key, value
 
-    def rope(self, query, key, kv_seq_len, position_ids):
-        key = self.ipex_rope(
-            key,
-            position_ids,
-            self.num_key_value_heads,
-            self.head_dim,
-            self.head_dim // 2,
-            self.head_dim,
-            kv_seq_len,
-        )
-        query = self.ipex_rope(
-            query,
-            position_ids,
-            self.num_heads,
-            self.head_dim,
-            self.head_dim // 2,
-            self.head_dim,
-            kv_seq_len,
-        )
+    def rope(self, query, key, kv_seq_len, position_ids, use_cache):
+        if use_cache:
+            key = self.ipex_rope(
+                key,
+                position_ids,
+                self.num_key_value_heads,
+                self.head_dim,
+                self.head_dim // 2,
+                self.head_dim,
+                kv_seq_len,
+            )
+            query = self.ipex_rope(
+                query,
+                position_ids,
+                self.num_heads,
+                self.head_dim,
+                self.head_dim // 2,
+                self.head_dim,
+                kv_seq_len,
+            )
         return query, key
 
     def sdpa(self, query, key, value, past_key_value, attention_mask, use_cache):
@@ -265,7 +266,7 @@ class _IPEXLlamaAttention(nn.Module):
         kv_seq_len = seq_len + past_key_value[0].size(-2) if past_key_value is not None else seq_len
 
         query, key, value = self.qkv_gemm(hidden_states)
-        query, key = self.rope(query, key, kv_seq_len, position_ids)
+        query, key = self.rope(query, key, kv_seq_len, position_ids, use_cache)
 
         attn_output, past_key_value, attn_weights = self.sdpa(
             query, key, value, past_key_value, attention_mask, use_cache
