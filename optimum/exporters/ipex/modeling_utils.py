@@ -227,7 +227,7 @@ class _IPEXLlamaDecoderLayerRef(nn.Module):
     def __init__(self, module, config, distributed=False):
         if is_ipex_version("<", "2.3.0"):
             raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
-        if is_transformers_version("<", "4.38.2") or is_transformers_version(">", "4.41.2"):
+        if is_transformers_version("<", "4.38.2") or is_transformers_version(">=", "4.39.0"):
             raise ImportError("Only transformers versions 4.38.2 ~ 4.41.2 are verified.")
 
         from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
