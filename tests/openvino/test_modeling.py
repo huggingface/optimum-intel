@@ -1189,13 +1189,6 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         model.to("cpu")
         model.compile()
 
-        # Text2Text generation
-        pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-        inputs = "This is a test"
-        outputs = pipe(inputs)
-        self.assertEqual(pipe.device, model.device)
-        self.assertIsInstance(outputs[0]["generated_text"], str)
-
         # Summarization
         pipe = pipeline("summarization", model=model, tokenizer=tokenizer)
         outputs = pipe(inputs)
@@ -1208,9 +1201,16 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["translation_text"], str)
 
-        ov_pipe = optimum_pipeline("translation_en_to_fr", model_id, accelerator="openvino")
+        # Text2Text generation
+        pipe = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
+        inputs = "This is a test"
+        outputs = pipe(inputs)
+        self.assertEqual(pipe.device, model.device)
+        self.assertIsInstance(outputs[0]["generated_text"], str)
+
+        ov_pipe = optimum_pipeline("text2text-generation", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
-        self.assertEqual(outputs[-1]["translation_text"], ov_outputs[-1]["translation_text"])
+        self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
         del ov_pipe
         del pipe
         del model
