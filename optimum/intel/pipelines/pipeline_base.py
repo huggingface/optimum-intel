@@ -192,7 +192,7 @@ def pipeline(
             However, if `config` is also not given or not a string, then the default tokenizer for the given `task`
             will be loaded.
         accelerator (`str`, *optional*):
-            The optimization backends, choose from ["ipex"].
+            The optimization backends, choose from ["ipex", "inc", "openvino"].
         use_fast (`bool`, *optional*, defaults to `True`):
             Whether or not to use a Fast tokenizer if possible (a [`PreTrainedTokenizerFast`]).
         torch_dtype (`str` or `torch.dtype`, *optional*):
