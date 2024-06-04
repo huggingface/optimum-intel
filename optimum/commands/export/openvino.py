@@ -348,8 +348,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 from ...exporters.openvino.convert import export_tokenizer
 
                 output = Path(self.args.output)
-                if tokenizer is not None:
-                    export_tokenizer(tokenizer, output / "tokenizer")
+                export_tokenizer(tokenizer, output / "tokenizer")
         else:
             # TODO : add input shapes
             main_export(
