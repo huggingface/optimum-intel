@@ -522,7 +522,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             past_key_values = tuple(tuple(pkv for _ in range(nb_pkv)) for _ in range(num_layers))
 
         return past_key_values
-    
+
     # Temporary fix.
     def _get_initial_cache_position(self, input_ids, model_kwargs):
         """Calculates `cache_position` for the pre-fill stage based on `input_ids` and optionally past length"""
