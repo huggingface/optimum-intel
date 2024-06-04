@@ -315,8 +315,18 @@ class OVExportCommand(BaseOptimumCLICommand):
                 export=True,
                 quantization_config=quantization_config,
                 stateful=not self.args.disable_stateful,
+                trust_remote_code=self.args.trust_remote_code,
             )
             model.save_pretrained(self.args.output)
+            try:
+                from transformers import AutoTokenizer
+
+                tokenizer = AutoTokenizer.from_pretrained(
+                    self.args.model, trust_remote_code=self.args.trust_remote_code
+                )
+                tokenizer.save_pretrained(self.args.output)
+            except:
+                logger.warning("Could not save tokenizer")
         else:
             # TODO : add input shapes
             main_export(
