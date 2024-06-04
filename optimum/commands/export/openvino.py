@@ -312,14 +312,13 @@ class OVExportCommand(BaseOptimumCLICommand):
             # avoid import when using other exporters (IPEX, INC)
             from ...exporters.openvino.convert import export_tokenizer
 
-            output = Path(self.args.output)
             tokenizer = getattr(model, "tokenizer", None)
             if tokenizer is not None:
-                export_tokenizer(tokenizer, output / "tokenizer")
+                export_tokenizer(tokenizer, self.args.output / "tokenizer")
 
             tokenizer_2 = getattr(model, "tokenizer_2", None)
             if tokenizer_2 is not None:
-                export_tokenizer(tokenizer_2, output / "tokenizer_2")
+                export_tokenizer(tokenizer_2, self.args.output / "tokenizer_2")
         elif task.startswith("text-generation") and quantize_with_dataset:
             from optimum.intel import OVModelForCausalLM
 
@@ -347,8 +346,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             if tokenizer and not self.args.disable_convert_tokenizer:
                 from ...exporters.openvino.convert import export_tokenizer
 
-                output = Path(self.args.output)
-                export_tokenizer(tokenizer, output / "tokenizer")
+                export_tokenizer(tokenizer, self.args.output / "tokenizer")
         else:
             # TODO : add input shapes
             main_export(
