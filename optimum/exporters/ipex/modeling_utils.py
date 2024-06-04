@@ -208,6 +208,7 @@ class _IPEXLlamaAttention(nn.Module):
         )
         return attn_output, past_key_value, attn_weights
 
+    # Adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L341
     def sdpa_without_cache(self, query, key, value, past_key_value, attention_mask):
         value_states = value.transpose(1, 2)
         query_states = query.transpose(1, 2)
@@ -285,6 +286,7 @@ class _IPEXLlamaAttention(nn.Module):
         return attn_output, attn_weights, past_key_value
 
 
+# Adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L186
 class _IPEXLlamaMLP(nn.Module):
     def __init__(self, module, config, distributed=False) -> None:
         if is_ipex_version("<", "2.3.0"):
