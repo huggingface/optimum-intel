@@ -21,21 +21,17 @@ import unittest
 from collections import defaultdict
 from enum import Enum
 from functools import partial
-from typing import List, Union
+from typing import Union
 
 import evaluate
 import numpy as np
 import torch
 from datasets import load_dataset
-from nncf.quantization.advanced_parameters import OverflowFix
 from parameterized import parameterized
-import openvino.runtime as ov
 import nncf
 from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
-    AutoModelForCausalLM,
-    AutoModelForTokenClassification,
     AutoTokenizer,
     AutoProcessor,
     TrainingArguments,
@@ -77,12 +73,16 @@ _TASK_TO_DATASET = {
 
 
 class OVQuantizerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (
+    SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
+        (OVModelForSequenceClassification, "bert", 22, 35),
+        (OVModelForCausalLM, "gpt2", 41, 3),
+    )
+    SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
-        # (OVModelForCausalLM, "gpt2", 41, 23),
+        (OVModelForCausalLM, "gpt2", 31, 22),
     )
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_TORCH_MODEL)
     def test_automodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
@@ -127,23 +127,21 @@ class OVQuantizerTest(unittest.TestCase):
             loaded_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_OV_MODEL)
     def test_ovmodel_static_quantization(self, model_cls, model_name, expected_fake_quantize, expected_int8):
         model_id = MODEL_NAMES[model_name]
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
-        if "gpt2" in model_id:
-            expected_int8 -= 1
 
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            transformers_model = model_cls.from_pretrained(model_id, export=True)
+            ov_model = model_cls.from_pretrained(model_id, export=True)
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
-            quantizer = OVQuantizer.from_pretrained(transformers_model, task=task)
+            quantizer = OVQuantizer.from_pretrained(ov_model, task=task)
 
             calibration_dataset = quantizer.get_calibration_dataset(
                 dataset_name,
@@ -413,8 +411,12 @@ class OVWeightCompressionTest(unittest.TestCase):
         model = model_cls.from_pretrained(
             model_id,
             export=True,
-            quantization_config=OVWeightQuantizationConfig(bits=8, dataset=dataset, num_samples=3),
         )
+        quantizer = OVQuantizer(model)
+        quantization_config = OVWeightQuantizationConfig(
+            bits=8, num_samples=3, quant_method=OVQuantizationMethod.HYBRID
+        )
+        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config), calibration_dataset=dataset)
         num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
         self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
         self.assertEqual(expected_ov_int8, num_int8)
@@ -663,7 +665,7 @@ class OVQuantizerQATest(unittest.TestCase):
 
 
 class OVTrainerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-uncased", 49, 38),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-uncased", 67, 38),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, model_name, expected_fake_quantize, expected_int8):

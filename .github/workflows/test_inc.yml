@@ -32,7 +32,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install cmake
         pip install py-cpuinfo
-        pip install torch==2.2 torchaudio torchvision --extra-index-url https://download.pytorch.org/whl/cpu
+        pip install torch==2.3.0 torchaudio==2.3.0 torchvision==0.18 --index-url https://download.pytorch.org/whl/cpu
         pip install .[neural-compressor,diffusers,tests]
         pip install intel-extension-for-transformers
         pip install peft
@@ -43,7 +43,6 @@ jobs:
     - name: Test IPEX
       run: |
         pip uninstall -y intel-extension-for-transformers
-        pip install torch==2.1.0 torchaudio==2.1.0 torchvision==0.16 --extra-index-url https://download.pytorch.org/whl/cpu
-        pip install intel-extension-for-pytorch==2.1.100
+        pip install intel-extension-for-pytorch==2.3.0
         pytest tests/neural_compressor/test_ipex.py
 

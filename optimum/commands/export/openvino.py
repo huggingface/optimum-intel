@@ -120,6 +120,15 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--all-layers",
+        action="store_true",
+        default=None,
+        help=(
+            "Whether embeddings and last MatMul layers should be compressed to INT4. If not provided an weight "
+            "compression is applied, they are compressed to INT8."
+        ),
+    )
+    optional_group.add_argument(
         "--disable-stateful",
         action="store_true",
         help=(
@@ -198,6 +207,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 and self.args.ratio is None
                 and self.args.group_size is None
                 and self.args.sym is None
+                and self.args.all_layers is None
                 and self.args.model in _DEFAULT_4BIT_CONFIGS
             ):
                 quantization_config = _DEFAULT_4BIT_CONFIGS[self.args.model]
@@ -207,6 +217,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "ratio": 1 if is_int8 else (self.args.ratio or 0.8),
                     "sym": self.args.sym or False,
                     "group_size": -1 if is_int8 else self.args.group_size,
+                    "all_layers": None if is_int8 else self.args.all_layers,
                 }
 
             if self.args.weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:
@@ -225,6 +236,9 @@ class OVExportCommand(BaseOptimumCLICommand):
                 "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
             )
             library_name = "transformers"
+
+        if self.args.convert_tokenizer:
+            logger.warning("`--convert-tokenizer` option is deprecated. Tokenizer will be converted by default.")
 
         if (
             library_name == "diffusers"
@@ -261,10 +275,21 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             model.save_pretrained(self.args.output)
 
-        else:
-            if self.args.convert_tokenizer:
-                logger.warning("`--convert-tokenizer` option is deprecated. Tokenizer will be converted by default.")
+            if self.args.disable_convert_tokenizer:
+                return
 
+            # avoid import when using other exporters (IPEX, INC)
+            from ...exporters.openvino.convert import export_tokenizer
+
+            output = Path(self.args.output)
+            tokenizer = getattr(model, "tokenizer", None)
+            if tokenizer is not None:
+                export_tokenizer(tokenizer, output / "tokenizer")
+
+            tokenizer_2 = getattr(model, "tokenizer_2", None)
+            if tokenizer_2 is not None:
+                export_tokenizer(tokenizer_2, output / "tokenizer_2")
+        else:
             # TODO : add input shapes
             main_export(
                 model_name_or_path=self.args.model,

@@ -547,7 +547,7 @@ def export_from_model(
     # TODO: support onnx_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
         raise ValueError(
-            f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum/issues if you would like the model type {model_type} to be supported natively in the ONNX export."
+            f"Trying to export a {model_type} model, that is a custom or unsupported architecture, but no custom export configuration was passed as `custom_export_configs`. Please refer to https://huggingface.co/docs/optimum/main/en/exporters/onnx/usage_guides/export_a_model#custom-export-of-transformers-models for an example on how to export custom models. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the model type {model_type} to be supported natively in the OpenVINO export."
         )
 
     if task.startswith("text-generation") and model.config.is_encoder_decoder:
@@ -614,7 +614,12 @@ def export_from_model(
         model.config.save_pretrained(output)
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
-            generation_config.save_pretrained(output)
+            try:
+                generation_config.save_pretrained(output)
+            except Exception as exception:
+                logger.warning(
+                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
+                )
 
         model_name_or_path = model.config._name_or_path
         maybe_save_preprocessors(model_name_or_path, output, trust_remote_code=trust_remote_code)
@@ -667,19 +672,20 @@ def export_tokenizer(
     output: Union[str, Path],
     suffix: Optional[str] = "",
 ):
-    from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME  # avoid circular imports
+    # avoid circular imports
+    from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME
+    from optimum.intel.openvino.utils import maybe_convert_tokenizer_to_fast
 
     try:
         from openvino_tokenizers import convert_tokenizer
     except ModuleNotFoundError:
-        # avoid this message before tokenizers are part of the openvino dependencies
-        # logger.info(
-        #     "Run `pip install openvino-tokenizers[transformers]` to get OpenVINO tokenizer/detokenizer models."
-        # )
         return
 
     if not isinstance(output, Path):
         output = Path(output)
+
+    if output.exists():
+        tokenizer = maybe_convert_tokenizer_to_fast(tokenizer, output)
 
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)

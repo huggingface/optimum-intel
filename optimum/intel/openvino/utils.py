@@ -17,10 +17,13 @@ import json
 import logging
 import os
 from glob import glob
+from pathlib import Path
+from typing import Tuple, Union
 
 import numpy as np
 from huggingface_hub import model_info
 from openvino.runtime import Core, Type, properties
+from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 
@@ -105,6 +108,24 @@ PREDEFINED_SD_DATASETS = {
     "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
     "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}},
 }
+
+
+NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[type(PreTrainedTokenizer)] = (CLIPTokenizer,)
+
+
+def maybe_convert_tokenizer_to_fast(
+    hf_tokenizer: PreTrainedTokenizer, tokenizer_path: Path
+) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
+    if isinstance(hf_tokenizer, PreTrainedTokenizerFast):
+        return hf_tokenizer
+
+    if isinstance(hf_tokenizer, NEED_CONVERT_TO_FAST_TOKENIZER):
+        try:
+            return AutoTokenizer.from_pretrained(tokenizer_path)
+        except Exception:
+            return hf_tokenizer
+
+    return hf_tokenizer
 
 
 def use_external_data_format(num_parameters: int) -> bool:
