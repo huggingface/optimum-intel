@@ -340,7 +340,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     self.args.model, trust_remote_code=self.args.trust_remote_code
                 )
                 tokenizer.save_pretrained(self.args.output)
-            except:
+            except Exception as e:
                 logger.warning("Could not save tokenizer")
 
             if tokenizer and not self.args.disable_convert_tokenizer:
