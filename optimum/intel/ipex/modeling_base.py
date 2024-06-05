@@ -95,7 +95,8 @@ def ipex_jit_trace(model, task, use_cache):
 
     model.config.return_dict = False
 
-    model.config.use_cache = "past_key_values" in sample_inputs
+    if "past_key_values" in sample_inputs:
+        model.config.use_cache = True
 
     model = ipex.optimize(model.eval(), dtype=model.dtype, inplace=True)
     # Disable repack while jit tracing to reduce the memory
