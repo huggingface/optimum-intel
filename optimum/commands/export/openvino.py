@@ -19,9 +19,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from transformers.utils.quantization_config import QuantizationMethod
 
 from ...exporters import TasksManager
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
+from ...utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
 
 
@@ -207,7 +209,7 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
-        from ...exporters.openvino.__main__ import infer_task, main_export
+        from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, OVConfig
 
         if self.args.fp16:
@@ -251,7 +253,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "all_layers": None if is_int8 else self.args.all_layers,
                     "dataset": self.args.dataset,
                     "num_samples": self.args.num_samples,
-                    "quant_method": "awq" if self.args.awq else None,
+                    "quant_method": QuantizationMethod.AWQ if self.args.awq else None,
                     "sensitivity_metric": self.args.sensitivity_metric,
                 }
 
@@ -305,20 +307,8 @@ class OVExportCommand(BaseOptimumCLICommand):
 
             model = model_cls.from_pretrained(self.args.model, export=True, quantization_config=quantization_config)
             model.save_pretrained(self.args.output)
-
-            if self.args.disable_convert_tokenizer:
-                return
-
-            # avoid import when using other exporters (IPEX, INC)
-            from ...exporters.openvino.convert import export_tokenizer
-
-            tokenizer = getattr(model, "tokenizer", None)
-            if tokenizer is not None:
-                export_tokenizer(tokenizer, self.args.output / "tokenizer")
-
-            tokenizer_2 = getattr(model, "tokenizer_2", None)
-            if tokenizer_2 is not None:
-                export_tokenizer(tokenizer_2, self.args.output / "tokenizer_2")
+            if not self.args.disable_convert_tokenizer:
+                maybe_convert_tokenizers(library_name, self.args.output, model)
         elif task.startswith("text-generation") and quantize_with_dataset:
             from optimum.intel import OVModelForCausalLM
 
@@ -332,21 +322,10 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             model.save_pretrained(self.args.output)
 
-            tokenizer = None
-            try:
-                from transformers import AutoTokenizer
-
-                tokenizer = AutoTokenizer.from_pretrained(
-                    self.args.model, trust_remote_code=self.args.trust_remote_code
-                )
-                tokenizer.save_pretrained(self.args.output)
-            except Exception:
-                logger.warning("Could not save tokenizer")
-
-            if tokenizer and not self.args.disable_convert_tokenizer:
-                from ...exporters.openvino.convert import export_tokenizer
-
-                export_tokenizer(tokenizer, self.args.output / "tokenizer")
+            maybe_save_preprocessors(self.args.model, self.args.output, trust_remote_code=self.args.trust_remote_code)
+            if not self.args.disable_convert_tokenizer:
+                preprocessors = maybe_load_preprocessors(self.args.model, trust_remote_code=self.args.trust_remote_code)
+                maybe_convert_tokenizers(library_name, self.args.output, preprocessors=preprocessors)
         else:
             # TODO : add input shapes
             main_export(
