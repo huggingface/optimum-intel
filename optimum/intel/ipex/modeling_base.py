@@ -85,8 +85,6 @@ def ipex_jit_trace(model, task, use_cache):
         model = _patch_model(model)
         # Todo: integerate in prepare_jit_inputs.
         sample_inputs = get_dummy_input(model, return_dict=True)
-        if not use_cache:
-            sample_inputs.pop("past_key_values")
         # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
         _enable_tpp()
     else:
@@ -96,7 +94,9 @@ def ipex_jit_trace(model, task, use_cache):
     model.config.return_dict = False
 
     if "past_key_values" in sample_inputs:
-        model.config.use_cache = True
+        model.config.use_cache = use_cache
+        if not use_cache:
+            sample_inputs.pop("past_key_values")
 
     model = ipex.optimize(model.eval(), dtype=model.dtype, inplace=True)
     # Disable repack while jit tracing to reduce the memory
