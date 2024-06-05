@@ -52,8 +52,8 @@ jobs:
       run: |
         pytest tests/openvino/test_modeling_basic.py
 
-    - name: Slow tests (Linux)
+    - name: Slow tests
       run: |
-        RUN_SLOW=1 pytest tests/openvino/test_modeling.py -s -m "run_slow" --durations=0
-      if: runner.os == 'Linux'
-
+        pytest tests/openvino/test_modeling.py -s -m "run_slow" --durations=0
+      env:
+        RUN_SLOW: 1
