@@ -12,8 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import logging
-
 from transformers.models.llama.modeling_llama import (
     LlamaAttention,
     LlamaDecoderLayer,
@@ -32,8 +30,6 @@ from .modeling_utils import (
     _llama_model_forward,
 )
 
-
-logger = logging.getLogger(__name__)
 
 _IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
 _IPEX_EXPORTED_TASK = ("text-generation",)
@@ -72,10 +68,6 @@ def _patch_llama_model(model):
         raise ImportError(
             f"Only ipex version >= {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports RotaryEmbedding and IndirectAccessKVCacheAttention"
         )
-
-    logger.warning(
-        "Only greedy search and beam search with do_sample=True/False are verified for the patched model. It may have risk if other generation methods are applied"
-    )
 
     from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCacheAttention, RotaryEmbedding
 
