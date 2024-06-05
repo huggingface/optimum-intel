@@ -32,6 +32,7 @@ INSTALL_REQUIRE = [
     "optimum~=1.20",
     "datasets>=1.4.0",
     "sentencepiece",
+    "setuptools",
     "scipy",
     "onnx",
 ]
