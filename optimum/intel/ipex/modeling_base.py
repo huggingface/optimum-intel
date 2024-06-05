@@ -73,12 +73,11 @@ def _is_patched_with_ipex(model, task):
                 return True
         return False
     else:
-        norm_config = NormalizedConfigManager.get_normalized_config_class(model.config.model_type)(model.config)
         # The ipex IAKV op in patched model requires the hidden size at least 64
         return (
             model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES
             and task in _IPEX_EXPORTED_TASK
-            and norm_config.hidden_size >= 64
+            and model.config.hidden_size >= 64
         )
 
 
