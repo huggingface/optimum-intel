@@ -54,6 +54,12 @@ optimum-cli export openvino --model local_path --task text-generation-with-past 
 
 To export your model in fp16, you can add `--weight-format fp16` when exporting your model.
 
+<Tip warning={true}>
+
+Models larger than 1 billion parameters are exported to the OpenVINO format with 8-bit weights by default. You can disable it with `--weight-format fp32`.
+
+</Tip>
+
 Once the model is exported, you can load the OpenVINO model using :
 
 ```python
@@ -130,7 +136,7 @@ model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
 
 <Tip warning={true}>
 
-`load_in_8bit` is enabled by default for the models larger than 1 billion parameters. You can disable it with `load_in_8bit=False`.
+If not specified, `load_in_8bit` will be set to `True` by default when models larger than 1 billion parameters are exported to the OpenVINO format (with `export=True`). You can disable it with `load_in_8bit=False`.
 
 </Tip>
 
