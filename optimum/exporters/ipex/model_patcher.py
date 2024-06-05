@@ -25,6 +25,7 @@ from transformers.models.llama.modeling_llama import (
 from optimum.intel.utils.import_utils import is_ipex_version
 
 from .modeling_utils import (
+    _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _IPEXLlamaDecoderLayerRef,
     _llama_attn_forward,
     _llama_layer_norm_forward,
@@ -34,10 +35,6 @@ from .modeling_utils import (
 
 logger = logging.getLogger(__name__)
 
-# Please also update in the setup.py and .github/workflows/test_ipex.yml if you change the transformers version
-_TRANSFORMERS_MIN_VERSION = "4.38.0"
-_TRANSFORMERS_MAX_VERSION = "4.41.2"
-_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.3.0"
 _IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
 _IPEX_EXPORTED_TASK = ("text-generation",)
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search")

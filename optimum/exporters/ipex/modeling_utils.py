@@ -24,10 +24,13 @@ from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repea
 
 from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
 
-from .model_patcher import _IPEX_MINIMUM_VERSION_FOR_PATCHING, _TRANSFORMERS_MAX_VERSION, _TRANSFORMERS_MIN_VERSION
-
 
 logger = logging.getLogger(__name__)
+
+# Please also update in the setup.py and .github/workflows/test_ipex.yml if you change the transformers version
+_TRANSFORMERS_MIN_VERSION = "4.38.0"
+_TRANSFORMERS_MAX_VERSION = "4.41.2"
+_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.3.0"
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
