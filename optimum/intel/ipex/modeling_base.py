@@ -50,7 +50,12 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
-from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_GENERATION_METHODS, _IPEX_EXPORTED_TASK, _patch_model
+from ...exporters.ipex.model_patcher import (
+    _IPEX_EXPORTED_GENERATION_METHODS,
+    _IPEX_EXPORTED_TASK,
+    _IPEX_MINIMUM_VERSION_FOR_PATCHING,
+    _patch_model,
+)
 from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
@@ -63,7 +68,7 @@ _IPEX_SUPPORT_MODEL_TYPES = ("llama",)
 
 
 def _is_patched_with_ipex(model, task):
-    if is_ipex_version("<", "2.3.0"):
+    if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         return False
 
     if isinstance(model, torch.jit.ScriptModule):

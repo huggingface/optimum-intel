@@ -34,6 +34,10 @@ from .modeling_utils import (
 
 logger = logging.getLogger(__name__)
 
+# Please also update in the setup.py and .github/workflows/test_ipex.yml if you change the transformers version
+_TRANSFORMERS_MIN_VERSION = "4.38.0"
+_TRANSFORMERS_MAX_VERSION = "4.41.2"
+_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.3.0"
 _IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
 _IPEX_EXPORTED_TASK = ("text-generation",)
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search")
@@ -67,8 +71,10 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 
 def _patch_llama_model(model):
-    if is_ipex_version("<", "2.3.0"):
-        raise ImportError("Only ipex version >= 2.3.0 supports RotaryEmbedding and IndirectAccessKVCacheAttention")
+    if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
+        raise ImportError(
+            f"Only ipex version >= {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports RotaryEmbedding and IndirectAccessKVCacheAttention"
+        )
 
     logger.warning(
         "Only greedy search and beam search with do_sample=True/False are verified for the patched model. It may have risk if other generation methods are applied"

@@ -24,6 +24,8 @@ from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repea
 
 from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
 
+from .model_patcher import _IPEX_MINIMUM_VERSION_FOR_PATCHING, _TRANSFORMERS_MAX_VERSION, _TRANSFORMERS_MIN_VERSION
+
 
 logger = logging.getLogger(__name__)
 
@@ -225,10 +227,16 @@ def _llama_model_forward(
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L694
 class _IPEXLlamaDecoderLayerRef(nn.Module):
     def __init__(self, module, config, distributed=False):
-        if is_ipex_version("<", "2.3.0"):
-            raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
-        if is_transformers_version("<", "4.38.2") or is_transformers_version(">", "4.41.2"):
-            raise ImportError("Only transformers versions 4.38.2 ~ 4.41.2 are verified.")
+        if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
+            raise ImportError(
+                f"Only ipex version > {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports Linear2SiluMul and LinearAdd"
+            )
+        if is_transformers_version("<", _TRANSFORMERS_MIN_VERSION) or is_transformers_version(
+            ">", _TRANSFORMERS_MAX_VERSION
+        ):
+            raise ImportError(
+                f"Only transformers versions {_TRANSFORMERS_MIN_VERSION} ~ {_TRANSFORMERS_MAX_VERSION} are verified."
+            )
 
         from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
 
