@@ -222,7 +222,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdirname:
             ipex_model.save_pretrained(tmpdirname)
             loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname)
-            loaded_model_outputs = loaded_model(**tokens)
+            loaded_model_outputs = loaded_model(**inputs)
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
         self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
@@ -396,7 +396,7 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         outputs = ipex_model(**inputs)
 
         with tempfile.TemporaryDirectory() as tmpdirname:
-            model.save_pretrained(tmpdirname)
+            ipex_model.save_pretrained(tmpdirname)
             loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname)
             loaded_model_outputs = loaded_model(**inputs)
 
