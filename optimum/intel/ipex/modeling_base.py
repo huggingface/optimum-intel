@@ -73,6 +73,9 @@ def _is_patched_with_ipex(model, task):
                 return True
         return False
     else:
+        # The ipex IAKV op in patched model requires the hidden size at least 64
+        if model.config.hidden_size < 64:
+            return False
         return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES and task in _IPEX_EXPORTED_TASK
 
 
