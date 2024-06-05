@@ -324,7 +324,9 @@ class OVExportCommand(BaseOptimumCLICommand):
 
             maybe_save_preprocessors(self.args.model, self.args.output, trust_remote_code=self.args.trust_remote_code)
             if not self.args.disable_convert_tokenizer:
-                preprocessors = maybe_load_preprocessors(self.args.model, trust_remote_code=self.args.trust_remote_code)
+                preprocessors = maybe_load_preprocessors(
+                    self.args.model, trust_remote_code=self.args.trust_remote_code
+                )
                 maybe_convert_tokenizers(library_name, self.args.output, preprocessors=preprocessors)
         else:
             # TODO : add input shapes
