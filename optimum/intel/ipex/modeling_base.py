@@ -18,7 +18,7 @@ import os
 import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import intel_extension_for_pytorch as ipex
 import torch
@@ -50,7 +50,7 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
-from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _patch_model
+from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_GENERATION_METHODS, _IPEX_EXPORTED_TASK, _patch_model
 from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
@@ -523,7 +523,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         return past_key_values
 
-    # Temporary fix.
+    # Temporary fix, will delete when https://github.com/huggingface/transformers/pull/31226 release.
     def _get_initial_cache_position(self, input_ids, model_kwargs):
         """Calculates `cache_position` for the pre-fill stage based on `input_ids` and optionally past length"""
         if not model_kwargs.get("use_cache", True):
@@ -578,6 +578,18 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             past_key_values = outputs["past_key_values"] if self.use_cache else None
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+
+    def _prepare_generation_config(
+        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+    ) -> Tuple[GenerationConfig, Dict]:
+        generation_config, model_kwargs = self.model_cls._prepare_generation_config(self, generation_config, **kwargs)
+        generation_method = generation_config.get_generation_mode(kwargs.get("assistant_model", None)).value
+        if self._is_ipex_exported and generation_method not in _IPEX_EXPORTED_GENERATION_METHODS:
+            raise ValueError(
+                f"The generation method {generation_method} is not supported for patched models for now, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
+            )
+
+        return generation_config, model_kwargs
 
 
 def _prepare_inputs_for_generation_for_llama(
