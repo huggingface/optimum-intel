@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import logging
 import math
 from typing import List, Optional, Tuple, Union
 
@@ -24,8 +23,6 @@ from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repea
 
 from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
 
-
-logger = logging.getLogger(__name__)
 
 # Please also update in the setup.py and .github/workflows/test_ipex.yml if you change the transformers version
 _TRANSFORMERS_MIN_VERSION = "4.38.0"
