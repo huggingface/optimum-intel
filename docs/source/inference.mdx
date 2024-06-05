@@ -30,8 +30,8 @@ As shown in the table below, each task is associated with a class enabling to au
 | `fill-mask`                          | `OVModelForMaskedLM`                 |
 | `image-classification`               | `OVModelForImageClassification`      |
 | `audio-classification`               | `OVModelForAudioClassification`      |
-| `text-generation`                    | `OVModelForCausalLM`                 |
-| `text2text-generation`               | `OVModelForSeq2SeqLM`                |
+| `text-generation-with-past`          | `OVModelForCausalLM`                 |
+| `text2text-generation-with-past`     | `OVModelForSeq2SeqLM`                |
 | `automatic-speech-recognition`       | `OVModelForSpeechSeq2Seq`            |
 | `image-to-text`                      | `OVModelForVision2Seq`               |
 
@@ -46,7 +46,7 @@ optimum-cli export openvino --model gpt2 ov_model
 
 The example above illustrates exporting a checkpoint from the 🤗 Hub. When exporting a local model, first make sure that you saved both the model’s weights and tokenizer files in the same directory (`local_path`).
 When using CLI, pass the `local_path` to the model argument instead of the checkpoint name of the model hosted on the Hub and provide the `--task` argument. You can review the list of supported tasks in the 🤗 [Optimum documentation](https://huggingface.co/docs/optimum/exporters/task_manager). If task argument is not provided, it will default to the model architecture without any task specific head.
-Here we set the `task` to `text-generation-with-past`, with the `-with-past` suffix enabling the re-use of the pre-computed key/values hidden-states `use_cache=True`.
+The `-with-past` suffix enable the re-use of the pre-computed key/values hidden-states and is the recommended option, to export the model without (equivalent to `use_cache=False`), you will need to remove this suffix.
 
 ```bash
 optimum-cli export openvino --model local_path --task text-generation-with-past ov_model
