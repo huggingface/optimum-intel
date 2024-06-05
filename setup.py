@@ -32,6 +32,7 @@ INSTALL_REQUIRE = [
     "optimum~=1.20",
     "datasets>=1.4.0",
     "sentencepiece",
+    "setuptools",
     "scipy",
     "onnx",
 ]
@@ -49,7 +50,6 @@ TESTS_REQUIRE = [
     "rjieba",
     "timm",
     "invisible-watermark>=0.2.0",
-    "auto-gptq",
     "transformers_stream_generator",
     "einops",
     "tiktoken",
