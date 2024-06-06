@@ -242,10 +242,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
 
     # High optimized model llama is not supported assisted decoding for now.
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @unittest.skipIf(
-        is_ipex_version(">=", "2.3.0"),
-        reason="CPU IPEXModel does not support assisted decoding when ipex version >= 2.3.0",
-    )
     def test_assisted_decoding(self, model_arch):
         if model_arch == "llama2":
             return
@@ -301,10 +297,6 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
                 self.assertIsInstance(outputs, torch.Tensor)
                 self.assertTrue(torch.equal(outputs, transformers_outputs))
 
-    @unittest.skipIf(
-        is_ipex_version(">=", "2.3.0"),
-        reason="CPU IPEXModel only supports with past_key_values for ipex version >= 2.3.0",
-    )
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
         tokenizer = AutoTokenizer.from_pretrained(model_id)

@@ -184,7 +184,7 @@ def recursive_to_device(value, device):
     return value
 
 
-def setattr_from_module(new_module, module):
+def _setattr_from_module(new_module, module):
     for k, v in module.__dict__.items():
         setattr(new_module, k, v)
     for k, v in module.__class__.__dict__.items():
