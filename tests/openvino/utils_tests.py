@@ -110,7 +110,7 @@ MODEL_NAMES = {
     "latent-consistency": "echarlaix/tiny-random-latent-consistency",
     "sew": "hf-internal-testing/tiny-random-SEWModel",
     "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",
-    "snowflake": "katuni4ka/tiny-random-snowflake",
+    "arctic": "katuni4ka/tiny-random-snowflake",
     "swin": "hf-internal-testing/tiny-random-SwinModel",
     "t5": "hf-internal-testing/tiny-random-t5",
     "trocr": "microsoft/trocr-small-handwritten",

@@ -155,18 +155,13 @@ class MixtralModelPatcher(DecoderModelPatcher):
 
 class ArcticModelPatcher(MixtralModelPatcher):
     def __enter__(self):
-        super().__enter__()
         # model initialize some weights for matrix multiplication in bfloat16, that lead to inconsistency of dtype
         try:
             self._model.to(torch.float32)
         except Exception:
             pass
 
-        for layer in self._model.model.layers:
-            layer.block_sparse_moe._unpatched_forward = layer.block_sparse_moe.forward
-            layer.block_sparse_moe.forward = types.MethodType(
-                _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
-            )
+        super().__enter__()
 
 
 def _chatglm_transformer_forward(
