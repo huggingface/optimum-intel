@@ -89,7 +89,10 @@ class OVBaseModel(OptimizedModel):
 
         self.model = model
         self.request = None
-        self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
+        if self.can_generate():
+            self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
+        else:
+            self.generation_config = None
 
         self._openvino_config = None
         if quantization_config:
@@ -240,6 +243,20 @@ class OVBaseModel(OptimizedModel):
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         model = cls.load_model(model_cache_path, quantization_config=quantization_config)
+
+        try:
+            generation_config = GenerationConfig.from_pretrained(
+                model_id,
+                token=token,
+                revision=revision,
+                subfolder=subfolder,
+                force_download=force_download,
+                cache_dir=cache_dir,
+            )
+            kwargs["generation_config"] = generation_config
+        except Exception:
+            pass
+
         return cls(
             model,
             config=config,

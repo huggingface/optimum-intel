@@ -78,7 +78,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.encoder_model = encoder
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
-        self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
+        if self.can_generate():
+            self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
+        else:
+            self.generation_config = None
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
@@ -217,6 +220,19 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             decoder = cls.load_model(file_names["decoder"], quantization_config)
             if use_cache:
                 decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
+
+        try:
+            generation_config = GenerationConfig.from_pretrained(
+                model_id,
+                token=token,
+                revision=revision,
+                cache_dir=cache_dir,
+                force_download=force_download,
+                local_files_only=local_files_only,
+            )
+            kwargs["generation_config"] = generation_config
+        except Exception:
+            pass
 
         return cls(
             encoder=encoder,

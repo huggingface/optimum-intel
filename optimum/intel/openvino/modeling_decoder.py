@@ -763,6 +763,18 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = cls
 
         enable_compilation = kwargs.pop("compile", True) and not load_in_4bit
+        try:
+            generation_config = GenerationConfig.from_pretrained(
+                model_id,
+                token=token,
+                revision=revision,
+                cache_dir=cache_dir,
+                force_download=force_download,
+                local_files_only=local_files_only,
+            )
+            kwargs["generation_config"] = generation_config
+        except Exception:
+            pass
         causal_model = init_cls(
             model=model,
             config=config,
