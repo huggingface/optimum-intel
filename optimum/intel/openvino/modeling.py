@@ -139,6 +139,7 @@ class OVModel(OVBaseModel):
         if isinstance(device, str):
             self._device = device.upper()
             self.request = None
+            self.request_dict.clear()
         else:
             logger.debug(f"device must be of type {str} but got {type(device)} instead")
 

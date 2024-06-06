@@ -88,7 +88,9 @@ class OVBaseModel(OptimizedModel):
         self.output_names = output_names
 
         self.model = model
+        self.compiled_model = None
         self.request = None
+        self.request_dict = {}
         self.generation_config = GenerationConfig.from_model_config(config) if self.can_generate() else None
 
         self._openvino_config = None
@@ -457,11 +459,11 @@ class OVBaseModel(OptimizedModel):
                 cache_dir = Path(self.model_save_dir).joinpath("model_cache")
                 ov_config["CACHE_DIR"] = str(cache_dir)
                 logger.info(f"Setting OpenVINO CACHE_DIR to {str(cache_dir)}")
-            self.request = core.compile_model(self.model, self._device, ov_config)
+            self.compiled_model = core.compile_model(self.model, self._device, ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(self.request)
+                _print_compiled_model_properties(self.compiled_model)
 
     def _reshape(
         self,
@@ -500,6 +502,7 @@ class OVBaseModel(OptimizedModel):
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
         self.request = None
+        self.request_dict.clear()
         return self
 
     def half(self):
@@ -509,6 +512,7 @@ class OVBaseModel(OptimizedModel):
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)
         self.request = None
+        self.request_dict.clear()
         return self
 
     def eval(self):

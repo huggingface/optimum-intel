@@ -210,6 +210,7 @@ class OVBaseDecoderModel(OVModel):
                 if self.is_dynamic:
                     self.model = self._reshape(self.model, -1, -1)
                 self.request = None
+                self.request_dict.clear()
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -345,7 +346,7 @@ class OVBaseDecoderModel(OVModel):
     def compile(self):
         if self.request is None:
             super().compile()
-            self.request = self.request.create_infer_request()
+            self.request = self.compiled_model.create_infer_request()
 
     def _make_stateful(self):
         patch_stateful(self.config, self.model)
@@ -424,9 +425,14 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         else:
             # past_key_values are not used explicitly, instead they are handled inside the model
             if past_key_values is None:
+                infer_req = self.request
+                if 'kwargs' in kwargs.keys():
+                    tid = kwargs['kwargs']['tid']
+                    if tid in self.request_dict:
+                        infer_req = self.request_dict[tid]
                 # This is the first iteration in a sequence, reset all states
-                if self.request is not None:
-                    self.request.reset_state()
+                if infer_req is not None:
+                    infer_req.reset_state()
                 # Set initial value for the next beam_idx input that will be used at the current iteration
                 # and will be optionally updated by _reorder_cache at the next iterations if beam_search is used
                 self.next_beam_idx = np.arange(batch_size, dtype=int)
@@ -473,6 +479,17 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
     ) -> CausalLMOutputWithPast:
         self.compile()
 
+        if 'kwargs' in kwargs.keys():
+            tid = kwargs['kwargs']['tid']
+            if tid in self.request_dict:
+                infer_req = self.request_dict[tid]
+            else:
+                infer_req = self.compiled_model.create_infer_request()
+                self.request_dict[tid] = infer_req
+        else:
+            tid = -1
+            infer_req = self.request
+
         inputs = self.prepare_inputs(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -484,9 +501,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if self._first_iter_beam_search:
             inputs, duplication_indices = self._deduplicate_inputs(inputs)
         # Run inference
-        self.request.start_async(inputs, share_inputs=True)
-        self.request.wait()
-        logits = torch.from_numpy(self.request.get_tensor("logits").data).to(self.device)
+        print(f'.... {tid} infer start ....\n')
+        infer_req.start_async(inputs, share_inputs=True)
+        infer_req.wait()
+        print(f'..... {tid} infer end .....\n')
+        logits = torch.from_numpy(infer_req.get_tensor("logits").data).to(self.device)
         if self.stateful:
             # Need a marker to differentiate the first generate iteration from the others in
             # the first condition at the function beginning above.
@@ -497,7 +516,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if not self.stateful:
             if self.use_cache:
                 # Tuple of length equal to : number of layer * number of past_key_value per decoder layer (2 corresponds to the self-attention layer)
-                past_key_values = tuple(self.request.get_tensor(key).data for key in self.key_value_output_names)
+                past_key_values = tuple(infer_req.get_tensor(key).data for key in self.key_value_output_names)
                 if self.config.model_type not in MULTI_QUERY_ATTN_MODELS or (
                     self.config.model_type == "falcon" and self.config.new_decoder_architecture
                 ):
