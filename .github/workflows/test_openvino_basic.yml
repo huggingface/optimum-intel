@@ -6,12 +6,13 @@ on:
     - cron:  '41 1 * * *'  # run every day at 1:41
   push:
     paths:
-    - 'tests/openvino/test_modeling_basic.py'
-    - '.github/workflows/test_openvino_basic.yml'
+      - 'tests/openvino/test_modeling_basic.py'
+      - '.github/workflows/test_openvino_basic.yml'
   pull_request:
+    types: [labeled]
     paths:
-    - 'tests/openvino/test_modeling_basic.py'
-    - '.github/workflows/test_openvino_basic.yml'
+      - 'tests/openvino/test_modeling_basic.py'
+      - '.github/workflows/test_openvino_basic.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
