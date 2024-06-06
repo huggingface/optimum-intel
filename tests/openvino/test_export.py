@@ -164,7 +164,7 @@ class ExportModelTest(unittest.TestCase):
                 # check that generate config remains after repeated saving
                 with TemporaryDirectory() as tmpdirname2:
                     ov_model.save_pretrained(tmpdirname2)
-                    ov_model = auto_model.from_pretrained(tmpdirname2)
+                    ov_model = auto_model.from_pretrained(tmpdirname2, use_cache=use_cache)
                     self.assertIsInstance(ov_model, OVBaseModel)
                     self.assertTrue(ov_model.can_generate())
                     self.assertTrue(ov_model.generation_config is not None)
