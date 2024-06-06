@@ -278,7 +278,7 @@ class _IPEXLlamaAttention(nn.Module):
 
         sdpa = self.sdpa_with_cache if use_cache else self.sdpa_without_cache
         attn_output, past_key_value, attn_weights = sdpa(query, key, value, past_key_value, attention_mask)
-        attn_output = attn_output.transpose(1, 2).view(bsz, seq_len, self.hidden_size)
+        attn_output = attn_output.transpose(1, 2).reshape(bsz, seq_len, self.hidden_size)
 
         if hasattr(self, "mha_linear_add"):
             attn_output = self.mha_linear_add(attn_output, residual)
