@@ -28,10 +28,11 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "transformers>=4.36.0,<4.41.0",
-    "optimum~=1.19",
+    "transformers>=4.36.0,<4.42.0",
+    "optimum~=1.20",
     "datasets>=1.4.0",
     "sentencepiece",
+    "setuptools",
     "scipy",
     "onnx",
 ]
@@ -49,11 +50,10 @@ TESTS_REQUIRE = [
     "rjieba",
     "timm",
     "invisible-watermark>=0.2.0",
-    "auto-gptq",
     "transformers_stream_generator",
     "einops",
     "tiktoken",
-    "sentence_transformers",
+    "sentence-transformers",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]

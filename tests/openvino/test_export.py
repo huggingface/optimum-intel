@@ -18,8 +18,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional
 
+import torch
 from parameterized import parameterized
-from transformers import AutoConfig
+from sentence_transformers import SentenceTransformer, models
+from transformers import AutoConfig, AutoTokenizer
 from utils_tests import MODEL_NAMES
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
@@ -124,7 +126,7 @@ class ExportModelTest(unittest.TestCase):
 
 
 class CustomExportModelTest(unittest.TestCase):
-    def test_export_custom_model(self):
+    def test_custom_export_config_model(self):
         class BertOnnxConfigWithPooler(BertOnnxConfig):
             @property
             def outputs(self):
@@ -157,3 +159,26 @@ class CustomExportModelTest(unittest.TestCase):
 
             self.assertIsInstance(ov_model, OVBaseModel)
             self.assertTrue(ov_model.output_names == {"last_hidden_state": 0, "pooler_output": 1})
+
+    def test_export_custom_model(self):
+        model_id = "hf-internal-testing/tiny-random-BertModel"
+        word_embedding_model = models.Transformer(model_id, max_seq_length=256)
+        pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension())
+        dense_model = models.Dense(
+            in_features=pooling_model.get_sentence_embedding_dimension(),
+            out_features=256,
+        )
+        model = SentenceTransformer(modules=[word_embedding_model, pooling_model, dense_model])
+
+        with TemporaryDirectory() as tmpdirname:
+            export_from_model(model, output=tmpdirname, task="feature-extraction")
+            ov_model = OVModelForCustomTasks.from_pretrained(tmpdirname)
+
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("This is a sample input", return_tensors="pt")
+        with torch.no_grad():
+            model_outputs = model(tokens)
+
+        ov_outputs = ov_model(**tokens)
+        self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
+        self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))

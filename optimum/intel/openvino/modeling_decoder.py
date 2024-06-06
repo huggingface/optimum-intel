@@ -42,7 +42,7 @@ from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import _DEFAULT_4BIT_CONFIGS, OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, STR_TO_OV_TYPE
+from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
 
 if TYPE_CHECKING:
@@ -409,6 +409,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             elif self.use_cache:
                 for input_name in self.key_value_input_names:
                     model_inputs = self.model.input(input_name)
+                    dtype = OV_TO_NP_TYPE[model_inputs.get_element_type().get_type_name()]
                     shape = model_inputs.get_partial_shape()
                     if self.config.model_type == "chatglm":
                         shape[0] = 0
@@ -419,7 +420,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                             shape[2] = 0
                         else:
                             shape[1] = 0
-                    inputs[input_name] = Tensor(model_inputs.get_element_type(), shape.get_shape())
+                    inputs[input_name] = np.empty([dim.get_length() for dim in shape], dtype=dtype)
         else:
             # past_key_values are not used explicitly, instead they are handled inside the model
             if past_key_values is None:
@@ -586,11 +587,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
         for input_name, input_tensor in model_inputs.items():
             if input_name not in ["input_ids", "beam_idx"]:
-                if not isinstance(input_tensor, Tensor):
+                if input_name not in self.key_value_input_names:
                     upd_model_inputs[input_name] = input_tensor[indicies]
                 else:
-                    shape = input_tensor.shape
-                    dtype = input_tensor.element_type
+                    shape = input_tensor.shape if isinstance(input_tensor, Tensor) else list(input_tensor.shape)
+                    dtype = input_tensor.element_type if isinstance(input_tensor, Tensor) else Type(input_tensor.dtype)
                     upd_batch_size = indicies.shape[0]
                     if self.config.model_type == "bloom":
                         upd_batch_size *= self.config.num_attention_heads
