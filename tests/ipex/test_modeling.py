@@ -188,6 +188,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "gpt_neox",
         "mistral",
         "llama",
+        "llama2",
         # "phi",
         "mpt",
         "opt",
@@ -196,7 +197,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES + IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
@@ -227,7 +228,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
         self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES + IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -242,6 +243,8 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     # High optimized model llama is not supported assisted decoding for now.
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_assisted_decoding(self, model_arch):
+        if model_arch == "llama2":
+            return
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)

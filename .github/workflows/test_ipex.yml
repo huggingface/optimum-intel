@@ -33,6 +33,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install torch torchaudio torchvision --extra-index-url https://download.pytorch.org/whl/cpu
         pip install .[ipex,tests]
+        pip install transformers==${{ matrix.transformers-version }}
     - name: Test with Pytest
       run: |
         pytest tests/ipex/

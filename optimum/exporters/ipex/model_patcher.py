@@ -33,7 +33,6 @@ from .modeling_utils import (
 
 _IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
 _IPEX_EXPORTED_TASK = ("text-generation",)
-_IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search")
 
 
 def convert_func(m, func_name, new_function):

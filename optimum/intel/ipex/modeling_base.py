@@ -50,12 +50,7 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
-from ...exporters.ipex.model_patcher import (
-    _IPEX_EXPORTED_GENERATION_METHODS,
-    _IPEX_EXPORTED_TASK,
-    _IPEX_MINIMUM_VERSION_FOR_PATCHING,
-    _patch_model,
-)
+from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _IPEX_MINIMUM_VERSION_FOR_PATCHING, _patch_model
 from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
@@ -65,6 +60,7 @@ logger = logging.getLogger(__name__)
 
 
 _IPEX_SUPPORT_MODEL_TYPES = ("llama",)
+_IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
 def _is_patched_with_ipex(model, task):
@@ -593,14 +589,21 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     def _prepare_generation_config(
         self, generation_config: Optional[GenerationConfig], **kwargs: Dict
     ) -> Tuple[GenerationConfig, Dict]:
-        generation_config, model_kwargs = self.model_cls._prepare_generation_config(self, generation_config, **kwargs)
-        generation_method = generation_config.get_generation_mode(kwargs.get("assistant_model", None)).value
-        if self._is_ipex_exported and generation_method not in _IPEX_EXPORTED_GENERATION_METHODS:
+        generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
+        generation_method = generation_config.get_generation_mode().value
+        if generation_method not in _IPEX_EXPORTED_GENERATION_METHODS:
             raise ValueError(
-                f"The generation method {generation_method} is not supported for patched models for now, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
+                f"The generation method {generation_method} is not supported for IPEXModelForCausalLM for now, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
 
         return generation_config, model_kwargs
+
+    def generate(self, **kwargs):
+        if self._is_ipex_exported and kwargs.get("assistant_model", None):
+            raise ValueError(
+                f"Assisted decoding is not supported for patched models for now, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
+            )
+        return super().generate(**kwargs)
 
 
 def _prepare_inputs_for_generation_for_llama(
