@@ -21,7 +21,7 @@ from typing import Optional
 import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer, GenerationConfig
 from utils_tests import MODEL_NAMES
 
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
@@ -70,6 +70,8 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-xl-refiner": OVStableDiffusionXLImg2ImgPipeline,
         "latent-consistency": OVLatentConsistencyModelPipeline,
     }
+
+    GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper")
 
     def _openvino_export(
         self,
@@ -123,6 +125,51 @@ class ExportModelTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_export(self, model_type: str):
         self._openvino_export(model_type)
+
+    @parameterized.expand(GENERATIVE_MODELS)
+    def test_export_with_custom_gen_config(self, model_type):
+        auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
+        task = auto_model.export_feature
+        model_name = MODEL_NAMES[model_type]
+        loading_kwargs = {"attn_implementation": "eager"} if model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED else {}
+
+        model = auto_model.auto_model_class.from_pretrained(model_name, **loading_kwargs)
+
+        model.generation_config.top_k = 42
+        model.generation_config.do_sample = True
+
+        if getattr(model.config, "model_type", None) == "pix2struct":
+            preprocessors = maybe_load_preprocessors(model_name)
+        else:
+            preprocessors = None
+
+        supported_tasks = (task, task + "-with-past") if "text-generation" in task else (task,)
+        for supported_task in supported_tasks:
+            with TemporaryDirectory() as tmpdirname:
+                export_from_model(
+                    model=model,
+                    output=Path(tmpdirname),
+                    task=supported_task,
+                    preprocessors=preprocessors,
+                )
+
+                use_cache = supported_task.endswith("-with-past")
+                ov_model = auto_model.from_pretrained(tmpdirname, use_cache=use_cache)
+                self.assertIsInstance(ov_model, OVBaseModel)
+                self.assertTrue(ov_model.can_generate())
+                self.assertTrue(ov_model.generation_config is not None)
+                self.assertIsInstance(ov_model.generation_config, GenerationConfig)
+                self.assertTrue(ov_model.generation_config.top_k == 42)
+
+                # check that generate config remains after repeated saving
+                with TemporaryDirectory() as tmpdirname2:
+                    ov_model.save_pretrained(tmpdirname2)
+                    ov_model = auto_model.from_pretrained(tmpdirname2, use_cache=use_cache)
+                    self.assertIsInstance(ov_model, OVBaseModel)
+                    self.assertTrue(ov_model.can_generate())
+                    self.assertTrue(ov_model.generation_config is not None)
+                    self.assertIsInstance(ov_model.generation_config, GenerationConfig)
+                    self.assertTrue(ov_model.generation_config.top_k == 42)
 
 
 class CustomExportModelTest(unittest.TestCase):

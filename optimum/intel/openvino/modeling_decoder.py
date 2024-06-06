@@ -223,6 +223,14 @@ class OVBaseDecoderModel(OVModel):
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
 
+        if self.generation_config is not None:
+            try:
+                self.generation_config.save_pretrained(save_directory)
+            except Exception as exception:
+                logger.warning(
+                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
+                )
+
         self._save_openvino_config(save_directory)
 
     @classmethod
@@ -765,6 +773,18 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = cls
 
         enable_compilation = kwargs.pop("compile", True) and not load_in_4bit
+        try:
+            generation_config = GenerationConfig.from_pretrained(
+                model_id,
+                token=token,
+                revision=revision,
+                cache_dir=cache_dir,
+                force_download=force_download,
+                local_files_only=local_files_only,
+            )
+            kwargs["generation_config"] = generation_config
+        except Exception:
+            pass
         causal_model = init_cls(
             model=model,
             config=config,
