@@ -1764,7 +1764,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, ov_model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
         ov_pipe = optimum_pipeline("image-to-text", model_id, accelerator="openvino")
-        ov_outputs = ov_pipe(inputs)
+        ov_outputs = ov_pipe(inputs, max_new_tokens=3)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
 
         gc.collect()
