@@ -250,11 +250,13 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        ipex_output = ipex_model.generate(**tokens, do_sample=False)
-        ipex_output_assisted = ipex_model.generate(**tokens, do_sample=False, assistant_model=transformers_model)
-        transformers_output = transformers_model.generate(**tokens, do_sample=False)
+        ipex_output = ipex_model.generate(**tokens, do_sample=False, max_new_tokens=4)
+        ipex_output_assisted = ipex_model.generate(
+            **tokens, do_sample=False, assistant_model=transformers_model, max_new_tokens=4
+        )
+        transformers_output = transformers_model.generate(**tokens, do_sample=False, max_new_tokens=4)
         transformers_output_assisted = transformers_model.generate(
-            **tokens, do_sample=False, assistant_model=ipex_model
+            **tokens, do_sample=False, assistant_model=ipex_model, max_new_tokens=4
         )
         self.assertTrue(torch.equal(ipex_output, ipex_output_assisted))
         self.assertTrue(torch.equal(transformers_output, transformers_output_assisted))
