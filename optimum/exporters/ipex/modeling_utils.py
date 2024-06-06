@@ -25,7 +25,7 @@ from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_ve
 
 
 # Please also update in the setup.py and .github/workflows/test_ipex.yml if you change the transformers version
-_TRANSFORMERS_MIN_VERSION = "4.38.0"
+_TRANSFORMERS_MIN_VERSION = "4.39.0"
 _TRANSFORMERS_MAX_VERSION = "4.41.2"
 _IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.3.0"
 
