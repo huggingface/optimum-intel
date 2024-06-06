@@ -23,6 +23,7 @@ from transformers.models.llama.modeling_llama import (
 from optimum.intel.utils.import_utils import is_ipex_version
 
 from .modeling_utils import (
+    _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _IPEXLlamaDecoderLayerRef,
     _llama_attn_forward,
     _llama_layer_norm_forward,
@@ -62,10 +63,12 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 
 def _patch_llama_model(model):
-    if is_ipex_version("<", "2.5.0"):
-        raise ImportError("Only ipex version > 2.3.0 supports RotaryEmbedding and IndirectAccessKVCache")
+    if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
+        raise ImportError(
+            f"Only ipex version >= {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports RotaryEmbedding and IndirectAccessKVCacheAttention"
+        )
 
-    from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCache, RotaryEmbedding
+    from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCacheAttention, RotaryEmbedding
 
     ipex_rope = RotaryEmbedding(
         model.config.max_position_embeddings,
@@ -73,7 +76,7 @@ def _patch_llama_model(model):
         model.config.rope_theta,
         model.config.architectures[0],
     )
-    ipex_scale_dot_product = IndirectAccessKVCache(text_max_length=model.config.max_position_embeddings)
+    ipex_scale_dot_product = IndirectAccessKVCacheAttention(text_max_length=model.config.max_position_embeddings)
     patch_op(model, LlamaAttention, "ipex_rope", ipex_rope)
     patch_op(model, LlamaAttention, "ipex_scale_dot_product", ipex_scale_dot_product)
 

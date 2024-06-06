@@ -347,7 +347,6 @@ class OVQuantizer(OptimumQuantizer):
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
                 )
-
                 if self.model.export_feature == "text-generation" and self.model.use_cache:
                     calibration_dataset = self._prepare_text_generation_dataset(
                         quantization_config, calibration_dataloader
@@ -430,6 +429,7 @@ class OVQuantizer(OptimumQuantizer):
             ),
             **kwargs,
         )
+
         self.model.model = quantized_model
         if save_directory is not None:
             self.model.save_pretrained(save_directory)
@@ -696,8 +696,6 @@ class OVQuantizer(OptimumQuantizer):
     def _prepare_text_generation_dataset(
         self, quantization_config: OVQuantizationConfig, calibration_dataloader: OVDataLoader
     ) -> nncf.Dataset:
-        # TODO: this function is not covered by tests, remove if not relevant anymore or cover by tests otherwise
-
         # Prefetch past_key_values
         self.model.update_pkv_precision(True)
         self.model.compile()
@@ -705,15 +703,16 @@ class OVQuantizer(OptimumQuantizer):
 
         num_samples = quantization_config.num_samples or 200
 
-        self.model.request = InferRequestWrapper(self.model.model.request, collected_inputs)
+        self.model.request = InferRequestWrapper(self.model.request, collected_inputs)
         try:
             for data in calibration_dataloader:
                 self.model.generate(**data, max_new_tokens=1)
                 if len(collected_inputs) >= num_samples:
                     break
         finally:
-            self.model.model.request = self.model.model.request.request
+            self.model.request = self.model.request.request
         calibration_dataset = nncf.Dataset(collected_inputs)
+
         return calibration_dataset
 
     def _prepare_unet_dataset(

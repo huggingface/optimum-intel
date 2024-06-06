@@ -20,6 +20,7 @@ from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
+    CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
     LlamaOnnxConfig,
@@ -44,6 +45,8 @@ from .model_patcher import (
     AquilaModelPatcher,
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
+    CodeGenModelPatcher,
+    DBRXModelPatcher,
     GemmaModelPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
@@ -105,6 +108,15 @@ class BaichaunOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 @register_in_tasks_manager("qwen2", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+@register_in_tasks_manager("qwen2-moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
@@ -738,3 +750,38 @@ class InternLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return InternLMModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "codegen",
+    *["feature-extraction", "feature-extraction-with-past", "text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class CodeGenOpenVINOConfig(CodeGenOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return CodeGenModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "dbrx",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
+        num_attention_heads="n_heads",
+        hidden_size="d_model",
+        num_layers="n_layers",
+        num_key_value_heads="attn_config.kv_n_heads",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return DBRXModelPatcher(self, model, model_kwargs=model_kwargs)
