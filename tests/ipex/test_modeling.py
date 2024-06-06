@@ -297,6 +297,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             tokens = tokenizer(text, padding=True, return_tensors="pt")
             for generation_config in generation_configs:
                 outputs = model.generate(**tokens, generation_config=generation_config)
+                transformers_outputs = trasnformers_model.generate(**tokens, generation_config=generation_config)
                 self.assertIsInstance(outputs, torch.Tensor)
                 self.assertTrue(torch.equal(outputs, transformers_outputs))
 

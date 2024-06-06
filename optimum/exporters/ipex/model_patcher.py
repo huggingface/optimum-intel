@@ -62,9 +62,7 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 def _patch_llama_model(model):
     if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
-        raise ImportError(
-            f"Only ipex version >= {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports llama model patching"
-        )
+        raise ImportError(f"Only ipex version >= {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports llama model patching")
     convert_functions(model, LlamaModel, "forward", _llama_model_forward)
     convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
     convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayer, model.config)

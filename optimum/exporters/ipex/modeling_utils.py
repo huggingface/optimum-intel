@@ -19,10 +19,11 @@ import torch
 from torch import nn
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
-from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
+from transformers.models.llama.modeling_llama import repeat_kv
 
-from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
+from optimum.intel.utils.import_utils import is_ipex_version
 from optimum.intel.utils.modeling_utils import setattr_from_module
+
 
 # Please also update in the setup.py and .github/workflows/test_ipex.yml if you change the transformers version
 _TRANSFORMERS_MIN_VERSION = "4.39.0"
@@ -34,7 +35,7 @@ _IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.3.0"
 def _llama_layer_norm_forward(self, hidden_states):
     return torch.ops.torch_ipex.rmsnorm(hidden_states, self.weight, self.variance_epsilon)
 
-  
+
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L1130
 def _llama_model_forward(
     self,
@@ -136,6 +137,7 @@ def _llama_model_forward(
         hidden_states=all_hidden_states,
         attentions=all_self_attns,
     )
+
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L321
 class _IPEXLlamaAttention(nn.Module):
