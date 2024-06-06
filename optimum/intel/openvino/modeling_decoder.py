@@ -752,17 +752,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
-        if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
-            quantization_config = _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, quantization_config)
-
-        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
-
-        load_in_4bit = quantization_config.bits == 4 if quantization_config else False
-
-        model = cls.load_model(
-            model_cache_path,
-            quantization_config=None if load_in_4bit else quantization_config,
-        )
+        model = cls.load_model(model_cache_path)
 
         model_type = config.model_type.replace("_", "-")
         if model_type == "bloom":
@@ -772,7 +762,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         else:
             init_cls = cls
 
-        enable_compilation = kwargs.pop("compile", True) and not load_in_4bit
+        if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
+            quantization_config = _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, quantization_config)
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+
+        enable_compilation = kwargs.pop("compile", True) and not quantization_config
+
         try:
             generation_config = GenerationConfig.from_pretrained(
                 model_id,
@@ -785,6 +780,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             kwargs["generation_config"] = generation_config
         except Exception:
             pass
+
         causal_model = init_cls(
             model=model,
             config=config,
@@ -794,7 +790,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             **kwargs,
         )
 
-        if load_in_4bit:
+        if quantization_config:
             if not is_nncf_available():
                 raise ImportError(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
