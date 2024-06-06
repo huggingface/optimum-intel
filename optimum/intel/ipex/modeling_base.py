@@ -603,7 +603,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             raise ValueError(
                 f"Assisted decoding is not supported for patched models for now, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
-        return super().generate(**kwargs)
+        return super().generate(*args, **kwargs)
 
 
 def _prepare_inputs_for_generation_for_llama(
