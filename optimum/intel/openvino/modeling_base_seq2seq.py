@@ -107,6 +107,13 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             openvino.save_model(src_file, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
+        if self.generation_config is not None:
+            try:
+                self.generation_config.save_pretrained(save_directory)
+            except Exception as exception:
+                logger.warning(
+                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
+                )
 
     @classmethod
     def _from_pretrained(

@@ -158,6 +158,14 @@ class OVBaseModel(OptimizedModel):
         """
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(self.model, dst_path, compress_to_fp16=False)
+        generation_config = getattr(self, "generation_config", None)
+        if generation_config is not None:
+            try:
+                generation_config.save_pretrained(save_directory)
+            except Exception as exception:
+                logger.warning(
+                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
+                )
 
         self._save_openvino_config(save_directory)
 
