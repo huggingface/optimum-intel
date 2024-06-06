@@ -116,7 +116,6 @@ class OVBaseDecoderModel(OVModel):
             quantization_config=quantization_config,
             **kwargs,
         )
-
         self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
         model_has_sinks = model_has_state(self.model)
@@ -256,6 +255,9 @@ class OVBaseDecoderModel(OVModel):
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
+        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
+        # would end-up removing the directory containing the underlying OpenVINO model
+        cls._model_save_dir_tempdirectory_instance = save_dir
 
         if task is None:
             task = cls.export_feature
