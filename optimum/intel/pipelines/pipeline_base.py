@@ -150,7 +150,7 @@ def pipeline(
     feature_extractor: Optional[Union[str, PreTrainedFeatureExtractor]] = None,
     use_fast: bool = True,
     token: Optional[Union[str, bool]] = None,
-    accelerator: Optional[str] = "ort",
+    accelerator: Optional[str] = None,
     revision: Optional[str] = None,
     trust_remote_code: Optional[bool] = None,
     torch_dtype: Optional[Union[str, torch.dtype]] = None,
@@ -171,6 +171,12 @@ def pipeline(
             The task defining which pipeline will be returned. Currently accepted tasks are:
 
             - `"text-generation"`: will return a [`TextGenerationPipeline`]:.
+            - `"fill-mask"`: will return a [`FillMaskPipeline`].
+            - `"question-answering"`: will return a [`QuestionAnsweringPipeline`].
+            - `"image-classificatio"`: will return a [`ImageClassificationPipeline`].
+            - `"text-classification"`: will return a [`TextClassificationPipeline`].
+            - `"token-classification"`: will return a [`TokenClassificationPipeline`].
+            - `"audio-classification"`: will return a [`AudioClassificationPipeline`].
 
         model (`str` or [`PreTrainedModel`], *optional*):
             The model that will be used by the pipeline to make predictions. This can be a model identifier or an
@@ -185,7 +191,7 @@ def pipeline(
             is not specified or not a string, then the default tokenizer for `config` is loaded (if it is a string).
             However, if `config` is also not given or not a string, then the default tokenizer for the given `task`
             will be loaded.
-        accelerator (`str`, *optional*, defaults to `"ipex"`):
+        accelerator (`str`, *optional*):
             The optimization backends, choose from ["ipex", "inc", "openvino"].
         use_fast (`bool`, *optional*, defaults to `True`):
             Whether or not to use a Fast tokenizer if possible (a [`PreTrainedTokenizerFast`]).
@@ -226,9 +232,12 @@ def pipeline(
         )
 
     if accelerator not in MAPPING_LOADING_FUNC:
-        raise ValueError(
-            f'Accelerator {accelerator} is not supported. Supported accelerator is {", ".join(MAPPING_LOADING_FUNC)}.'
-        )
+        if accelerator is None:
+            msg = "Impossible to instantiate a pipeline without specifying an `accelerator`."
+        else:
+            msg = f"`accelerator` {accelerator} is not supported."
+
+        raise ValueError(msg + f" Supported list of `accelerator` is : {', '.join(MAPPING_LOADING_FUNC)}.")
 
     if accelerator == "ipex":
         if task not in list(IPEX_SUPPORTED_TASKS.keys()):

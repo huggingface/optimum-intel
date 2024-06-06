@@ -18,7 +18,7 @@ import os
 import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import intel_extension_for_pytorch as ipex
 import torch
@@ -50,7 +50,7 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
-from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _patch_model
+from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _IPEX_MINIMUM_VERSION_FOR_PATCHING, _patch_model
 from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
@@ -60,10 +60,11 @@ logger = logging.getLogger(__name__)
 
 
 _IPEX_SUPPORT_MODEL_TYPES = ("llama",)
+_IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
 def _is_patched_with_ipex(model, task):
-    if is_ipex_version("<", "2.3.0"):
+    if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         return False
 
     if isinstance(model, torch.jit.ScriptModule):
@@ -73,7 +74,12 @@ def _is_patched_with_ipex(model, task):
                 return True
         return False
     else:
-        return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES and task in _IPEX_EXPORTED_TASK
+        # The ipex IAKV op in patched model requires the hidden size at least 64
+        return (
+            model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES
+            and task in _IPEX_EXPORTED_TASK
+            and model.config.hidden_size >= 64
+        )
 
 
 def ipex_jit_trace(model, task, use_cache):
@@ -83,6 +89,7 @@ def ipex_jit_trace(model, task, use_cache):
 
     if _is_patched_with_ipex(model, task):
         model = _patch_model(model)
+        # Todo: integerate in prepare_jit_inputs.
         sample_inputs = get_dummy_input(model, return_dict=True)
         # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
         _enable_tpp()
@@ -92,9 +99,10 @@ def ipex_jit_trace(model, task, use_cache):
 
     model.config.return_dict = False
 
-    if "past_key_values" in sample_inputs and use_cache:
-        # Make sure the model will output past_key_values in generation tasks
-        model.config.use_cache = True
+    if "past_key_values" in sample_inputs:
+        model.config.use_cache = use_cache
+        if not use_cache:
+            sample_inputs.pop("past_key_values")
 
     model = ipex.optimize(model.eval(), dtype=model.dtype, inplace=True)
     # Disable repack while jit tracing to reduce the memory
@@ -522,6 +530,23 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         return past_key_values
 
+    # Temporary fix, will delete when https://github.com/huggingface/transformers/pull/31226 release.
+    def _get_initial_cache_position(self, input_ids, model_kwargs):
+        """Calculates `cache_position` for the pre-fill stage based on `input_ids` and optionally past length"""
+        if not model_kwargs.get("use_cache", True):
+            model_kwargs["cache_position"] = None
+            return model_kwargs
+
+        past_length = 0
+        if "past_key_values" in model_kwargs:
+            past_length = model_kwargs["past_key_values"][0][0].shape[-2]
+        if "inputs_embeds" in model_kwargs:
+            cur_len = model_kwargs["inputs_embeds"].shape[1]
+        else:
+            cur_len = input_ids.shape[-1]
+        model_kwargs["cache_position"] = torch.arange(past_length, cur_len, device=input_ids.device)
+        return model_kwargs
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -560,6 +585,25 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             past_key_values = outputs["past_key_values"] if self.use_cache else None
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+
+    def _prepare_generation_config(
+        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+    ) -> Tuple[GenerationConfig, Dict]:
+        generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
+        generation_method = generation_config.get_generation_mode().value
+        if generation_method not in _IPEX_EXPORTED_GENERATION_METHODS:
+            raise ValueError(
+                f"The generation method {generation_method} is not supported for IPEXModelForCausalLM for now, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
+            )
+
+        return generation_config, model_kwargs
+
+    def generate(self, *args, **kwargs):
+        if self._is_ipex_exported and kwargs.get("assistant_model", None):
+            raise ValueError(
+                f"Assisted decoding is not supported for patched models for now, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
+            )
+        return super().generate(*args, **kwargs)
 
 
 def _prepare_inputs_for_generation_for_llama(

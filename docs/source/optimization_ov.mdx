@@ -44,7 +44,7 @@ model.save_pretrained(saving_directory)
 
 <Tip warning={true}>
 
-`load_in_8bit` is enabled by default for the models larger than 1 billion parameters. You can disable it with `load_in_8bit=False`.
+If not specified, `load_in_8bit` will be set to `True` by default when models larger than 1 billion parameters are exported to the OpenVINO format (with `export=True`). You can disable it with `load_in_8bit=False`.
 
 </Tip>
 

@@ -116,7 +116,6 @@ class OVBaseDecoderModel(OVModel):
             quantization_config=quantization_config,
             **kwargs,
         )
-
         self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
         model_has_sinks = model_has_state(self.model)
@@ -224,6 +223,14 @@ class OVBaseDecoderModel(OVModel):
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
 
+        if self.generation_config is not None:
+            try:
+                self.generation_config.save_pretrained(save_directory)
+            except Exception as exception:
+                logger.warning(
+                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
+                )
+
         self._save_openvino_config(save_directory)
 
     @classmethod
@@ -256,6 +263,9 @@ class OVBaseDecoderModel(OVModel):
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
+        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
+        # would end-up removing the directory containing the underlying OpenVINO model
+        cls._model_save_dir_tempdirectory_instance = save_dir
 
         if task is None:
             task = cls.export_feature
@@ -587,11 +597,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         )
         for input_name, input_tensor in model_inputs.items():
             if input_name not in ["input_ids", "beam_idx"]:
-                if not isinstance(input_tensor, Tensor):
+                if input_name not in self.key_value_input_names:
                     upd_model_inputs[input_name] = input_tensor[indicies]
                 else:
-                    shape = input_tensor.shape
-                    dtype = input_tensor.element_type
+                    shape = input_tensor.shape if isinstance(input_tensor, Tensor) else list(input_tensor.shape)
+                    dtype = input_tensor.element_type if isinstance(input_tensor, Tensor) else Type(input_tensor.dtype)
                     upd_batch_size = indicies.shape[0]
                     if self.config.model_type == "bloom":
                         upd_batch_size *= self.config.num_attention_heads
@@ -763,6 +773,18 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = cls
 
         enable_compilation = kwargs.pop("compile", True) and not load_in_4bit
+        try:
+            generation_config = GenerationConfig.from_pretrained(
+                model_id,
+                token=token,
+                revision=revision,
+                cache_dir=cache_dir,
+                force_download=force_download,
+                local_files_only=local_files_only,
+            )
+            kwargs["generation_config"] = generation_config
+        except Exception:
+            pass
         causal_model = init_cls(
             model=model,
             config=config,
