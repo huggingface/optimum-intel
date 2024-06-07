@@ -430,6 +430,7 @@ class _IPEXLlamaAttention(nn.Module):
             module.v_proj.data = self.qkv_proj_weight[:, self.num_key_value_groups + 1, :, :].reshape(
                 [self.num_key_value_heads * self.head_dim, self.hidden_size]
             )
+            self.qkv_proj_weight = self.qkv_proj_weight.permute(3, 0, 1, 2).contiguous()
             if module.q_proj.bias is not None:
                 q_bias = module.q_proj.bias.view(self.num_key_value_heads, self.num_key_value_groups, self.head_dim)
                 k_bias = module.k_proj.bias.view(self.num_key_value_heads, 1, self.head_dim)
