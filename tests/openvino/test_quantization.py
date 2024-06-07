@@ -63,7 +63,7 @@ from optimum.intel import (
 from optimum.intel.openvino.configuration import OVQuantizationMethod, OVQuantizationConfigBase
 
 from optimum.intel.openvino.quantization import InferRequestWrapper
-from optimum.intel.utils.import_utils import is_openvino_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_tranformers_version
 from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
 
 _TASK_TO_DATASET = {
@@ -88,6 +88,9 @@ class OVQuantizerTest(unittest.TestCase):
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
         file_name = "openvino_quantized_model.xml"
+
+        if model_name == "bert" and is_tranformers_version("<", "4.41.0"):
+            expected_fake_quantize = 32
 
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
@@ -114,7 +117,6 @@ class OVQuantizerTest(unittest.TestCase):
                 ov_config=ov_config,
             )
             model = model_cls.from_pretrained(tmp_dir, file_name=file_name)
-
             num_fake_quantize, num_int8, _ = get_num_quantized_nodes(model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
             self.assertEqual(expected_int8, num_int8)

@@ -54,6 +54,7 @@ from optimum.intel.openvino.modeling import (
 )
 from optimum.intel.openvino.trainer import DEFAULT_QUANTIZATION_CONFIG, OVTrainer
 from optimum.intel.openvino.utils import OV_XML_FILE_NAME
+from optimum.intel.utils.import_utils import is_transformers_version
 
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -463,6 +464,7 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
     task = "sequence-classification"
 
     @parameterized.expand(OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS.items())
+    @unittest.skipIf(is_transformers_version("<", "4.41.0"), reason="Mismatch in expected fake quantized op")
     def test_training(self, _, desc: OVTrainerTestDescriptor):
         self.run_ovtrainer_training_checks(desc)
 
@@ -611,6 +613,7 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
     task = "image-classification"
 
     @parameterized.expand(OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS.items())
+    @unittest.skipIf(is_transformers_version("<", "4.41.0"), reason="Mismatch in expected fake quantized op")
     def test_training(self, _, desc: OVTrainerTestDescriptor):
         self.run_ovtrainer_training_checks(desc)
 

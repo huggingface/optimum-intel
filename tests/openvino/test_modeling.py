@@ -81,7 +81,7 @@ from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, O
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
 from optimum.intel.openvino.utils import _print_compiled_model_properties
-from optimum.intel.utils.import_utils import is_openvino_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
@@ -528,7 +528,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "chatglm",
         "codegen",
         "codegen2",
-        # "data2vec-text", # TODO : enable when enabled in exporters
         "gemma",
         "gpt2",
         "gpt_neo",
@@ -548,7 +547,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "stablelm",
         "starcoder2",
         "phi",
-        "phi3",
         "internlm2",
         "orion",
         "falcon",
@@ -556,17 +554,29 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "persimmon",
         "biogpt",
         "gpt_neox_japanese",
-        "cohere",
         "xglm",
         "aquila",
         "aquila2",
         "xverse",
         "internlm",
-        "dbrx",
         "qwen2-moe",
         "jais",
         "arctic",
     )
+
+    if is_transformers_version(">=", "4.40.0"):
+        SUPPORTED_ARCHITECTURES += (
+            "gemma",
+            "olmo",
+            "stablelm",
+            "starcoder2",
+            "dbrx",
+            "phi3",
+            "cohere",
+            "qwen2",
+            "qwen2_moe",
+        )
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
