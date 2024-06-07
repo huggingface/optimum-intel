@@ -92,7 +92,7 @@ MODEL_NAMES = {
     "phi3": "katuni4ka/tiny-random-phi3",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "katuni4ka/tiny-random-qwen",
-    "qwen2": "Qwen/Qwen1.5-0.5B",
+    "qwen2": "fxmarty/tiny-dummy-qwen2",
     "qwen2-moe": "katuni4ka/tiny-random-qwen1.5-moe",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
