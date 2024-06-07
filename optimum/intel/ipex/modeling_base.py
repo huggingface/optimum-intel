@@ -238,8 +238,23 @@ class IPEXModel(OptimizedModel):
             token = use_auth_token
 
         if not getattr(config, "torchscript", False):
-            raise ValueError(
-                "`config.torchscript` should be set to `True`, if your model is not a TorchScript model and needs to be traced please set `export=True` when loading it with `.from_pretrained()`"
+            logger.warning(
+                "Detect torchscript is false, which mean the model haven't exported yet, fallback to _from_transformers"
+            )
+            return cls._from_transformers(
+                model_id,
+                config,
+                kwargs.get("use_cache", True),
+                use_auth_token,
+                token,
+                revision,
+                force_download,
+                cache_dir,
+                subfolder,
+                local_files_only,
+                torch_dtype=kwargs.get("torch_dtype", None),
+                trust_remote_code=kwargs.get("torch_dtype", False),
+                _commit_hash=kwargs.get("_commit_hash", None),
             )
 
         # Load the model from local directory
@@ -267,7 +282,10 @@ class IPEXModel(OptimizedModel):
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         output_path = os.path.join(save_directory, WEIGHTS_NAME)
-        torch.jit.save(self.model, output_path)
+        if getattr(self.config, "torchscript", None):
+            torch.jit.save(self.model, output_path)
+        else:
+            self.model.save_pretrained(output_path)
 
     def forward(
         self,
