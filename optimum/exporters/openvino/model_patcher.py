@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-from transformers.cache_utils import Cache, StaticCache
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import is_tf_available
 
@@ -37,6 +36,7 @@ from optimum.intel.utils.import_utils import (
 
 if TYPE_CHECKING:
     from transformers.modeling_utils import PreTrainedModel
+    from transformers.cache_utils import Cache
 
     from optimum.exporters.onnx.config import OnnxConfig
 
@@ -1667,9 +1667,10 @@ def _dbrx_update_causal_mask_latest(
     attention_mask: torch.Tensor,
     input_tensor: torch.Tensor,
     cache_position: torch.Tensor,
-    past_key_values: Cache,
+    past_key_values: "Cache",
     output_attentions: bool,
 ):
+    from transformers.cache_utils import StaticCache
     from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 
     # TODO: As of torch==2.2.0, the `attention_mask` passed to the model in `generate` is 2D and of dynamic length even when the static
@@ -1789,7 +1790,7 @@ def _persimmon_self_attn_sdpa_forward(
     hidden_states: torch.Tensor,
     attention_mask: Optional[torch.Tensor] = None,
     position_ids: Optional[torch.LongTensor] = None,
-    past_key_value: Optional[Cache] = None,
+    past_key_value: Optional["Cache"] = None,
     output_attentions: bool = False,
     use_cache: bool = False,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
