@@ -19,9 +19,15 @@ import torch
 from torch import nn
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
-from transformers.models.llama.modeling_llama import repeat_kv
+from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
 
-from optimum.intel.utils.import_utils import is_ipex_version
+from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
+
+
+# Please also update in the setup.py and .github/workflows/test_ipex.yml if you change the transformers version
+_TRANSFORMERS_MIN_VERSION = "4.39.0"
+_TRANSFORMERS_MAX_VERSION = "4.41.2"
+_IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.3.0"
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
@@ -51,27 +57,27 @@ def _llama_attn_forward(
     query = query.view(bsz, q_len, self.num_heads, self.head_dim)
     key = key.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
     value = value.view(bsz, q_len, self.num_key_value_heads, self.head_dim)
-    # Use ipex op to rotary position embedding more efficient.
-    key = self.ipex_rope(
-        key,
-        position_ids,
-        self.num_key_value_heads,
-        self.head_dim,
-        self.head_dim // 2,
-        self.head_dim,
-        kv_seq_len,
-    )
-    query = self.ipex_rope(
-        query,
-        position_ids,
-        self.num_heads,
-        self.head_dim,
-        self.head_dim // 2,
-        self.head_dim,
-        kv_seq_len,
-    )
 
     if use_cache:
+        # Use ipex op to rotary position embedding more efficient.
+        key = self.ipex_rope(
+            key,
+            position_ids,
+            self.num_key_value_heads,
+            self.head_dim,
+            self.head_dim // 2,
+            self.head_dim,
+            kv_seq_len,
+        )
+        query = self.ipex_rope(
+            query,
+            position_ids,
+            self.num_heads,
+            self.head_dim,
+            self.head_dim // 2,
+            self.head_dim,
+            kv_seq_len,
+        )
         # This ipex op pre-allocates buffers for past_key_values and use beam index history
         # which to decide which beam should be used to make attention scale dot more efficient.
         (attn_output, attn_weights, past_key_value) = self.ipex_scale_dot_product(
@@ -87,6 +93,8 @@ def _llama_attn_forward(
         value_states = value.transpose(1, 2)
         query_states = query.transpose(1, 2)
         key_states = key.transpose(1, 2)
+        cos, sin = self.rotary_emb(value_states, position_ids)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
         kv_seq_len = key_states.shape[-2]
 
         past_key_value = None
@@ -218,9 +226,17 @@ def _llama_model_forward(
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L694
 class _IPEXLlamaDecoderLayerRef(nn.Module):
-    def __init__(self, module, config):
-        if is_ipex_version("<", "2.3.0"):
-            raise ImportError("Only ipex version > 2.3.0 supports Linear2SiluMul and LinearAdd")
+    def __init__(self, module, config, distributed=False):
+        if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
+            raise ImportError(
+                f"Only ipex version > {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports Linear2SiluMul and LinearAdd"
+            )
+        if is_transformers_version("<", _TRANSFORMERS_MIN_VERSION) or is_transformers_version(
+            ">", _TRANSFORMERS_MAX_VERSION
+        ):
+            raise ImportError(
+                f"Only transformers versions {_TRANSFORMERS_MIN_VERSION} ~ {_TRANSFORMERS_MAX_VERSION} are verified."
+            )
 
         from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
 

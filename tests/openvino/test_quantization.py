@@ -74,7 +74,7 @@ _TASK_TO_DATASET = {
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
-        (OVModelForSequenceClassification, "bert", 32, 35),
+        (OVModelForSequenceClassification, "bert", 22, 35),
         (OVModelForCausalLM, "gpt2", 41, 3),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
@@ -665,7 +665,7 @@ class OVQuantizerQATest(unittest.TestCase):
 
 
 class OVTrainerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-uncased", 49, 38),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-uncased", 67, 38),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, model_name, expected_fake_quantize, expected_int8):
