@@ -292,7 +292,6 @@ class _IPEXLlamaAttention(nn.Module):
         return query, key
 
     def sdpa_with_cache(self, query, key, value, past_key_value, attention_mask, position_ids):
-
         if self.module_device == "xpu":
             scale = 1.0 / math.sqrt(self.head_dim)
             is_causal = False
