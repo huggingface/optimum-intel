@@ -90,7 +90,7 @@ MODEL_NAMES = {
     "persimmon": "hf-internal-testing/tiny-random-PersimmonForCausalLM",
     "pix2struct": "fxmarty/pix2struct-tiny-random",
     "phi": "echarlaix/tiny-random-PhiForCausalLM",
-    "phi3": "katuni4ka/tiny-random-phi3",
+    "phi3": "Xenova/tiny-random-Phi3ForCausalLM",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "katuni4ka/tiny-random-qwen",
     "qwen2": "fxmarty/tiny-dummy-qwen2",
