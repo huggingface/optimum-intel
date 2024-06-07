@@ -19,9 +19,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from transformers.utils.quantization_config import QuantizationMethod
 
 from ...exporters import TasksManager
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
+from ...utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
 
 
@@ -129,6 +131,33 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--awq",
+        action="store_true",
+        default=None,
+        help=(
+            "Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires "
+            "additional time for tuning weights on a calibration dataset. To run AWQ, please also provide a dataset "
+            "argument. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such "
+            "case it will be skipped."
+        ),
+    )
+    optional_group.add_argument(
+        "--sensitivity-metric",
+        type=str,
+        default=None,
+        help=(
+            "The sensitivity metric for assigning quantization precision to layers. Can be one of the following: "
+            "['weight_quantization_error', 'hessian_input_activation', 'mean_activation_variance', "
+            "'max_activation_variance', 'mean_activation_magnitude']."
+        ),
+    )
+    optional_group.add_argument(
+        "--num-samples",
+        type=int,
+        default=None,
+        help="The maximum number of samples to take from the dataset for quantization.",
+    )
+    optional_group.add_argument(
         "--disable-stateful",
         action="store_true",
         help=(
@@ -180,7 +209,7 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
-        from ...exporters.openvino.__main__ import main_export
+        from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, OVConfig
 
         if self.args.fp16:
@@ -208,6 +237,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                 and self.args.group_size is None
                 and self.args.sym is None
                 and self.args.all_layers is None
+                and self.args.dataset is None
+                and self.args.num_samples is None
+                and self.args.awq is None
+                and self.args.sensitivity_metric is None
                 and self.args.model in _DEFAULT_4BIT_CONFIGS
             ):
                 quantization_config = _DEFAULT_4BIT_CONFIGS[self.args.model]
@@ -218,6 +251,10 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "sym": self.args.sym or False,
                     "group_size": -1 if is_int8 else self.args.group_size,
                     "all_layers": None if is_int8 else self.args.all_layers,
+                    "dataset": self.args.dataset,
+                    "num_samples": self.args.num_samples,
+                    "quant_method": QuantizationMethod.AWQ if self.args.awq else None,
+                    "sensitivity_metric": self.args.sensitivity_metric,
                 }
 
             if self.args.weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:
@@ -226,7 +263,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                 )
                 quantization_config["sym"] = "asym" not in self.args.weight_format
                 quantization_config["group_size"] = 128 if "128" in self.args.weight_format else 64
-            quantization_config["dataset"] = self.args.dataset
             ov_config = OVConfig(quantization_config=quantization_config)
 
         library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
@@ -240,12 +276,11 @@ class OVExportCommand(BaseOptimumCLICommand):
         if self.args.convert_tokenizer:
             logger.warning("`--convert-tokenizer` option is deprecated. Tokenizer will be converted by default.")
 
-        if (
-            library_name == "diffusers"
-            and ov_config
-            and ov_config.quantization_config
-            and ov_config.quantization_config.dataset is not None
-        ):
+        quantization_config = ov_config.quantization_config if ov_config else None
+        quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None
+        task = infer_task(self.args.task, self.args.model)
+
+        if library_name == "diffusers" and quantize_with_dataset:
             if not is_diffusers_available():
                 raise ValueError(DIFFUSERS_IMPORT_ERROR.format("Export of diffusers models"))
 
@@ -270,25 +305,29 @@ class OVExportCommand(BaseOptimumCLICommand):
             else:
                 raise NotImplementedError(f"Quantization in hybrid mode isn't supported for class {class_name}.")
 
-            model = model_cls.from_pretrained(
-                self.args.model, export=True, quantization_config=ov_config.quantization_config
+            model = model_cls.from_pretrained(self.args.model, export=True, quantization_config=quantization_config)
+            model.save_pretrained(self.args.output)
+            if not self.args.disable_convert_tokenizer:
+                maybe_convert_tokenizers(library_name, self.args.output, model)
+        elif task.startswith("text-generation") and quantize_with_dataset:
+            from optimum.intel import OVModelForCausalLM
+
+            # To quantize a text-generation model with a dataset, an instantiated OVModelForCausalLM is required
+            model = OVModelForCausalLM.from_pretrained(
+                self.args.model,
+                export=True,
+                quantization_config=quantization_config,
+                stateful=not self.args.disable_stateful,
+                trust_remote_code=self.args.trust_remote_code,
             )
             model.save_pretrained(self.args.output)
 
-            if self.args.disable_convert_tokenizer:
-                return
-
-            # avoid import when using other exporters (IPEX, INC)
-            from ...exporters.openvino.convert import export_tokenizer
-
-            output = Path(self.args.output)
-            tokenizer = getattr(model, "tokenizer", None)
-            if tokenizer is not None:
-                export_tokenizer(tokenizer, output / "tokenizer")
-
-            tokenizer_2 = getattr(model, "tokenizer_2", None)
-            if tokenizer_2 is not None:
-                export_tokenizer(tokenizer_2, output / "tokenizer_2")
+            maybe_save_preprocessors(self.args.model, self.args.output, trust_remote_code=self.args.trust_remote_code)
+            if not self.args.disable_convert_tokenizer:
+                preprocessors = maybe_load_preprocessors(
+                    self.args.model, trust_remote_code=self.args.trust_remote_code
+                )
+                maybe_convert_tokenizers(library_name, self.args.output, preprocessors=preprocessors)
         else:
             # TODO : add input shapes
             main_export(

@@ -83,7 +83,7 @@ from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_timm import TimmImageProcessor
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import is_openvino_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
@@ -597,8 +597,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "chatglm",
         "codegen",
         "codegen2",
-        # "data2vec-text", # TODO : enable when enabled in exporters
-        "gemma",
         "gpt2",
         "gpt_neo",
         "gpt_neox",
@@ -609,15 +607,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "mistral",
         "mixtral",
         "mpt",
-        "olmo",
         "opt",
         "pegasus",
         "qwen",
-        "qwen2",
-        "stablelm",
-        "starcoder2",
         "phi",
-        "phi3",
         "internlm2",
         "orion",
         "falcon",
@@ -625,15 +618,28 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "persimmon",
         "biogpt",
         "gpt_neox_japanese",
-        "cohere",
         "xglm",
         "aquila",
         "aquila2",
         "xverse",
         "internlm",
-        "dbrx",
-        "qwen2-moe",
+        "jais",
+        "arctic",
     )
+
+    if is_transformers_version(">=", "4.40.0"):
+        SUPPORTED_ARCHITECTURES += (
+            "gemma",
+            "olmo",
+            "stablelm",
+            "starcoder2",
+            "dbrx",
+            "phi3",
+            "cohere",
+            "qwen2",
+            "qwen2-moe",
+        )
+
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
         "chatglm",
@@ -644,12 +650,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen",
         "internlm2",
         "orion",
-        "phi3",
         "aquila",
         "aquila2",
         "xverse",
         "internlm",
         "codegen2",
+        "arctic",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -691,7 +697,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         set_seed(SEED)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch == "qwen":
+        if model_arch in ["qwen", "arctic"]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
@@ -945,6 +951,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_id, export=True, use_cache=True, stateful=False, **model_kwargs
         )
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+
+        if model_arch == "arctic":
+            transformers_model.to(torch.float32)
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
         tokens.pop("token_type_ids", None)
@@ -955,14 +964,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model_stateless.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
 
-        for gen_config in gen_configs:
+        for idx, gen_config in enumerate(gen_configs):
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
             transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
-            self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs))
+            self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs), f"generation config : {idx}")
             ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
-            self.assertTrue(torch.allclose(ov_stateless_outputs, transformers_outputs))
+            self.assertTrue(torch.allclose(ov_stateless_outputs, transformers_outputs), f"generation config : {idx}")
 
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):

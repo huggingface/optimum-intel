@@ -14,56 +14,113 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Reference
+# Models
 
-## OVModelForFeatureExtraction
+## Natural Language Processing
 
-[[autodoc]] openvino.modeling.OVModelForFeatureExtraction
+The following classes are available for the following natural language processing tasks.
 
-## OVModelForMaskedLM
-
-[[autodoc]] openvino.modeling.OVModelForMaskedLM
-
-## OVModelForQuestionAnswering
-
-[[autodoc]] openvino.modeling.OVModelForQuestionAnswering
-
-## OVModelForSequenceClassification
-
-[[autodoc]] openvino.modeling.OVModelForSequenceClassification
-
-## OVModelForTokenClassification
-
-[[autodoc]] openvino.modeling.OVModelForTokenClassification
-
-## OVModelForAudioClassification
-
-[[autodoc]] openvino.modeling.OVModelForAudioClassification
-
-## OVModelForAudioFrameClassification
-
-[[autodoc]] openvino.modeling.OVModelForAudioFrameClassification
-
-## OVModelForCTC
-
-[[autodoc]] openvino.modeling.OVModelForCTC
-
-## OVModelForAudioXVector
-
-[[autodoc]] openvino.modeling.OVModelForAudioXVector
-
-## OVModelForImageClassification
-
-[[autodoc]] openvino.modeling.OVModelForImageClassification
-
-## OVModelForCausalLM
+### OVModelForCausalLM
 
 [[autodoc]] openvino.modeling_decoder.OVModelForCausalLM
+    - forward
+    - generate
 
-## OVModelForSeq2SeqLM
+### OVModelForMaskedLM
+
+[[autodoc]] openvino.modeling.OVModelForMaskedLM
+    - forward
+
+### OVModelForSeq2SeqLM
 
 [[autodoc]] openvino.modeling_seq2seq.OVModelForSeq2SeqLM
+    - forward
 
-## OVQuantizer
+### OVModelForQuestionAnswering
+
+[[autodoc]] openvino.modeling.OVModelForQuestionAnswering
+    - forward
+
+### OVModelForSequenceClassification
+
+[[autodoc]] openvino.modeling.OVModelForSequenceClassification
+    - forward
+
+### OVModelForTokenClassification
+
+[[autodoc]] openvino.modeling.OVModelForTokenClassification
+    - forward
+
+
+## Audio
+
+The following classes are available for the following audio tasks.
+
+### OVModelForAudioClassification
+
+[[autodoc]] openvino.modeling.OVModelForAudioClassification
+    - forward
+
+### OVModelForAudioFrameClassification
+
+[[autodoc]] openvino.modeling.OVModelForAudioFrameClassification
+    - forward
+
+### OVModelForCTC
+
+[[autodoc]] openvino.modeling.OVModelForCTC
+    - forward
+
+### OVModelForAudioXVector
+
+[[autodoc]] openvino.modeling.OVModelForAudioXVector
+    - forward
+
+### OVModelForSpeechSeq2Seq
+
+[[autodoc]] openvino.modeling_seq2seq.OVModelForSpeechSeq2Seq
+    - forward
+
+
+## Computer Vision
+
+The following classes are available for the following computer vision tasks.
+
+### OVModelForImageClassification
+
+[[autodoc]] openvino.modeling.OVModelForImageClassification
+    - forward
+
+
+## Multimodal
+
+The following classes are available for the following multimodal tasks.
+
+### OVModelForVision2Seq
+
+[[autodoc]] openvino.modeling_seq2seq.OVModelForVision2Seq
+    - forward
+
+### OVModelForPix2Struct
+
+[[autodoc]] openvino.modeling_seq2seq.OVModelForPix2Struct
+    - forward
+
+##  Custom Tasks
+
+### OVModelForCustomTasks
+
+[[autodoc]] openvino.modeling.OVModelForCustomTasks
+    - forward
+
+### OVModelForFeatureExtraction
+
+[[autodoc]] openvino.modeling.OVModelForFeatureExtraction
+    - forward
+
+
+# Quantization
+
+### OVQuantizer
 
 [[autodoc]] openvino.quantization.OVQuantizer

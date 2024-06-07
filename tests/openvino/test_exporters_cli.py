@@ -89,6 +89,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "opt125m", "int4_sym_g64", 62, 86),
         ("text-generation-with-past", "opt125m", "int4_asym_g64", 62, 86),
         ("text-generation-with-past", "llama_awq", "int4 --ratio 1.0 --sym --group-size 16 --all-layers", 0, 32),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
+            "--sensitivity-metric max_activation_variance",
+            4,
+            28,
+        ),
     ]
 
     def _openvino_export(
@@ -197,10 +205,11 @@ class OVCLIExportTestCase(unittest.TestCase):
     @parameterized.expand(TEST_4BIT_CONFIGURATONS)
     def test_exporters_cli_int4(self, task: str, model_type: str, option: str, expected_int8: int, expected_int4: int):
         with TemporaryDirectory() as tmpdir:
-            subprocess.run(
+            result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
                 shell=True,
                 check=True,
+                capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
@@ -208,6 +217,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             _, num_int8, num_int4 = get_num_quantized_nodes(model)
             self.assertEqual(expected_int8, num_int8)
             self.assertEqual(expected_int4, num_int4)
+            self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
 
     def test_exporters_cli_help(self):
         subprocess.run(
