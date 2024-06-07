@@ -131,7 +131,10 @@ def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
         # the current expert. We need to make sure to multiply the output hidden
         # states by `routing_weights` on the corresponding tokens (top-1 and top-2)
         current_state = hidden_states[None, top_x].reshape(-1, hidden_dim)
-        current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
+        if is_transformers_version("<", "4.37.0"):
+            current_hidden_states = expert_layer(current_state, routing_weights[top_x, idx, None])
+        else:
+            current_hidden_states = expert_layer(current_state) * routing_weights[top_x, idx, None]
 
         final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
     final_hidden_states = final_hidden_states.reshape(batch_size, sequence_length, hidden_dim)
