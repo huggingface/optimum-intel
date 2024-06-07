@@ -35,8 +35,8 @@ from optimum.intel.utils.import_utils import (
 
 
 if TYPE_CHECKING:
-    from transformers.modeling_utils import PreTrainedModel
     from transformers.cache_utils import Cache
+    from transformers.modeling_utils import PreTrainedModel
 
     from optimum.exporters.onnx.config import OnnxConfig
 
