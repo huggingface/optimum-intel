@@ -148,8 +148,8 @@ class _IPEXLlamaAttention(nn.Module):
         self.config = config
         from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCacheAttention, LinearAdd, RotaryEmbedding
 
-        if module.self_attn.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
-            self.mha_linear_add = LinearAdd(self.o_proj)
+        if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
+            self.mha_linear_add = LinearAdd(module.o_proj)
             del self.__dict__["_modules"]["o_proj"]
         self.ipex_scale_dot_product = IndirectAccessKVCacheAttention(
             text_max_length=module.config.max_position_embeddings
@@ -306,7 +306,7 @@ class _IPEXLlamaMLP(nn.Module):
         from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
 
         # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-        if module.mlp.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
+        if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
             self.mlp_linear_add = LinearAdd(module.down_proj)
             del self.__dict__["_modules"]["down_proj"]
         self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
