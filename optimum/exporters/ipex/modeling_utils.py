@@ -414,28 +414,28 @@ class _IPEXLlamaAttention(nn.Module):
                 module.v_proj.bias.data = self.qkv_proj_bias[2]
         else:
             q_proj = module.q_proj.weight.view(
-                self.num_kv_heads, self.num_key_value_groups, self.head_dim, self.hidden_size
+                self.num_key_value_heads, self.num_key_value_groups, self.head_dim, self.hidden_size
             )
-            k_proj = module.k_proj.weight.view(self.num_kv_heads, 1, self.head_dim, self.hidden_size)
-            v_proj = module.v_proj.weight.view(self.num_kv_heads, 1, self.head_dim, self.hidden_size)
+            k_proj = module.k_proj.weight.view(self.num_key_value_heads, 1, self.head_dim, self.hidden_size)
+            v_proj = module.v_proj.weight.view(self.num_key_value_heads, 1, self.head_dim, self.hidden_size)
             self.qkv_proj_weight = torch.cat([q_proj, k_proj, v_proj], dim=1).view(
-                [self.num_kv_heads, self.num_key_value_groups + 2, self.head_dim, self.hidden_size]
+                [self.num_key_value_heads, self.num_key_value_groups + 2, self.head_dim, self.hidden_size]
             )
-            module.q_proj.data = self.qkv_proj_weight[:, : self.num_key_value_groups, :, :].view(
-                [self.num_kv_heads * self.num_key_value_groups * self.head_dim, self.hidden_size]
+            module.q_proj.data = self.qkv_proj_weight[:, : self.num_key_value_groups, :, :].reshape(
+                [self.num_key_value_heads * self.num_key_value_groups * self.head_dim, self.hidden_size]
             )
-            module.k_proj.data = self.qkv_proj_weight[:, self.num_key_value_groups, :, :].view(
-                [self.num_kv_heads * self.head_dim, self.hidden_size]
+            module.k_proj.data = self.qkv_proj_weight[:, self.num_key_value_groups, :, :].reshape(
+                [self.num_key_value_heads * self.head_dim, self.hidden_size]
             )
-            module.v_proj.data = self.qkv_proj_weight[:, self.num_key_value_groups + 1, :, :].view(
-                [self.num_kv_heads * self.head_dim, self.hidden_size]
+            module.v_proj.data = self.qkv_proj_weight[:, self.num_key_value_groups + 1, :, :].reshape(
+                [self.num_key_value_heads * self.head_dim, self.hidden_size]
             )
             if module.q_proj.bias is not None:
-                q_bias = module.q_proj.bias.view(self.num_kv_heads, self.num_key_value_groups, self.head_dim)
-                k_bias = module.k_proj.bias.view(self.num_kv_heads, 1, self.head_dim)
-                v_bias = module.v_proj.bias.view(self.num_kv_heads, 1, self.head_dim)
+                q_bias = module.q_proj.bias.view(self.num_key_value_heads, self.num_key_value_groups, self.head_dim)
+                k_bias = module.k_proj.bias.view(self.num_key_value_heads, 1, self.head_dim)
+                v_bias = module.v_proj.bias.view(self.num_key_value_heads, 1, self.head_dim)
                 self.qkv_proj_bias = torch.cat([q_bias, k_bias, v_bias], dim=1).view(
-                    [self.num_kv_heads, self.num_key_value_groups + 2, self.head_dim]
+                    [self.num_key_value_heads, self.num_key_value_groups + 2, self.head_dim]
                 )
                 module.q_proj.bias.data = self.qkv_proj_bias[:, : self.num_key_value_groups, self.head_dim].view(-1)
                 module.k_proj.bias.data = self.qkv_proj_bias[:, self.num_key_value_groups, self.head_dim].view(-1)
