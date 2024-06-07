@@ -568,7 +568,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "phi3",
             "cohere",
             "qwen2",
-            "qwen2_moe",
+            "qwen2-moe",
         )
 
     GENERATION_LENGTH = 100
