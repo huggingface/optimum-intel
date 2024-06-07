@@ -5,7 +5,7 @@ on:
   schedule:
     - cron:  '41 1 * * *'  # run every day at 1:41
   pull_request:
-    types: [labeled]
+    types: [opened, synchronize, reopened, labeled]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
