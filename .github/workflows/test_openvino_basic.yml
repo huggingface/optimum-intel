@@ -24,16 +24,16 @@ jobs:
       matrix:
         # Testing lower and upper bound of supported Python versions
         # This also ensures that the test fails if dependencies break for Python 3.7
-        python-version: ["3.8", "3.11"]
-        transformers: ['transformers']
+        python-version: ["3.8", "3.12"]
         optimum: ['optimum', 'git+https://github.com/huggingface/optimum.git']
+        os: ["ubuntu-22.04", "windows-latest"]
 
-    runs-on: ubuntu-20.04
+    runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Setup Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -43,12 +43,17 @@ jobs:
         # optimum or transformers to a specific version
         # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        pip install .[tests] openvino onnx onnxruntime ${{ matrix.optimum}} ${{ matrix.transformers }}
+        pip install .[tests] openvino onnxruntime ${{ matrix.optimum}}
 
-    - name: Pip freeze        
+    - name: Pip freeze
       run: pip freeze
 
     - name: Test with Pytest
       run: |
         pytest tests/openvino/test_modeling_basic.py
-        RUN_SLOW=1 pytest tests/openvino/test_modeling.py -s -m "run_slow" --durations=0
+
+    - name: Slow tests
+      run: |
+        pytest tests/openvino/test_modeling.py -s -m "run_slow" --durations=0
+      env:
+        RUN_SLOW: 1

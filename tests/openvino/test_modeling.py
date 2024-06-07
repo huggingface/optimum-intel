@@ -564,6 +564,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm",
         "dbrx",
         "qwen2-moe",
+        "jais",
+        "arctic",
     )
     GENERATION_LENGTH = 100
     REMOTE_CODE_MODELS = (
@@ -581,6 +583,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "xverse",
         "internlm",
         "codegen2",
+        "arctic",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -622,7 +625,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         set_seed(SEED)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch == "qwen":
+        if model_arch in ["qwen", "arctic"]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
@@ -869,6 +872,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_id, export=True, use_cache=True, stateful=False, **model_kwargs
         )
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
+
+        if model_arch == "arctic":
+            transformers_model.to(torch.float32)
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
         tokens.pop("token_type_ids", None)
@@ -879,14 +885,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         ov_model_stateless.config.eos_token_id = None
         transformers_model.config.eos_token_id = None
 
-        for gen_config in gen_configs:
+        for idx, gen_config in enumerate(gen_configs):
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
             transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
-            self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs))
+            self.assertTrue(torch.allclose(ov_stateful_outputs, transformers_outputs), f"generation config : {idx}")
             ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
-            self.assertTrue(torch.allclose(ov_stateless_outputs, transformers_outputs))
+            self.assertTrue(torch.allclose(ov_stateless_outputs, transformers_outputs), f"generation config : {idx}")
 
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
@@ -1679,7 +1685,7 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         inputs = preprocessor(images=image, return_tensors="pt")
 
-        transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
+        transformers_model = AutoModelForImageClassification.from_pretrained(model_id, attn_implementation="eager")
         transformers_model.eval()
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs, output_attentions=True)

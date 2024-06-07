@@ -18,6 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: [3.8, 3.9]
+        transformers-version: [4.39.0, 4.41.2]
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
@@ -32,6 +33,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install torch torchaudio torchvision --extra-index-url https://download.pytorch.org/whl/cpu
         pip install .[ipex,tests]
+        pip install transformers==${{ matrix.transformers-version }}
     - name: Test with Pytest
       run: |
         pytest tests/ipex/

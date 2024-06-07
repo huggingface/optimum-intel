@@ -47,7 +47,6 @@ from transformers import (
 from utils_tests import MODEL_NAMES, SEED, INCTestMixin, _generate_dataset
 from optimum.intel.utils.import_utils import is_torch_version, is_itrex_available
 
-
 from optimum.intel import (
     INCConfig,
     INCModelForCausalLM,

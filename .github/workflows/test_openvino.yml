@@ -17,14 +17,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.8, 3.11]
+        python-version: ["3.8", "3.12"]
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Setup Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
@@ -46,3 +46,4 @@ jobs:
         pip install openvino-nightly
         python -c "from optimum.intel import OVModelForCausalLM; OVModelForCausalLM.from_pretrained('hf-internal-testing/tiny-random-gpt2', export=True, compile=False)"
         optimum-cli export openvino -m hf-internal-testing/tiny-random-gpt2 gpt2-ov
+
