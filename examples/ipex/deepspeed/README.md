@@ -27,11 +27,11 @@ apt update && apt install -y gpg-agent
 
 wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null && echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | tee /etc/apt/sources.list.d/oneAPI.list
 
-apt-get update && apt install -y intel-basekit
+apt-get update && apt install -y intel-basekit numactl && apt-get install -y python3-dev git
 
-apt install -y numactl && apt-get install -y python3-dev
+pip install transformers deepspeed accelerate
 
-pip install transformers deepspeed
+source /opt/intel/oneapi/setvars.sh
 ```
 3. Install optimum-intel.
 4. Run the script with the following command.

@@ -83,9 +83,9 @@ def get_repo_root(model_name_or_path):
         snapshot_download(
             model_name_or_path,
             local_files_only=is_offline_mode(),
-            cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
+            cache_dir=os.getenv("HF_HOME", None),
             allow_patterns=allow_patterns,
-            # ignore_patterns=["*.safetensors"],
+            ignore_patterns=["training_args.bin"],
         )
 
     dist.barrier()
@@ -93,9 +93,9 @@ def get_repo_root(model_name_or_path):
     return snapshot_download(
         model_name_or_path,
         local_files_only=is_offline_mode(),
-        cache_dir=os.getenv("TRANSFORMERS_CACHE", None),
+        cache_dir=os.getenv("HF_HOME", None),
         allow_patterns=allow_patterns,
-        # ignore_patterns=["*.safetensors"],
+        ignore_patterns=["training_args.bin"],
     )
 
 
@@ -133,7 +133,6 @@ repo_root = get_repo_root(model_name)
 write_checkpoints_json()
 dist.barrier()
 
-print(model)
 model = deepspeed.init_inference(
     model,
     mp_size=world_size,
@@ -142,8 +141,6 @@ model = deepspeed.init_inference(
     checkpoint=checkpoints_json,
     replace_with_kernel_inject=False,
 )
-print(model)
-print(model.module)
 model = model.module
 model = IPEXModelForCausalLM._from_model(model.eval())
 
