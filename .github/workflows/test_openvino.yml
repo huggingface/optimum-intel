@@ -18,6 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.8", "3.12"]
+        transformers-version: ["4.36.0", "4.41.*"]
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
@@ -32,6 +33,7 @@ jobs:
         python -m pip install --upgrade pip
         # install PyTorch CPU version to avoid installing CUDA packages on GitHub runner without GPU
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install transformers==${{ matrix.transformers-version }}
         pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
     - name: Test with Pytest
       run: |
