@@ -571,11 +571,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 ):
                     past_key_values = tuple(
                         tuple(
-                            (
-                                past_state[indicies]
-                                if not self.config.model_type == "chatglm"
-                                else past_state[:, indicies, ...]
-                            )
+                            past_state[indicies]
+                            if not self.config.model_type == "chatglm"
+                            else past_state[:, indicies, ...]
                             for past_state in layer_past
                         )
                         for layer_past in past_key_values
