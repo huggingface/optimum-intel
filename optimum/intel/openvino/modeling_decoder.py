@@ -38,7 +38,7 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
-from ..utils.import_utils import is_nncf_available
+from ..utils.import_utils import is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import _DEFAULT_4BIT_CONFIGS, OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
@@ -633,8 +633,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
-        _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
-        generation_mode = _generation_config.get_generation_mode(assistant_model)
+        if is_transformers_version(">=", "4.39.0"):
+            _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
+            generation_mode = _generation_config.get_generation_mode(assistant_model)
+        else:
+            _generation_config = generation_config or self.generation_config
+            generation_mode = self._get_generation_mode(_generation_config, assistant_model)
 
         is_beam_search = generation_mode in [
             GenerationMode.BEAM_SEARCH,
