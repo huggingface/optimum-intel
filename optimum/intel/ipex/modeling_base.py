@@ -68,8 +68,6 @@ def _is_patched_with_ipex(model, task):
         return False
 
     if isinstance(model, torch.jit.ScriptModule):
-        if is_ipex_version("<", "2.3.0"):
-            return False
         for node in model.graph.nodes():
             # Jit will record the codes position so we can check if the node use ipex exporter.
             if "torch_ipex::rotary_position_embedding" in node.__str__():
