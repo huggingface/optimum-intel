@@ -57,8 +57,7 @@ def patch_model_with_bettertransformer(model):
 
     if is_torch_version("<", "2.1.1"):
         log.warn(
-            COLOR_RED
-            + "[WARNING] For good performance with stateful models PyTorch>=2.1.1 is required. "
+            COLOR_RED + "[WARNING] For good performance with stateful models PyTorch>=2.1.1 is required. "
             f"This Python environment has PyTorch {_torch_version}. "
             "Consider upgrading PyTorch and Transformers, for example by running "
             "`pip install --upgrade --upgrade-strategy eager optimum[openvino]`, and export the model again"
