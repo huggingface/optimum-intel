@@ -362,10 +362,7 @@ class OVTrainer(Trainer):
             else:
                 debug_overflow = DebugUnderflowOverflow(self.model)  # noqa
 
-        is_fsdp_xla_enabled = (
-            self.is_fsdp_xla_enabled if is_transformers_version(">=", "4.36.0") else self.fsdp is not None
-        )
-        delay_optimizer_creation = is_sagemaker_mp_enabled() or is_fsdp_xla_enabled or self.is_fsdp_enabled
+        delay_optimizer_creation = is_sagemaker_mp_enabled() or self.is_fsdp_xla_enabled or self.is_fsdp_enabled
 
         # We need to reset the scheduler, as its parameters may be different on subsequent calls
         if self._created_lr_scheduler:
@@ -408,12 +405,9 @@ class OVTrainer(Trainer):
 
             self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gradient_checkpointing_kwargs)
 
-        if is_transformers_version("<", "4.29.0"):
-            is_distributed = self.args.local_rank != -1
-        else:
-            from accelerate.utils import DistributedType
+        from accelerate.utils import DistributedType
 
-            is_distributed = self.args.distributed_state.distributed_type != DistributedType.NO
+        is_distributed = self.args.distributed_state.distributed_type != DistributedType.NO
 
         if self.compression_controller is not None and is_distributed:
             self.compression_controller.distributed()
@@ -426,8 +420,6 @@ class OVTrainer(Trainer):
         use_accelerator_prepare = True if model is self.model else False
 
         if delay_optimizer_creation:
-            if is_transformers_version("<", "4.36.0") and use_accelerator_prepare:
-                self.model = self.accelerator.prepare(self.model)
             self.create_optimizer_and_scheduler(num_training_steps=max_steps)
 
         # prepare using `accelerator` prepare
@@ -597,7 +589,7 @@ class OVTrainer(Trainer):
             for step, inputs in enumerate(epoch_iterator):
                 total_batched_samples += 1
 
-                if is_transformers_version(">=", "4.36.0") and self.args.include_num_input_tokens_seen:
+                if self.args.include_num_input_tokens_seen:
                     main_input_name = getattr(self.model, "main_input_name", "input_ids")
                     if main_input_name not in inputs:
                         logger.warning(
