@@ -554,17 +554,26 @@ class OVBaseModel(OptimizedModel):
             return True
         return False
 
-    def _raise_if_incompatible_inputs(self, inputs: Dict):
+    def _inference(self, inputs):
+        try:
+            outputs = self.request(inputs)
+        except Exception as e:
+            invalid_inputs_msg = self._incompatible_inputs_warning(inputs)
+            if invalid_inputs_msg is not None:
+                e.args += (invalid_inputs_msg,)
+            raise e
+        return outputs
+
+    def _incompatible_inputs_warning(self, inputs: Dict):
         expected_inputs_names = set(self.input_names.keys())
         inputs_names = set(inputs.keys())
 
         if expected_inputs_names != inputs_names:
-            raise ValueError(
-                f"Got unexpected inputs: expecting the following inputs {expected_inputs_names} but got {inputs_names}."
-            )
+            return f"Got unexpected inputs: expecting the following inputs {expected_inputs_names} but got {inputs_names}."
 
         for input_name in inputs:
             if inputs[input_name] is None:
-                raise ValueError(
-                    f"Got unexpected inputs: expecting the following inputs {expected_inputs_names} but got `{input_name}` set to {inputs[input_name]}."
-                )
+                dtype = self.request.inputs[self.input_names[input_name]].get_element_type()
+                return f"Got unexpected inputs: `{input_name}` set to {type(inputs[input_name])} while expected to be {dtype}."
+
+        return None
