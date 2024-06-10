@@ -196,7 +196,7 @@ class OVModelForSequenceClassification(OVModel):
         if not np_inputs:
             input_ids = np.array(input_ids)
             attention_mask = np.array(attention_mask)
-            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else np.zeros_like(input_ids)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -205,7 +205,7 @@ class OVModelForSequenceClassification(OVModel):
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
         outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
@@ -261,7 +261,7 @@ class OVModelForQuestionAnswering(OVModel):
         if not np_inputs:
             input_ids = np.array(input_ids)
             attention_mask = np.array(attention_mask)
-            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else np.zeros_like(input_ids)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -270,7 +270,7 @@ class OVModelForQuestionAnswering(OVModel):
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
         outputs = self._inference(inputs)
         start_logits = (
@@ -330,7 +330,8 @@ class OVModelForTokenClassification(OVModel):
         if not np_inputs:
             input_ids = np.array(input_ids)
             attention_mask = np.array(attention_mask)
-            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else np.zeros_like(input_ids)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
+
 
         inputs = {
             "input_ids": input_ids,
@@ -339,7 +340,7 @@ class OVModelForTokenClassification(OVModel):
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
         outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
@@ -394,7 +395,7 @@ class OVModelForFeatureExtraction(OVModel):
         if not np_inputs:
             input_ids = np.array(input_ids)
             attention_mask = np.array(attention_mask)
-            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else np.zeros_like(input_ids)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -403,7 +404,7 @@ class OVModelForFeatureExtraction(OVModel):
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
         outputs = self._inference(inputs)
         last_hidden_state = (
@@ -527,7 +528,7 @@ class OVModelForMaskedLM(OVModel):
         if not np_inputs:
             input_ids = np.array(input_ids)
             attention_mask = np.array(attention_mask)
-            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else np.zeros_like(input_ids)
+            token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
         inputs = {
             "input_ids": input_ids,
@@ -536,7 +537,7 @@ class OVModelForMaskedLM(OVModel):
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
         outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]

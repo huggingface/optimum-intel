@@ -463,6 +463,26 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         del pipe
         gc.collect()
 
+    def test_default_token_type_ids(self):
+        model_id = MODEL_NAMES["bert"]
+        model = OVModelForTokenClassification.from_pretrained(model_id, export=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("this is a simple input", return_tensors="np")
+        self.assertTrue("token_type_ids" in model.input_names)
+        token_type_ids = tokens.pop("token_type_ids")
+        outs = model(token_type_ids=token_type_ids, **tokens)
+        outs_without_token_type_ids = model(**tokens)
+        self.assertTrue(np.allclose(outs.logits, outs_without_token_type_ids.logits))
+
+        tokens["attention_mask"] = None
+        with self.assertRaises(Exception) as context:
+            _ = model(**tokens)
+
+        self.assertIn("Got unexpected inputs: ", str(context.exception))
+
+        del model
+        gc.collect()
+
 
 class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
