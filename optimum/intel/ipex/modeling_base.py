@@ -15,13 +15,17 @@
 
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import intel_extension_for_pytorch as ipex
 import torch
 from huggingface_hub import hf_hub_download
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from intel_extension_for_pytorch.cpu._auto_kernel_selection import _enable_tpp
+from intel_extension_for_pytorch.transformers.optimize import get_dummy_input
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -35,6 +39,7 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
+    is_torch_xpu_available,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
@@ -45,12 +50,75 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
-from ..generation.modeling import jit_trace, prepare_jit_inputs
-from ..utils.import_utils import is_torch_version
-from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
+from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _IPEX_MINIMUM_VERSION_FOR_PATCHING, _patch_model
+from ..generation.modeling import prepare_jit_inputs
+from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
+from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
 
 
 logger = logging.getLogger(__name__)
+
+
+_IPEX_SUPPORT_MODEL_TYPES = ("llama",)
+_IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
+
+
+def _is_patched_with_ipex(model, task):
+    if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
+        return False
+
+    if isinstance(model, torch.jit.ScriptModule):
+        for node in model.graph.nodes():
+            # Jit will record the codes position so we can check if the node use ipex exporter.
+            if "torch_ipex::rotary_position_embedding" in node.__str__():
+                return True
+        return False
+    else:
+        # The ipex IAKV op in patched model requires the hidden size at least 64
+        return (
+            model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES
+            and task in _IPEX_EXPORTED_TASK
+            and model.config.hidden_size >= 64
+        )
+
+
+def ipex_jit_trace(model, task, use_cache):
+    # Only support torch version >= 2.1.0 to support example_kwarg_inputs in jit.trace
+    if is_torch_version("<", "2.1.0"):
+        raise ImportError("`torch>=2.1.0` is needed to trace your model")
+
+    if _is_patched_with_ipex(model, task):
+        model = _patch_model(model)
+        # Todo: integerate in prepare_jit_inputs.
+        sample_inputs = get_dummy_input(model, return_dict=True)
+        # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
+        _enable_tpp()
+    else:
+        model = patch_decoder_attention_mask(model)
+        sample_inputs = prepare_jit_inputs(model, task, use_cache)
+
+    model.config.return_dict = False
+
+    if "past_key_values" in sample_inputs:
+        model.config.use_cache = use_cache
+        if not use_cache:
+            sample_inputs.pop("past_key_values")
+
+    model = ipex.optimize(model.eval(), dtype=model.dtype, inplace=True)
+    # Disable repack while jit tracing to reduce the memory
+    ipex._C.disable_jit_linear_repack()
+    with torch.no_grad():
+        trace_model = torch.jit.trace(
+            model,
+            example_kwarg_inputs=sample_inputs,
+            strict=False,
+            check_trace=False,
+        )
+        trace_model = torch.jit.freeze(trace_model)
+        trace_model(**sample_inputs)
+        trace_model(**sample_inputs)
+
+    return trace_model
 
 
 class IPEXModel(OptimizedModel):
@@ -58,6 +126,7 @@ class IPEXModel(OptimizedModel):
     export_feature = "feature-extraction"
     base_model_prefix = "ipex_model"
     main_input_name = "input_ids"
+    output_name = "last_hidden_state"
 
     def __init__(
         self,
@@ -68,11 +137,16 @@ class IPEXModel(OptimizedModel):
         **kwargs,
     ):
         OptimizedModel.__init__(self, model=model, config=config)
-        # To do: add XPU support
-        self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
+        if is_torch_xpu_available(check_device=True):
+            self._device = torch.device("xpu:0")
+        elif torch.cuda.is_available():
+            self._device = torch.device("cuda:0")
+        else:
+            self._device = torch.device("cpu")
         self.model.to(self._device)
+        self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model_save_dir = model_save_dir
+        self._is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
 
         self.input_names = {
             inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
@@ -90,66 +164,84 @@ class IPEXModel(OptimizedModel):
         cls,
         model_id: str,
         config: PretrainedConfig,
+        use_cache: bool = True,
         use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
-        use_cache: bool = True,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         trust_remote_code: bool = False,
+        _commit_hash: str = None,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError(
+                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
+                )
+            token = use_auth_token
+
         if is_torch_version("<", "2.1.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
         task = cls.export_feature
         model_kwargs = {
             "revision": revision,
-            "use_auth_token": use_auth_token,
+            "token": token,
             "cache_dir": cache_dir,
             "subfolder": subfolder,
             "local_files_only": local_files_only,
             "force_download": force_download,
             "torch_dtype": torch_dtype,
             "trust_remote_code": trust_remote_code,
+            "_commit_hash": _commit_hash,
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        model = patch_decoder_attention_mask(model)
-        model = ipex.optimize(model, dtype=torch_dtype, level="O1", auto_kernel_selection=True)
-        traced_model = jit_trace(model, task, use_cache)
+        traced_model = ipex_jit_trace(model, task, use_cache)
 
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
-        torch.jit.save(traced_model, save_dir_path / WEIGHTS_NAME)
         config.torchscript = True
+        config.torch_dtype = torch_dtype
 
-        return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            use_auth_token=use_auth_token,
-            revision=revision,
-            force_download=force_download,
-            cache_dir=cache_dir,
-            local_files_only=local_files_only,
-            use_cache=use_cache,
-        )
+        return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
 
     @classmethod
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str, None]] = None,
-        revision: Optional[Union[str, None]] = None,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: Optional[str] = WEIGHTS_NAME,
         local_files_only: bool = False,
         subfolder: str = "",
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError(
+                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
+                )
+            token = use_auth_token
+
+        if not getattr(config, "torchscript", False):
+            raise ValueError(
+                "`config.torchscript` should be set to `True`, if your model is not a TorchScript model and needs to be traced please set `export=True` when loading it with `.from_pretrained()`"
+            )
+
         # Load the model from local directory
         if os.path.isdir(model_id):
             model_cache_path = os.path.join(model_id, file_name)
@@ -159,7 +251,7 @@ class IPEXModel(OptimizedModel):
             model_cache_path = hf_hub_download(
                 repo_id=model_id,
                 filename=file_name,
-                use_auth_token=use_auth_token,
+                token=token,
                 revision=revision,
                 cache_dir=cache_dir,
                 force_download=force_download,
@@ -193,7 +285,12 @@ class IPEXModel(OptimizedModel):
             inputs["token_type_ids"] = token_type_ids
 
         outputs = self._call_model(**inputs)
-        return ModelOutput(**outputs) if isinstance(outputs, dict) else ModelOutput(logits=outputs[0])
+        if isinstance(outputs, dict):
+            model_output = ModelOutput(**outputs)
+        else:
+            model_output = ModelOutput()
+            model_output[self.output_name] = outputs[0]
+        return model_output
 
     def eval(self):
         self.model.eval()
@@ -207,6 +304,13 @@ class IPEXModel(OptimizedModel):
     def dtype(self) -> torch.dtype:
         return self._dtype
 
+    @property
+    def model_dtype(self):
+        logger.warning(
+            "access to the `model_dtype` attribute is deprecated and will be removed after v1.18.0, please use `_dtype` instead."
+        )
+        return self._dtype
+
     def to(self, device: Union[torch.device, str]):
         self._device = device if isinstance(device, torch.device) else torch.device(device)
         self.model.to(self._device)
@@ -217,7 +321,7 @@ class IPEXModel(OptimizedModel):
 
     def _call_model(self, *args, **kwargs):
         try:
-            with torch.autocast(self.device.type, self.dtype):
+            with torch.autocast(self.device.type, self.dtype), torch.no_grad():
                 out = self.model(*args, **kwargs)
         except RuntimeError:
             out = self.model(*args, **kwargs)
@@ -226,25 +330,32 @@ class IPEXModel(OptimizedModel):
     def _init_warmup(self):
         # warmup, the first 2 forwards of an IPEX model include some preprocessing steps and
         # the results of the compute are unpredictable
-        use_cache = "past_key_values" in self.input_names
-        dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
-        for _ in range(2):
-            self(**dummy_inputs)
+        # TODO : add warmup for IPEX exported model
+        if not self._is_ipex_exported:
+            use_cache = "past_key_values" in self.input_names
+            dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
+            if self._device.type != "cpu":
+                dummy_inputs = recursive_to_device(value=dummy_inputs, device=self._device)
+            for _ in range(2):
+                self(**dummy_inputs)
 
 
 class IPEXModelForSequenceClassification(IPEXModel):
     auto_model_class = AutoModelForSequenceClassification
     export_feature = "text-classification"
+    output_name = "logits"
 
 
 class IPEXModelForTokenClassification(IPEXModel):
     auto_model_class = AutoModelForTokenClassification
     export_feature = "token-classification"
+    output_name = "logits"
 
 
 class IPEXModelForMaskedLM(IPEXModel):
     auto_model_class = AutoModelForMaskedLM
     export_feature = "fill-mask"
+    output_name = "logits"
 
 
 class IPEXModelForImageClassification(IPEXModel):
@@ -325,9 +436,10 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     ):
         # Perform the initial warmup at the end of __init__
         super().__init__(model, config, model_save_dir=model_save_dir, warmup=False)
+        GenerationMixin.__init__(self)
 
-        self.normalized_config = NormalizedConfigManager.get_normalized_config_class(config.model_type)(config)
-        self.model_dtype = kwargs.get("model_dtype", self.dtype)
+        model_type = config.model_type.replace("_", "-")
+        self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(config)
         self.use_cache = "past_key_values" in self.input_names
 
         if use_cache ^ self.use_cache:
@@ -339,6 +451,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             )
         config.is_decoder = True
         config.is_encoder_decoder = False
+
         self.generation_config = GenerationConfig.from_model_config(config)
         try:
             self.model_cls = get_class_from_dynamic_module(
@@ -346,8 +459,21 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             )
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
-        self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
-        self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)
+
+        if self._is_ipex_exported:
+            self._reorder_cache = _ipex_reorder_cache
+        else:
+            # Check if _reorder_cache is a static method
+            if isinstance(self.model_cls.__dict__["_reorder_cache"], staticmethod):
+                self._reorder_cache = self.model_cls._reorder_cache
+            else:
+                self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
+
+        if is_transformers_version(">=", "4.38.0") and model_type in {"llama", "phi", "persimmon"}:
+            self.prepare_inputs_for_generation = _prepare_inputs_for_generation_for_llama
+        else:
+            self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)
+
         if hasattr(self.model_cls, "_convert_to_standard_cache"):
             self._convert_to_standard_cache = self.model_cls._convert_to_standard_cache
         if hasattr(self.model_cls, "_convert_to_bloom_cache"):
@@ -367,7 +493,25 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         else:
             num_attention_heads = self.normalized_config.num_attention_heads
 
-        if model_type == "bloom":
+        if self._is_ipex_exported:
+            # Indirect access kv cache has a different data layout compared with most transformers model,
+            # see https://intel.github.io/intel-extension-for-pytorch/cpu/latest/tutorials/llm.html#indirect-access-kv-cache
+            beam_idx_tmp = torch.zeros(
+                (self.config.max_position_embeddings, input_ids.shape[0]), dtype=torch.long
+            ).contiguous()
+            past_key_values = tuple(
+                [
+                    (
+                        torch.zeros(1, 0, 0, 1, dtype=torch.long).contiguous(),
+                        torch.zeros([1, 1, 1, 1]).contiguous(),
+                        torch.zeros([1, 1, 1, 1]).contiguous(),
+                        beam_idx_tmp,
+                    )
+                    for i in range(num_layers)
+                ]
+            )
+            return past_key_values
+        elif model_type == "bloom":
             shape_key = (batch_size * num_attention_heads, d_k, 0)
             shape_value = (batch_size * num_attention_heads, 0, d_k)
             key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)
@@ -386,6 +530,23 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         return past_key_values
 
+    # Temporary fix, will delete when https://github.com/huggingface/transformers/pull/31226 release.
+    def _get_initial_cache_position(self, input_ids, model_kwargs):
+        """Calculates `cache_position` for the pre-fill stage based on `input_ids` and optionally past length"""
+        if not model_kwargs.get("use_cache", True):
+            model_kwargs["cache_position"] = None
+            return model_kwargs
+
+        past_length = 0
+        if "past_key_values" in model_kwargs:
+            past_length = model_kwargs["past_key_values"][0][0].shape[-2]
+        if "inputs_embeds" in model_kwargs:
+            cur_len = model_kwargs["inputs_embeds"].shape[1]
+        else:
+            cur_len = input_ids.shape[-1]
+        model_kwargs["cache_position"] = torch.arange(past_length, cur_len, device=input_ids.device)
+        return model_kwargs
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -402,12 +563,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             "input_ids": input_ids,
             "attention_mask": attention_mask,
         }
-
-        if "position_ids" in self.input_names and position_ids is None:
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
-            if past_key_values:
-                position_ids = position_ids[:, -1].unsqueeze(-1)
 
         if "position_ids" in self.input_names or not self.input_names:
             inputs["position_ids"] = position_ids
@@ -430,3 +585,101 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             past_key_values = outputs["past_key_values"] if self.use_cache else None
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+
+    def _prepare_generation_config(
+        self, generation_config: Optional[GenerationConfig], **kwargs: Dict
+    ) -> Tuple[GenerationConfig, Dict]:
+        generation_config, model_kwargs = super()._prepare_generation_config(generation_config, **kwargs)
+        generation_method = generation_config.get_generation_mode().value
+        if generation_method not in _IPEX_EXPORTED_GENERATION_METHODS:
+            raise ValueError(
+                f"The generation method {generation_method} is not supported for IPEXModelForCausalLM for now, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
+            )
+
+        return generation_config, model_kwargs
+
+    def generate(self, *args, **kwargs):
+        if self._is_ipex_exported and kwargs.get("assistant_model", None):
+            raise ValueError(
+                f"Assisted decoding is not supported for patched models for now, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
+            )
+        return super().generate(*args, **kwargs)
+
+
+def _prepare_inputs_for_generation_for_llama(
+    input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
+):
+    from transformers.cache_utils import Cache
+
+    if past_key_values is not None:
+        if isinstance(past_key_values, Cache):
+            cache_length = past_key_values.get_seq_length()
+            past_length = past_key_values.seen_tokens
+            max_cache_length = past_key_values.get_max_length()
+        else:
+            cache_length = past_length = past_key_values[0][0].shape[2]
+            max_cache_length = None
+
+        # Keep only the unprocessed tokens:
+        # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
+        # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
+        # input)
+        if attention_mask is not None and attention_mask.shape[1] > input_ids.shape[1]:
+            input_ids = input_ids[:, -(attention_mask.shape[1] - past_length) :]
+        # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
+        # input_ids based on the past_length.
+        elif past_length < input_ids.shape[1]:
+            input_ids = input_ids[:, past_length:]
+        # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens.
+
+        # If we are about to go beyond the maximum cache length, we need to crop the input attention mask.
+        if (
+            max_cache_length is not None
+            and attention_mask is not None
+            and cache_length + input_ids.shape[1] > max_cache_length
+        ):
+            attention_mask = attention_mask[:, -max_cache_length:]
+
+    position_ids = kwargs.get("position_ids", None)
+    if attention_mask is not None and position_ids is None:
+        # create position_ids on the fly for batch generation
+        position_ids = attention_mask.long().cumsum(-1) - 1
+        position_ids.masked_fill_(attention_mask == 0, 1)
+        if past_key_values:
+            position_ids = position_ids[:, -input_ids.shape[1] :]
+
+    # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+    if inputs_embeds is not None and past_key_values is None:
+        model_inputs = {"inputs_embeds": inputs_embeds}
+    else:
+        model_inputs = {"input_ids": input_ids}
+
+    model_inputs.update(
+        {
+            "position_ids": position_ids,
+            "past_key_values": past_key_values,
+            "use_cache": kwargs.get("use_cache"),
+            "attention_mask": attention_mask,
+        }
+    )
+    return model_inputs
+
+
+def _ipex_reorder_cache(
+    past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+) -> Tuple[Tuple[torch.Tensor]]:
+    # Ipex patched model uses indirect access kv cache which has a different shape with other transformers models
+    if len(past_key_values[0]) == 4 and past_key_values[0][0].shape[-1] == 1:
+        for layer_past in past_key_values:
+            layer_past[3][layer_past[0].size(-2) - 1] = beam_idx
+        return past_key_values
+    elif len(past_key_values[0]) == 8:
+        for layer_past in past_key_values:
+            layer_past[3][layer_past[0].size(-2) - 1] = beam_idx
+            layer_past[7][layer_past[0].size(-2) - 1] = beam_idx
+        return past_key_values
+    else:
+        return tuple(
+            tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
+            for layer_past in past_key_values
+        )

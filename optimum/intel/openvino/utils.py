@@ -17,10 +17,13 @@ import json
 import logging
 import os
 from glob import glob
+from pathlib import Path
+from typing import Tuple, Union
 
 import numpy as np
 from huggingface_hub import model_info
-from openvino.runtime import Type, properties
+from openvino.runtime import Core, Type, properties
+from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 
@@ -30,6 +33,9 @@ OV_XML_FILE_NAME = "openvino_model.xml"
 OV_ENCODER_NAME = "openvino_encoder_model.xml"
 OV_DECODER_NAME = "openvino_decoder_model.xml"
 OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
+
+OV_TOKENIZER_NAME = "openvino_tokenizer{}.xml"
+OV_DETOKENIZER_NAME = "openvino_detokenizer{}.xml"
 
 ONNX_WEIGHTS_NAME = "model.onnx"
 ONNX_ENCODER_NAME = "encoder_model.onnx"
@@ -93,7 +99,33 @@ _HEAD_TO_AUTOMODELS = {
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
     "pix2struct": "OVModelForPix2Struct",
+    "latent-consistency": "OVLatentConsistencyModelPipeline",
 }
+
+
+PREDEFINED_SD_DATASETS = {
+    "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
+    "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
+    "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}},
+}
+
+
+NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[type(PreTrainedTokenizer)] = (CLIPTokenizer,)
+
+
+def maybe_convert_tokenizer_to_fast(
+    hf_tokenizer: PreTrainedTokenizer, tokenizer_path: Path
+) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
+    if isinstance(hf_tokenizer, PreTrainedTokenizerFast):
+        return hf_tokenizer
+
+    if isinstance(hf_tokenizer, NEED_CONVERT_TO_FAST_TOKENIZER):
+        try:
+            return AutoTokenizer.from_pretrained(tokenizer_path)
+        except Exception:
+            return hf_tokenizer
+
+    return hf_tokenizer
 
 
 def use_external_data_format(num_parameters: int) -> bool:
@@ -145,3 +177,9 @@ def _print_compiled_model_properties(compiled_model):
                 logger.info(f"  {k}: {value}")
         except Exception:
             logger.error(f"[error] Get property of '{k}' failed")
+    try:
+        logger.info("EXECUTION_DEVICES:")
+        for device in compiled_model.get_property("EXECUTION_DEVICES"):
+            logger.info(f"  {device}: {Core().get_property(device, 'FULL_DEVICE_NAME')}")
+    except Exception:
+        logger.error("[error] Get FULL_DEVICE_NAME failed")

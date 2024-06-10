@@ -15,34 +15,26 @@
 import copy
 import inspect
 import logging
+import types
 import warnings
 from enum import Enum
 from itertools import chain
 from pathlib import Path
-from typing import Callable, Dict, Optional, Union
+from typing import Callable, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
-from neural_compressor.adaptor.pytorch import PyTorch_FXAdaptor, _cfg_to_qconfig, _propagate_qconfig
 from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.experimental.export import torch_to_int8_onnx
 from neural_compressor.model.onnx_model import ONNXModel
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
+from packaging.version import parse
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForMaskedLM,
-    AutoModelForMultipleChoice,
-    AutoModelForQuestionAnswering,
-    AutoModelForSeq2SeqLM,
-    AutoModelForSequenceClassification,
-    AutoModelForTokenClassification,
-    AutoModelForVision2Seq,
     DataCollator,
     PretrainedConfig,
     PreTrainedModel,
-    XLNetLMHeadModel,
     default_data_collator,
 )
 
@@ -56,10 +48,16 @@ from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME
 from ..utils.import_utils import (
+    ITREX_IMPORT_ERROR,
     _ipex_version,
+    _itrex_version,
     _neural_compressor_version,
+    _torch_version,
     is_ipex_version,
+    is_itrex_available,
+    is_itrex_version,
     is_neural_compressor_version,
+    is_torch_version,
 )
 from .configuration import INCConfig
 from .modeling_base import (  # noqa
@@ -71,16 +69,36 @@ from .modeling_base import (  # noqa
     INCModelForSequenceClassification,
     INCModelForTokenClassification,
     INCModelForVision2Seq,
-    INCModelForXLNetLM,
 )
-from .utils import INCDataLoader, _cfgs_to_fx_cfgs
+from .utils import (
+    IPEX_MINIMUM_VERSION,
+    ITREX_MINIMUM_TORCH_VERSION,
+    ITREX_MINIMUM_VERSION,
+    NEURAL_COMPRESSOR_MINIMUM_VERSION,
+    NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION,
+    INCDataLoader,
+)
+
+
+if is_itrex_available():
+    if is_itrex_version("<", ITREX_MINIMUM_VERSION):
+        raise ImportError(
+            f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_itrex_version}, "
+            f"but only version {ITREX_MINIMUM_VERSION} or higher is supported."
+        )
+
+    from intel_extension_for_transformers.transformers.llm.quantization.utils import convert_to_quantized_model
+    from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
+    from intel_extension_for_transformers.transformers.utils.config import (
+        AwqConfig,
+        GPTQConfig,
+        ITREXQuantizationConfigMixin,
+        RtnConfig,
+    )
 
 
 logger = logging.getLogger(__name__)
 
-NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
-NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION = "2.3.0"
-IPEX_MINIMUM_VERSION = "2.1.0"
 
 if is_neural_compressor_version("<", NEURAL_COMPRESSOR_MINIMUM_VERSION):
     raise ImportError(
@@ -143,21 +161,20 @@ class INCQuantizer(OptimumQuantizer):
 
     def quantize(
         self,
-        quantization_config: "PostTrainingQuantConfig",
+        quantization_config: Union["PostTrainingQuantConfig", "ITREXQuantizationConfigMixin"],
         save_directory: Union[str, Path],
         calibration_dataset: Dataset = None,
         batch_size: int = 8,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
         file_name: str = None,
-        weight_only: bool = False,
         **kwargs,
     ):
         """
         Quantize a model given the optimization specifications defined in `quantization_config`.
 
         Args:
-            quantization_config (`PostTrainingQuantConfig`):
+            quantization_config (`Union[PostTrainingQuantConfig, ITREXQuantizationConfigMixin]`):
                 The configuration containing the parameters related to quantization.
             save_directory (`Union[str, Path]`):
                 The directory where the quantized model should be saved.
@@ -169,54 +186,96 @@ class INCQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether or not to remove the columns unused by the model forward method.
-            weight_only (`bool`, defaults to `False`):
-                Whether compress weights to integer precision (4-bit by default) while keeping activations
-                floating-point. Fits best for LLM footprint reduction and performance acceleration.
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
         save_onnx_model = kwargs.pop("save_onnx_model", False)
+        device = kwargs.pop("device", "cpu")
+        use_cpu = device == torch.device("cpu") or device == "cpu"
+        use_xpu = device == torch.device("xpu") or device == "xpu"
+        calibration_dataloader = None
 
         if save_onnx_model and isinstance(self._original_model, ORTModel):
             save_onnx_model = False
             logger.warning("Model provided is an ONNX model, `save_onnx_model` is set to False")
 
         default_name = WEIGHTS_NAME if not isinstance(self._original_model, ORTModel) else ONNX_WEIGHTS_NAME
-        calibration_dataloader = None
         self._set_task()
 
-        if weight_only:
+        if kwargs.pop("weight_only", None) is not None:
+            logger.warning(
+                "`weight_only` is deprecated. Use `quantization_config` instead to specify which methodology and quantization pamraters to apply."
+            )
+
+        if (
+            isinstance(quantization_config, PostTrainingQuantConfig)
+            and quantization_config.backend == "ipex"
+            and is_ipex_version("<", IPEX_MINIMUM_VERSION)
+            and "generation" in self.task
+        ):
+            raise ImportError(
+                f"Found an incompatible version of intel-extension-for-pytorch. Found version {_ipex_version}, "
+                f"but only version {IPEX_MINIMUM_VERSION} or higher is supported."
+            )
+
+        if save_onnx_model:
+            if (
+                not isinstance(quantization_config, PostTrainingQuantConfig)
+                or INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.DYNAMIC
+            ):
+                logger.warning("ONNX export for dynamic and weight only quantized model is not supported.")
+                save_onnx_model = False
+
+        # ITREX Weight Only Quantization
+        if not isinstance(quantization_config, PostTrainingQuantConfig):
+            if is_itrex_version("==", "1.4.2") and (
+                is_torch_version("!=", "2.3.0") or parse(_torch_version).local != "cpu"
+            ):
+                raise ImportError(
+                    f"Found an incompatible version of `intel-extension-for-transformers` and `torch`. Found version itrex {_itrex_version} and torch {_torch_version}, "
+                    f"but only torch 2.3.0+cpu is compatible with ITREX v1.4.2."
+                )
+
             # check neural-compressor version
             if is_neural_compressor_version("<", NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION):
                 raise ImportError(
                     f"Found an incompatible version of neural-compressor. Found version {_neural_compressor_version}, "
                     f"but only version {NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION} or higher supports weight-only quantization."
                 )
+            if not is_itrex_available():
+                raise ImportError(ITREX_IMPORT_ERROR.format("Weight only quantization"))
 
-            # If op_type_dict of quantization_config is not defined, it will use default values for weight-only quantization:
-            # {"bits": 4, "group_size": 32, "scheme": "sym", "algorithm": "RTN"}
-            if isinstance(quantization_config.op_type_dict, dict) and len(quantization_config.op_type_dict) > 0:
-                algo = []
-                for _, val in quantization_config.op_type_dict.items():
-                    algo += val.get("weight", {}).get("algorithm", ["RTN"])
-            else:
-                algo = ["RTN"]
+            if is_torch_version("<", ITREX_MINIMUM_TORCH_VERSION):
+                raise ImportError(
+                    f"Found an incompatible version of `torch`. Found version {_torch_version}, "
+                    f"but only version {ITREX_MINIMUM_TORCH_VERSION} or higher is supported."
+                )
 
-            if calibration_dataset is None and ("GPTQ" in algo or "AWQ" in algo):
+            if not isinstance(quantization_config, ITREXQuantizationConfigMixin):
+                raise TypeError(
+                    "`quantization_config` should either be an instance of `neural_compressor.config.PostTrainingQuantConfig` or "
+                    f"`intel_extension_for_transformers.transformers.utils.config.ITREXQuantizationConfigMixin` but got: {type(quantization_config)} instead."
+                )
+
+            if not isinstance(quantization_config, (GPTQConfig, RtnConfig)):
+                raise ValueError(
+                    f"Weight-only quantization is only support RTN and GPTQ algorithm now! But got {quantization_config}"
+                )
+
+            if calibration_dataset is None and isinstance(quantization_config, (GPTQConfig, AwqConfig)):
                 raise ValueError(
                     "Weight-only quantization needs a calibration dataset for both GPTQ and AWQ methodologies."
                 )
 
-            if calibration_dataset is None:
-                calibration_dataloader = None
-            else:
+            if calibration_dataset is not None:
                 calibration_dataloader = self._get_calibration_dataloader(
                     calibration_dataset=calibration_dataset,
                     batch_size=batch_size,
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
-                    use_label=False if "GPTQ" in algo else True,
+                    use_label=not isinstance(quantization_config, (GPTQConfig)),
                 )
+            quantization_config.calib_dataloader = calibration_dataloader
 
         elif INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
             # Since PyTorch fx trace does not really require an example_inputs, only need calibration_dataset or calibration_fn here.
@@ -224,9 +283,7 @@ class INCQuantizer(OptimumQuantizer):
                 raise ValueError(
                     "Post-training static quantization needs a calibration dataset or a calibration_function."
                 )
-            if calibration_dataset is None:
-                calibration_dataloader = None
-            else:
+            if calibration_dataset is not None:
                 quantization_config.calibration_sampling_size = len(calibration_dataset)
                 calibration_dataloader = self._get_calibration_dataloader(
                     calibration_dataset=calibration_dataset,
@@ -239,95 +296,92 @@ class INCQuantizer(OptimumQuantizer):
                 logger.warning("ONNX export is no supported for model with quantized embeddings")
                 save_onnx_model = False
 
-        else:
-            # Disable ONNX export for dynamically quantized model as deprecated in neural-compressor>=2.2.0
-            if save_onnx_model:
-                logger.warning(
-                    "ONNX export for dynamic quantized model is no longer supported by neural-compressor>=2.2.0. "
-                    "To apply dynamic quantization on an ONNX model, you can use optimum.onnxruntime.ORTQuantizer"
-                )
-                save_onnx_model = False
+        if not isinstance(quantization_config, PostTrainingQuantConfig):
+            if use_cpu:
+                # will remove after intel-extension-for-transformers 1.3.3 release.
+                quantization_config.device = "cpu"
+                quantization_config.post_init_cpu()
+            elif use_xpu:
+                # will remove after intel-extension-for-transformers 1.3.3 release.
+                quantization_config.device = "xpu"
+                quantization_config.post_init_xpu()
 
-        if (
-            quantization_config.backend == "ipex"
-            and is_ipex_version("<", IPEX_MINIMUM_VERSION)
-            and "generation" in self.task
-        ):
-            raise ImportError(
-                f"Found an incompatible version of intel-extension-for-pytorch. Found version {_ipex_version}, "
-                f"but only version {IPEX_MINIMUM_VERSION} or higher is supported."
+            self._quantized_model = convert_to_quantized_model(
+                self._original_model, quantization_config, device=quantization_config.device
             )
 
-        if isinstance(self._original_model.config, PretrainedConfig):
-            self._original_model.config.backend = quantization_config.backend
+            self._quantized_model.quantization_config = quantization_config
+            self._quantized_model.save_pretrained = types.MethodType(save_low_bit, self._quantized_model)
+            self._quantized_model.save_pretrained(save_directory)
 
-        if isinstance(self._original_model, ORTModel):
-            # TODO : enable seq2seq models
-            if isinstance(self._original_model, ORTModelForConditionalGeneration):
-                raise RuntimeError("ORTModelForConditionalGeneration not supported for quantization")
+        else:
+            if isinstance(self._original_model.config, PretrainedConfig):
+                self._original_model.config.backend = quantization_config.backend
 
-            if isinstance(self._original_model, ORTModelForCausalLM):
-                model_or_path = self._original_model.onnx_paths
-                if len(model_or_path) > 1:
-                    raise RuntimeError(
-                        f"Too many ONNX model files were found in {self._original_model.onnx_paths}, only `use_cache=False` is supported"
-                    )
-                model_or_path = str(model_or_path[0])
-                default_name = ONNX_DECODER_NAME
+            if isinstance(self._original_model, ORTModel):
+                # TODO : enable seq2seq models
+                if isinstance(self._original_model, ORTModelForConditionalGeneration):
+                    raise RuntimeError("ORTModelForConditionalGeneration not supported for quantization")
+
+                if isinstance(self._original_model, ORTModelForCausalLM):
+                    model_or_path = self._original_model.onnx_paths
+                    if len(model_or_path) > 1:
+                        raise RuntimeError(
+                            f"Too many ONNX model files were found in {self._original_model.onnx_paths}, only `use_cache=False` is supported"
+                        )
+                    model_or_path = str(model_or_path[0])
+                    default_name = ONNX_DECODER_NAME
+                else:
+                    model_or_path = str(self._original_model.model_path)
             else:
-                model_or_path = str(self._original_model.model_path)
-        else:
-            model_or_path = self._original_model
+                model_or_path = self._original_model
 
-        compressed_model = fit(
-            model_or_path,
-            conf=quantization_config,
-            calib_dataloader=calibration_dataloader,
-            eval_func=self.eval_fn,
-            calib_func=self.calibration_fn,
-        )
-
-        if not hasattr(compressed_model, "_model") or compressed_model._model is None:
-            raise RuntimeError(
-                "The maximum number of trials specified has been reached and no quantized model meeting the specified"
-                " accuracy tolerance has been found. Either the tolerance or the number of trials need to be increased."
+            compressed_model = fit(
+                model_or_path,
+                conf=quantization_config,
+                calib_dataloader=calibration_dataloader,
+                eval_func=self.eval_fn,
+                calib_func=self.calibration_fn,
             )
 
-        if isinstance(self._original_model.config, PretrainedConfig):
-            # If backend is IPEX, then the quantized model is JIT model which will drop the config attribute,
-            # so need set config from original_model.
-            model_config = copy.deepcopy(self._original_model.config)
-            model_config.torch_dtype = "int8"
-            if isinstance(compressed_model, IPEXModel):
-                model_config.torchscript = True
-                model_config.backend = "ipex"
-            elif not isinstance(compressed_model, ONNXModel):
-                compressed_model._model.config = model_config
-            model_config.save_pretrained(save_directory)
+            if not hasattr(compressed_model, "_model") or compressed_model._model is None:
+                raise RuntimeError("Calling `neural_compressor.fit` returned unexpected results")
 
-        self._quantized_model = compressed_model._model
+            if isinstance(self._original_model.config, PretrainedConfig):
+                # If backend is IPEX, then the quantized model is JIT model which will drop the config attribute,
+                # so need set config from original_model.
+                model_config = copy.deepcopy(self._original_model.config)
+                model_config.torch_dtype = "int8"
+                if isinstance(compressed_model, IPEXModel):
+                    model_config.torchscript = True
+                    model_config.backend = "ipex"
+                elif not isinstance(compressed_model, ONNXModel):
+                    compressed_model._model.config = model_config
+                model_config.save_pretrained(save_directory)
 
-        if save_onnx_model:
-            model_type = self._original_model.config.model_type.replace("_", "-")
-            model_name = getattr(self._original_model, "name", None)
-            onnx_config_class = TasksManager.get_exporter_config_constructor(
-                exporter="onnx",
-                model=self._original_model,
-                task=self.task,
-                model_type=model_type,
-                model_name=model_name,
-            )
-            onnx_config = onnx_config_class(self._original_model.config)
-            compressed_model.eval()
-            output_onnx_path = save_directory.joinpath(ONNX_WEIGHTS_NAME)
-            # Export the compressed model to the ONNX format
-            self._onnx_export(compressed_model, onnx_config, output_onnx_path)
+            self._quantized_model = compressed_model._model
 
-        output_path = save_directory.joinpath(file_name or default_name)
-        # Save the quantized model
-        self._save_pretrained(compressed_model, output_path)
-        quantization_config = INCConfig(quantization=quantization_config, save_onnx_model=save_onnx_model)
-        quantization_config.save_pretrained(save_directory)
+            if save_onnx_model:
+                model_type = self._original_model.config.model_type.replace("_", "-")
+                model_name = getattr(self._original_model, "name", None)
+                onnx_config_class = TasksManager.get_exporter_config_constructor(
+                    exporter="onnx",
+                    model=self._original_model,
+                    task=self.task,
+                    model_type=model_type,
+                    model_name=model_name,
+                )
+                onnx_config = onnx_config_class(self._original_model.config)
+                compressed_model.eval()
+                output_onnx_path = save_directory.joinpath(ONNX_WEIGHTS_NAME)
+                # Export the compressed model to the ONNX format
+                self._onnx_export(compressed_model, onnx_config, output_onnx_path)
+
+            output_path = save_directory.joinpath(file_name or default_name)
+            # Save the quantized model
+            self._save_pretrained(compressed_model, output_path)
+            quantization_config = INCConfig(quantization=quantization_config, save_onnx_model=save_onnx_model)
+            quantization_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: Union[PyTorchModel, IPEXModel], output_path: str):
@@ -403,7 +457,8 @@ class INCQuantizer(OptimumQuantizer):
         dataset_split: str = "train",
         preprocess_function: Optional[Callable] = None,
         preprocess_batch: bool = True,
-        use_auth_token: bool = False,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
     ) -> Dataset:
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -422,16 +477,28 @@ class INCQuantizer(OptimumQuantizer):
                 Processing function to apply to each example after loading dataset.
             preprocess_batch (`bool`, defaults to `True`):
                 Whether the `preprocess_function` should be batched.
-            use_auth_token (`bool`, defaults to `False`):
-                Whether to use the token generated when running `transformers-cli login`.
+            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+                Deprecated. Please use `token` instead.
+            token (Optional[Union[bool, str]], defaults to `None`):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `huggingface-cli login` (stored in `~/.huggingface`).
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         calibration_dataset = load_dataset(
             dataset_name,
             name=dataset_config_name,
             split=dataset_split,
-            use_auth_token=use_auth_token,
+            token=token,
         )
 
         if num_samples is not None:
@@ -471,116 +538,3 @@ class INCQuantizer(OptimumQuantizer):
     def _remove_unused_columns(self, dataset: Dataset):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
-
-
-# Adapted from https://github.com/intel/neural-compressor/blob/master/neural_compressor/utils/pytorch.py#L96
-def _apply_quantization_from_config(q_config: Dict, model: torch.nn.Module) -> torch.nn.Module:
-    """
-    Apply Intel Neural Compressor quantization steps on the given model.
-
-    Arguments:
-        q_config (`Dict`):
-            Dictionary containing all quantization information such as approach, dtype, scheme and granularity.
-        model (`torch.nn.Module`):
-            Model to quantize.
-    Returns:
-        q_model (`torch.nn.Module`):
-            Quantized model.
-    """
-    from torch.quantization import add_observer_, convert
-    from torch.quantization.quantize_fx import convert_fx, prepare_fx, prepare_qat_fx
-
-    approach = q_config.get("approach")
-    framework = q_config.get("framework")
-
-    if approach not in SUPPORTED_QUANT_MODE:
-        raise ValueError(
-            "Unknown quantization approach. Supported approach are " + ", ".join(SUPPORTED_QUANT_MODE.keys())
-        )
-
-    quant_mode = INCQuantizationMode(approach)
-    q_model = copy.deepcopy(model)
-    q_model.eval()
-
-    if framework == "pytorch_fx":
-        op_cfgs = _cfg_to_qconfig(q_config, approach)
-        fx_op_cfgs = _cfgs_to_fx_cfgs(op_cfgs, approach)
-
-        if not q_config["fx_sub_module_list"]:
-            if quant_mode == INCQuantizationMode.AWARE_TRAINING:
-                q_model.train()
-                q_model = prepare_qat_fx(q_model, fx_op_cfgs)
-            else:
-                q_model = prepare_fx(q_model, fx_op_cfgs)
-            q_model = convert_fx(q_model)
-
-        else:
-            sub_module_list = q_config["fx_sub_module_list"]
-            if q_config["approach"] == "quant_aware_training":
-                q_model.train()
-                PyTorch_FXAdaptor.prepare_sub_graph(sub_module_list, fx_op_cfgs, q_model, prefix="", is_qat=True)
-            else:
-                PyTorch_FXAdaptor.prepare_sub_graph(sub_module_list, fx_op_cfgs, q_model, prefix="")
-            PyTorch_FXAdaptor.convert_sub_graph(sub_module_list, q_model, prefix="")
-
-    else:
-        if quant_mode == INCQuantizationMode.DYNAMIC:
-            q_mapping = torch.quantization.quantization_mappings.get_default_dynamic_quant_module_mappings()
-            op_cfgs = _cfg_to_qconfig(q_config, approach)
-        else:
-            q_mapping = torch.quantization.quantization_mappings.get_default_static_quant_module_mappings()
-            op_cfgs = _cfg_to_qconfig(q_config)
-
-        _propagate_qconfig(q_model, op_cfgs, approach=approach)
-
-        if quant_mode != INCQuantizationMode.DYNAMIC:
-            add_observer_(q_model)
-        q_model = convert(q_model, mapping=q_mapping, inplace=True)
-
-    return q_model
-
-
-class IncQuantizedModel(INCModel):
-    @classmethod
-    def from_pretrained(cls, *args, **kwargs):
-        warnings.warn(
-            f"The class `{cls.__name__}` has been depreciated and will be removed in optimum-intel v1.12, please use "
-            f"`{cls.__name__.replace('IncQuantized', 'INC')}` instead."
-        )
-        return super().from_pretrained(*args, **kwargs)
-
-
-class IncQuantizedModelForQuestionAnswering(IncQuantizedModel):
-    auto_model_class = AutoModelForQuestionAnswering
-
-
-class IncQuantizedModelForSequenceClassification(IncQuantizedModel):
-    auto_model_class = AutoModelForSequenceClassification
-
-
-class IncQuantizedModelForTokenClassification(IncQuantizedModel):
-    auto_model_class = AutoModelForTokenClassification
-
-
-class IncQuantizedModelForMultipleChoice(IncQuantizedModel):
-    auto_model_class = AutoModelForMultipleChoice
-
-
-class IncQuantizedModelForSeq2SeqLM(IncQuantizedModel):
-    auto_model_class = AutoModelForSeq2SeqLM
-
-
-class IncQuantizedModelForCausalLM(IncQuantizedModel):
-    auto_model_class = AutoModelForCausalLM
-
-
-class IncQuantizedModelForMaskedLM(IncQuantizedModel):
-    auto_model_class = AutoModelForMaskedLM
-
-
-class IncQuantizedModelForXLNetLM(IncQuantizedModel):
-    auto_model_class = XLNetLMHeadModel
-
-
-class IncQuantizedModelForVision2Seq(IncQuantizedModel):
-    auto_model_class = AutoModelForVision2Seq

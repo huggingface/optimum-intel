@@ -80,7 +80,6 @@ from transformers.utils import (
     is_accelerate_available,
     is_apex_available,
     is_sagemaker_mp_enabled,
-    is_torch_tpu_available,
     logging,
 )
 
@@ -100,6 +99,11 @@ from .utils import (
     use_external_data_format,
 )
 
+
+if is_transformers_version(">=", "4.39.0"):
+    from transformers.utils import is_torch_xla_available
+else:
+    from transformers.utils import is_torch_tpu_available as is_torch_xla_available
 
 if is_accelerate_available():
     from accelerate import __version__ as accelerate_version
@@ -123,7 +127,7 @@ if is_apex_available():
 if is_sagemaker_mp_enabled():
     import smdistributed.modelparallel.torch as smp
 
-if is_torch_tpu_available(check_device=False):
+if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
 
 core = Core()
@@ -134,6 +138,23 @@ logger.setLevel(logging.INFO)
 # NNCF Error to be shown on stdout
 # set_log_level(logging.ERROR)
 NNCF_LOG_FILE_NAME = "nncf_output.log"
+
+
+DEFAULT_QUANTIZATION_CONFIG = {
+    "algorithm": "quantization",
+    "preset": "mixed",
+    "overflow_fix": "disable",
+    "initializer": {
+        "range": {"num_init_samples": 300, "type": "mean_min_max"},
+        "batchnorm_adaptation": {"num_bn_adaptation_samples": 0},
+    },
+    "scope_overrides": {"activations": {"{re}.*matmul_0": {"mode": "symmetric"}}},
+    "ignored_scopes": [
+        "{re}.*Embedding.*",
+        "{re}.*add___.*",
+        "{re}.*layer_norm_.*",
+    ],
+}
 
 
 def _onnx_export_nncf_model(model: NNCFNetwork, config: OnnxConfig, output: Union[str, io.BytesIO], opset: int = None):
@@ -191,7 +212,6 @@ class OVTrainer(Trainer):
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
         ov_config: Optional[OVConfig] = None,
         task: Optional[str] = None,
-        feature: Optional[str] = None,
     ):
         self.neftune_noise_alpha = None
 
@@ -210,13 +230,7 @@ class OVTrainer(Trainer):
         )
 
         self.ov_config = ov_config
-        if feature is not None:
-            logger.warning("`feature` is deprecated and will be removed in a future version. Use `task` instead.")
-            if task is not None and task != feature:
-                logger.warning(
-                    f"Both `feature` and `task` were specified. {task} will be used to define the model topology for the model ONNX export."
-                )
-        self.task = task or feature
+        self.task = task
         self.teacher = None
         if teacher_model is not None:
             self.teacher = teacher_model.to(args.device)
@@ -225,37 +239,51 @@ class OVTrainer(Trainer):
             self.teacher.eval()
         self.compression_controller = None
 
-        if self.ov_config is not None and self.args.do_train:
-            self._set_task()
-            train_dataloader = self.get_train_dataloader()
-            model_inputs = next(iter(train_dataloader))
-            for label_name in self.label_names:
-                model_inputs.pop(label_name)
-            force_batch_one = self._is_pruning_enabled()
-            self.ov_config.add_input_info(model_inputs, force_batch_one)
-            nncf_config = NNCFConfig.from_dict(self.ov_config.__dict__)
-            nncf_config.register_extra_structs(
-                [
-                    QuantizationRangeInitArgs(OVDataLoader(train_dataloader)),
-                    BNAdaptationInitArgs(OVDataLoader(train_dataloader)),
-                ]
-            )
+        if self.ov_config is not None:
+            if self.ov_config.compression is None:
+                self.ov_config.compression = DEFAULT_QUANTIZATION_CONFIG
+            if (
+                isinstance(self.ov_config.compression, dict)
+                and "algorithm" in self.ov_config.compression
+                and self.ov_config.compression["algorithm"] == "quantization"
+            ):
+                self.ov_config.compression["export_to_onnx_standard_ops"] = self.ov_config.save_onnx_model
+            elif isinstance(self.ov_config.compression, list):
+                for i, algo_config in enumerate(self.ov_config.compression):
+                    if algo_config["algorithm"] == "quantization":
+                        self.ov_config.compression[i]["export_to_onnx_standard_ops"] = self.ov_config.save_onnx_model
 
-            # Configure NNCF logging
-            # Disable nncf logging to stdout except error
-            # but to file nncf_output.log
-            nncf_config["log_dir"] = args.output_dir
-            nncf_log_file_handler = logging.logging.FileHandler(os.path.join(args.output_dir, NNCF_LOG_FILE_NAME))
-            nncf_log_file_handler.setFormatter(logging.logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
-            nncf_logger.addHandler(nncf_log_file_handler)
-            set_log_level(logging.ERROR)
-            nncf_logger.setLevel(logging.INFO)
-            nncf_log_file_handler.setLevel(logging.INFO)
+            if self.args.do_train:
+                self._set_task()
+                train_dataloader = self.get_train_dataloader()
+                model_inputs = next(iter(train_dataloader))
+                for label_name in self.label_names:
+                    model_inputs.pop(label_name)
+                force_batch_one = self._is_pruning_enabled()
+                self.ov_config.add_input_info(model_inputs, force_batch_one)
+                nncf_config = NNCFConfig.from_dict(self.ov_config.__dict__)
+                nncf_config.register_extra_structs(
+                    [
+                        QuantizationRangeInitArgs(OVDataLoader(train_dataloader)),
+                        BNAdaptationInitArgs(OVDataLoader(train_dataloader)),
+                    ]
+                )
 
-            self.compression_controller, self.model = create_compressed_model(self.model, nncf_config)
-            self.model_wrapped = self.model
-            # TODO : To deprecate once support transformers > 4.30.0
-            self.deepspeed = None
+                # Configure NNCF logging
+                # Disable nncf logging to stdout except error
+                # but to file nncf_output.log
+                nncf_config["log_dir"] = args.output_dir
+                nncf_log_file_handler = logging.logging.FileHandler(os.path.join(args.output_dir, NNCF_LOG_FILE_NAME))
+                nncf_log_file_handler.setFormatter(logging.logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+                nncf_logger.addHandler(nncf_log_file_handler)
+                set_log_level(logging.ERROR)
+                nncf_logger.setLevel(logging.INFO)
+                nncf_log_file_handler.setLevel(logging.INFO)
+
+                self.compression_controller, self.model = create_compressed_model(self.model, nncf_config)
+                self.model_wrapped = self.model
+                # TODO : To deprecate once support transformers > 4.30.0
+                self.deepspeed = None
 
     def _set_signature_columns_if_needed(self):
         if self._signature_columns is None:
@@ -607,7 +635,7 @@ class OVTrainer(Trainer):
 
                 if (
                     args.logging_nan_inf_filter
-                    and not is_torch_tpu_available()
+                    and not is_torch_xla_available()
                     and (torch.isnan(tr_loss_step) or torch.isinf(tr_loss_step))
                 ):
                     # if loss is nan or inf simply add the average of previous logged losses
@@ -702,7 +730,7 @@ class OVTrainer(Trainer):
         logger.info("\n\nTraining completed. Do not forget to share your model on huggingface.co/models =)\n\n")
         if args.load_best_model_at_end and self.state.best_model_checkpoint is not None:
             # Wait for everyone to get here so we are sure the model has been saved by process 0.
-            if is_torch_tpu_available():
+            if is_torch_xla_available():
                 xm.rendezvous("load_best_model_at_end")
             elif args.parallel_mode == ParallelMode.DISTRIBUTED:
                 dist.barrier()
@@ -795,7 +823,7 @@ class OVTrainer(Trainer):
 
     def _maybe_log_save_evaluate(self, tr_loss, model, trial, epoch, ignore_keys_for_eval):
         if self.control.should_log:
-            if is_torch_tpu_available():
+            if is_torch_xla_available():
                 xm.mark_step()
 
             logs: Dict[str, float] = {}
@@ -876,7 +904,7 @@ class OVTrainer(Trainer):
             output_path = os.path.join(output_dir, OV_XML_FILE_NAME)
             self.compression_controller.prepare_for_export()
             model_type = self.model.config.model_type.replace("_", "-")
-            onnx_config_class = TasksManager.get_exporter_config_constructor(
+            exporter_config_class = TasksManager.get_exporter_config_constructor(
                 exporter="onnx",
                 model=self.model,
                 task=self.task,
@@ -884,9 +912,9 @@ class OVTrainer(Trainer):
             )
 
             if self.task == "text-generation":
-                onnx_config = onnx_config_class(self.model.config, use_past=self.model.config.use_cache)
+                onnx_config = exporter_config_class(self.model.config, use_past=self.model.config.use_cache)
             else:
-                onnx_config = onnx_config_class(self.model.config)
+                onnx_config = exporter_config_class(self.model.config)
 
             num_parameters = self.model.num_parameters()
             save_as_external_data = use_external_data_format(num_parameters) or self.ov_config.save_onnx_model

@@ -13,11 +13,11 @@
 # limitations under the License.
 import subprocess
 import unittest
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from parameterized import parameterized
 from utils_tests import (
-    _ARCHITECTURES_TO_EXPECTED_INT4_INT8,
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
     get_num_quantized_nodes,
@@ -25,6 +25,7 @@ from utils_tests import (
 
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.intel import (  # noqa
+    OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
     OVModelForFeatureExtraction,
@@ -38,6 +39,7 @@ from optimum.intel import (  # noqa
     OVStableDiffusionXLPipeline,
 )
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
+from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
 
 
 class OVCLIExportTestCase(unittest.TestCase):
@@ -61,15 +63,41 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("stable-diffusion-xl", "stable-diffusion-xl"),
         ("stable-diffusion-xl", "stable-diffusion-xl-refiner"),
     )
+    EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
+        "gpt2": 2,
+        "t5": 0,  # no .model file in the repository
+        "albert": 0,  # not supported yet
+        "distilbert": 1,  # no detokenizer
+        "roberta": 2,
+        "vit": 0,  # no tokenizer for image model
+        "wav2vec2": 0,  # no tokenizer
+        "bert": 1,  # no detokenizer
+        "blenderbot": 2,
+        "stable-diffusion": 2,
+        "stable-diffusion-xl": 4,
+    }
 
-    SUPPORTED_4BIT_ARCHITECTURES = (("text-generation-with-past", "opt125m"),)
+    SUPPORTED_SD_HYBRID_ARCHITECTURES = (
+        ("stable-diffusion", 72, 195),
+        ("stable-diffusion-xl", 84, 331),
+        ("latent-consistency", 50, 135),
+    )
 
-    SUPPORTED_4BIT_OPTIONS = ["int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"]
-
-    TEST_4BIT_CONFIGURATONS = []
-    for arch in SUPPORTED_4BIT_ARCHITECTURES:
-        for option in SUPPORTED_4BIT_OPTIONS:
-            TEST_4BIT_CONFIGURATONS.append([arch[0], arch[1], option])
+    TEST_4BIT_CONFIGURATONS = [
+        ("text-generation-with-past", "opt125m", "int4_sym_g128", 62, 86),
+        ("text-generation-with-past", "opt125m", "int4_asym_g128", 62, 86),
+        ("text-generation-with-past", "opt125m", "int4_sym_g64", 62, 86),
+        ("text-generation-with-past", "opt125m", "int4_asym_g64", 62, 86),
+        ("text-generation-with-past", "llama_awq", "int4 --ratio 1.0 --sym --group-size 16 --all-layers", 0, 32),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
+            "--sensitivity-metric max_activation_variance",
+            4,
+            28,
+        ),
+    ]
 
     def _openvino_export(
         self, model_name: str, task: str, compression_option: str = None, compression_ratio: float = None
@@ -97,6 +125,32 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+
+    @parameterized.expand(
+        arch
+        for arch in SUPPORTED_ARCHITECTURES
+        if not arch[0].endswith("-with-past") and not arch[1].endswith("-refiner")
+    )
+    def test_exporters_cli_tokenizers(self, task: str, model_type: str):
+        with TemporaryDirectory() as tmpdir:
+            output = subprocess.check_output(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {tmpdir}",
+                shell=True,
+                stderr=subprocess.STDOUT,
+            ).decode()
+            if not is_openvino_tokenizers_available():
+                self.assertTrue(
+                    "OpenVINO Tokenizers is not available." in output
+                    or "OpenVINO and OpenVINO Tokenizers versions are not binary compatible." in output,
+                    msg=output,
+                )
+                return
+
+            number_of_tokenizers = sum("tokenizer" in file for file in map(str, Path(tmpdir).rglob("*.xml")))
+            self.assertEqual(self.EXPECTED_NUMBER_OF_TOKENIZER_MODELS[model_type], number_of_tokenizers, output)
+
+            if number_of_tokenizers == 1:
+                self.assertTrue("Detokenizer is not supported, convert tokenizer only." in output, output)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):
@@ -135,21 +189,35 @@ class OVCLIExportTestCase(unittest.TestCase):
                 _, num_int8, _ = get_num_quantized_nodes(model)
                 self.assertEqual(expected_int8[i], num_int8)
 
-    @parameterized.expand(TEST_4BIT_CONFIGURATONS)
-    def test_exporters_cli_int4(self, task: str, model_type: str, option: str):
+    @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
+    def test_exporters_cli_hybrid_quantization(self, model_type: str, exp_num_fq: int, exp_num_int8: int):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task}  --weight-format {option} {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --dataset laion/filtered-wit --weight-format int8 {tmpdir}",
                 shell=True,
                 check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS[model_type]).from_pretrained(tmpdir)
+            num_fq, num_int8, _ = get_num_quantized_nodes(model.unet)
+            self.assertEqual(exp_num_int8, num_int8)
+            self.assertEqual(exp_num_fq, num_fq)
+
+    @parameterized.expand(TEST_4BIT_CONFIGURATONS)
+    def test_exporters_cli_int4(self, task: str, model_type: str, option: str, expected_int8: int, expected_int4: int):
+        with TemporaryDirectory() as tmpdir:
+            result = subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
+                shell=True,
+                check=True,
+                capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
 
-            expected_int8, expected_int4 = _ARCHITECTURES_TO_EXPECTED_INT4_INT8[model_type]
             _, num_int8, num_int4 = get_num_quantized_nodes(model)
             self.assertEqual(expected_int8, num_int8)
             self.assertEqual(expected_int4, num_int4)
+            self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
 
     def test_exporters_cli_help(self):
         subprocess.run(
@@ -157,3 +225,31 @@ class OVCLIExportTestCase(unittest.TestCase):
             shell=True,
             check=True,
         )
+
+    def test_exporters_cli_sentence_transformers(self):
+        model_id = MODEL_NAMES["bge"]
+        with TemporaryDirectory() as tmpdir:
+            # default export creates transformers model
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_id} --task feature-extraction {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS["feature-extraction"]).from_pretrained(tmpdir, compile=False)
+            self.assertTrue("last_hidden_state" in model.output_names)
+            # export with transformers lib creates transformers model
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_id} --task feature-extraction --library transformers {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS["feature-extraction"]).from_pretrained(tmpdir, compile=False)
+            self.assertTrue("last_hidden_state" in model.output_names)
+            # export with sentence_transformers lib creates sentence_transformers model
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_id} --task feature-extraction --library sentence_transformers {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = eval(_HEAD_TO_AUTOMODELS["feature-extraction"]).from_pretrained(tmpdir, compile=False)
+            self.assertFalse("last_hidden_state" in model.output_names)

@@ -13,7 +13,8 @@ Optimum Intel can be used to load optimized models from the [Hugging Face Hub](h
 
 ## Transformers models
 
-You can now easily perform inference with OpenVINO Runtime on a variety of Intel processors ([see](https://docs.openvino.ai/latest/openvino_docs_OV_UG_supported_plugins_Supported_Devices.html) the full list of supported devices). 
+You can now easily perform inference with OpenVINO Runtime on a variety of Intel processors
+([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices). 
 For that, just replace the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
 
 As shown in the table below, each task is associated with a class enabling to automatically load your model.
@@ -27,13 +28,17 @@ As shown in the table below, each task is associated with a class enabling to au
 | `image-classification`               | `OVModelForImageClassification`      |
 | `feature-extraction`                 | `OVModelForFeatureExtraction`        |
 | `fill-mask`                          | `OVModelForMaskedLM`                 |
-| `text-generation`                    | `OVModelForCausalLM`                 |
-| `text2text-generation`               | `OVModelForSeq2SeqLM`                |
+| `image-classification`               | `OVModelForImageClassification`      |
+| `audio-classification`               | `OVModelForAudioClassification`      |
+| `text-generation-with-past`          | `OVModelForCausalLM`                 |
+| `text2text-generation-with-past`     | `OVModelForSeq2SeqLM`                |
+| `automatic-speech-recognition`       | `OVModelForSpeechSeq2Seq`            |
+| `image-to-text`                      | `OVModelForVision2Seq`               |
 
 
 ### Export
 
-It is possible to export your model to the [OpenVINO](https://docs.openvino.ai/2023.1/openvino_ir.html) IR format with the CLI :
+It is possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
 
 ```bash
 optimum-cli export openvino --model gpt2 ov_model
@@ -41,11 +46,19 @@ optimum-cli export openvino --model gpt2 ov_model
 
 The example above illustrates exporting a checkpoint from the 🤗 Hub. When exporting a local model, first make sure that you saved both the model’s weights and tokenizer files in the same directory (`local_path`).
 When using CLI, pass the `local_path` to the model argument instead of the checkpoint name of the model hosted on the Hub and provide the `--task` argument. You can review the list of supported tasks in the 🤗 [Optimum documentation](https://huggingface.co/docs/optimum/exporters/task_manager). If task argument is not provided, it will default to the model architecture without any task specific head.
-Here we set the `task` to `text-generation-with-past`, with the `-with-past` suffix enabling the re-use of the pre-computed key/values hidden-states `use_cache=True`.
+The `-with-past` suffix enable the re-use of the pre-computed key/values hidden-states and is the recommended option, to export the model without (equivalent to `use_cache=False`), you will need to remove this suffix.
 
 ```bash
 optimum-cli export openvino --model local_path --task text-generation-with-past ov_model
 ```
+
+To export your model in fp16, you can add `--weight-format fp16` when exporting your model.
+
+<Tip warning={true}>
+
+Models larger than 1 billion parameters are exported to the OpenVINO format with 8-bit weights by default. You can disable it with `--weight-format fp32`.
+
+</Tip>
 
 Once the model is exported, you can load the OpenVINO model using :
 
@@ -96,15 +109,24 @@ tokenizer.save_pretrained(save_directory)
 
 ### Weight-only quantization
 
-You can also apply 8-bit or 4-bit weight quantization when exporting your model with the CLI:
+You can also apply fp16, 8-bit or 4-bit weight compression on the Linear, Convolutional and Embedding layers when exporting your model with the CLI by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
 
 ```bash
 optimum-cli export openvino --model gpt2 --weight-format int8 ov_model
 ```
 
-This will result in the exported model linear and embedding layers to be quantized to INT8 or INT4, the activations will be kept in floating point precision. This type of optimization allows reducing the footprint and latency of LLMs.
+This type of optimization allows to reduce the memory footprint and inference latency.
 
-This can also be done when loading your model by setting the `load_in_8bit` argument when calling the `from_pretrained()` method.
+
+By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#symmetric-quantization) you can add `--sym`.
+
+For INT4 quantization you can also specify the following arguments :
+* The `--group-size` parameter will define the group size to use for quantization, `-1` it will results in per-column quantization.
+* The `--ratio` parameter controls the ratio between 4-bit and 8-bit quantization. If set to 0.9, it means that 90% of the layers will be quantized to `int4` while 10% will be quantized to `int8`.
+
+Smaller `group_size` and `ratio` values usually improve accuracy at the sacrifice of the model size and inference latency.
+
+You can also apply 8-bit quantization on your model's weight when loading your model by setting the `load_in_8bit=True` argument when calling the `from_pretrained()` method.
 
 ```python
 from optimum.intel import OVModelForCausalLM
@@ -112,20 +134,11 @@ from optimum.intel import OVModelForCausalLM
 model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
 ```
 
-> **NOTE:** `load_in_8bit` is enabled by default for the models larger than 1 billion parameters.
+<Tip warning={true}>
 
-There are also alternative compression options for a different performance-accuracy trade-off:
+If not specified, `load_in_8bit` will be set to `True` by default when models larger than 1 billion parameters are exported to the OpenVINO format (with `export=True`). You can disable it with `load_in_8bit=False`.
 
-| Option                                                              | Description       |
-|---------------------------------------------------------------------|-------------------|
-| `fp16`                                                              | Float16 weights   |
-| `int8`                                                              | INT8 weights      |
-| `int4_sym_g128`, `int4_asym_g128`, `int4_sym_g64`, `int4_asym_g64`* | INT4 weights      |
-
-*`sym` and `asym` stand for symmetric and asymmetric quantization, `g128` and `g64` means the group size `128` and `64` respectively. 
-
-`--ratio` CLI parameter controls the ratio between 4-bit and 8-bit quantized layers and can also change performance-accuracy trade-off for the optimized model. It is valid only for INT4 quantization options.
-
+</Tip>
 
 To apply quantization on both weights and activations, you can use the `OVQuantizer`, more information in the [documentation](https://huggingface.co/docs/optimum/main/en/intel/optimization_ov#optimization).
 
@@ -181,7 +194,7 @@ model.reshape(1,128)
 model.compile()
 ```
 
-To run inference on Intel integrated or discrete GPU, use `.to("gpu")`. On GPU, models run in FP16 precision by default. (See [OpenVINO documentation](https://docs.openvino.ai/nightly/openvino_docs_install_guides_configurations_for_intel_gpu.html) about installing drivers for GPU inference).
+To run inference on Intel integrated or discrete GPU, use `.to("gpu")`. On GPU, models run in FP16 precision by default. (See [OpenVINO documentation](https://docs.openvino.ai/2024/get-started/configurations/configurations-intel-gpu.html) about installing drivers for GPU inference).
 
 ```python
 # Static shapes speed up inference
@@ -470,7 +483,7 @@ image = refiner(prompt=prompt, image=image[None, :]).images[0]
 ```
 
 
-## Latent Consistency Models
+### Latent Consistency Models
 
 
 | Task                                 | Auto Class                           |
@@ -478,7 +491,7 @@ image = refiner(prompt=prompt, image=image[None, :]).images[0]
 | `text-to-image`                      | `OVLatentConsistencyModelPipeline`   |
 
 
-### Text-to-Image
+#### Text-to-Image
 
 Here is an example of how you can load a Latent Consistency Models (LCMs) from [SimianLuo/LCM_Dreamshaper_v7](https://huggingface.co/SimianLuo/LCM_Dreamshaper_v7) and run inference using OpenVINO :
 

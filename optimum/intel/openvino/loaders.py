@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+import warnings
 from typing import Dict, List, Optional, Union
 
 import torch
@@ -25,7 +26,7 @@ if is_safetensors_available():
     import safetensors
 
 import openvino
-from huggingface_hub.constants import HF_HUB_OFFLINE
+from huggingface_hub.constants import HF_HUB_OFFLINE, HUGGINGFACE_HUB_CACHE
 from openvino.runtime import Type
 from openvino.runtime import opset11 as ops
 from openvino.runtime.passes import Manager, Matcher, MatcherPass, WrapType
@@ -37,7 +38,7 @@ from .utils import TEXTUAL_INVERSION_EMBEDDING_KEY, TEXTUAL_INVERSION_NAME, TEXT
 try:
     from diffusers.utils import DIFFUSERS_CACHE
 except ImportError:
-    DIFFUSERS_CACHE = None
+    DIFFUSERS_CACHE = HUGGINGFACE_HUB_CACHE
 
 
 logger = logging.getLogger(__name__)
@@ -188,9 +189,11 @@ class OVTextualInversionLoaderMixin:
             local_files_only (`bool`, *optional*, defaults to `False`):
                 Whether to only load local model weights and configuration files or not. If set to `True`, the model
                 won't be downloaded from the Hub.
-            use_auth_token (`str` or *bool*, *optional*):
-                The token to use as HTTP bearer authorization for remote files. If `True`, the token generated from
-                `diffusers-cli login` (stored in `~/.huggingface`) is used.
+            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+                Deprecated. Please use `token` instead.
+            token (Optional[Union[bool, str]], defaults to `None`):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `huggingface-cli login` (stored in `~/.huggingface`).
             revision (`str`, *optional*, defaults to `"main"`):
                 The specific model version to use. It can be a branch name, a tag name, a commit id, or any identifier
                 allowed by Git.
@@ -258,10 +261,20 @@ class OVTextualInversionLoaderMixin:
         proxies = kwargs.pop("proxies", None)
         local_files_only = kwargs.pop("local_files_only", HF_HUB_OFFLINE)
         use_auth_token = kwargs.pop("use_auth_token", None)
+        token = kwargs.pop("token", None)
         revision = kwargs.pop("revision", None)
         subfolder = kwargs.pop("subfolder", None)
         weight_name = kwargs.pop("weight_name", None)
         use_safetensors = kwargs.pop("use_safetensors", None)
+
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
 
         if use_safetensors and not is_safetensors_available():
             raise ValueError(
@@ -319,7 +332,7 @@ class OVTextualInversionLoaderMixin:
                             resume_download=resume_download,
                             proxies=proxies,
                             local_files_only=local_files_only,
-                            use_auth_token=use_auth_token,
+                            use_auth_token=token,  # still uses use_auth_token
                             revision=revision,
                             subfolder=subfolder,
                             user_agent=user_agent,
@@ -340,7 +353,7 @@ class OVTextualInversionLoaderMixin:
                         resume_download=resume_download,
                         proxies=proxies,
                         local_files_only=local_files_only,
-                        use_auth_token=use_auth_token,
+                        use_auth_token=token,  # still uses use_auth_token
                         revision=revision,
                         subfolder=subfolder,
                         user_agent=user_agent,

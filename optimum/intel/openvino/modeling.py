@@ -11,16 +11,20 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+
 import logging
 import os
+import warnings
 from pathlib import Path
-from typing import Optional, Union
+from tempfile import TemporaryDirectory
+from typing import Dict, Optional, Union
 
 import numpy as np
 import openvino
 import torch
 import transformers
 from huggingface_hub import model_info
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -41,6 +45,7 @@ from transformers.modeling_outputs import (
     CausalLMOutput,
     ImageClassifierOutput,
     MaskedLMOutput,
+    ModelOutput,
     QuestionAnsweringModelOutput,
     SequenceClassifierOutput,
     TokenClassifierOutput,
@@ -49,7 +54,9 @@ from transformers.modeling_outputs import (
 
 from optimum.exporters import TasksManager
 
+from ...exporters.openvino import main_export
 from ..utils.import_utils import is_timm_available, is_timm_version
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import _is_timm_ov_dir
 
@@ -133,7 +140,7 @@ class OVModel(OVBaseModel):
             self._device = device.upper()
             self.request = None
         else:
-            logger.warning(f"device must be of type {str} but got {type(device)} instead")
+            logger.debug(f"device must be of type {str} but got {type(device)} instead")
 
         return self
 
@@ -411,6 +418,70 @@ class OVModelForFeatureExtraction(OVModel):
         )
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
+    @classmethod
+    def _from_transformers(
+        cls,
+        model_id: str,
+        config: PretrainedConfig,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        subfolder: str = "",
+        local_files_only: bool = False,
+        task: Optional[str] = None,
+        trust_remote_code: bool = False,
+        load_in_8bit: Optional[bool] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
+        save_dir = TemporaryDirectory()
+        save_dir_path = Path(save_dir.name)
+        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
+        # would end-up removing the directory containing the underlying OpenVINO model
+        cls._model_save_dir_tempdirectory_instance = save_dir
+
+        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
+        if load_in_8bit is None and not quantization_config:
+            ov_config = None
+        else:
+            ov_config = OVConfig(dtype="fp32")
+
+        # OVModelForFeatureExtraction works with Transformers type of models, thus even sentence-transformers models are loaded as such.
+        main_export(
+            model_name_or_path=model_id,
+            output=save_dir_path,
+            task=task or cls.export_feature,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            local_files_only=local_files_only,
+            force_download=force_download,
+            trust_remote_code=trust_remote_code,
+            ov_config=ov_config,
+            library_name="transformers",
+        )
+
+        config.save_pretrained(save_dir_path)
+        return cls._from_pretrained(
+            model_id=save_dir_path,
+            config=config,
+            load_in_8bit=load_in_8bit,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+
 
 MASKED_LM_EXAMPLE = r"""
     Example of masked language modeling using `transformers.pipelines`:
@@ -529,15 +600,25 @@ class OVModelForImageClassification(OVModel):
         export: bool = False,
         config: Optional["PretrainedConfig"] = None,
         use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
         task: Optional[str] = None,
         trust_remote_code: bool = False,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         # Fix the mismatch between timm_config and huggingface_config
         local_timm_model = _is_timm_ov_dir(model_id)
         if local_timm_model or (not os.path.isdir(model_id) and model_info(model_id).library_name == "timm"):
@@ -566,7 +647,7 @@ class OVModelForImageClassification(OVModel):
                 model_id=model_id,
                 config=config,
                 export=export,
-                use_auth_token=use_auth_token,
+                token=token,
                 revision=revision,
                 force_download=force_download,
                 cache_dir=cache_dir,
@@ -905,3 +986,66 @@ class OVModelForAudioFrameClassification(OVModel):
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
 
         return TokenClassifierOutput(logits=logits)
+
+
+CUSTOM_TASKS_EXAMPLE = """
+    Example of custom tasks (e.g. a sentence transformers with a pooler head):
+
+    ```python
+    >>> from transformers import {processor_class}
+    >>> from optimum.intel import {model_class}
+
+    >>> tokenizer = {processor_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}")
+
+    >>> inputs = tokenizer("I love burritos!", return_tensors="np")
+
+    >>> outputs = model(**inputs)
+    >>> last_hidden_state = outputs.last_hidden_state
+    >>> pooler_output = outputs.pooler_output
+    ```
+"""
+
+
+@add_start_docstrings(
+    """
+    OpenVINO Model for custom tasks. It can be used to leverage the inference acceleration for any single-file OpenVINO model, that may use custom inputs and outputs.
+    """,
+    MODEL_START_DOCSTRING,
+)
+class OVModelForCustomTasks(OVModel):
+    @add_start_docstrings_to_model_forward(
+        CUSTOM_TASKS_EXAMPLE.format(
+            processor_class=_TOKENIZER_FOR_DOC,
+            model_class="OVModelForCustomTasks",
+            checkpoint="IlyasMoutawwakil/sbert-all-MiniLM-L6-v2-with-pooler",
+        )
+    )
+    def forward(self, **kwargs):
+        expected_inputs_names = set(self.input_names)
+        inputs_names = set(kwargs)
+
+        if not expected_inputs_names.issubset(inputs_names):
+            raise ValueError(
+                f"Got unexpected inputs: expecting the following inputs : {', '.join(expected_inputs_names)} but got : {', '.join(inputs_names)}."
+            )
+
+        np_inputs = isinstance(next(iter(kwargs.values())), np.ndarray)
+        inputs = {}
+        for input_name in self.input_names:
+            inputs[input_name] = np.array(kwargs.pop(input_name)) if not np_inputs else kwargs.pop(input_name)
+
+        outputs = self.request(inputs)
+
+        model_outputs = {}
+        for key, value in outputs.items():
+            key_name = next(iter(key.names))
+            if "." in key_name:
+                key_name = key_name.split(".")[0]
+                if key_name not in model_outputs:
+                    model_outputs[key_name] = []
+                model_outputs[key_name].append(torch.from_numpy(value).to(self.device) if not np_inputs else value)
+            else:
+                model_outputs[key_name] = torch.from_numpy(value).to(self.device) if not np_inputs else value
+
+        return ModelOutput(**model_outputs)

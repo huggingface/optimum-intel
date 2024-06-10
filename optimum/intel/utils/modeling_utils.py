@@ -148,3 +148,46 @@ def patch_decoder_attention_mask(model: "PreTrainedModel"):
     elif model.config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
         model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
     return model
+
+
+def get_model_device(model: torch.nn.Module) -> torch.device:
+    """
+    Determines the device on which a PyTorch model is currently residing.
+
+    Args:
+        model: The PyTorch model to query.
+
+    Returns:
+        torch.device: The device where the model's parameters are located.
+
+    Raises:
+        StopIteration: If the model has no parameters.
+    """
+    try:
+        device = next(model.parameters()).device
+    except StopIteration:
+        # The model had no parameters at all, doesn't matter which device to choose
+        device = torch.device("cpu")
+    return device
+
+
+def recursive_to_device(value, device):
+    """
+    Recursivley move the tensor element in `value` to `device`
+    """
+    if isinstance(value, (tuple, list)):
+        return type(value)(recursive_to_device(v, device) for v in value)
+    elif isinstance(value, dict):
+        return {k: recursive_to_device(v, device) for k, v in value.items()}
+    elif isinstance(value, torch.Tensor):
+        return value.to(device)
+    return value
+
+
+def _setattr_from_module(new_module, module):
+    for k, v in module.__dict__.items():
+        setattr(new_module, k, v)
+    for k, v in module.__class__.__dict__.items():
+        if k.startswith("__") or k.startswith("forward"):
+            continue
+        setattr(new_module.__class__, k, getattr(module.__class__, k))

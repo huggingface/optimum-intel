@@ -19,29 +19,96 @@ limitations under the License.
 🤗 Optimum Intel provides an `openvino` package that enables you to apply a variety of model compression methods such as quantization, pruning, on many models hosted on the 🤗 hub using the [NNCF](https://docs.openvino.ai/2022.1/docs_nncf_introduction.html) framework.
 
 
-## Post-training optimization
+## Post-training
 
-Post-training static quantization introduces an additional calibration step where data is fed through the network in order to compute the activations quantization parameters.
-Here is how to apply static quantization on a fine-tuned DistilBERT:
+Quantization is a technique to reduce the computational and memory costs of running inference by representing the weights and / or the activations with lower precision data types like 8-bit or 4-bit.
+
+### Weight-only quantization
+
+Quantization can be applied on the model's Linear, Convolutional and Embedding layers, enabling the loading of large models on memory-limited devices. For example, when applying 8-bit quantization, the resulting model will be x4 smaller than its fp32 counterpart. For 4-bit quantization, the reduction in memory could theoretically reach x8, but is closer to x6 in practice.
+
+
+#### 8-bit
+
+For the 8-bit weight quantization you can set `load_in_8bit=True` to load your model's weights in 8-bit:
 
 ```python
-from functools import partial
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from optimum.intel import OVConfig, OVQuantizer
+from optimum.intel import OVModelForCausalLM
+
+model_id = "helenai/gpt2-ov"
+model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
+
+# Saves the int8 model that will be x4 smaller than its fp32 counterpart
+model.save_pretrained(saving_directory)
+```
+
+<Tip warning={true}>
+
+If not specified, `load_in_8bit` will be set to `True` by default when models larger than 1 billion parameters are exported to the OpenVINO format (with `export=True`). You can disable it with `load_in_8bit=False`.
+
+</Tip>
+
+You can also provide a `quantization_config` instead to specify additional optimization parameters.
+
+#### 4-bit
+
+For the 4-bit weight quantization, you need a `quantization_config` to define the optimization parameters, for example:
+
+```python
+from optimum.intel import OVModelForCausalLM, OVWeightQuantizationConfig
+
+quantization_config = OVWeightQuantizationConfig(bits=4)
+model = OVModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config)
+```
+
+You can tune quantization parameters to achieve a better performance accuracy trade-off as follows:
+
+```python
+quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, dataset="ptb")
+```
+
+By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#symmetric-quantization) you can add `sym=True`.
+
+For 4-bit quantization you can also specify the following arguments in the quantization configuration :
+* The `group_size` parameter will define the group size to use for quantization, `-1` it will results in per-column quantization.
+* The `ratio` parameter controls the ratio between 4-bit and 8-bit quantization. If set to 0.9, it means that 90% of the layers will be quantized to `int4` while 10% will be quantized to `int8`.
+
+Smaller `group_size` and `ratio` values usually improve accuracy at the sacrifice of the model size and inference latency.
+
+### Static quantization
+
+When applying post-training static quantization, both the weights and the activations are quantized.
+To apply quantization on the activations, an additional calibration step is needed which consists in feeding a `calibration_dataset` to the network in order to estimate the quantization activations parameters.
+
+Here is how to apply static quantization on a fine-tuned DistilBERT given your own `calibration_dataset`:
+
+```python
+from transformers import AutoTokenizer
+from optimum.intel import OVQuantizer, OVModelForSequenceClassification, OVConfig, OVQuantizationConfig
 
 model_id = "distilbert-base-uncased-finetuned-sst-2-english"
-model = AutoModelForSequenceClassification.from_pretrained(model_id)
+model = OVModelForSequenceClassification.from_pretrained(model_id, export=True)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 # The directory where the quantized model will be saved
 save_dir = "ptq_model"
 
+quantizer = OVQuantizer.from_pretrained(model)
+
+# Apply static quantization and export the resulting quantized model to OpenVINO IR format
+ov_config = OVConfig(quantization_config=OVQuantizationConfig())
+quantizer.quantize(ov_config=ov_config, calibration_dataset=calibration_dataset, save_directory=save_dir)
+# Save the tokenizer
+tokenizer.save_pretrained(save_dir)
+```
+
+The calibration dataset can also be created easily using your `OVQuantizer`:
+
+```python
+from functools import partial
+
 def preprocess_function(examples, tokenizer):
     return tokenizer(examples["sentence"], padding="max_length", max_length=128, truncation=True)
 
-# Load the default quantization configuration detailing the quantization we wish to apply
-quantization_config = OVConfig()
-# Instantiate our OVQuantizer using the desired configuration
-quantizer = OVQuantizer.from_pretrained(model)
 # Create the calibration dataset used to perform static quantization
 calibration_dataset = quantizer.get_calibration_dataset(
     "glue",
@@ -50,49 +117,39 @@ calibration_dataset = quantizer.get_calibration_dataset(
     num_samples=300,
     dataset_split="train",
 )
-# Apply static quantization and export the resulting quantized model to OpenVINO IR format
-quantizer.quantize(
-    quantization_config=quantization_config,
-    calibration_dataset=calibration_dataset,
-    save_directory=save_dir,
-)
-# Save the tokenizer
-tokenizer.save_pretrained(save_dir)
 ```
+
 
 The `quantize()` method applies post-training static quantization and export the resulting quantized model to the OpenVINO Intermediate Representation (IR). The resulting graph is represented with two files: an XML file describing the network topology and a binary file describing the weights. The resulting model can be run on any target Intel device.
 
-##  Weight-only quantization
 
-You can optimize the performance of text-generation LLMs by quantizing weights to various precisions that provide different performance-accuracy trade-offs.
+###  Hybrid quantization
+
+Traditional optimization methods like post-training 8-bit quantization do not work well for Stable Diffusion (SD) models and can lead to poor generation results. On the other hand, weight compression does not improve performance significantly when applied to Stable Diffusion models, as the size of activations is comparable to weights.
+The U-Net component takes up most of the overall execution time of the pipeline. Thus, optimizing just this one component can bring substantial benefits in terms of inference speed while keeping acceptable accuracy without fine-tuning. Quantizing the rest of the diffusion pipeline does not significantly improve inference performance but could potentially lead to substantial accuracy degradation.
+Therefore, the proposal is to apply quantization in *hybrid mode* for the U-Net model and weight-only quantization for the rest of the pipeline components :
+* U-Net : quantization applied on both the weights and activations 
+* The text encoder, VAE encoder / decoder : quantization applied on the weights 
+
+The hybrid mode involves the quantization of weights in MatMul and Embedding layers, and activations of other layers, facilitating accuracy preservation post-optimization while reducing the model size.
+
+The `quantization_config` is utilized to define optimization parameters for optimizing the SD pipeline. To enable hybrid quantization, specify the quantization dataset in the `quantization_config`. If the dataset is not defined, weight-only quantization will be applied on all components.
 
 ```python
-from optimum.intel import OVModelForCausalLM
+from optimum.intel import OVStableDiffusionPipeline, OVWeightQuantizationConfig
 
-model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
+model = OVStableDiffusionPipeline.from_pretrained(
+    model_id,
+    export=True,
+    quantization_config=OVWeightQuantizationConfig(bits=8, dataset="conceptual_captions"),
+)
 ```
 
-> **NOTE:** `load_in_8bit` is enabled by default for models larger than 1 billion parameters.
-
-For the 4-bit weight quantization we recommend using the NNCF API like below:
-```python
-from optimum.intel import OVModelForCausalLM
-import nncf
-
-model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=False)
-model.model = nncf.compress_weights(
-        model.model,
-        mode=nncf.CompressWeightsMode.INT4_SYM,
-        ratio=0.8,
-        group_size=128,
-    )
-model.save_pretrained("compressed_model")
-```
 
 For more details, please refer to the corresponding NNCF [documentation](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/CompressWeights.md).
 
 
-## Training-time optimization
+## Training-time
 
 Apart from optimizing a model after training like post-training quantization above, `optimum.openvino` also provides optimization methods during training, namely Quantization-Aware Training (QAT) and Joint Pruning, Quantization and Distillation (JPQD).
 

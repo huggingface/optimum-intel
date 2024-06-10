@@ -1,3 +1,17 @@
+#  Copyright 2024 The HuggingFace Team. All rights reserved.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
 import os
 from collections import OrderedDict
 from typing import Dict, List, Optional, Union
@@ -5,6 +19,7 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 import timm
 import torch
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from packaging import version
 from timm.layers.config import set_fused_attn
 from timm.models._hub import load_model_config_from_hf
@@ -41,7 +56,7 @@ class TimmConfig(PretrainedConfig):
     def from_pretrained(
         cls,
         pretrained_model_name_or_path: Union[str, os.PathLike],
-        cache_dir: Optional[Union[str, os.PathLike]] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         force_download: bool = False,
         local_files_only: bool = False,
         token: Optional[Union[str, bool]] = None,

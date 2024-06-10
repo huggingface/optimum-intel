@@ -16,11 +16,9 @@ import logging
 import os
 import warnings
 from collections import UserDict
-from typing import Dict
 
 import torch
 from neural_compressor.utils.pytorch import load
-from packaging import version
 from torch.utils.data import DataLoader
 
 from ..utils.constant import WEIGHTS_NAME
@@ -30,6 +28,13 @@ logger = logging.getLogger(__name__)
 
 
 CONFIG_NAME = "best_configure.yaml"
+QUANTIZATION_CONFIG_NAME = "quantize_config.json"
+
+NEURAL_COMPRESSOR_MINIMUM_VERSION = "2.1.0"
+NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION = "2.3.0"
+IPEX_MINIMUM_VERSION = "2.1.0"
+ITREX_MINIMUM_VERSION = "1.4.0"
+ITREX_MINIMUM_TORCH_VERSION = "2.2.0"
 
 
 _HEAD_TO_AUTOMODELS = {
@@ -43,10 +48,6 @@ _HEAD_TO_AUTOMODELS = {
     "stable-diffusion": "INCStableDiffusionPipeline",
     "feature-extraction": "INCModel",
 }
-
-
-parsed_torch_version_base = version.parse(version.parse(torch.__version__).base_version)
-is_torch_less_than_1_13 = parsed_torch_version_base < version.parse("1.13.0")
 
 
 class INCDataLoader(DataLoader):
@@ -71,44 +72,6 @@ class INCDataLoader(DataLoader):
                 yield input, label
             else:
                 yield input
-
-
-def _cfgs_to_fx_cfgs(op_cfgs: Dict, observer_type: str = "post_training_static_quant") -> Dict:
-    """Inc function which convert a quantization config to a format that meets the requirements of torch.fx.
-
-    Arguments:
-        op_cfgs (`dict`):
-            Dictionary of quantization configure for each op.
-        observer_type (`str`):
-            Specify observer type.
-    Returns:
-        fx_op_cfgs (`dict`):
-            Dictionary of quantization configure that meets the requirements of torch.fx.
-    """
-    if not is_torch_less_than_1_13:
-        from torch.ao.quantization import QConfigMapping
-
-        fx_op_cfgs = QConfigMapping()
-    else:
-        fx_op_cfgs = {}
-        op_tuple_cfg_list = []
-    for key, value in op_cfgs.items():
-        if key == "default_qconfig":
-            if not is_torch_less_than_1_13:
-                fx_op_cfgs.set_global(value)
-            else:
-                fx_op_cfgs[""] = value
-            continue
-        if not is_torch_less_than_1_13:
-            fx_op_cfgs.set_module_name(key, value)
-        else:
-            op_tuple = (key, value)
-            op_tuple_cfg_list.append(op_tuple)
-
-    if is_torch_less_than_1_13:
-        fx_op_cfgs["module_name"] = op_tuple_cfg_list
-
-    return fx_op_cfgs
 
 
 def load_quantized_model(checkpoint_dir_or_file: str, model: torch.nn.Module, **kwargs) -> torch.nn.Module:

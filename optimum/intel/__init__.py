@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from transformers.utils import OptionalDependencyNotAvailable, _LazyModule
 
 from .utils import (
+    is_accelerate_available,
     is_diffusers_available,
     is_ipex_available,
     is_neural_compressor_available,
@@ -29,6 +30,7 @@ from .version import __version__
 
 _import_structure = {
     "openvino": [],
+    "utils.dummy_openvino_and_nncf_objects": [],
 }
 
 try:
@@ -57,14 +59,35 @@ try:
     if not (is_openvino_available() and is_nncf_available()):
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
-    _import_structure["utils.dummy_openvino_and_nncf_objects"] = [
-        "OVConfig",
-        "OVQuantizer",
-        "OVTrainer",
-        "OVTrainingArguments",
-    ]
+    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(
+        [
+            "OVQuantizer",
+            "OVTrainingArguments",
+            "OVQuantizationConfig",
+            "OVWeightQuantizationConfig",
+            "OVDynamicQuantizationConfig",
+        ]
+    )
 else:
-    _import_structure["openvino"].extend(["OVConfig", "OVQuantizer", "OVTrainer", "OVTrainingArguments"])
+    _import_structure["openvino"].extend(
+        [
+            "OVQuantizer",
+            "OVTrainingArguments",
+            "OVQuantizationConfig",
+            "OVWeightQuantizationConfig",
+            "OVDynamicQuantizationConfig",
+        ]
+    )
+
+
+try:
+    if not (is_openvino_available() and is_nncf_available() and is_accelerate_available()):
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    _import_structure["utils.dummy_openvino_and_nncf_objects"].extend(["OVTrainer"])
+else:
+    _import_structure["openvino"].extend(["OVTrainer"])
+
 
 try:
     if not (is_openvino_available() and is_diffusers_available()):
@@ -105,8 +128,9 @@ else:
             "OVModelForAudioClassification",
             "OVModelForAudioFrameClassification",
             "OVModelForAudioXVector",
-            "OVModelForCTC",
             "OVModelForCausalLM",
+            "OVModelForCTC",
+            "OVModelForCustomTasks",
             "OVModelForFeatureExtraction",
             "OVModelForImageClassification",
             "OVModelForMaskedLM",
@@ -114,8 +138,10 @@ else:
             "OVModelForQuestionAnswering",
             "OVModelForSeq2SeqLM",
             "OVModelForSpeechSeq2Seq",
+            "OVModelForVision2Seq",
             "OVModelForSequenceClassification",
             "OVModelForTokenClassification",
+            "OVConfig",
         ]
     )
 
@@ -144,6 +170,7 @@ else:
         "INCSeq2SeqTrainer",
         "INCTrainer",
     ]
+
 try:
     if not (is_neural_compressor_available() and is_diffusers_available()):
         raise OptionalDependencyNotAvailable()
@@ -176,9 +203,29 @@ if TYPE_CHECKING:
         if not (is_openvino_available() and is_nncf_available()):
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
-        from .utils.dummy_openvino_and_nncf_objects import OVConfig, OVQuantizer, OVTrainer, OVTrainingArguments
+        from .utils.dummy_openvino_and_nncf_objects import (
+            OVDynamicQuantizationConfig,
+            OVQuantizationConfig,
+            OVQuantizer,
+            OVTrainingArguments,
+            OVWeightQuantizationConfig,
+        )
     else:
-        from .openvino import OVConfig, OVQuantizer, OVTrainer, OVTrainingArguments
+        from .openvino import (
+            OVDynamicQuantizationConfig,
+            OVQuantizationConfig,
+            OVQuantizer,
+            OVTrainingArguments,
+            OVWeightQuantizationConfig,
+        )
+
+    try:
+        if not (is_openvino_available() and is_nncf_available() and is_accelerate_available()):
+            raise OptionalDependencyNotAvailable()
+    except OptionalDependencyNotAvailable:
+        from .utils.dummy_openvino_and_nncf_objects import OVTrainer
+    else:
+        from .openvino import OVTrainer
 
     try:
         if not (is_openvino_available() and is_diffusers_available()):
@@ -209,11 +256,13 @@ if TYPE_CHECKING:
         from .utils.dummy_openvino_objects import *
     else:
         from .openvino import (
+            OVConfig,
             OVModelForAudioClassification,
             OVModelForAudioFrameClassification,
             OVModelForAudioXVector,
             OVModelForCausalLM,
             OVModelForCTC,
+            OVModelForCustomTasks,
             OVModelForFeatureExtraction,
             OVModelForImageClassification,
             OVModelForMaskedLM,
@@ -222,6 +271,7 @@ if TYPE_CHECKING:
             OVModelForSequenceClassification,
             OVModelForSpeechSeq2Seq,
             OVModelForTokenClassification,
+            OVModelForVision2Seq,
         )
 
     try:
