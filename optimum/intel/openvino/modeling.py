@@ -332,7 +332,6 @@ class OVModelForTokenClassification(OVModel):
             attention_mask = np.array(attention_mask)
             token_type_ids = np.array(token_type_ids) if token_type_ids is not None else token_type_ids
 
-
         inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,

@@ -479,7 +479,6 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
             _ = model(**tokens)
 
         self.assertIn("Got unexpected inputs: ", str(context.exception))
-
         del model
         gc.collect()
 
