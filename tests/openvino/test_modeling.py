@@ -14,7 +14,6 @@
 
 import gc
 import os
-import subprocess
 import tempfile
 import time
 import unittest
@@ -249,13 +248,14 @@ class OVModelIntegrationTest(unittest.TestCase):
         gc.collect()
 
     def test_load_model_from_hub_private_with_token(self):
-        subprocess.run("huggingface-cli logout", shell=True)
+        token = os.environ.get("HF_HUB_READ_TOKEN", None)
+        if token is None:
+            self.skipTest("Test requires a token `HF_HUB_READ_TOKEN` in the environment variable")
 
-        # a fine-grained read-only token of private repo "IlyasMoutawwakil/test-hub-bert"
-        token = "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"
-
-        loaded_model = OVModelForMaskedLM.from_pretrained("IlyasMoutawwakil/test-hub-bert", use_auth_token=token)
-        self.assertIsInstance(loaded_model.config, PretrainedConfig)
+        model = OVModelForCausalLM.from_pretrained(
+            "optimum-internal-testing/tiny-random-phi-private", use_auth_token=token, revision="openvino"
+        )
+        self.assertIsInstance(model.config, PretrainedConfig)
 
 
 class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
