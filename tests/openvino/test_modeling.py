@@ -766,12 +766,18 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model.compile()
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         inputs = "My name is Arthur and I live in"
-        outputs = pipe(inputs, max_length=20)
+        set_seed(SEED)
+        outputs = pipe(inputs, max_length=22)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(inputs in item["generated_text"] for item in outputs))
-
-        ov_pipe = optimum_pipeline("text-generation", model_id, accelerator="openvino")
-        ov_outputs = ov_pipe(inputs)
+        ov_pipe = optimum_pipeline(
+            "text-generation",
+            model_id,
+            accelerator="openvino",
+            trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+        )
+        set_seed(SEED)
+        ov_outputs = ov_pipe(inputs, max_length=22)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
         del ov_pipe
         del pipe
