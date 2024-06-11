@@ -81,7 +81,9 @@ def fuse_cache_reorder(
         consumers = parameter_output_port.get_target_inputs()
         gather = opset13.gather(parameter_output_port, beam_idx, opset13.constant(gather_dim))
         for consumer in consumers:
-            consumer.replace_source_output(gather.output(0))
+            if consumer.get_node().get_type_name() != "ShapeOf":
+                # shape content doesn't change. keeping ShapeOf ops on Parameter (or ReadValue in stateful case)
+                consumer.replace_source_output(gather.output(0))
     ov_model.validate_nodes_and_infer_types()
 
 
