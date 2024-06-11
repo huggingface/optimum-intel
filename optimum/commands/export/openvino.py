@@ -229,10 +229,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                 "sym": False,
                 "group_size": None,
                 "all_layers": None,
-                "dataset": self.args.dataset,
-                "num_samples": self.args.num_samples,
-                "quant_method": None,
-                "sensitivity_metric": self.args.sensitivity_metric,
             }
 
         library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
