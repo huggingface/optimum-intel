@@ -216,7 +216,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         def _get_default_int4_config(model_id_or_path, library_name, trust_remote_code):
             if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
-                return _DEFAULT_4BIT_CONFIGS[model_idor_path]
+                return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
             if "transformers" in library_name:
                 config = AutoConfig.from_pretrained(model_id_or_path, trust_remote_code=trust_remote_code)
                 original_model_name = config._name_or_path
