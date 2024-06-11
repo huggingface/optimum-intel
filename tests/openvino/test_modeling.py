@@ -252,7 +252,9 @@ class OVModelIntegrationTest(unittest.TestCase):
         if token is None:
             self.skipTest("Test requires a token `HF_HUB_READ_TOKEN` in the environment variable")
 
-        model = OVModelForCausalLM.from_pretrained("echarlaix/tiny-openvino-private", use_auth_token=token)
+        model = OVModelForCausalLM.from_pretrained(
+            "optimum-internal-testing/tiny-random-phi-private", use_auth_token=token, revision="openvino"
+        )
         self.assertIsInstance(model.config, PretrainedConfig)
 
 
