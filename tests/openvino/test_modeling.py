@@ -767,7 +767,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         inputs = "My name is Arthur and I live in"
         set_seed(SEED)
-        outputs = pipe(inputs, max_length=22)
+        outputs = pipe(inputs, max_new_tokens=5)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(inputs in item["generated_text"] for item in outputs))
         ov_pipe = optimum_pipeline(
@@ -775,9 +775,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_id,
             accelerator="openvino",
             trust_remote_code=model_arch in self.REMOTE_CODE_MODELS,
+            tokenizer=tokenizer if model_arch == "qwen" else None,
         )
         set_seed(SEED)
-        ov_outputs = ov_pipe(inputs, max_length=22)
+        ov_outputs = ov_pipe(inputs, max_new_tokens=5)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
         del ov_pipe
         del pipe
@@ -1100,11 +1101,13 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
         inputs = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        set_seed(SEED)
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
         ov_pipe = optimum_pipeline("image-classification", model_id, accelerator="openvino")
+        set_seed(SEED)
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
         del ov_pipe
