@@ -142,7 +142,7 @@ model = deepspeed.init_inference(
     replace_with_kernel_inject=False,
 )
 model = model.module
-model = IPEXModelForCausalLM._from_model(model.eval())
+model = IPEXModelForCausalLM(model.eval(), config)
 
 input_tokens = tokenizer.batch_encode_plus(
     ["This is an example input"], return_token_type_ids=False, return_tensors="pt"

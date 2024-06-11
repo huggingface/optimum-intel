@@ -39,7 +39,6 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
-    PreTrainedModel,
     is_torch_xpu_available,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
@@ -137,13 +136,22 @@ class IPEXModel(OptimizedModel):
         warmup: bool = True,
         **kwargs,
     ):
-        OptimizedModel.__init__(self, model=model, config=config)
         if is_torch_xpu_available(check_device=True):
             self._device = torch.device("xpu:0")
         elif torch.cuda.is_available():
             self._device = torch.device("cuda:0")
         else:
             self._device = torch.device("cpu")
+
+        # CPU only support jit model for now.
+        if self._device == torch.device("cpu") and not isinstance(model, torch.jit.RecursiveScriptModule):
+            config = model.config if config is None else config
+            use_cache = model.config.use_cache
+            model = ipex_jit_trace(model, self.export_feature, use_cache)
+            config.torchscript = True
+
+        OptimizedModel.__init__(self, model=model, config=config)
+
         self.model.to(self._device)
         self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model_save_dir = model_save_dir
@@ -211,18 +219,6 @@ class IPEXModel(OptimizedModel):
         config.torch_dtype = torch_dtype
 
         return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
-
-    @classmethod
-    def _from_model(
-        cls,
-        model: PreTrainedModel,
-    ):
-        config = model.config
-        use_cache = model.config.use_cache
-        traced_model = ipex_jit_trace(model, cls.export_feature, use_cache)
-        config.torchscript = True
-
-        return cls(traced_model, config=config, use_cache=use_cache, warmup=False)
 
     @classmethod
     def _from_pretrained(
