@@ -258,7 +258,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         if self.quant_method == QuantizationMethod.AWQ:
             self.quant_method = OVQuantizationMethod.DEFAULT
             self.awq = True
-            logger.warning('Using quant_method=\"AWQ\" is deprecated. Please use awq=True instead in the future.')
+            logger.warning('Using quant_method="AWQ" is deprecated. Please use awq=True instead in the future.')
 
 
 @dataclass
