@@ -227,27 +227,25 @@ class OVCLIExportTestCase(unittest.TestCase):
             # overload for matching with default configuration
             pt_model.config._name_or_path = "bigscience/bloomz-7b1"
             pt_model.save_pretrained(tmpdir)
-            result = subprocess.run(
+            subprocess.run(
                 f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",
                 shell=True,
                 check=True,
-                capture_output=True,
             )
-            model_kwargs = {"use_cache": True}
-            model = eval(_HEAD_TO_AUTOMODELS["text-generation"]).from_pretrained(tmpdir, **model_kwargs)
+
+            model = OVModelForCausalLM.from_pretrained(tmpdir)
             rt_info = model.model.get_rt_info()
             self.assertTrue("nncf" in rt_info)
             self.assertTrue("weight_compression" in rt_info["nncf"])
             default_config = _DEFAULT_4BIT_CONFIGS["bigscience/bloomz-7b1"]
             model_weight_compression_config = rt_info["nncf"]["weight_compression"]
             sym = default_config.pop("sym", False)
-            bits = default_config.pop("bits", 4)
+            bits = default_config.pop("bits", None)
+            self.assertEqual(bits, 4)
 
             mode = f'int{bits}_{"sym" if sym else "asym"}'
             default_config["mode"] = mode
             for key, value in default_config.items():
-                if key in ["sym", "bits"]:
-                    continue
                 self.assertTrue(key in model_weight_compression_config)
                 self.assertEqual(
                     model_weight_compression_config[key].value,
