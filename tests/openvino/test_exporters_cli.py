@@ -17,6 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from parameterized import parameterized
+from transformers import AutoModelForCausalLM
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
@@ -38,6 +39,7 @@ from optimum.intel import (  # noqa
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
+from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
 
@@ -218,6 +220,35 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(expected_int8, num_int8)
             self.assertEqual(expected_int4, num_int4)
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
+
+    def test_exporters_cli_int4_with_local_model_and_default_config(self):
+        with TemporaryDirectory() as tmpdir:
+            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["llama"])
+            # overload for matching with default configuration
+            pt_model.config._name_or_path = "meta-llama/Llama-2-13b-chat"
+            pt_model.save_pretrained(tmpdir)
+            result = subprocess.run(
+                f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",
+                shell=True,
+                check=True,
+                capture_output=True,
+            )
+            model_kwargs = {"use_cache": True}
+            model = eval(_HEAD_TO_AUTOMODELS["text-generation-with-past"]).from_pretrained(tmpdir, **model_kwargs)
+            self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
+            self.assertTrue(model.model.has_rt_info())
+            rt_info = model.model.get_rt_info()
+            self.assertTrue("nncf" in rt_info)
+            self.assertTrue("weight_compression" in rt_info["nncf"])
+            default_config = _DEFAULT_4BIT_CONFIGS["meta-llama/Llama-2-13b-chat"]
+            model_weight_compression_config = rt_info["nncf"]["weight_compression"]
+            for key, value in default_config.items():
+                self.assertTrue(key in model_weights_compression_config)
+                self.assertEqual(
+                    model_weights_compression_config[key].value,
+                    str(value),
+                    f"Parameter {key} not matched with expected, {model_weights_compression_config[key].value} != {value}",
+                )
 
     def test_exporters_cli_help(self):
         subprocess.run(
