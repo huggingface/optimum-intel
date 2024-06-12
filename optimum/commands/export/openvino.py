@@ -263,7 +263,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "all_layers": None if is_int8 else self.args.all_layers,
                     "dataset": self.args.dataset,
                     "num_samples": self.args.num_samples,
-                    "quant_method": QuantizationMethod.AWQ if self.args.awq else None,
+                    "awq": self.args.awq,
                     "sensitivity_metric": self.args.sensitivity_metric,
                     "scale_estimation": self.args.scale_estimation,
                 }

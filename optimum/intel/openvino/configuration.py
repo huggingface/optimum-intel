@@ -173,6 +173,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             The maximum number of samples composing the calibration dataset.
         quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
             Weight compression method to apply.
+        awq (`bool`, *optional*):
+            Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires "
+            "additional time for tuning weights on a calibration dataset. To run AWQ, providing a dataset is required. "
+            "Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such case it "
+            "will be skipped.
         scale_estimation (`bool`, *optional*):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
@@ -191,6 +196,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
         quant_method: Union[QuantizationMethod, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
+        awq: bool = None,
         scale_estimation: bool = None,
         **kwargs,
     ):
@@ -202,8 +208,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
         self.quant_method = quant_method
-        self.post_init()
+        self.awq = awq
         self.scale_estimation = scale_estimation
+        self.post_init()
 
     def post_init(self):
         r"""
@@ -247,6 +254,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 
         if self.tokenizer is not None and not isinstance(self.tokenizer, str):
             raise ValueError(f"Tokenizer is expected to be a string, but found {self.tokenizer}")
+
+        if self.quant_method == QuantizationMethod.AWQ:
+            self.quant_method = OVQuantizationMethod.DEFAULT
+            self.awq = True
+            logger.warning('Using quant_method=\"AWQ\" is deprecated. Please use awq=True instead in the future.')
 
 
 @dataclass

@@ -81,7 +81,7 @@ Quality of 4-bit weight compressed model can further be improved by employing on
 
 AWQ and Scale Estimation algorithms can be applied together or separately. For that, provide corresponding arguments to the 4-bit `OVWeightQuantizationConfig` together with a dataset. For example:
 ```python
-quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, quant_method="awq", scale_estimation=True, dataset="ptb")
+quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, awq=True, scale_estimation=True, dataset="ptb")
 ```
 
 ### Static quantization
