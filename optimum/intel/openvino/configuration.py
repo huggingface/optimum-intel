@@ -174,10 +174,10 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
             Weight compression method to apply.
         awq (`bool`, *optional*):
-            Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires "
-            "additional time for tuning weights on a calibration dataset. To run AWQ, providing a dataset is required. "
-            "Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such case it "
-            "will be skipped.
+            Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires
+            additional time for tuning weights on a calibration dataset. To run AWQ, providing a dataset is required.
+            Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such case it
+            will be skipped.
         scale_estimation (`bool`, *optional*):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
