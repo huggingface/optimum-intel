@@ -230,6 +230,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="ptb",
                 quant_method=QuantizationMethod.AWQ,
+                scale_estimation=True
             ),
             16,
         ),

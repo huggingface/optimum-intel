@@ -823,6 +823,7 @@ def _weight_only_quantization(
         ignored_scope=config.get_ignored_scope_instance(),
         dataset=dataset,
         subset_size=config.num_samples if config.num_samples else 128,
+        scale_estimation=config.scale_estimation,
     )
 
 

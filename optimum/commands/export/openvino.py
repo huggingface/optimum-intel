@@ -142,6 +142,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--scale-estimation",
+        action="store_true",
+        default=None,
+        help=(
+            "Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original "
+            "and compressed layers. Providing a dataset is required to run scale estimation. Please note, that "
+            "applying scale estimation takes additional memory and time."
+        ),
+    )
+    optional_group.add_argument(
         "--sensitivity-metric",
         type=str,
         default=None,
@@ -255,6 +265,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "num_samples": self.args.num_samples,
                     "quant_method": QuantizationMethod.AWQ if self.args.awq else None,
                     "sensitivity_metric": self.args.sensitivity_metric,
+                    "scale_estimation": self.args.scale_estimation,
                 }
 
             if self.args.weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:

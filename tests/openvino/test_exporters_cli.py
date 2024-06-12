@@ -97,6 +97,13 @@ class OVCLIExportTestCase(unittest.TestCase):
             4,
             28,
         ),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --scale-estimation --dataset wikitext2 --num-samples 100 ",
+            4,
+            28,
+        ),
     ]
 
     def _openvino_export(
@@ -218,6 +225,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertEqual(expected_int8, num_int8)
             self.assertEqual(expected_int4, num_int4)
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
+            self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
 
     def test_exporters_cli_help(self):
         subprocess.run(

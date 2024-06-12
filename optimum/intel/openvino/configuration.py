@@ -173,6 +173,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             The maximum number of samples composing the calibration dataset.
         quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
             Weight compression method to apply.
+        scale_estimation (`bool`, *optional*):
+            Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
+            compressed layers. Providing a dataset is required to run scale estimation.
     """
 
     def __init__(
@@ -188,6 +191,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
         quant_method: Union[QuantizationMethod, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
+        scale_estimation: bool = None,
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
@@ -199,6 +203,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.sensitivity_metric = sensitivity_metric
         self.quant_method = quant_method
         self.post_init()
+        self.scale_estimation = scale_estimation
 
     def post_init(self):
         r"""
