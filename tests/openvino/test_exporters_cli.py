@@ -223,9 +223,9 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
-            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["llama"])
+            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["bloom"])
             # overload for matching with default configuration
-            pt_model.config._name_or_path = "meta-llama/Llama-2-13b-chat"
+            pt_model.config._name_or_path = "bigscience/bloomz-7b1"
             pt_model.save_pretrained(tmpdir)
             result = subprocess.run(
                 f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",
@@ -234,20 +234,25 @@ class OVCLIExportTestCase(unittest.TestCase):
                 capture_output=True,
             )
             model_kwargs = {"use_cache": True}
-            model = eval(_HEAD_TO_AUTOMODELS["text-generation-with-past"]).from_pretrained(tmpdir, **model_kwargs)
-            self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
-            self.assertTrue(model.model.has_rt_info())
+            model = eval(_HEAD_TO_AUTOMODELS["text-generation"]).from_pretrained(tmpdir, **model_kwargs)
             rt_info = model.model.get_rt_info()
             self.assertTrue("nncf" in rt_info)
             self.assertTrue("weight_compression" in rt_info["nncf"])
-            default_config = _DEFAULT_4BIT_CONFIGS["meta-llama/Llama-2-13b-chat"]
+            default_config = _DEFAULT_4BIT_CONFIGS["bigscience/bloomz-7b1"]
             model_weight_compression_config = rt_info["nncf"]["weight_compression"]
+            sym = default_config.pop("sym", False)
+            bits = default_config.pop("bits", 4)
+
+            mode = f'int{bits}_{"sym" if sym else "asym"}'
+            default_config["mode"] = mode
             for key, value in default_config.items():
-                self.assertTrue(key in model_weights_compression_config)
+                if key in ["sym", "bits"]:
+                    continue
+                self.assertTrue(key in model_weight_compression_config)
                 self.assertEqual(
-                    model_weights_compression_config[key].value,
+                    model_weight_compression_config[key].value,
                     str(value),
-                    f"Parameter {key} not matched with expected, {model_weights_compression_config[key].value} != {value}",
+                    f"Parameter {key} not matched with expected, {model_weight_compression_config[key].value} != {value}",
                 )
 
     def test_exporters_cli_help(self):

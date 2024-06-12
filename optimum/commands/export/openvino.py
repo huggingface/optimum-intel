@@ -13,6 +13,7 @@
 # limitations under the License.
 """Defines the command line for the export with OpenVINO."""
 
+import json
 import logging
 import sys
 from pathlib import Path
@@ -209,17 +210,16 @@ class OVExportCommand(BaseOptimumCLICommand):
         return parse_args_openvino(parser)
 
     def run(self):
-        from transformers import AutoConfig
-
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, OVConfig
 
-        def _get_default_int4_config(model_id_or_path, library_name, trust_remote_code):
+        def _get_default_int4_config(model_id_or_path, library_name):
             if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
                 return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
-            if "transformers" in library_name:
-                config = AutoConfig.from_pretrained(model_id_or_path, trust_remote_code=trust_remote_code)
-                original_model_name = config._name_or_path
+            if "transformers" in library_name and (Path(model_id_or_path) / "config.json").exists():
+                with (Path(model_id_or_path) / "config.json").open("r") as config_f:
+                    config = json.load(config_f)
+                    original_model_name = config.get("_name_or_path", "")
                 if original_model_name in _DEFAULT_4BIT_CONFIGS:
                     return _DEFAULT_4BIT_CONFIGS[original_model_name]
 
@@ -269,9 +269,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 and self.args.awq is None
                 and self.args.sensitivity_metric is None
             ):
-                quantization_config = _get_default_int4_config(
-                    self.args.model, library_name, self.args.trust_remote_code
-                )
+                quantization_config = _get_default_int4_config(self.args.model, library_name)
             else:
                 quantization_config = {
                     "bits": 8 if is_int8 else 4,
