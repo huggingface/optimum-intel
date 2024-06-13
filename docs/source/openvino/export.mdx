@@ -17,7 +17,8 @@ It is possible to export your model to the [OpenVINO IR](https://docs.openvino.a
 optimum-cli export openvino --model gpt2 openvino_model/
 ```
 
-The model argument can either be the model ID of a model hosted on the [HF hub](https://huggingface.co/models) or a path to a model hosted locally.
+The model argument can either be the model ID of a model hosted on the [Hub](https://huggingface.co/models) or a path to a model hosted locally.
+
 
 Check out the help for more options:
 
@@ -25,9 +26,22 @@ Check out the help for more options:
 optimum-cli export openvino --help
 ```
 
-### Weight-only quantization
+#### Task
 
-You can also apply fp16, 8-bit or 4-bit weight compression on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
+If the task argument is not provided, it will be automatically inferred.
+
+For model hosted locally, you need to specify it among the list of the [supported tasks](https://huggingface.co/docs/optimum/exporters/task_manager):
+
+```bash
+optimum-cli export openvino --model local_model_dir --task text-generation-with-past openvino_model
+```
+
+The `-with-past` suffix enable the re-use of the pre-computed key/values hidden-states and is the recommended option. To export the model without (equivalent to `use_cache=False`), you will need to remove this suffix.
+
+
+#### Quantization
+
+You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
 
 ```bash
 optimum-cli export openvino --model gpt2 --weight-format int8 openvino_model/
@@ -49,8 +63,7 @@ Models larger than 1 billion parameters are exported to the OpenVINO format with
 
 </Tip>
 
-Once the model is exported, you can now [load your OpenVINO model](https://huggingface.co/docs/optimum/main/en/intel/inference)
-
+Once the model is exported, you can now [load your OpenVINO model](https://huggingface.co/docs/optimum/main/en/intel/openvino/inference)
 
 ## Exporting when loading your model
 
