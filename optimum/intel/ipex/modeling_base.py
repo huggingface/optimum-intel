@@ -144,7 +144,7 @@ class IPEXModel(OptimizedModel):
             self._device = torch.device("cpu")
 
         # CPU only support jit model for now.
-        if self._device == torch.device("cpu") and not isinstance(model, torch.jit.RecursiveScriptModule):
+        if not isinstance(model, torch.jit.RecursiveScriptModule):
             config = model.config if config is None else config
             use_cache = model.config.use_cache
             model = ipex_jit_trace(model, self.export_feature, use_cache)
