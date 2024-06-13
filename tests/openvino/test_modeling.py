@@ -555,7 +555,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "xverse",
         "internlm",
         "jais",
-        "arctic",
     )
 
     if is_transformers_version(">=", "4.40.0"):
@@ -569,6 +568,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "cohere",
             "qwen2",
             "qwen2-moe",
+            "arctic",
         )
 
     GENERATION_LENGTH = 100
