@@ -89,15 +89,20 @@ class IPEXModelTest(unittest.TestCase):
             transformers_outputs = transformers_model(**tokens)
         outputs = ipex_model(**tokens)
 
+        # Test re-load model
         with tempfile.TemporaryDirectory() as tmpdirname:
             ipex_model.save_pretrained(tmpdirname)
             loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname)
             loaded_model_outputs = loaded_model(**tokens)
+        # Test init method
+        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model_outputs = init_model(**tokens)
         # Compare tensor outputs
         for output_name in {"logits", "last_hidden_state"}:
             if output_name in transformers_outputs:
                 self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-4))
                 self.assertTrue(torch.equal(outputs[output_name], loaded_model_outputs[output_name]))
+                self.assertTrue(torch.equal(outputs[output_name], init_model_outputs[output_name]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -147,10 +152,15 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
             transformers_outputs = transformers_model(**tokens)
         outputs = ipex_model(**tokens)
 
+        # Test re-load model
         with tempfile.TemporaryDirectory() as tmpdirname:
             ipex_model.save_pretrained(tmpdirname)
             loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname)
             loaded_model_outputs = loaded_model(**tokens)
+
+        # Test init method
+        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model_outputs = init_model(**tokens)
 
         self.assertIn("start_logits", outputs)
         self.assertIn("end_logits", outputs)
@@ -159,6 +169,8 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         self.assertTrue(torch.allclose(outputs.end_logits, transformers_outputs.end_logits, atol=1e-4))
         self.assertTrue(torch.equal(outputs.start_logits, loaded_model_outputs.start_logits))
         self.assertTrue(torch.equal(outputs.end_logits, loaded_model_outputs.end_logits))
+        self.assertTrue(torch.equal(outputs.start_logits, init_model_outputs.start_logits))
+        self.assertTrue(torch.equal(outputs.end_logits, init_model_outputs.end_logits))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -220,13 +232,20 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
 
+        # Test re-load model
         with tempfile.TemporaryDirectory() as tmpdirname:
             ipex_model.save_pretrained(tmpdirname)
             loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname)
             loaded_model_outputs = loaded_model(**inputs)
+
+        # Test init method
+        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model_outputs = init_model(**inputs)
+
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
         self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
+        self.assertTrue(torch.equal(outputs.logits, init_model_outputs.logits))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -354,13 +373,20 @@ class IPEXModelForAudioClassificationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**inputs)
         outputs = ipex_model(**inputs)
 
+        # Test re-load model
         with tempfile.TemporaryDirectory() as tmpdirname:
             ipex_model.save_pretrained(tmpdirname)
             loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname)
             loaded_model_outputs = loaded_model(**inputs)
+
+        # Test init method
+        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model_outputs = init_model(**inputs)
+
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
         self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
+        self.assertTrue(torch.equal(outputs.logits, init_model_outputs.logits))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -400,15 +426,21 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
             transformers_outputs = transformers_model(**inputs)
         outputs = ipex_model(**inputs)
 
+        # Test re-load model
         with tempfile.TemporaryDirectory() as tmpdirname:
             ipex_model.save_pretrained(tmpdirname)
             loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname)
             loaded_model_outputs = loaded_model(**inputs)
 
+        # Test init method
+        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model_outputs = init_model(**inputs)
+
         self.assertIn("logits", outputs)
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
         self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
+        self.assertTrue(torch.equal(outputs.logits, init_model_outputs.logits))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
