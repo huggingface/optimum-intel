@@ -49,8 +49,7 @@ from optimum.intel.utils.import_utils import (
     is_ipex_available,
     is_openvino_available,
 )
-
-from ...utils.file_utils import find_files_matching_pattern
+from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 
 
 if is_ipex_available():
@@ -236,7 +235,7 @@ def load_openvino_model(
     elif isinstance(model, str):
         model_id = model
         pattern = r"(.*)?openvino(.*)?\_model.xml"
-        ov_files = find_files_matching_pattern(
+        ov_files = _find_files_matching_pattern(
             model,
             pattern,
             use_auth_token=hub_kwargs.get("token", None),
