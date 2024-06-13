@@ -11,6 +11,8 @@ specific language governing permissions and limitations under the License.
 
 Optimum Intel can be used to load optimized models from the [Hugging Face Hub](https://huggingface.co/models?library=openvino&sort=downloads) and create pipelines to run inference with OpenVINO Runtime without rewriting your APIs.
 
+## Transformers models
+
 Once [your model was exported](export), you can load it by replacing the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
 
 ```diff
@@ -39,14 +41,7 @@ tokenizer.save_pretrained(save_directory)
 
 ### Weight-only quantization
 
-You can also apply fp16, 8-bit or 4-bit weight compression on the Linear, Convolutional and Embedding layers when exporting your model with the CLI by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
-
-```bash
-optimum-cli export openvino --model gpt2 --weight-format int8 ov_model
-```
-
-This type of optimization allows to reduce the memory footprint and inference latency.
-
+You can also apply fp16, 8-bit or 4-bit weight compression on the Linear, Convolutional and Embedding layers when loading your model to reduce the memory footprint and inference latency.
 
 By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#symmetric-quantization) you can add `--sym`.
 
