@@ -109,7 +109,7 @@ class IPEXModelTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline(self.IPEX_MODEL_CLASS.export_feature, model=model, tokenizer=tokenizer)
+        pipe = pipeline(self.IPEX_MODEL_CLASS.export_feature, model=model, tokenizer=tokenizer, framework="pt")
         text = "This restaurant is awesome"
         if self.IPEX_MODEL_CLASS.export_feature == "fill-mask":
             text += tokenizer.mask_token
@@ -177,7 +177,7 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = IPEXModelForQuestionAnswering.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
+        pipe = pipeline("question-answering", model=model, tokenizer=tokenizer, framework="pt")
         question = "What's my name?"
         context = "My Name is Sasha and I live in Lyon."
         outputs = pipe(question, context)
@@ -254,7 +254,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
-        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, framework="pt")
         outputs = pipe("This is a sample", max_length=10)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
@@ -393,7 +393,7 @@ class IPEXModelForAudioClassificationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
+        pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor, framework="pt")
         outputs = pipe([np.random.random(16000)])
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
@@ -447,7 +447,7 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
+        pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor, framework="pt")
         outputs = pipe("http://images.cocodataset.org/val2017/000000039769.jpg")
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
