@@ -1,0 +1,65 @@
+<!--Copyright 2024 The HuggingFace Team. All rights reserved.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+-->
+
+# Export your model
+
+## Exporting a model using the CLI 
+
+It is possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
+
+```bash
+optimum-cli export openvino --model gpt2 openvino_model/
+```
+
+The model argument can either be the model ID of a model hosted on the [HF hub](https://huggingface.co/models) or a path to a model hosted locally.
+
+Check out the help for more options:
+
+```bash
+optimum-cli export openvino --help
+```
+
+### Weight-only quantization
+
+You can also apply fp16, 8-bit or 4-bit weight compression on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
+
+```bash
+optimum-cli export openvino --model gpt2 --weight-format int8 openvino_model/
+```
+
+This type of optimization allows to reduce the memory footprint and inference latency.
+
+By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#symmetric-quantization) you can add `--sym`.
+
+For INT4 quantization you can also specify the following arguments :
+* The `--group-size` parameter will define the group size to use for quantization, `-1` it will results in per-column quantization.
+* The `--ratio` parameter controls the ratio between 4-bit and 8-bit quantization. If set to 0.9, it means that 90% of the layers will be quantized to `int4` while 10% will be quantized to `int8`.
+
+Smaller `group_size` and `ratio` values usually improve accuracy at the sacrifice of the model size and inference latency.
+
+<Tip warning={true}>
+
+Models larger than 1 billion parameters are exported to the OpenVINO format with 8-bit weights by default. You can disable it with `--weight-format fp32`.
+
+</Tip>
+
+Once the model is exported, you can now [load your OpenVINO model](https://huggingface.co/docs/optimum/main/en/intel/inference)
+
+
+## Exporting when loading your model
+
+You can also load your PyTorch checkpoint and convert it to the OpenVINO format on-the-fly, by setting `export=True` when loading your model.
+
+```python
+from optimum.intel import OVModelForCausalLM
+
+model = OVModelForCausalLM.from_pretrained("gpt2", export=True)
+model.save_pretrained("openvino_model")
+tokenizer.save_pretrained("openvino_model")
+```

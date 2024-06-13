@@ -12,8 +12,10 @@
       title: Reference
     title: Neural Compressor
   - sections:
+    - local: openvino/export
+      title: Export
     - local: openvino/inference
-      title: Models for inference
+      title: Inference
     - local: openvino/optimization
       title: Optimization
     - local: openvino/reference
