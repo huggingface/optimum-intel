@@ -9,7 +9,7 @@ specific language governing permissions and limitations under the License.
 
 # Export your model
 
-## Exporting a model using the CLI 
+## Using the CLI
 
 It is possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
 
@@ -65,7 +65,7 @@ Models larger than 1 billion parameters are exported to the OpenVINO format with
 
 Once the model is exported, you can now [load your OpenVINO model](inference)
 
-## Exporting when loading your model
+## During loading
 
 You can also load your PyTorch checkpoint and convert it to the OpenVINO format on-the-fly, by setting `export=True` when loading your model.
 
