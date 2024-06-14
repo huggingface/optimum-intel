@@ -136,13 +136,22 @@ class IPEXModel(OptimizedModel):
         warmup: bool = True,
         **kwargs,
     ):
-        OptimizedModel.__init__(self, model=model, config=config)
         if is_torch_xpu_available(check_device=True):
             self._device = torch.device("xpu:0")
         elif torch.cuda.is_available():
             self._device = torch.device("cuda:0")
         else:
             self._device = torch.device("cpu")
+
+        # CPU only support jit model for now.
+        if not isinstance(model, torch.jit.RecursiveScriptModule):
+            config = model.config if config is None else config
+            use_cache = getattr(model.config, "use_cache", False)
+            model = ipex_jit_trace(model, self.export_feature, use_cache)
+            config.torchscript = True
+
+        OptimizedModel.__init__(self, model=model, config=config)
+
         self.model.to(self._device)
         self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model_save_dir = model_save_dir
@@ -438,8 +447,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         super().__init__(model, config, model_save_dir=model_save_dir, warmup=False)
         GenerationMixin.__init__(self)
 
-        model_type = config.model_type.replace("_", "-")
-        self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(config)
+        model_type = self.config.model_type.replace("_", "-")
+        self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
         self.use_cache = "past_key_values" in self.input_names
 
         if use_cache ^ self.use_cache:
@@ -449,10 +458,10 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
                 f"once again with `use_cache={use_cache}` when calling the `from_pretrained` method. "
                 "To export your model, simply set `export=True`."
             )
-        config.is_decoder = True
-        config.is_encoder_decoder = False
+        self.config.is_decoder = True
+        self.config.is_encoder_decoder = False
 
-        self.generation_config = GenerationConfig.from_model_config(config)
+        self.generation_config = GenerationConfig.from_model_config(self.config)
         try:
             self.model_cls = get_class_from_dynamic_module(
                 self.config.auto_map["AutoModelForCausalLM"], model_save_dir
