@@ -11,10 +11,10 @@ specific language governing permissions and limitations under the License.
 
 ## Using the CLI
 
-It is possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
+To export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
 
 ```bash
-optimum-cli export openvino --model gpt2 openvino_model/
+optimum-cli export openvino --model gpt2 ov_model/
 ```
 
 The model argument can either be the model ID of a model hosted on the [Hub](https://huggingface.co/models) or a path to a model hosted locally.
@@ -30,13 +30,17 @@ optimum-cli export openvino --help
 
 If the task argument is not provided, it will be automatically inferred.
 
-For model hosted locally, you need to specify it among the list of the [supported tasks](https://huggingface.co/docs/optimum/main/en/exporters/task_manager):
+For local models, you need to specify it among the list of the [supported tasks](https://huggingface.co/docs/optimum/main/en/exporters/task_manager):
 
 ```bash
-optimum-cli export openvino --model local_model_dir --task text-generation-with-past openvino_model
+optimum-cli export openvino --model local_model_dir --task text-generation-with-past ov_model/
 ```
 
-The `-with-past` suffix enable the re-use of the pre-computed key/values hidden-states and is the recommended option. To export the model without (equivalent to `use_cache=False`), you will need to remove this suffix.
+#### Exporting a model using past keys/values in the decoder
+
+When exporting a decoder model used for generation, it can be useful to encapsulate in the exported model the [reuse of past keys and values](https://discuss.huggingface.co/t/what-is-the-purpose-of-use-cache-in-decoder/958/2). This allows to avoid recomputing the same intermediate activations during the generation.
+
+This behavior corresponds to `--task text-geeneration-with-past`, `--task text2text-generation-with-past`, or `--task automatic-speech-recognition-with-past`. If for any purpose you would like to disable the export with past keys/values reuse, passing explicitly to `optimum-cli export openvino` the task `text2text-generation`, `text-generation` or `automatic-speech-recognition` is required.
 
 
 #### Quantization
@@ -44,18 +48,11 @@ The `-with-past` suffix enable the re-use of the pre-computed key/values hidden-
 You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
 
 ```bash
-optimum-cli export openvino --model gpt2 --weight-format int8 openvino_model/
+optimum-cli export openvino --model gpt2 --weight-format int8 ov_model/
 ```
 
-This type of optimization allows to reduce the memory footprint and inference latency.
+For more information on the quantization parameters checkout the [documentation](inference#weight-only-quantization)
 
-By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#symmetric-quantization) you can add `--sym`.
-
-For INT4 quantization you can also specify the following arguments :
-* The `--group-size` parameter will define the group size to use for quantization, `-1` it will results in per-column quantization.
-* The `--ratio` parameter controls the ratio between 4-bit and 8-bit quantization. If set to 0.9, it means that 90% of the layers will be quantized to `int4` while 10% will be quantized to `int8`.
-
-Smaller `group_size` and `ratio` values usually improve accuracy at the sacrifice of the model size and inference latency.
 
 <Tip warning={true}>
 
@@ -65,14 +62,16 @@ Models larger than 1 billion parameters are exported to the OpenVINO format with
 
 Once the model is exported, you can now [load your OpenVINO model](inference)
 
-## During loading
+#### Custom export
+
+<Tip>
 
 You can also load your PyTorch checkpoint and convert it to the OpenVINO format on-the-fly, by setting `export=True` when loading your model.
 
 ```python
-from optimum.intel import OVModelForCausalLM
-
 model = OVModelForCausalLM.from_pretrained("gpt2", export=True)
-model.save_pretrained("openvino_model")
-tokenizer.save_pretrained("openvino_model")
+model.save_pretrained("ov_model")
+
 ```
+
+</Tip>
