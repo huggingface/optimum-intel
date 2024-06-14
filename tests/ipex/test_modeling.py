@@ -97,6 +97,8 @@ class IPEXModelTest(unittest.TestCase):
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model)
         init_model_outputs = init_model(**tokens)
+        self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
+
         # Compare tensor outputs
         for output_name in {"logits", "last_hidden_state"}:
             if output_name in transformers_outputs:
@@ -109,7 +111,7 @@ class IPEXModelTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline(self.IPEX_MODEL_CLASS.export_feature, model=model, tokenizer=tokenizer, framework="pt")
+        pipe = pipeline(self.IPEX_MODEL_CLASS.export_feature, model=model, tokenizer=tokenizer)
         text = "This restaurant is awesome"
         if self.IPEX_MODEL_CLASS.export_feature == "fill-mask":
             text += tokenizer.mask_token
@@ -161,6 +163,7 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model)
         init_model_outputs = init_model(**tokens)
+        self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
         self.assertIn("start_logits", outputs)
         self.assertIn("end_logits", outputs)
@@ -177,7 +180,7 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = IPEXModelForQuestionAnswering.from_pretrained(model_id, export=True)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        pipe = pipeline("question-answering", model=model, tokenizer=tokenizer, framework="pt")
+        pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
         question = "What's my name?"
         context = "My Name is Sasha and I live in Lyon."
         outputs = pipe(question, context)
@@ -241,6 +244,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model)
         init_model_outputs = init_model(**inputs)
+        self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
@@ -254,7 +258,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
-        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer, framework="pt")
+        pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         outputs = pipe("This is a sample", max_length=10)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
@@ -382,6 +386,7 @@ class IPEXModelForAudioClassificationTest(unittest.TestCase):
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model)
         init_model_outputs = init_model(**inputs)
+        self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-3))
@@ -393,7 +398,7 @@ class IPEXModelForAudioClassificationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor, framework="pt")
+        pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
         outputs = pipe([np.random.random(16000)])
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
@@ -435,6 +440,7 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         # Test init method
         init_model = self.IPEX_MODEL_CLASS(transformers_model)
         init_model_outputs = init_model(**inputs)
+        self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
         self.assertIn("logits", outputs)
         # Compare tensor outputs
@@ -447,7 +453,7 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         model = self.IPEX_MODEL_CLASS.from_pretrained(model_id, export=True)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
-        pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor, framework="pt")
+        pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
         outputs = pipe("http://images.cocodataset.org/val2017/000000039769.jpg")
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
