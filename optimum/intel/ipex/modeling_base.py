@@ -147,10 +147,12 @@ class IPEXModel(OptimizedModel):
         self._dtype = self.config.torch_dtype if self.config.torch_dtype is not None else torch.float32
         self.model_save_dir = model_save_dir
         self._is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
-
-        self.input_names = {
-            inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
-        }
+        if self._device.type == "cpu":
+            self.input_names = {
+                inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
+            }
+        else:
+            self.input_names = {"past_key_values": None, "position_ids": None}
         # Registers the IPEXModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -187,9 +189,6 @@ class IPEXModel(OptimizedModel):
                 )
             token = use_auth_token
 
-        if is_torch_version("<", "2.1.0"):
-            raise ImportError("`torch>=2.0.0` is needed to trace your model")
-
         task = cls.export_feature
         model_kwargs = {
             "revision": revision,
@@ -204,12 +203,16 @@ class IPEXModel(OptimizedModel):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        traced_model = ipex_jit_trace(model, task, use_cache)
 
-        config.torchscript = True
-        config.torch_dtype = torch_dtype
-
-        return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
+        if is_torch_xpu_available(check_device=True):
+            model.to("xpu:0")
+            if _is_patched_with_ipex(model, task):
+                model = _patch_model(model)
+        else:
+            model = ipex_jit_trace(model, task, use_cache)
+            config.torchscript = True
+            config.torch_dtype = torch_dtype
+        return cls(model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
 
     @classmethod
     def _from_pretrained(
@@ -460,7 +463,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
 
-        if self._is_ipex_exported:
+        if self._is_ipex_exported and self._device.type == "cpu":
             self._reorder_cache = _ipex_reorder_cache
         else:
             # Check if _reorder_cache is a static method
@@ -568,7 +571,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             inputs["position_ids"] = position_ids
 
         if self.use_cache:
-            if past_key_values is None:
+            if past_key_values is None and self._device.type == "cpu":
                 past_key_values = self._prepare_past_key_values(input_ids)
 
             inputs["past_key_values"] = past_key_values
