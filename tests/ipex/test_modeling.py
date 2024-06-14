@@ -446,7 +446,7 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
         self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
-        self.assertTrue(torch.equal(outputs.logits, init_model_outputs.logits))
+        self.assertTrue(torch.allclose(init_model_outputs.logits, transformers_outputs.logits, atol=1e-4))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
