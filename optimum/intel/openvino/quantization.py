@@ -757,9 +757,6 @@ class OVQuantizer(OptimumQuantizer):
 
             dataset_metadata = PREDEFINED_SD_DATASETS[dataset_name]
             datasets_kwargs = {"split": dataset_metadata["split"], "streaming": True}
-            if is_datasets_version(">=", "2.20.0"):
-                datasets_kwargs["trust_remote_code"] = True
-
             dataset = load_dataset(dataset_name, **datasets_kwargs).shuffle(seed=self.seed)
 
             input_names = dataset_metadata["inputs"]
