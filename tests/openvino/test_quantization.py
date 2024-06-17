@@ -229,7 +229,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="ptb",
-                awq=True,
+                quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
             16,
@@ -457,8 +457,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
-            if quantization_config.awq:
-                # TODO: Check that AWQ and SE were actually applied
+            if quantization_config.quant_method == QuantizationMethod.AWQ or quantization_config.scale_estimation:
+                # TODO: Check that AWQ and SE was actually applied
                 pass
 
             tokenizer = AutoTokenizer.from_pretrained(model_id)

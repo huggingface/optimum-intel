@@ -172,12 +172,18 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         num_samples (`int`, *optional*):
             The maximum number of samples composing the calibration dataset.
         quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
-            Weight compression method to apply.
+            Weight compression method to apply. Possible options:
+                - "default": default weight quantization will be applied.
+                - "awq": compressed weights will be computed according to the Activation-Aware-Quantization (AWQ)
+                  method. AWQ improves generation quality of INT4-compressed LLMs, but requires
+                  additional time for tuning weights on a calibration dataset. To run AWQ, providing a dataset is
+                  required. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in
+                  such case it will be skipped.
+                - "hybrid": The hybrid mode involves the quantization of weights in MatMul and Embedding layers, and
+                  activations of other layers, facilitating accuracy preservation post-optimization while reducing
+                  the model size. Hybrid mode performs well when applied to a UNet model in diffusion pipelines.
         awq (`bool`, *optional*):
-            Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires
-            additional time for tuning weights on a calibration dataset. To run AWQ, providing a dataset is required.
-            Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such case it
-            will be skipped.
+            Alias for `quant_method="awq"`.
         scale_estimation (`bool`, *optional*):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
@@ -208,8 +214,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
         self.quant_method = quant_method
-        self.awq = awq
         self.scale_estimation = scale_estimation
+        if awq:
+            self.quant_method = QuantizationMethod.AWQ
         self.post_init()
 
     def post_init(self):
@@ -254,11 +261,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
 
         if self.tokenizer is not None and not isinstance(self.tokenizer, str):
             raise ValueError(f"Tokenizer is expected to be a string, but found {self.tokenizer}")
-
-        if self.quant_method == QuantizationMethod.AWQ:
-            self.quant_method = OVQuantizationMethod.DEFAULT
-            self.awq = True
-            logger.warning('Using quant_method="AWQ" is deprecated. Please use awq=True instead in the future.')
 
 
 @dataclass

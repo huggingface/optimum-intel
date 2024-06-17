@@ -819,7 +819,7 @@ def _weight_only_quantization(
         group_size=config.group_size,
         all_layers=config.all_layers,
         sensitivity_metric=sensitivity_metric,
-        awq=config.awq,
+        awq=config.quant_method == QuantizationMethod.AWQ or None,
         ignored_scope=config.get_ignored_scope_instance(),
         dataset=dataset,
         subset_size=config.num_samples if config.num_samples else 128,
