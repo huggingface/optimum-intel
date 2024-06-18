@@ -559,6 +559,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                             "ignored_scope": nncf.IgnoredScope(),
                             "awq": None,
                             "subset_size": 128,
+                            "scale_estimation": None,
                         }
                         compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 

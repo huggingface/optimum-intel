@@ -182,8 +182,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - "hybrid": The hybrid mode involves the quantization of weights in MatMul and Embedding layers, and
                   activations of other layers, facilitating accuracy preservation post-optimization while reducing
                   the model size. Hybrid mode performs well when applied to a UNet model in diffusion pipelines.
-        awq (`bool`, *optional*):
-            Alias for `quant_method="awq"`.
         scale_estimation (`bool`, *optional*):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
@@ -202,7 +200,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
         quant_method: Union[QuantizationMethod, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
-        awq: bool = None,
         scale_estimation: bool = None,
         **kwargs,
     ):
@@ -215,8 +212,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.sensitivity_metric = sensitivity_metric
         self.quant_method = quant_method
         self.scale_estimation = scale_estimation
-        if awq:
-            self.quant_method = QuantizationMethod.AWQ
         self.post_init()
 
     def post_init(self):
