@@ -54,6 +54,7 @@ TESTS_REQUIRE = [
     "einops",
     "tiktoken",
     "sentence-transformers",
+    "auto-round",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
