@@ -94,6 +94,7 @@ if is_itrex_available():
         GPTQConfig,
         ITREXQuantizationConfigMixin,
         RtnConfig,
+        AutoRoundConfig,
     )
 
 
@@ -257,9 +258,9 @@ class INCQuantizer(OptimumQuantizer):
                     f"`intel_extension_for_transformers.transformers.utils.config.ITREXQuantizationConfigMixin` but got: {type(quantization_config)} instead."
                 )
 
-            if not isinstance(quantization_config, (GPTQConfig, RtnConfig)):
+            if not isinstance(quantization_config, (GPTQConfig, RtnConfig, AutoRoundConfig)):
                 raise ValueError(
-                    f"Weight-only quantization is only support RTN and GPTQ algorithm now! But got {quantization_config}"
+                    f"Weight-only quantization is only support RTN, GPTQ and AutoRound algorithm now! But got {quantization_config}"
                 )
 
             if calibration_dataset is None and isinstance(quantization_config, (GPTQConfig, AwqConfig)):

@@ -508,6 +508,7 @@ class WeightOnlyQuantizationTest(INCTestMixin):
         ("rtn", "int4_clip"),
         ("rtn", "int8"),
         ("gptq", "int4_clip"),
+        ("autoround", "int4_clip"),
     )
 
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
@@ -515,7 +516,13 @@ class WeightOnlyQuantizationTest(INCTestMixin):
     def test_weight_only_quantization(self, methodology, weight_dtype):
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
 
-        from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig
+        from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig, AutoRoundConfig
+
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
+        calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
 
         bits = 4 if "4" in weight_dtype else 8
         if methodology == "gptq":
@@ -523,14 +530,10 @@ class WeightOnlyQuantizationTest(INCTestMixin):
             quantization_config = GPTQConfig(
                 bits=bits, sym=True, damp_percent=0.01, weight_dtype=weight_dtype, max_input_length=128
             )
+        elif methodology == "autoround":
+            quantization_config = AutoRoundConfig(bits=bits, tokenizer=tokenizer, nsamples=10)
         else:
-            quantization_config = RtnConfig(bits=bits, weight_dtype=weight_dtype)
-
-        model = AutoModelForCausalLM.from_pretrained(model_name)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
-        calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
+            quantization_config = RtnConfig(bits=bits, weight_dtype=weight_dtype, nsamples=10)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantizer.quantize(
