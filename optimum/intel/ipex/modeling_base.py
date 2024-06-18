@@ -160,9 +160,17 @@ class IPEXModel(OptimizedModel):
             self._init_warmup()
 
     @classmethod
-    def _from_transformers(
+    def _from_transformers(cls, *args, **kwargs):
+        logger.warning(
+            "_from_transformers will be removed in the future, please remove the export arguments in the API."
+        )
+
+        return cls._from_pretrained(*args, **kwargs)
+
+    @classmethod
+    def _from_pretrained(
         cls,
-        model_id: str,
+        model_id: Union[str, Path],
         config: PretrainedConfig,
         use_cache: bool = True,
         use_auth_token: Optional[Union[bool, str]] = None,
@@ -175,55 +183,7 @@ class IPEXModel(OptimizedModel):
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         trust_remote_code: bool = False,
         _commit_hash: str = None,
-    ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError(
-                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
-                )
-            token = use_auth_token
-
-        if is_torch_version("<", "2.1.0"):
-            raise ImportError("`torch>=2.0.0` is needed to trace your model")
-
-        task = cls.export_feature
-        model_kwargs = {
-            "revision": revision,
-            "token": token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "torch_dtype": torch_dtype,
-            "trust_remote_code": trust_remote_code,
-            "_commit_hash": _commit_hash,
-        }
-
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        traced_model = ipex_jit_trace(model, task, use_cache)
-
-        config.torchscript = True
-        config.torch_dtype = torch_dtype
-
-        return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
-
-    @classmethod
-    def _from_pretrained(
-        cls,
-        model_id: Union[str, Path],
-        config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: Optional[str] = WEIGHTS_NAME,
-        local_files_only: bool = False,
-        subfolder: str = "",
         **kwargs,
     ):
         if use_auth_token is not None:
@@ -238,24 +198,41 @@ class IPEXModel(OptimizedModel):
             token = use_auth_token
 
         if not getattr(config, "torchscript", False):
-            logger.warning(
-                "Detect torchscript is false, which mean the model haven't exported yet, fallback to _from_transformers"
-            )
-            return cls._from_transformers(
-                model_id,
-                config,
-                kwargs.get("use_cache", True),
-                use_auth_token,
-                token,
-                revision,
-                force_download,
-                cache_dir,
-                subfolder,
-                local_files_only,
-                torch_dtype=kwargs.get("torch_dtype", None),
-                trust_remote_code=kwargs.get("torch_dtype", False),
-                _commit_hash=kwargs.get("_commit_hash", None),
-            )
+            logger.warning("Detect torchscript is false. Convert to torchscript model!")
+            if use_auth_token is not None:
+                warnings.warn(
+                    "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
+                    FutureWarning,
+                )
+                if token is not None:
+                    raise ValueError(
+                        "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
+                    )
+                token = use_auth_token
+
+            if is_torch_version("<", "2.1.0"):
+                raise ImportError("`torch>=2.0.0` is needed to trace your model")
+
+            task = cls.export_feature
+            model_kwargs = {
+                "revision": revision,
+                "token": token,
+                "cache_dir": cache_dir,
+                "subfolder": subfolder,
+                "local_files_only": local_files_only,
+                "force_download": force_download,
+                "torch_dtype": torch_dtype,
+                "trust_remote_code": trust_remote_code,
+                "_commit_hash": _commit_hash,
+            }
+
+            model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+            traced_model = ipex_jit_trace(model, task, use_cache)
+
+            config.torchscript = True
+            config.torch_dtype = torch_dtype
+
+            return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
 
         # Load the model from local directory
         if os.path.isdir(model_id):
@@ -285,6 +262,7 @@ class IPEXModel(OptimizedModel):
         if getattr(self.config, "torchscript", None):
             torch.jit.save(self.model, output_path)
         else:
+            logger.warning("The module is not a torchscript model, will be treated as a transformers model.")
             self.model.save_pretrained(output_path)
 
     def forward(
