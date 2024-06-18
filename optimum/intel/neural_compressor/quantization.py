@@ -90,11 +90,11 @@ if is_itrex_available():
     from intel_extension_for_transformers.transformers.llm.quantization.utils import convert_to_quantized_model
     from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
     from intel_extension_for_transformers.transformers.utils.config import (
+        AutoRoundConfig,
         AwqConfig,
         GPTQConfig,
         ITREXQuantizationConfigMixin,
         RtnConfig,
-        AutoRoundConfig,
     )
 
 
@@ -256,6 +256,12 @@ class INCQuantizer(OptimumQuantizer):
                 raise TypeError(
                     "`quantization_config` should either be an instance of `neural_compressor.config.PostTrainingQuantConfig` or "
                     f"`intel_extension_for_transformers.transformers.utils.config.ITREXQuantizationConfigMixin` but got: {type(quantization_config)} instead."
+                )
+
+            if isinstance(quantization_config, AutoRoundConfig) and is_neural_compressor_version("<", "2.6.0"):
+                raise ImportError(
+                    f"Found an incompatible version of neural-compressor. Found version {_neural_compressor_version}, "
+                    f"but neural-compressor v2.6.0 or higher is needed for AutoRound quantization."
                 )
 
             if not isinstance(quantization_config, (GPTQConfig, RtnConfig, AutoRoundConfig)):
