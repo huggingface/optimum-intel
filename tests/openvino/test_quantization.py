@@ -236,6 +236,20 @@ class OVWeightCompressionTest(unittest.TestCase):
             ),
             16,
         ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            dict(
+                bits=4,
+                sym=True,
+                group_size=16,
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                dataset="c4",
+                quant_method="awq",
+            ),
+            16,
+        ),
     )
 
     SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION = (
@@ -415,9 +429,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         ]
         model = model_cls.from_pretrained(model_id, export=True)
         quantizer = OVQuantizer(model)
-        quantization_config = OVWeightQuantizationConfig(
-            bits=8, num_samples=3, quant_method=OVQuantizationMethod.HYBRID
-        )
+        quantization_config = OVWeightQuantizationConfig(bits=8, num_samples=3, quant_method="hybrid")
+        self.assertIsInstance(quantization_config.quant_method, OVQuantizationMethod.HYBRID)
+
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config), calibration_dataset=dataset)
         num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
         self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
@@ -456,7 +470,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
-            if quantization_config.quant_method == QuantizationMethod.AWQ or quantization_config.scale_estimation:
+            if quantization_config.quant_method.lower() == "awq" or quantization_config.scale_estimation:
                 # TODO: Check that AWQ and SE was actually applied
                 pass
 

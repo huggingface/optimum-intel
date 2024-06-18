@@ -78,6 +78,7 @@ _DEFAULT_4BIT_CONFIGS = {
 class OVQuantizationMethod(str, Enum):
     DEFAULT = "default"
     HYBRID = "hybrid"
+    AWQ = "awq"
 
 
 @dataclass
@@ -210,7 +211,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
-        self.quant_method = quant_method
+        self.quant_method = OVQuantizationMethod(quant_method) if isinstance(quant_method, str) else quant_method
         self.scale_estimation = scale_estimation
         self.post_init()
 
