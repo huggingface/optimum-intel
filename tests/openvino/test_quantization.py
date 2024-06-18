@@ -108,6 +108,7 @@ class OVQuantizerTest(unittest.TestCase):
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,
                 dataset_split="train",
+                trust_remote_code=True,
             )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             quantizer.quantize(
@@ -151,6 +152,7 @@ class OVQuantizerTest(unittest.TestCase):
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,
                 dataset_split="train",
+                trust_remote_code=True,
             )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
@@ -215,7 +217,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=-1,
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
-                dataset="ptb",
+                dataset="c4",
             ),
             14,
         ),
@@ -228,7 +230,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=16,
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
-                dataset="ptb",
+                dataset="c4",
                 quant_method=QuantizationMethod.AWQ,
             ),
             16,
@@ -410,10 +412,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         dataset = [
             "dream rose covered with clean crystal, sharp edges, transparent, beautiful, highly detailed, high render"
         ]
-        model = model_cls.from_pretrained(
-            model_id,
-            export=True,
-        )
+        model = model_cls.from_pretrained(model_id, export=True)
         quantizer = OVQuantizer(model)
         quantization_config = OVWeightQuantizationConfig(
             bits=8, num_samples=3, quant_method=OVQuantizationMethod.HYBRID
@@ -606,6 +605,7 @@ class OVQuantizerQATest(unittest.TestCase):
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,
                 dataset_split="test",
+                trust_remote_code=True,
             )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
@@ -644,6 +644,7 @@ class OVQuantizerQATest(unittest.TestCase):
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,
                 dataset_split="test",
+                trust_remote_code=True,
             )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)

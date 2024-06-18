@@ -618,7 +618,7 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
         self.run_ovtrainer_training_checks(desc)
 
     def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
-        self.dataset = load_dataset("hf-internal-testing/cats_vs_dogs_sample")
+        self.dataset = load_dataset("hf-internal-testing/cats_vs_dogs_sample", trust_remote_code=True)
         self.num_labels = len(self.dataset["train"].features["labels"].names)
 
         self.feature_extractor = AutoImageProcessor.from_pretrained(desc.model_id)
