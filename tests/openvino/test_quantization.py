@@ -22,7 +22,7 @@ from collections import defaultdict
 from enum import Enum
 from functools import partial
 from typing import Union
-
+import pytest
 import evaluate
 import numpy as np
 import torch
@@ -37,6 +37,7 @@ from transformers import (
     TrainingArguments,
     default_data_collator,
 )
+from transformers.testing_utils import slow
 from transformers.utils.quantization_config import QuantizationMethod
 
 from optimum.intel import (
@@ -587,6 +588,8 @@ class OVQuantizerQATest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("bert",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_automodel_static_quantization(self, model_name):
         model_id = MODEL_NAMES[model_name]
 
@@ -628,6 +631,8 @@ class OVQuantizerQATest(unittest.TestCase):
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_ovmodel_static_quantization(self, model_name):
         model_id = MODEL_NAMES[model_name]
 
