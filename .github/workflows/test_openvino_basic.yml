@@ -52,6 +52,6 @@ jobs:
 
     - name: Slow tests
       run: |
-        pytest tests/openvino/test_modeling.py -s -m "run_slow" --durations=0
+        pytest tests/openvino -s -m "run_slow" --durations=0
       env:
         RUN_SLOW: 1

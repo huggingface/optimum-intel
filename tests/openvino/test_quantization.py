@@ -173,7 +173,6 @@ class OVQuantizerTest(unittest.TestCase):
 
 
 class OVWeightCompressionTest(unittest.TestCase):
-    # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = (
         (OVModelForSequenceClassification, "bert", 70, 70),
         (OVModelForCausalLM, "gpt2", 44, 44),
@@ -181,7 +180,6 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 86),)
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 148),)
-
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
 
     LOAD_IN_4_BITS_SCOPE = (
@@ -347,7 +345,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
-    @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
     def test_ovmodel_8bit_weight_compression_stateful(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
@@ -473,7 +470,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(openvino_config.dtype, "int4")
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
-    @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=True)
         self.assertTrue(model.stateful)
@@ -634,6 +630,7 @@ class OVQuantizerQATest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_ovmodel_static_quantization(self, model_name):
         model_id = MODEL_NAMES[model_name]
+
         def preprocess_function(examples, tokenizer):
             return tokenizer(
                 examples["question"], examples["context"], padding="max_length", max_length=64, truncation=True
