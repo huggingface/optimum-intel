@@ -13,6 +13,7 @@
 # limitations under the License.
 """Defines the command line for the export with OpenVINO."""
 
+import json
 import logging
 import sys
 from pathlib import Path
@@ -142,6 +143,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--scale-estimation",
+        action="store_true",
+        default=None,
+        help=(
+            "Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original "
+            "and compressed layers. Providing a dataset is required to run scale estimation. Please note, that "
+            "applying scale estimation takes additional memory and time."
+        ),
+    )
+    optional_group.add_argument(
         "--sensitivity-metric",
         type=str,
         default=None,
@@ -212,6 +223,32 @@ class OVExportCommand(BaseOptimumCLICommand):
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
         from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, OVConfig
 
+        def _get_default_int4_config(model_id_or_path, library_name):
+            if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
+                return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
+            if "transformers" in library_name and (Path(model_id_or_path) / "config.json").exists():
+                with (Path(model_id_or_path) / "config.json").open("r") as config_f:
+                    config = json.load(config_f)
+                    original_model_name = config.get("_name_or_path", "")
+                if original_model_name in _DEFAULT_4BIT_CONFIGS:
+                    return _DEFAULT_4BIT_CONFIGS[original_model_name]
+
+            return {
+                "bits": 4,
+                "ratio": 0.8,
+                "sym": False,
+                "group_size": None,
+                "all_layers": None,
+            }
+
+        library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
+        if library_name == "sentence_transformers" and self.args.library is None:
+            logger.warning(
+                "Library name is not specified. There are multiple possible variants: `sentence_transformers`, `transformers`."
+                "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+            )
+            library_name = "transformers"
+
         if self.args.fp16:
             logger.warning(
                 "`--fp16` option is deprecated and will be removed in a future version. Use `--weight-format` instead."
@@ -241,9 +278,8 @@ class OVExportCommand(BaseOptimumCLICommand):
                 and self.args.num_samples is None
                 and self.args.awq is None
                 and self.args.sensitivity_metric is None
-                and self.args.model in _DEFAULT_4BIT_CONFIGS
             ):
-                quantization_config = _DEFAULT_4BIT_CONFIGS[self.args.model]
+                quantization_config = _get_default_int4_config(self.args.model, library_name)
             else:
                 quantization_config = {
                     "bits": 8 if is_int8 else 4,
@@ -255,6 +291,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "num_samples": self.args.num_samples,
                     "quant_method": QuantizationMethod.AWQ if self.args.awq else None,
                     "sensitivity_metric": self.args.sensitivity_metric,
+                    "scale_estimation": self.args.scale_estimation,
                 }
 
             if self.args.weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:
@@ -264,14 +301,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                 quantization_config["sym"] = "asym" not in self.args.weight_format
                 quantization_config["group_size"] = 128 if "128" in self.args.weight_format else 64
             ov_config = OVConfig(quantization_config=quantization_config)
-
-        library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
-        if library_name == "sentence_transformers" and self.args.library is None:
-            logger.warning(
-                "Library name is not specified. There are multiple possible variants: `sentence_transformers`, `transformers`."
-                "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
-            )
-            library_name = "transformers"
 
         if self.args.convert_tokenizer:
             logger.warning("`--convert-tokenizer` option is deprecated. Tokenizer will be converted by default.")

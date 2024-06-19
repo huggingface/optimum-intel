@@ -16,7 +16,7 @@ limitations under the License.
 
 # Optimization
 
-🤗 Optimum Intel provides an `openvino` package that enables you to apply a variety of model compression methods such as quantization, pruning, on many models hosted on the 🤗 hub using the [NNCF](https://docs.openvino.ai/2022.1/docs_nncf_introduction.html) framework.
+🤗 Optimum Intel provides an `openvino` package that enables you to apply a variety of model compression methods such as quantization, pruning, on many models hosted on the 🤗 hub using the [NNCF](https://docs.openvino.ai/2024/openvino-workflow/model-optimization.html) framework.
 
 
 ## Post-training
@@ -67,13 +67,22 @@ You can tune quantization parameters to achieve a better performance accuracy tr
 quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, dataset="ptb")
 ```
 
-By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#symmetric-quantization) you can add `sym=True`.
+By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/usage/training_time_compression/other_algorithms/LegacyQuantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/usage/training_time_compression/other_algorithms/LegacyQuantization.md#symmetric-quantization) you can add `sym=True`.
 
 For 4-bit quantization you can also specify the following arguments in the quantization configuration :
 * The `group_size` parameter will define the group size to use for quantization, `-1` it will results in per-column quantization.
 * The `ratio` parameter controls the ratio between 4-bit and 8-bit quantization. If set to 0.9, it means that 90% of the layers will be quantized to `int4` while 10% will be quantized to `int8`.
 
 Smaller `group_size` and `ratio` values usually improve accuracy at the sacrifice of the model size and inference latency.
+
+Quality of 4-bit weight compressed model can further be improved by employing one of the following data-dependent methods:
+* AWQ which stands for Activation Aware Quantization is an algorithm that tunes model weights for more accurate 4-bit compression. It slightly improves generation quality of compressed LLMs, but requires significant additional time and memory for tuning weights on a calibration dataset. Please note that it is possible that there will be no matching patterns in the model to apply AWQ, in such case it will be skipped.
+* Scale Estimation is a method that tunes quantization scales to minimize the `L2` error between the original and compressed layers. Providing a dataset is required to run scale estimation. Using this method also incurs additional time and memory overhead.
+
+AWQ and Scale Estimation algorithms can be applied together or separately. For that, provide corresponding arguments to the 4-bit `OVWeightQuantizationConfig` together with a dataset. For example:
+```python
+quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, quant_method="awq", scale_estimation=True, dataset="wikitext2")
+```
 
 ### Static quantization
 
@@ -146,7 +155,7 @@ model = OVStableDiffusionPipeline.from_pretrained(
 ```
 
 
-For more details, please refer to the corresponding NNCF [documentation](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/CompressWeights.md).
+For more details, please refer to the corresponding NNCF [documentation](https://github.com/openvinotoolkit/nncf/blob/develop/docs/usage/post_training_compression/weights_compression/Usage.md).
 
 
 ## Training-time
@@ -218,7 +227,7 @@ QAT simulates the effects of quantization during training, in order to alleviate
 
 Other than quantization, compression methods like pruning and distillation are common in further improving the task performance and efficiency. Structured pruning slims a model for lower computational demands while distillation leverages knowledge of a teacher, usually, larger model to improve model prediction. Combining these methods with quantization can result in optimized model with significant efficiency improvement while enjoying good task accuracy retention. In `optimum.openvino`, `OVTrainer` provides the capability to jointly prune, quantize and distill a model during training. Following is an example on how to perform the optimization on BERT-base for the sst-2 task.
 
-First, we create a config dictionary to specify the target algorithms. As `optimum.openvino` relies on NNCF as backend, the config format follows NNCF specifications (see [here](https://github.com/openvinotoolkit/nncf/tree/develop/docs/compression_algorithms)). In the example config below, we specify pruning and quantization in a list of compression with thier hyperparameters. The pruning method closely resembles the work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf) whereas the quantization refers to QAT. With this configuration, the model under optimization will be initialized with pruning and quantization operators at the beginning of the training.
+First, we create a config dictionary to specify the target algorithms. As `optimum.openvino` relies on NNCF as backend, the config format follows NNCF specifications (see [here](https://github.com/openvinotoolkit/nncf/blob/develop/docs/usage/training_time_compression/other_algorithms)). In the example config below, we specify pruning and quantization in a list of compression with thier hyperparameters. The pruning method closely resembles the work of [Lagunas et al., 2021, Block Pruning For Faster Transformers](https://arxiv.org/pdf/2109.04838.pdf) whereas the quantization refers to QAT. With this configuration, the model under optimization will be initialized with pruning and quantization operators at the beginning of the training.
 
 ```python
 compression_config = [
@@ -285,7 +294,7 @@ Once we have the config ready, we can start develop the training pipeline like t
 
 More on the description and how to configure movement sparsity, see NNCF documentation [here](https://github.com/openvinotoolkit/nncf/blob/develop/nncf/experimental/torch/sparsity/movement/MovementSparsity.md).
 
-More on available algorithms in NNCF, see documentation [here](https://github.com/openvinotoolkit/nncf/tree/develop/docs/compression_algorithms).
+More on available algorithms in NNCF, see documentation [here](https://github.com/openvinotoolkit/nncf/tree/develop/docs/usage/training_time_compression/other_algorithms).
 
 For complete JPQD scripts, please refer to examples provided [here](https://github.com/huggingface/optimum-intel/tree/main/examples/openvino). 
 

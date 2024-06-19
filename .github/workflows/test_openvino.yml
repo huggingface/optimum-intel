@@ -4,9 +4,12 @@ name: OpenVINO - Test
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - v*-release
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -18,6 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.8", "3.12"]
+        transformers-version: ["4.36.0", "4.41.*"]
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
@@ -32,8 +36,11 @@ jobs:
         python -m pip install --upgrade pip
         # install PyTorch CPU version to avoid installing CUDA packages on GitHub runner without GPU
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install transformers==${{ matrix.transformers-version }}
         pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
     - name: Test with Pytest
+      env:
+        HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
       run: |
         pytest tests/openvino/ --ignore tests/openvino/test_modeling_basic.py --durations=0
     - name: Test basic

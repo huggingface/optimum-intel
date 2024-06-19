@@ -5,13 +5,10 @@ on:
   schedule:
     - cron:  '41 1 * * *'  # run every day at 1:41
   push:
-    paths:
-    - 'tests/openvino/test_modeling_basic.py'
-    - '.github/workflows/test_openvino_basic.yml'
+    branches:
+      - v*-release
   pull_request:
-    paths:
-    - 'tests/openvino/test_modeling_basic.py'
-    - '.github/workflows/test_openvino_basic.yml'
+    types: [opened, synchronize, reopened, labeled]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -19,6 +16,7 @@ concurrency:
 
 jobs:
   build:
+    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') ||  (github.event_name == 'push') || contains( github.event.pull_request.labels.*.name, 'openvino-test') }}
     strategy:
       fail-fast: false
       matrix:

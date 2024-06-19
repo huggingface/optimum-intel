@@ -41,6 +41,7 @@ from optimum.utils.input_generators import (
 )
 from optimum.utils.normalized_config import NormalizedTextConfig
 
+from ...intel.utils.import_utils import _transformers_version, is_transformers_version
 from .model_patcher import (
     AquilaModelPatcher,
     ArcticModelPatcher,
@@ -818,4 +819,9 @@ class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
+        if is_transformers_version("<=", "4.36.0"):
+            raise ValueError(
+                f"Model patching for Arctic models only available for transformers >= v4.37.0, found {_transformers_version}"
+            )
+
         return ArcticModelPatcher(self, model, model_kwargs=model_kwargs)

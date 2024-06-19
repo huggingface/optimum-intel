@@ -48,7 +48,12 @@ from ...exporters.openvino import export, export_pytorch_via_onnx
 from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
 from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import DATASETS_IMPORT_ERROR, is_datasets_available, is_diffusers_available
+from ..utils.import_utils import (
+    DATASETS_IMPORT_ERROR,
+    is_datasets_available,
+    is_datasets_version,
+    is_diffusers_available,
+)
 from ..utils.modeling_utils import get_model_device
 from .configuration import OVConfig, OVQuantizationConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
@@ -595,6 +600,7 @@ class OVQuantizer(OptimumQuantizer):
         use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        trust_remote_code: bool = False,
     ) -> "Dataset":
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -620,6 +626,10 @@ class OVQuantizer(OptimumQuantizer):
                 when running `huggingface-cli login` (stored in `~/.huggingface`).
             cache_dir (`str`, *optional*):
                 Caching directory for a calibration dataset.
+            trust_remote_code (`bool`, defaults to `False`):
+                Whether or not to allow for custom models defined on the Hub in their own modeling files. This option
+                should only be set to `True` for repositories you trust and in which you have read the code, as it will
+                execute code present on the Hub on your local machine.
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
@@ -634,15 +644,14 @@ class OVQuantizer(OptimumQuantizer):
 
         if not is_datasets_available():
             raise ValueError(DATASETS_IMPORT_ERROR.format("OVQuantizer.get_calibration_dataset"))
+
         from datasets import load_dataset
 
-        calibration_dataset = load_dataset(
-            dataset_name,
-            name=dataset_config_name,
-            split=dataset_split,
-            token=token,
-            cache_dir=cache_dir,
-        )
+        datasets_kwargs = {"name": dataset_config_name, "split": dataset_split, "token": token, "cache_dir": cache_dir}
+        if is_datasets_version(">=", "2.20.0"):
+            datasets_kwargs["trust_remote_code"] = trust_remote_code
+
+        calibration_dataset = load_dataset(dataset_name, **datasets_kwargs)
 
         if num_samples is not None:
             num_samples = min(num_samples, len(calibration_dataset))
@@ -747,9 +756,9 @@ class OVQuantizer(OptimumQuantizer):
             from datasets import load_dataset
 
             dataset_metadata = PREDEFINED_SD_DATASETS[dataset_name]
-            dataset = load_dataset(dataset_name, split=dataset_metadata["split"], streaming=True).shuffle(
-                seed=self.seed
-            )
+            datasets_kwargs = {"split": dataset_metadata["split"], "streaming": True}
+            dataset = load_dataset(dataset_name, **datasets_kwargs).shuffle(seed=self.seed)
+
             input_names = dataset_metadata["inputs"]
             dataset = dataset.select_columns(list(input_names.values()))
 
@@ -823,6 +832,7 @@ def _weight_only_quantization(
         ignored_scope=config.get_ignored_scope_instance(),
         dataset=dataset,
         subset_size=config.num_samples if config.num_samples else 128,
+        scale_estimation=config.scale_estimation,
     )
 
 
