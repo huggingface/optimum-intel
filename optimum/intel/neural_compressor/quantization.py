@@ -40,6 +40,7 @@ from transformers import (
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx import OnnxConfig
+from optimum.intel.neural_compressor import INCModelForCausalLM
 from optimum.onnxruntime import ORTModel
 from optimum.onnxruntime.modeling_decoder import ORTModelForCausalLM
 from optimum.onnxruntime.modeling_seq2seq import ORTModelForConditionalGeneration
@@ -309,10 +310,14 @@ class INCQuantizer(OptimumQuantizer):
             self._quantized_model = convert_to_quantized_model(
                 self._original_model, quantization_config, device=quantization_config.device
             )
-
+            quantization_config.remove_redundant_parameters()
+            self._quantized_model.config.quantization_config = quantization_config
             self._quantized_model.quantization_config = quantization_config
             self._quantized_model.save_pretrained = types.MethodType(save_low_bit, self._quantized_model)
             self._quantized_model.save_pretrained(save_directory)
+            # self._quantized_model saved to "output_dir" with GPTQ format
+            # which is replaced by inplace so loading it to restore optimized model
+            self._quantized_model = INCModelForCausalLM.from_pretrained(save_directory)
 
         else:
             if isinstance(self._original_model.config, PretrainedConfig):
