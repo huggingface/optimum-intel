@@ -172,7 +172,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
         num_samples (`int`, *optional*):
             The maximum number of samples composing the calibration dataset.
-        quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
+        quant_method (`str or OVQuantizationMethod`, defaults of OVQuantizationMethod.DEFAULT):
             Weight compression method to apply. Possible options:
                 - "default": default weight quantization will be applied.
                 - "awq": compressed weights will be computed according to the Activation-Aware-Quantization (AWQ)
@@ -200,7 +200,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sensitivity_metric: Optional[str] = None,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
-        quant_method: Union[str, QuantizationMethod, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
+        quant_method: Union[str, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
         scale_estimation: bool = None,
         **kwargs,
     ):
