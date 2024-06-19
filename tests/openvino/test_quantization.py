@@ -588,18 +588,20 @@ class OVWeightCompressionTest(unittest.TestCase):
 
 
 class OVQuantizerQATest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = (("hf-internal-testing/tiny-random-BertForQuestionAnswering",),)
+    SUPPORTED_ARCHITECTURES = ("bert",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_automodel_static_quantization(self, model_name):
+        model_id = MODEL_NAMES[model_name]
+
         def preprocess_function(examples, tokenizer):
             return tokenizer(
                 examples["question"], examples["context"], padding="max_length", max_length=64, truncation=True
             )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_name)
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
             quantizer = OVQuantizer.from_pretrained(transformers_model)
             calibration_dataset = quantizer.get_calibration_dataset(
                 "squadshifts",
@@ -631,14 +633,15 @@ class OVQuantizerQATest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_ovmodel_static_quantization(self, model_name):
+        model_id = MODEL_NAMES[model_name]
         def preprocess_function(examples, tokenizer):
             return tokenizer(
                 examples["question"], examples["context"], padding="max_length", max_length=64, truncation=True
             )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            transformers_model = OVModelForQuestionAnswering.from_pretrained(model_name, export=True)
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            transformers_model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
             quantizer = OVQuantizer.from_pretrained(transformers_model)
             calibration_dataset = quantizer.get_calibration_dataset(
                 "squadshifts",
@@ -670,12 +673,13 @@ class OVQuantizerQATest(unittest.TestCase):
 
 
 class OVTrainerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-uncased", 67, 38),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("albert", 65, 39),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, model_name, expected_fake_quantize, expected_int8):
-        model = AutoModelForSequenceClassification.from_pretrained(model_name)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model_id = MODEL_NAMES[model_name]
+        model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
         ov_config = OVConfig()
         dataset = load_dataset("glue", "sst2")
         dataset = dataset.map(
