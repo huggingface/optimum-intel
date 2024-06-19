@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import torch
 from transformers import PretrainedConfig
-from transformers.utils.quantization_config import QuantizationConfigMixin, QuantizationMethod
+from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
