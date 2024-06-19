@@ -177,7 +177,6 @@ class IPEXModel(OptimizedModel):
 
     @classmethod
     def _from_transformers(cls, *args, **kwargs):
-
         return cls._from_pretrained(*args, **kwargs)
 
     @classmethod
