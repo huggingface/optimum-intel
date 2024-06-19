@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 
+import inspect
 import logging
 import os
 import warnings
@@ -132,6 +133,7 @@ class IPEXModel(OptimizedModel):
         self,
         model,
         config: PretrainedConfig = None,
+        export: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         warmup: bool = True,
         **kwargs,
@@ -144,11 +146,14 @@ class IPEXModel(OptimizedModel):
             self._device = torch.device("cpu")
 
         # CPU only support jit model for now.
-        if not isinstance(model, torch.jit.RecursiveScriptModule):
-            config = model.config if config is None else config
-            use_cache = getattr(model.config, "use_cache", False)
-            model = ipex_jit_trace(model, self.export_feature, use_cache)
-            config.torchscript = True
+        if export:
+            if isinstance(model, torch.jit.RecursiveScriptModule):
+                logger.warning("The model has been exported already.")
+            else:
+                config = model.config if config is None else config
+                use_cache = getattr(model.config, "use_cache", False)
+                model = ipex_jit_trace(model, self.export_feature, use_cache)
+                config.torchscript = True
 
         OptimizedModel.__init__(self, model=model, config=config)
 
@@ -157,9 +162,11 @@ class IPEXModel(OptimizedModel):
         self.model_save_dir = model_save_dir
         self._is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
 
-        self.input_names = {
-            inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
-        }
+        self.input_names = (
+            {inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"}
+            if isinstance(model, torch.jit.RecursiveScriptModule)
+            else inspect.signature(model.forward).parameters
+        )
         # Registers the IPEXModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -208,21 +215,12 @@ class IPEXModel(OptimizedModel):
 
         if not getattr(config, "torchscript", False):
             logger.warning("Detect torchscript is false. Convert to torchscript model!")
-            if use_auth_token is not None:
-                warnings.warn(
-                    "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
-                    FutureWarning,
-                )
-                if token is not None:
-                    raise ValueError(
-                        "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
-                    )
-                token = use_auth_token
 
             if is_torch_version("<", "2.1.0"):
                 raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
             task = cls.export_feature
+            config.torch_dtype = torch_dtype
             model_kwargs = {
                 "revision": revision,
                 "token": token,
@@ -236,12 +234,8 @@ class IPEXModel(OptimizedModel):
             }
 
             model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-            traced_model = ipex_jit_trace(model, task, use_cache)
 
-            config.torchscript = True
-            config.torch_dtype = torch_dtype
-
-            return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
+            return cls(model, config=config, export=True, use_cache=use_cache)
 
         # Load the model from local directory
         if os.path.isdir(model_id):
@@ -434,13 +428,14 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         self,
         model,
         config: PretrainedConfig = None,
+        export: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
         warmup: bool = True,
         **kwargs,
     ):
         # Perform the initial warmup at the end of __init__
-        super().__init__(model, config, model_save_dir=model_save_dir, warmup=False)
+        super().__init__(model, config, export, model_save_dir=model_save_dir, warmup=False)
         GenerationMixin.__init__(self)
 
         model_type = self.config.model_type.replace("_", "-")
