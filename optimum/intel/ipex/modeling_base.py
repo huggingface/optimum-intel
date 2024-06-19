@@ -177,9 +177,6 @@ class IPEXModel(OptimizedModel):
 
     @classmethod
     def _from_transformers(cls, *args, **kwargs):
-        logger.warning(
-            "_from_transformers will be removed in the future, please remove the export arguments in the API."
-        )
 
         return cls._from_pretrained(*args, **kwargs)
 
