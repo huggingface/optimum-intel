@@ -95,7 +95,7 @@ class IPEXModelTest(unittest.TestCase):
             loaded_model = self.IPEX_MODEL_CLASS.from_pretrained(tmpdirname)
             loaded_model_outputs = loaded_model(**tokens)
         # Test init method
-        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True)
         init_model_outputs = init_model(**tokens)
         self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
@@ -161,7 +161,7 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
             loaded_model_outputs = loaded_model(**tokens)
 
         # Test init method
-        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True)
         init_model_outputs = init_model(**tokens)
         self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
@@ -242,7 +242,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
             loaded_model_outputs = loaded_model(**inputs)
 
         # Test init method
-        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True)
         init_model_outputs = init_model(**inputs)
         self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
@@ -384,7 +384,7 @@ class IPEXModelForAudioClassificationTest(unittest.TestCase):
             loaded_model_outputs = loaded_model(**inputs)
 
         # Test init method
-        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True)
         init_model_outputs = init_model(**inputs)
         self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
@@ -438,7 +438,7 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
             loaded_model_outputs = loaded_model(**inputs)
 
         # Test init method
-        init_model = self.IPEX_MODEL_CLASS(transformers_model)
+        init_model = self.IPEX_MODEL_CLASS(transformers_model, export=True)
         init_model_outputs = init_model(**inputs)
         self.assertIsInstance(init_model.model, torch.jit.RecursiveScriptModule)
 
