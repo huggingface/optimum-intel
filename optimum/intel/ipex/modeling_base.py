@@ -151,7 +151,7 @@ class IPEXModel(OptimizedModel):
                 logger.warning("The model has been exported already.")
             else:
                 config = model.config if config is None else config
-                use_cache = getattr(model.config, "use_cache", False)
+                use_cache = getattr(config, "use_cache", False)
                 model = ipex_jit_trace(model, self.export_feature, use_cache)
                 config.torchscript = True
 
@@ -231,7 +231,7 @@ class IPEXModel(OptimizedModel):
 
             model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
 
-            return cls(model, config=config, export=True, use_cache=use_cache)
+            return cls(model, config=config, export=True, use_cache=use_cache, **kwargs)
 
         # Load the model from local directory
         if os.path.isdir(model_id):
@@ -254,7 +254,7 @@ class IPEXModel(OptimizedModel):
         model = torch.jit.load(model_cache_path)
         torch.jit.freeze(model.eval())
 
-        return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
+        return cls(model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         output_path = os.path.join(save_directory, WEIGHTS_NAME)
@@ -431,6 +431,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         **kwargs,
     ):
         # Perform the initial warmup at the end of __init__
+        config.use_cache = use_cache
         super().__init__(model, config, export, model_save_dir=model_save_dir, warmup=False)
         GenerationMixin.__init__(self)
 
@@ -438,7 +439,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
         self.use_cache = "past_key_values" in self.input_names
 
-        if use_cache ^ self.use_cache:
+        if export and use_cache ^ self.use_cache:
             raise ValueError(
                 f"`use_cache` was set to `{use_cache}` but the loaded model only supports `use_cache={self.use_cache}`. "
                 f"Please load your current model with `use_cache={self.use_cache}` or export the original model "
