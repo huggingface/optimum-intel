@@ -439,7 +439,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
         self.use_cache = "past_key_values" in self.input_names
 
-        if export and use_cache ^ self.use_cache:
+        if isinstance(model, torch.jit.RecursiveScriptModule) and use_cache ^ self.use_cache:
             raise ValueError(
                 f"`use_cache` was set to `{use_cache}` but the loaded model only supports `use_cache={self.use_cache}`. "
                 f"Please load your current model with `use_cache={self.use_cache}` or export the original model "
