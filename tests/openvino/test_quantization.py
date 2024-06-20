@@ -585,22 +585,20 @@ class OVWeightCompressionTest(unittest.TestCase):
 
 
 class OVQuantizerQATest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("bert",)
+    SUPPORTED_ARCHITECTURES = ("hf-internal-testing/tiny-random-BertForQuestionAnswering",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
     @slow
     def test_automodel_static_quantization(self, model_name):
-        model_id = MODEL_NAMES[model_name]
-
         def preprocess_function(examples, tokenizer):
             return tokenizer(
                 examples["question"], examples["context"], padding="max_length", max_length=64, truncation=True
             )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_id)
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            transformers_model = AutoModelForQuestionAnswering.from_pretrained(model_name)
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
             quantizer = OVQuantizer.from_pretrained(transformers_model)
             calibration_dataset = quantizer.get_calibration_dataset(
                 "squadshifts",
