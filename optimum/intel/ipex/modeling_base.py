@@ -432,7 +432,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
     ):
         # Perform the initial warmup at the end of __init__
         config.use_cache = use_cache
-        super().__init__(model, config, export, model_save_dir=model_save_dir, warmup=False)
+        super().__init__(model, config, export=export, model_save_dir=model_save_dir, warmup=False)
         GenerationMixin.__init__(self)
 
         model_type = self.config.model_type.replace("_", "-")
