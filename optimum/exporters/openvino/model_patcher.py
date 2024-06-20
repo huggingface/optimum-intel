@@ -190,7 +190,7 @@ def _chatglm_transformer_forward(
     if inputs_embeds is None:
         inputs_embeds = self.embedding(input_ids)
 
-    if self.pre_seq_len is not None:
+    if getattr(self, "pre_seq_len", None) is not None:
         if past_key_values is None:
             past_key_values = self.get_prompt(
                 batch_size=batch_size,
@@ -285,6 +285,17 @@ def _chatglm2_core_attention_forward(self, query_layer, key_layer, value_layer, 
     return context_layer
 
 
+def _glm4_core_attention_forward(self, query_layer, key_layer, value_layer, attention_mask):
+    attention_mask = ~attention_mask
+    context_layer = torch.nn.functional.scaled_dot_product_attention(
+        query_layer, key_layer, value_layer, attention_mask.to(torch.float32)
+    )
+    context_layer = context_layer.transpose(1, 2).contiguous()
+    new_context_layer_shape = context_layer.size()[:-2] + (self.hidden_size_per_partition,)
+    context_layer = context_layer.reshape(*new_context_layer_shape)
+    return context_layer
+
+
 class ChatGLMModelPatcher(DecoderModelPatcher):
     def __init__(
         self,
@@ -293,21 +304,25 @@ class ChatGLMModelPatcher(DecoderModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         super().__init__(config, model, model_kwargs)
-
-        self.original_chatglm_transformer_forward = model.transformer.forward
+        self.is_v4 = hasattr(self._model.config, "rope_ratio")
 
     def __enter__(self):
         super().__enter__()
-        self._model.transformer.forward = types.MethodType(_chatglm_transformer_forward, self._model.transformer)
+
+        if not self.is_v4:
+            self._model.transformer._orig_forward = self._model.transformer.forward
+            self._model.transformer.forward = types.MethodType(_chatglm_transformer_forward, self._model.transformer)
         for block in self._model.transformer.encoder.layers:
             block.self_attention.core_attention._orig_forward = block.self_attention.core_attention.forward
             block.self_attention.core_attention.forward = types.MethodType(
-                _chatglm2_core_attention_forward, block.self_attention.core_attention
+                _chatglm2_core_attention_forward if not self.is_v4 else _glm4_core_attention_forward,
+                block.self_attention.core_attention,
             )
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        self._model.transformer.forward = self.original_chatglm_transformer_forward
+        if hasattr(self._model.transformer, "_orig_forward"):
+            self._model.transformer.forward = self._model.transformer._orig_forward
         for block in self._model.transformer.encoder.layers:
             block.self_attention.core_attention.forward = block.self_attention.core_attention._orig_forward
 
@@ -367,9 +382,9 @@ def _llama_gemma_update_causal_mask_legacy(self, attention_mask, input_tensor, c
                 offset = 0
             mask_shape = attention_mask.shape
             mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[
-                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
-            ] = mask_slice
+            causal_mask[: mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]] = (
+                mask_slice
+            )
 
     if (
         self.config._attn_implementation == "sdpa"
@@ -1640,9 +1655,9 @@ def _dbrx_update_causal_mask_legacy(
                 offset = 0
             mask_shape = attention_mask.shape
             mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[
-                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
-            ] = mask_slice
+            causal_mask[: mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]] = (
+                mask_slice
+            )
 
     if (
         self.config._attn_implementation == "sdpa"
