@@ -151,7 +151,7 @@ class IPEXModel(OptimizedModel):
                 logger.warning("The model has been exported already.")
             else:
                 config = model.config if config is None else config
-                use_cache = getattr(config, "use_cache", False)
+                use_cache = kwargs.get("use_cache", None)
                 model = ipex_jit_trace(model, self.export_feature, use_cache)
                 config.torchscript = True
 
@@ -431,8 +431,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         **kwargs,
     ):
         # Perform the initial warmup at the end of __init__
-        config.use_cache = use_cache
-        super().__init__(model, config, export=export, model_save_dir=model_save_dir, warmup=False)
+        super().__init__(
+            model, config, export=export, model_save_dir=model_save_dir, warmup=False, use_cache=use_cache
+        )
         GenerationMixin.__init__(self)
 
         model_type = self.config.model_type.replace("_", "-")
