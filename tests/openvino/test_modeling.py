@@ -643,6 +643,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "xverse",
         "internlm",
         "jais",
+        "glm4",
     )
 
     if is_transformers_version(">=", "4.40.0"):
@@ -675,6 +676,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "internlm",
         "codegen2",
         "arctic",
+        "glm4",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -716,7 +718,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         set_seed(SEED)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
-        if model_arch in ["qwen", "arctic"]:
+        if model_arch in ["qwen", "arctic", "glm4"]:
             transformers_model.to(torch.float32)
 
         with torch.no_grad():
@@ -729,7 +731,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "qwen":
             return
 
-        if model_arch not in ["chatglm", "persimmon"]:
+        if model_arch not in ["chatglm", "glm4", "persimmon"]:
             tokenizer.pad_token_id = tokenizer.eos_token_id
 
         if model_arch == "persimmon":
