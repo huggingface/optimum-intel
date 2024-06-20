@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 
+import inspect
 import logging
 import os
 import warnings
@@ -132,6 +133,7 @@ class IPEXModel(OptimizedModel):
         self,
         model,
         config: PretrainedConfig = None,
+        export: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         warmup: bool = True,
         **kwargs,
@@ -144,11 +146,14 @@ class IPEXModel(OptimizedModel):
             self._device = torch.device("cpu")
 
         # CPU only support jit model for now.
-        if not isinstance(model, torch.jit.RecursiveScriptModule):
-            config = model.config if config is None else config
-            use_cache = getattr(model.config, "use_cache", False)
-            model = ipex_jit_trace(model, self.export_feature, use_cache)
-            config.torchscript = True
+        if export:
+            if isinstance(model, torch.jit.RecursiveScriptModule):
+                logger.warning("The model has been exported already.")
+            else:
+                config = model.config if config is None else config
+                use_cache = kwargs.get("use_cache", None)
+                model = ipex_jit_trace(model, self.export_feature, use_cache)
+                config.torchscript = True
 
         OptimizedModel.__init__(self, model=model, config=config)
 
@@ -157,9 +162,11 @@ class IPEXModel(OptimizedModel):
         self.model_save_dir = model_save_dir
         self._is_ipex_exported = _is_patched_with_ipex(model, self.export_feature)
 
-        self.input_names = {
-            inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
-        }
+        self.input_names = (
+            {inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"}
+            if isinstance(model, torch.jit.RecursiveScriptModule)
+            else inspect.signature(model.forward).parameters
+        )
         # Registers the IPEXModelForXXX classes into the transformers AutoModel classes to avoid warnings when creating
         # a pipeline https://github.com/huggingface/transformers/blob/cad61b68396a1a387287a8e2e2fef78a25b79383/src/transformers/pipelines/base.py#L863
         AutoConfig.register(self.base_model_prefix, AutoConfig)
@@ -169,9 +176,13 @@ class IPEXModel(OptimizedModel):
             self._init_warmup()
 
     @classmethod
-    def _from_transformers(
+    def _from_transformers(cls, *args, **kwargs):
+        return cls._from_pretrained(*args, **kwargs)
+
+    @classmethod
+    def _from_pretrained(
         cls,
-        model_id: str,
+        model_id: Union[str, Path],
         config: PretrainedConfig,
         use_cache: bool = True,
         use_auth_token: Optional[Union[bool, str]] = None,
@@ -184,55 +195,7 @@ class IPEXModel(OptimizedModel):
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         trust_remote_code: bool = False,
         _commit_hash: str = None,
-    ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError(
-                    "Both the arguments `use_auth_token` and `token` were specified, which is not supported. Please specify only `token`."
-                )
-            token = use_auth_token
-
-        if is_torch_version("<", "2.1.0"):
-            raise ImportError("`torch>=2.0.0` is needed to trace your model")
-
-        task = cls.export_feature
-        model_kwargs = {
-            "revision": revision,
-            "token": token,
-            "cache_dir": cache_dir,
-            "subfolder": subfolder,
-            "local_files_only": local_files_only,
-            "force_download": force_download,
-            "torch_dtype": torch_dtype,
-            "trust_remote_code": trust_remote_code,
-            "_commit_hash": _commit_hash,
-        }
-
-        model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        traced_model = ipex_jit_trace(model, task, use_cache)
-
-        config.torchscript = True
-        config.torch_dtype = torch_dtype
-
-        return cls(traced_model, config=config, model_save_dir=model_id, use_cache=use_cache, warmup=False)
-
-    @classmethod
-    def _from_pretrained(
-        cls,
-        model_id: Union[str, Path],
-        config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: Optional[str] = WEIGHTS_NAME,
-        local_files_only: bool = False,
-        subfolder: str = "",
         **kwargs,
     ):
         if use_auth_token is not None:
@@ -247,9 +210,28 @@ class IPEXModel(OptimizedModel):
             token = use_auth_token
 
         if not getattr(config, "torchscript", False):
-            raise ValueError(
-                "`config.torchscript` should be set to `True`, if your model is not a TorchScript model and needs to be traced please set `export=True` when loading it with `.from_pretrained()`"
-            )
+            logger.warning("Detect torchscript is false. Convert to torchscript model!")
+
+            if is_torch_version("<", "2.1.0"):
+                raise ImportError("`torch>=2.0.0` is needed to trace your model")
+
+            task = cls.export_feature
+            config.torch_dtype = torch_dtype
+            model_kwargs = {
+                "revision": revision,
+                "token": token,
+                "cache_dir": cache_dir,
+                "subfolder": subfolder,
+                "local_files_only": local_files_only,
+                "force_download": force_download,
+                "torch_dtype": torch_dtype,
+                "trust_remote_code": trust_remote_code,
+                "_commit_hash": _commit_hash,
+            }
+
+            model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
+
+            return cls(model, config=config, export=True, use_cache=use_cache, **kwargs)
 
         # Load the model from local directory
         if os.path.isdir(model_id):
@@ -272,11 +254,15 @@ class IPEXModel(OptimizedModel):
         model = torch.jit.load(model_cache_path)
         torch.jit.freeze(model.eval())
 
-        return cls(model, config=config, model_save_dir=model_save_dir, **kwargs)
+        return cls(model, config=config, model_save_dir=model_save_dir, use_cache=use_cache, **kwargs)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         output_path = os.path.join(save_directory, WEIGHTS_NAME)
-        torch.jit.save(self.model, output_path)
+        if getattr(self.config, "torchscript", None):
+            torch.jit.save(self.model, output_path)
+        else:
+            logger.warning("The module is not a torchscript model, will be treated as a transformers model.")
+            self.model.save_pretrained(output_path)
 
     def forward(
         self,
@@ -438,20 +424,23 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         self,
         model,
         config: PretrainedConfig = None,
+        export: bool = False,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         use_cache: bool = True,
         warmup: bool = True,
         **kwargs,
     ):
         # Perform the initial warmup at the end of __init__
-        super().__init__(model, config, model_save_dir=model_save_dir, warmup=False)
+        super().__init__(
+            model, config, export=export, model_save_dir=model_save_dir, warmup=False, use_cache=use_cache
+        )
         GenerationMixin.__init__(self)
 
         model_type = self.config.model_type.replace("_", "-")
         self.normalized_config = NormalizedConfigManager.get_normalized_config_class(model_type)(self.config)
         self.use_cache = "past_key_values" in self.input_names
 
-        if use_cache ^ self.use_cache:
+        if isinstance(model, torch.jit.RecursiveScriptModule) and use_cache ^ self.use_cache:
             raise ValueError(
                 f"`use_cache` was set to `{use_cache}` but the loaded model only supports `use_cache={self.use_cache}`. "
                 f"Please load your current model with `use_cache={self.use_cache}` or export the original model "
