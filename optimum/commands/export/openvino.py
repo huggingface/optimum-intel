@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from transformers.utils.quantization_config import QuantizationMethod
 
 from ...exporters import TasksManager
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
@@ -289,7 +288,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "all_layers": None if is_int8 else self.args.all_layers,
                     "dataset": self.args.dataset,
                     "num_samples": self.args.num_samples,
-                    "quant_method": QuantizationMethod.AWQ if self.args.awq else None,
+                    "quant_method": "awq" if self.args.awq else "default",
                     "sensitivity_metric": self.args.sensitivity_metric,
                     "scale_estimation": self.args.scale_estimation,
                 }
