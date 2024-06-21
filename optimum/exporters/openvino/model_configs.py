@@ -167,24 +167,27 @@ class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         )
         self.multi_query_group_num = normalized_config.multi_query_group_num
         self.head_dim = normalized_config.kv_channels
+        self.standart_cache_layout = hasattr(normalized_config, "rope_ratio")
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        past_key_shape = (
-            self.sequence_length,
-            self.batch_size,
-            self.multi_query_group_num,
-            self.head_dim,
-        )
-        past_value_shape = (
-            self.sequence_length,
-            self.batch_size,
-            self.multi_query_group_num,
-            self.head_dim,
-        )
+        if not self.standart_cache_layout:
+            pkv_shape = (
+                self.sequence_length,
+                self.batch_size,
+                self.multi_query_group_num,
+                self.head_dim,
+            )
+        else:
+            pkv_shape = (
+                self.batch_size,
+                self.multi_query_group_num,
+                self.sequence_length,
+                self.head_dim,
+            )
         return [
             (
-                self.random_float_tensor(past_key_shape, framework=framework, dtype=float_dtype),
-                self.random_float_tensor(past_value_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(pkv_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(pkv_shape, framework=framework, dtype=float_dtype),
             )
             for _ in range(self.num_layers)
         ]
@@ -229,7 +232,10 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             and "attention_mask" in dummy_inputs
         ):
             # Obtain the past sequence length from the value instead of the key (Bloom). ChatGLM has seq_len in 0 dim instead of -2
-            past_present_length = dummy_inputs["input_ids"].shape[1] + dummy_inputs["past_key_values"][0][1].shape[0]
+            seq_len_dim = 0 if not hasattr(self._normalized_config, "rope_ratio") else -2
+            past_present_length = (
+                dummy_inputs["input_ids"].shape[1] + dummy_inputs["past_key_values"][0][1].shape[seq_len_dim]
+            )
 
             dummy_inputs["attention_mask"] = DummyInputGenerator.pad_input_on_dim(
                 dummy_inputs["attention_mask"],
@@ -260,9 +266,18 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             decoder_sequence_name = "past_sequence_length + present_lenght"
             name = "present"
 
+        is_v4 = hasattr(self._normalized_config, "rope_ratio")
         for i in range(self._normalized_config.num_layers):
-            inputs_or_outputs[f"{name}.{i}.key"] = {1: "batch_size", 0: decoder_sequence_name}
-            inputs_or_outputs[f"{name}.{i}.value"] = {1: "batch_size", 0: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.key"] = (
+                {1: "batch_size", 0: decoder_sequence_name}
+                if not is_v4
+                else {0: "batch_size", 2: decoder_sequence_name}
+            )
+            inputs_or_outputs[f"{name}.{i}.value"] = (
+                {1: "batch_size", 0: decoder_sequence_name}
+                if not is_v4
+                else {0: "batch_size", 2: decoder_sequence_name}
+            )
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
