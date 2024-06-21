@@ -632,16 +632,14 @@ class OVQuantizerQATest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_ovmodel_static_quantization(self, model_name):
-        model_id = MODEL_NAMES[model_name]
-
         def preprocess_function(examples, tokenizer):
             return tokenizer(
                 examples["question"], examples["context"], padding="max_length", max_length=64, truncation=True
             )
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            transformers_model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            transformers_model = OVModelForQuestionAnswering.from_pretrained(model_name, export=True)
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
             quantizer = OVQuantizer.from_pretrained(transformers_model)
             calibration_dataset = quantizer.get_calibration_dataset(
                 "squadshifts",
