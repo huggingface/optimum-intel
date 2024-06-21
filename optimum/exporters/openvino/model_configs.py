@@ -171,26 +171,14 @@ class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if not self.standart_cache_layout:
-            past_key_shape = (
-                self.sequence_length,
-                self.batch_size,
-                self.multi_query_group_num,
-                self.head_dim,
-            )
-            past_value_shape = (
+            pkv_shape = (
                 self.sequence_length,
                 self.batch_size,
                 self.multi_query_group_num,
                 self.head_dim,
             )
         else:
-            past_key_shape = (
-                self.batch_size,
-                self.multi_query_group_num,
-                self.sequence_length,
-                self.head_dim,
-            )
-            past_value_shape = (
+            pkv_shape = (
                 self.batch_size,
                 self.multi_query_group_num,
                 self.sequence_length,
@@ -198,8 +186,8 @@ class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             )
         return [
             (
-                self.random_float_tensor(past_key_shape, framework=framework, dtype=float_dtype),
-                self.random_float_tensor(past_value_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(pkv_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(pkv_shape, framework=framework, dtype=float_dtype),
             )
             for _ in range(self.num_layers)
         ]
