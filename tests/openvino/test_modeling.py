@@ -307,21 +307,16 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
-        # "camembert",
         "convbert",
-        # "data2vec_text",
-        # "deberta_v2",
         "distilbert",
         "electra",
         "flaubert",
         "ibert",
-        # "mobilebert",
-        # "nystromformer",
+        "nystromformer",
         "roberta",
         "roformer",
         "squeezebert",
         "xlm",
-        # "xlm_roberta",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -348,6 +343,8 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -1013,16 +1010,18 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
-        # "camembert",
-        # "convbert",
-        # "data2vec_text",
+        "camembert",
+        "convbert",
+        "data2vec_text",
         "deberta",
-        # "deberta_v2",
+        "deberta_v2",
         "distilbert",
         "electra",
         "flaubert",
         "ibert",
-        # "mobilebert",
+        "mobilebert",
+        "mpnet",
+        "perceiver_text",
         "roberta",
         "roformer",
         "squeezebert",
@@ -1079,16 +1078,19 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "beit",
         "convnext",
-        # "data2vec_vision",
-        # "deit",
+        "convnextv2",
+        "data2vec_vision",
+        "deit",
         "levit",
         "mobilenet_v1",
         "mobilenet_v2",
         "mobilevit",
-        # "poolformer",
+        "poolformer",
+        "perceiver_vision",
         "resnet",
-        # "segformer",
-        # "swin",
+        "segformer",
+        "swin",
+        "donut-swin",
         "vit",
     )
 
@@ -1182,7 +1184,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         # "bigbird_pegasus",
         "blenderbot",
         "blenderbot-small",
-        # "longt5",
+        "longt5",
         "m2m_100",
         "marian",
         "mbart",
@@ -1225,6 +1227,8 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -1320,17 +1324,17 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
 class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        # "audio_spectrogram_transformer",
-        # "data2vec_audio",
-        # "hubert",
-        # "sew",
-        # "sew_d",
-        # "wav2vec2-conformer",
+        "audio_spectrogram_transformer",
+        "data2vec_audio",
+        "hubert",
+        "sew",
+        "sew_d",
         "unispeech",
-        # "unispeech_sat",
-        # "wavlm",
+        "unispeech_sat",
+        "wavlm",
         "wav2vec2",
-        # "wav2vec2-conformer",
+        "wav2vec2-conformer",
+        "whisper",
     )
 
     def _generate_random_audio_data(self):
@@ -1366,6 +1370,8 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -1684,6 +1690,8 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -1790,6 +1798,8 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch: str):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]

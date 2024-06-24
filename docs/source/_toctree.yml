@@ -14,6 +14,8 @@
   - sections:
     - local: openvino/export
       title: Export
+    - local: openvino/architectures
+      title: Architectures
     - local: openvino/inference
       title: Inference
     - local: openvino/optimization
