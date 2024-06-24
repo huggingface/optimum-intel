@@ -104,6 +104,7 @@ def export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
+    patch_16bit_model: bool = False
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -155,6 +156,7 @@ def export(
             ov_config=ov_config,
             model_kwargs=model_kwargs,
             stateful=stateful,
+            patch_16bit_model=patch_16bit_model
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -288,6 +290,7 @@ def export_pytorch(
     model_kwargs: Optional[Dict[str, Any]] = None,
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = False,
+    patch_16bit_model: bool = False
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -366,6 +369,11 @@ def export_pytorch(
             # model.config.torchscript = True can not be used for patching, because it overrides return_dict to False
             patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
             patched_forward = patcher.patched_forward
+
+            if patch_16bit_model:
+                from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
+                __make_16bit_traceable(model)
+
 
             @functools.wraps(patched_forward)
             def ts_patched_forward(*args, **kwargs):
@@ -466,6 +474,7 @@ def export_models(
     model_kwargs: Optional[Dict[str, Any]] = None,
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
+    patch_16bit_model: bool = False
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -517,6 +526,7 @@ def export_models(
                 model_kwargs=model_kwargs,
                 ov_config=ov_config,
                 stateful=stateful,
+                patch_16bit_model=patch_16bit_model
             )
         )
 
@@ -537,6 +547,7 @@ def export_from_model(
     preprocessors: List = None,
     device: str = "cpu",
     trust_remote_code: bool = False,
+    patch_16bit_model: bool = False,
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
@@ -699,6 +710,7 @@ def export_from_model(
         stateful=stateful,
         opset=opset,
         model_kwargs=model_kwargs,
+        patch_16bit_model=patch_16bit_model
     )
 
 
