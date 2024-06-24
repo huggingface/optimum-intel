@@ -43,7 +43,7 @@ tokenizer.save_pretrained(save_directory)
 
 You can also apply fp16, 8-bit or 4-bit weight compression on the Linear, Convolutional and Embedding layers when loading your model to reduce the memory footprint and inference latency.
 
-For more information on the quantization parameters checkout the [documentation](inference#weight-only-quantization)
+For more information on the quantization parameters checkout the [documentation](optimziation#weight-only-quantization).
 
 <Tip warning={true}>
 
@@ -51,7 +51,7 @@ If not specified, `load_in_8bit` will be set to `True` by default when models la
 
 </Tip>
 
-To apply quantization on both weights and activations, you can use the `OVQuantizer`, more information in the [documentation](optimization).
+It's also possible to apply quantization on both weights and activations using the `OVQuantizer`, more information in the [documentation](optimization#static-quantization).
 
 ### Static shape
 
