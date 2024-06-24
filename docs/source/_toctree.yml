@@ -15,7 +15,7 @@
     - local: openvino/export
       title: Export
     - local: openvino/architectures
-      title: Architectures
+      title: Supported Models
     - local: openvino/inference
       title: Inference
     - local: openvino/optimization
