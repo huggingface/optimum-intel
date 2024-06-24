@@ -28,7 +28,6 @@ from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.model.onnx_model import ONNXModel
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
-from neural_compressor.utils.export import torch_to_int8_onnx
 from packaging.version import parse
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import (
@@ -78,6 +77,12 @@ from .utils import (
     NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION,
     INCDataLoader,
 )
+
+
+if is_neural_compressor_version("<", "2.6"):
+    from neural_compressor.experimental.export import torch_to_int8_onnx
+else:
+    from neural_compressor.utils.export import torch_to_int8_onnx
 
 
 if is_itrex_available():
