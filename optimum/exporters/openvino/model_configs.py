@@ -19,8 +19,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from packaging import version
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel, TFPreTrainedModel
 from optimum.exporters.onnx.base import ConfigBehavior
-import logging
-logger = logging.getLogger(__name__)
 
 from transformers.utils import is_tf_available
 
@@ -2217,7 +2215,6 @@ class Phi3VisionOpenVINOConfig(OnnxConfig):
 class WhisperOpenVINOConfig(WhisperOnnxConfig):
     def __init__(self, config: PretrainedConfig, task: str = "feature-extraction", int_dtype: str = "int64", float_dtype: str = "fp32", use_past: bool = False, use_past_in_inputs: bool = False, behavior: ConfigBehavior = ConfigBehavior.MONOLITH, preprocessors: Optional[List[Any]] = None, legacy: bool = False, stateful: bool = False):
         self.stateful = stateful
-        logger.warn(f"config stateful: {self.stateful}")
         super().__init__(config, task, int_dtype, float_dtype, use_past, use_past_in_inputs, behavior, preprocessors, legacy)
 
 
@@ -2228,12 +2225,10 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
         forces the other generators to use the same batch size, meaning they will all produce inputs of the same batch
         size. Override this method for custom behavior.
         """
-        logger.warn(f"config stateful: {self.stateful}")
         if self.stateful:
             if "encoder_sequence_length" not in kwargs:
                 sequence_len = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
                 kwargs["encoder_sequence_length"] = sequence_len + 2
-        logger.warn(kwargs)
         return super()._create_dummy_input_generator_classes(**kwargs)
 
     def with_behavior(

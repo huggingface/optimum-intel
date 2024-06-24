@@ -117,7 +117,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         """
         src_files = [self.encoder_model, self.decoder_model]
         dst_file_names = [OV_ENCODER_NAME, OV_DECODER_NAME]
-        if self.use_cache:
+        if self.decoder_with_past_model is not None:
             src_files.append(self.decoder_with_past_model)
             dst_file_names.append(OV_DECODER_WITH_PAST_NAME)
 

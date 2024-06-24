@@ -205,7 +205,6 @@ def ensure_export_task_support_stateful(task: str, is_encoder_decoder:bool = Fal
     )
 
     is_stateful = task.endswith("-with-past") and task.replace("-with-past", "") in _ENCODER_DECODER_TASKS_WITH_PAST
-    log.warn(f"is_stateful {is_stateful}")
     return is_stateful
     
 
