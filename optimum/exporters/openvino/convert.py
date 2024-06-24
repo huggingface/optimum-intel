@@ -36,9 +36,7 @@ from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflo
 from optimum.exporters.utils import (
     _get_submodels_and_export_configs as _default_get_submodels_and_export_configs,
 )
-from optimum.exporters.utils import (
-    get_diffusion_models_for_export,
-)
+from optimum.exporters.utils import  ENCODER_NAME, DECODER_NAME, DECODER_WITH_PAST_NAME, _get_submodels_for_export_encoder_decoder
 from optimum.intel.utils.import_utils import (
     _diffusers_version,
     _nncf_version,
@@ -534,6 +532,8 @@ def export_models(
             f"Provided custom names {output_names} for the export of {len(models_and_export_configs)} models. Please provide the same number of names as models to export."
         )
 
+    if not isinstance(stateful, (list, tuple)):
+        stateful = [stateful] * len(models_and_export_configs)
     for i, model_name in enumerate(models_and_export_configs.keys()):
         submodel, sub_export_config = models_and_export_configs[model_name]
         output_name = output_names[i] if output_names is not None else Path(model_name + ".xml")
@@ -549,9 +549,9 @@ def export_models(
                 input_shapes=input_shapes,
                 model_kwargs=model_kwargs,
                 ov_config=ov_config,
-                stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
                 patch_16bit_model=patch_16bit_model,
                 library_name=library_name,
+                stateful=stateful[i],
             )
         )
 
@@ -615,7 +615,7 @@ def export_from_model(
         logger.info(f"Automatic task detection to: {task}.")
 
     stateful = stateful and (
-        ensure_export_task_support_stateful(task)
+        ensure_export_task_support_stateful(task, getattr(getattr(model, "config", {}), "is_encoder_decoder", False))
         or ensure_model_type_support_stateful(getattr(getattr(model, "config", {}), "model_type", ""))
     )
     # TODO: support onnx_config.py in the model repo
@@ -646,6 +646,8 @@ def export_from_model(
         input_shapes[input_name] = (
             kwargs_shapes[input_name] if input_name in kwargs_shapes else DEFAULT_DUMMY_SHAPES[input_name]
         )
+    
+    logging.disable(logging.INFO)
 
     if library_name == "open_clip":
         custom_architecture = True
@@ -653,7 +655,17 @@ def export_from_model(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
-    if library_name == "diffusers":
+    elif (model.config.is_encoder_decoder and task.startswith(TasksManager._ENCODER_DECODER_TASKS)) and stateful and not custom_architecture:
+        export_config, models_and_export_configs = _get_encoder_decoder_stateful_models_for_export(
+            model=model,
+            task=task,
+            preprocessors=preprocessors,
+            library_name=library_name,
+            _variant="default"
+        )
+        stateful = [False, True]
+
+    elif library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
     else:
@@ -895,6 +907,7 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
     return model
 
 
+
 def _get_multi_modal_submodels_and_export_configs(
     model: Union["PreTrainedModel", "TFPreTrainedModel"],
     task: str,
@@ -932,7 +945,6 @@ def _get_multi_modal_submodels_and_export_configs(
         models_for_export[model_id] = (model_part, model_part_config)
         stateful_parts.append(stateful if getattr(model_part_config, "use_past", False) else False)
     return main_config, models_for_export, stateful_parts
-
 
 def _get_submodels_and_export_configs(
     model: Union["PreTrainedModel", "TFPreTrainedModel", "DiffusionPipeline"],
@@ -1193,3 +1205,47 @@ def get_flux_models_for_export(pipeline, exporter, int_dtype, float_dtype):
         models_for_export["text_encoder_2"] = (text_encoder_2, export_config)
 
     return models_for_export
+
+
+def _get_encoder_decoder_stateful_models_for_export(
+    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    task: str,
+    _variant: str,
+    library_name: str,
+    int_dtype: str = "int64",
+    float_dtype: str = "fp32",
+    preprocessors: Optional[List[Any]] = None,
+):
+    logger.info("HERE")
+    export_config_constructor = TasksManager.get_exporter_config_constructor(
+        model=model, exporter="openvino", task=task, library_name=library_name
+    )
+    export_config = export_config_constructor(
+        model.config,
+        int_dtype=int_dtype,
+        float_dtype=float_dtype,
+        preprocessors=preprocessors,
+        legacy=False,
+    )
+
+    export_config.variant = _variant
+    all_variants = "\n".join(
+        [f"    - {name}: {description}" for name, description in export_config.VARIANTS.items()]
+    )
+    logger.info(f"Using the export variant {export_config.variant}. Available variants are:\n{all_variants}")
+
+    models_for_export = _get_submodels_for_export_encoder_decoder(model, use_past=True)
+
+    encoder_export_config = export_config.with_behavior("encoder")
+    models_for_export[ENCODER_NAME] = (models_for_export[ENCODER_NAME], encoder_export_config)
+
+    decoder_export_config_with_past = export_config.with_behavior("decoder", use_past=True, use_past_in_inputs=True, stateful=True)
+    decoder_with_past_model = models_for_export.pop(DECODER_WITH_PAST_NAME)
+    models_for_export[DECODER_NAME] = (
+        decoder_with_past_model,
+        decoder_export_config_with_past,
+    )
+    logger.info(models_for_export.keys())
+
+
+    return None, models_for_export
