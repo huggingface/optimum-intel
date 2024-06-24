@@ -189,7 +189,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         action="store_true",
         help="Do not add converted tokenizer and detokenizer OpenVINO models.",
     )
-    #TODO : deprecated
+    # TODO : deprecated
     optional_group.add_argument("--fp16", action="store_true", help="Compress weights to fp16")
     optional_group.add_argument("--int8", action="store_true", help="Compress weights to int8")
     optional_group.add_argument(
