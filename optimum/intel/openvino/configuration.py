@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import torch
 from transformers import PretrainedConfig
-from transformers.utils.quantization_config import QuantizationConfigMixin, QuantizationMethod
+from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
@@ -78,6 +78,7 @@ _DEFAULT_4BIT_CONFIGS = {
 class OVQuantizationMethod(str, Enum):
     DEFAULT = "default"
     HYBRID = "hybrid"
+    AWQ = "awq"
 
 
 @dataclass
@@ -171,7 +172,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
         num_samples (`int`, *optional*):
             The maximum number of samples composing the calibration dataset.
-        quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
+        quant_method (`str or OVQuantizationMethod`, defaults of OVQuantizationMethod.DEFAULT):
             Weight compression method to apply. Possible options:
                 - "default": default weight quantization will be applied.
                 - "awq": compressed weights will be computed according to the Activation-Aware-Quantization (AWQ)
@@ -199,7 +200,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sensitivity_metric: Optional[str] = None,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
-        quant_method: Union[QuantizationMethod, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
+        quant_method: Union[str, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
         scale_estimation: bool = None,
         **kwargs,
     ):
@@ -210,7 +211,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
-        self.quant_method = quant_method
+        self.quant_method = OVQuantizationMethod(quant_method) if isinstance(quant_method, str) else quant_method
         self.scale_estimation = scale_estimation
         self.post_init()
 

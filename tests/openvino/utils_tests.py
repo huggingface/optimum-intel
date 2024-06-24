@@ -129,6 +129,7 @@ MODEL_NAMES = {
     "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
     "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "katuni4ka/tiny-random-xverse",
+    "glm4": "katuni4ka/tiny-random-glm4",
 }
 
 
