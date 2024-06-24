@@ -26,7 +26,11 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.openvino.convert import export_from_model
-from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version, is_openvino_version
+from optimum.intel.utils.import_utils import (
+    is_openvino_tokenizers_available,
+    is_transformers_version,
+    is_openvino_version,
+)
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 from .utils import clear_class_registry
@@ -283,9 +287,17 @@ def main_export(
             )
             trust_remote_code = False
 
-    if not do_gptq_patching and "text-generation" in task and config.dtype in ["float16", "bfloat16"] and is_openvino_version(">=", "2024.3"):
-        loading_kwargs["torch_dtype"] = torch.float16 if config.dtype == "float16" else torch.bfloat16
-        patch_16bit = True
+    if (
+        not do_gptq_patching
+        and task.startswith("text-generation")
+        and getattr(config, "torch_dtype", "float32") in ["float16", "bfloat16"]
+    ):
+        if is_openvino_version(">=", "2024.2") and config.torch_dtype == "float16":
+            loading_kwargs["torch_dtype"] = torch.float16
+            patch_16bit = True
+        if is_openvino_version(">=", "2024.3") and config.torch_dtype == "bfloat16":
+            loading_kwargs["torch_dtype"] = torch.bfloat16
+            patch_16bit = True
 
     # Patch the modules to export of GPTQ models w/o GPU
     if do_gptq_patching:
