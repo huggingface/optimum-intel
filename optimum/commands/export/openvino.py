@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from transformers.utils.quantization_config import QuantizationMethod
 
 from ...exporters import TasksManager
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
@@ -140,6 +139,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
             "additional time for tuning weights on a calibration dataset. To run AWQ, please also provide a dataset "
             "argument. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such "
             "case it will be skipped."
+        ),
+    )
+    optional_group.add_argument(
+        "--scale-estimation",
+        action="store_true",
+        default=None,
+        help=(
+            "Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original "
+            "and compressed layers. Providing a dataset is required to run scale estimation. Please note, that "
+            "applying scale estimation takes additional memory and time."
         ),
     )
     optional_group.add_argument(
@@ -279,8 +288,9 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "all_layers": None if is_int8 else self.args.all_layers,
                     "dataset": self.args.dataset,
                     "num_samples": self.args.num_samples,
-                    "quant_method": QuantizationMethod.AWQ if self.args.awq else None,
+                    "quant_method": "awq" if self.args.awq else "default",
                     "sensitivity_metric": self.args.sensitivity_metric,
+                    "scale_estimation": self.args.scale_estimation,
                 }
 
             if self.args.weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:

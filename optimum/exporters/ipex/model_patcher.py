@@ -49,12 +49,12 @@ def convert_functions(m, target_m, new_function_name, new_function):
         convert_functions(sub_m, target_m, new_function_name, new_function)
 
 
-def convert_class(m, target_m, new_class, config, distributed=False):
+def convert_class(m, target_m, new_class, config):
     for name, sub_m in m.named_children():
         if isinstance(sub_m, target_m):
-            new_m = new_class(sub_m, config, distributed)
+            new_m = new_class(sub_m, config)
             setattr(m, name, new_m)
-        convert_class(sub_m, target_m, new_class, config, distributed)
+        convert_class(sub_m, target_m, new_class, config)
 
 
 def patch_op(m, target_m, new_op_name, new_op):

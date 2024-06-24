@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import torch
 from transformers import PretrainedConfig
-from transformers.utils.quantization_config import QuantizationConfigMixin, QuantizationMethod
+from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
@@ -78,6 +78,7 @@ _DEFAULT_4BIT_CONFIGS = {
 class OVQuantizationMethod(str, Enum):
     DEFAULT = "default"
     HYBRID = "hybrid"
+    AWQ = "awq"
 
 
 @dataclass
@@ -171,8 +172,20 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
         num_samples (`int`, *optional*):
             The maximum number of samples composing the calibration dataset.
-        quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
-            Weight compression method to apply.
+        quant_method (`str or OVQuantizationMethod`, defaults of OVQuantizationMethod.DEFAULT):
+            Weight compression method to apply. Possible options:
+                - "default": default weight quantization will be applied.
+                - "awq": compressed weights will be computed according to the Activation-Aware-Quantization (AWQ)
+                  method. AWQ improves generation quality of INT4-compressed LLMs, but requires
+                  additional time for tuning weights on a calibration dataset. To run AWQ, providing a dataset is
+                  required. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in
+                  such case it will be skipped.
+                - "hybrid": The hybrid mode involves the quantization of weights in MatMul and Embedding layers, and
+                  activations of other layers, facilitating accuracy preservation post-optimization while reducing
+                  the model size. Hybrid mode performs well when applied to a UNet model in diffusion pipelines.
+        scale_estimation (`bool`, *optional*):
+            Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
+            compressed layers. Providing a dataset is required to run scale estimation.
     """
 
     def __init__(
@@ -187,7 +200,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sensitivity_metric: Optional[str] = None,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
-        quant_method: Union[QuantizationMethod, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
+        quant_method: Union[str, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
+        scale_estimation: bool = None,
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
@@ -197,7 +211,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
-        self.quant_method = quant_method
+        self.quant_method = OVQuantizationMethod(quant_method) if isinstance(quant_method, str) else quant_method
+        self.scale_estimation = scale_estimation
         self.post_init()
 
     def post_init(self):

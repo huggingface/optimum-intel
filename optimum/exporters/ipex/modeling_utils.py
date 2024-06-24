@@ -138,7 +138,7 @@ def _llama_model_forward(
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L321
 class _IPEXLlamaAttention(nn.Module):
-    def __init__(self, module, config, distributed=False) -> None:
+    def __init__(self, module, config) -> None:
         if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
             raise ImportError(
                 f"Only ipex version > {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports IndirectAccessKVCacheAttention, LinearAdd, RotaryEmbedding"
@@ -146,11 +146,10 @@ class _IPEXLlamaAttention(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.distributed = distributed
         from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCacheAttention, LinearAdd, RotaryEmbedding
 
-        if not self.distributed:
-            self.mha_linear_add = LinearAdd(self.o_proj)
+        if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
+            self.mha_linear_add = LinearAdd(module.o_proj)
             del self.__dict__["_modules"]["o_proj"]
         self.ipex_scale_dot_product = IndirectAccessKVCacheAttention(
             text_max_length=module.config.max_position_embeddings
@@ -296,7 +295,7 @@ class _IPEXLlamaAttention(nn.Module):
 
 # Adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L186
 class _IPEXLlamaMLP(nn.Module):
-    def __init__(self, module, config, distributed=False) -> None:
+    def __init__(self, module, config) -> None:
         if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
             raise ImportError(
                 f"Only ipex version > {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports Linear2SiluMul, LinearAdd"
@@ -304,10 +303,10 @@ class _IPEXLlamaMLP(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.distributed = distributed
         from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
 
-        if not self.distributed:
+        # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
+        if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
             self.mlp_linear_add = LinearAdd(module.down_proj)
             del self.__dict__["_modules"]["down_proj"]
         self.linear_silu_mul = Linear2SiluMul(module.gate_proj, module.up_proj)
@@ -336,12 +335,11 @@ class _IPEXLlamaMLP(nn.Module):
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L694
 class _IPEXLlamaDecoderLayer(nn.Module):
-    def __init__(self, module, config, distributed=False):
+    def __init__(self, module, config):
         super().__init__()
         _setattr_from_module(self, module)
-        self.distributed = distributed
-        self.self_attn = _IPEXLlamaAttention(module.self_attn, config, distributed)
-        self.mlp = _IPEXLlamaMLP(module.mlp, config, distributed)
+        self.self_attn = _IPEXLlamaAttention(module.self_attn, config)
+        self.mlp = _IPEXLlamaMLP(module.mlp, config)
 
     def forward(
         self,
