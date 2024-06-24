@@ -24,7 +24,7 @@ The model argument can either be the model ID of a model hosted on the [Hub](htt
 optimum-cli export openvino --model local_model_dir --task text-generation-with-past ov_model/
 ```
 
-The `-with-past` suffix enable the re-use of the pre-computed key/values hidden-states and is the recommended option, to export the model without, you will need to remove this suffix.
+The `-with-past` suffix enable the re-use of past keys and values. This allows to avoid recomputing the same intermediate activations during the generation. to export the model without, you will need to remove this suffix.
 
 | With K-V cache                           | Without K-V cache                    |
 |------------------------------------------|--------------------------------------|
@@ -113,7 +113,7 @@ Models larger than 1 billion parameters are exported to the OpenVINO format with
 
 Once the model is exported, you can now [load your OpenVINO model](inference) by replacing the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
 
-#### When loading your model
+### When loading your model
 
 You can also load your PyTorch checkpoint and convert it to the OpenVINO format on-the-fly, by setting `export=True` when loading your model.
 
@@ -124,7 +124,7 @@ model = OVModelForCausalLM.from_pretrained("gpt2", export=True)
 model.save_pretrained("ov_model")
 ```
 
-#### After loading your model
+### After loading your model
 
 ```python
 from transfomers import AutoModelForCausalLM

@@ -33,7 +33,7 @@ See the [reference documentation](reference) for more information about paramete
 To easily save the resulting model, you can use the `save_pretrained()` method, which will save both the BIN and XML files describing the graph. It is useful to save the tokenizer to the same directory, to enable easy loading of the tokenizer for the model.
 
 ```python
-# Save the exported model
+# Save your model
 save_directory = "openvino_distilbert"
 model.save_pretrained(save_directory)
 tokenizer.save_pretrained(save_directory)
@@ -43,21 +43,7 @@ tokenizer.save_pretrained(save_directory)
 
 You can also apply fp16, 8-bit or 4-bit weight compression on the Linear, Convolutional and Embedding layers when loading your model to reduce the memory footprint and inference latency.
 
-By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/compression_algorithms/Quantization.md#symmetric-quantization) you can add `--sym`.
-
-For INT4 quantization you can also specify the following arguments :
-* The `--group-size` parameter will define the group size to use for quantization, `-1` it will results in per-column quantization.
-* The `--ratio` parameter controls the ratio between 4-bit and 8-bit quantization. If set to 0.9, it means that 90% of the layers will be quantized to `int4` while 10% will be quantized to `int8`.
-
-Smaller `group_size` and `ratio` values usually improve accuracy at the sacrifice of the model size and inference latency.
-
-You can also apply 8-bit quantization on your model's weight when loading your model by setting the `load_in_8bit=True` argument when calling the `from_pretrained()` method.
-
-```python
-from optimum.intel import OVModelForCausalLM
-
-model = OVModelForCausalLM.from_pretrained(model_id, load_in_8bit=True)
-```
+For more information on the quantization parameters checkout the [documentation](inference#weight-only-quantization)
 
 <Tip warning={true}>
 
