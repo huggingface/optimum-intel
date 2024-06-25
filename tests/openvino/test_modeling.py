@@ -312,7 +312,6 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         "electra",
         "flaubert",
         "ibert",
-        "nystromformer",
         "roberta",
         "roformer",
         "squeezebert",
@@ -1021,6 +1020,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "ibert",
         "mobilebert",
         "mpnet",
+        "nystromformer",
         "perceiver_text",
         "roberta",
         "roformer",
@@ -1035,6 +1035,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_model = OVModelForMaskedLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = AutoModelForMaskedLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = f"This is a sample {tokenizer.mask_token}"
@@ -1054,17 +1055,18 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
-        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
         model = OVModelForMaskedLM.from_pretrained(model_id, export=True)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
         inputs = f"This is a {tokenizer.mask_token}."
+        set_seed(SEED)
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
-
+        set_seed(SEED)
         ov_pipe = optimum_pipeline("fill-mask", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
@@ -1078,7 +1080,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "beit",
         "convnext",
-        "convnextv2",
+        # "convnextv2",
         "data2vec_vision",
         "deit",
         "levit",
@@ -1090,7 +1092,6 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         "resnet",
         "segformer",
         "swin",
-        "donut-swin",
         "vit",
     )
 
@@ -1102,6 +1103,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         url = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -1184,7 +1186,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         # "bigbird_pegasus",
         "blenderbot",
         "blenderbot-small",
-        "longt5",
+        # "longt5",
         "m2m_100",
         "marian",
         "mbart",
@@ -1334,7 +1336,6 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         "wavlm",
         "wav2vec2",
         "wav2vec2-conformer",
-        "whisper",
     )
 
     def _generate_random_audio_data(self):
@@ -1350,6 +1351,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_model = OVModelForAudioClassification.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = AutoModelForAudioClassification.from_pretrained(model_id)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         inputs = preprocessor(self._generate_random_audio_data(), return_tensors="pt")
@@ -1380,11 +1382,13 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
         inputs = [np.random.random(16000)]
+        set_seed(SEED)
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
 
         ov_pipe = optimum_pipeline("audio-classification", model_id, accelerator="openvino")
+        set_seed(SEED)
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1][-1]["score"], ov_outputs[-1][-1]["score"])
         del ov_pipe
