@@ -307,21 +307,15 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
-        # "camembert",
         "convbert",
-        # "data2vec_text",
-        # "deberta_v2",
         "distilbert",
         "electra",
         "flaubert",
         "ibert",
-        # "mobilebert",
-        # "nystromformer",
         "roberta",
         "roformer",
         "squeezebert",
         "xlm",
-        # "xlm_roberta",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -348,6 +342,8 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -995,13 +991,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         for gen_config in gen_configs:
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
-
+            set_seed(SEED)
             transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+            set_seed(SEED)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
             self.assertTrue(
                 torch.equal(ov_stateful_outputs, transformers_outputs),
                 f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model_stateful output {ov_stateful_outputs}",
             )
+            set_seed(SEED)
             ov_stateless_outputs = ov_model_stateless.generate(**tokens, generation_config=gen_config)
             self.assertTrue(
                 torch.equal(ov_stateless_outputs, transformers_outputs),
@@ -1013,16 +1011,19 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "albert",
         "bert",
-        # "camembert",
-        # "convbert",
-        # "data2vec_text",
+        "camembert",
+        "convbert",
+        "data2vec_text",
         "deberta",
-        # "deberta_v2",
+        "deberta_v2",
         "distilbert",
         "electra",
         "flaubert",
         "ibert",
-        # "mobilebert",
+        "mobilebert",
+        "mpnet",
+        "nystromformer",
+        "perceiver_text",
         "roberta",
         "roformer",
         "squeezebert",
@@ -1036,6 +1037,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_model = OVModelForMaskedLM.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = AutoModelForMaskedLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = f"This is a sample {tokenizer.mask_token}"
@@ -1055,8 +1057,8 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
-        set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
         model = OVModelForMaskedLM.from_pretrained(model_id, export=True)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -1065,7 +1067,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
-
+        set_seed(SEED)
         ov_pipe = optimum_pipeline("fill-mask", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
@@ -1079,19 +1081,20 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
         "beit",
         "convnext",
-        # "data2vec_vision",
-        # "deit",
+        # "convnextv2",
+        "data2vec_vision",
+        "deit",
         "levit",
         "mobilenet_v1",
         "mobilenet_v2",
         "mobilevit",
-        # "poolformer",
+        "poolformer",
+        "perceiver_vision",
         "resnet",
-        # "segformer",
-        # "swin",
+        "segformer",
+        "swin",
         "vit",
     )
-
     TIMM_MODELS = ("timm/pit_s_distilled_224.in1k", "timm/vit_tiny_patch16_224.augreg_in21k")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -1100,6 +1103,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = AutoModelForImageClassification.from_pretrained(model_id)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         url = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -1129,13 +1133,12 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
         inputs = "http://images.cocodataset.org/val2017/000000039769.jpg"
-        set_seed(SEED)
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
-        ov_pipe = optimum_pipeline("image-classification", model_id, accelerator="openvino")
         set_seed(SEED)
+        ov_pipe = optimum_pipeline("image-classification", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
         del ov_pipe
@@ -1225,6 +1228,8 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -1320,17 +1325,16 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
 
 class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
-        # "audio_spectrogram_transformer",
-        # "data2vec_audio",
-        # "hubert",
-        # "sew",
-        # "sew_d",
-        # "wav2vec2-conformer",
+        "audio_spectrogram_transformer",
+        "data2vec_audio",
+        "hubert",
+        "sew",
+        "sew_d",
         "unispeech",
-        # "unispeech_sat",
-        # "wavlm",
+        "unispeech_sat",
+        "wavlm",
         "wav2vec2",
-        # "wav2vec2-conformer",
+        "wav2vec2-conformer",
     )
 
     def _generate_random_audio_data(self):
@@ -1346,6 +1350,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_model = OVModelForAudioClassification.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = AutoModelForAudioClassification.from_pretrained(model_id)
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         inputs = preprocessor(self._generate_random_audio_data(), return_tensors="pt")
@@ -1366,6 +1371,8 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -1377,7 +1384,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
-
+        set_seed(SEED)
         ov_pipe = optimum_pipeline("audio-classification", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1][-1]["score"], ov_outputs[-1][-1]["score"])
@@ -1684,6 +1691,8 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
@@ -1790,6 +1799,8 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_pipeline(self, model_arch: str):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]

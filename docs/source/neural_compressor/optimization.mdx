@@ -16,7 +16,7 @@ Optimum Intel can be used to apply popular compression techniques such as quanti
 
 ## Post-training optimization
 
-Post-training compression techniques such as dynamic and static quantization can be easily applied on your model using our [`INCQuantizer`](https://huggingface.co/docs/optimum/intel_optimization#optimum.intel.neural_compressor.IncQuantizer).
+Post-training compression techniques such as dynamic and static quantization can be easily applied on your model using our [`INCQuantizer`](optimization).
 Note that quantization is currently only supported for CPUs (only CPU backends are available), so we will not be utilizing GPUs / CUDA in the following examples.
 
 ### Dynamic quantization
@@ -252,7 +252,7 @@ To know more about the different supported methodologies, you can refer to the N
 
 ## Loading a quantized model
 
-To load a quantized model hosted locally or on the 🤗 hub, you must instantiate you model using our [`INCModelForXxx`](https://huggingface.co/docs/optimum/main/intel/reference_inc#optimum.intel.neural_compressor.quantization.INCModel) classes.
+To load a quantized model hosted locally or on the 🤗 hub, you must instantiate you model using our [`INCModelForXxx`](reference) classes.
 
 ```python
 from optimum.intel import INCModelForSequenceClassification
