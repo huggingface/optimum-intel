@@ -94,8 +94,6 @@ Optional arguments:
                         Do not add converted tokenizer and detokenizer OpenVINO models.
 ```
 
-### Quantization
-
 You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
 
 ```bash
@@ -111,17 +109,20 @@ Models larger than 1 billion parameters are exported to the OpenVINO format with
 
 </Tip>
 
-Once the model is exported, you can now [load your OpenVINO model](inference) by replacing the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
-
 ## When loading your model
 
 You can also load your PyTorch checkpoint and convert it to the OpenVINO format on-the-fly, by setting `export=True` when loading your model.
+
+To easily save the resulting model, you can use the `save_pretrained()` method, which will save both the BIN and XML files describing the graph. It is useful to save the tokenizer to the same directory, to enable easy loading of the tokenizer for the model.
 
 ```python
 from optimum.intel import OVModelForCausalLM
 
 model = OVModelForCausalLM.from_pretrained("gpt2", export=True)
-model.save_pretrained("ov_model")
+
+save_directory = "ov_model"
+model.save_pretrained(save_directory)
+tokenizer.save_pretrained(save_directory)
 ```
 
 ## After loading your model
@@ -133,3 +134,5 @@ from optimum.exporters.openvino import export_from_model
 model = AutoModelForCausalLM.from_pretrained("gpt2")
 export_from_model(model, output="ov_model", task="text-generation-with-past")
 ```
+
+Once the model is exported, you can now [load your OpenVINO model](inference) by replacing the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.

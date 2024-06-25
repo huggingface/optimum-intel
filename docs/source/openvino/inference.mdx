@@ -30,15 +30,6 @@ Once [your model was exported](export), you can load it by replacing the `AutoMo
 
 See the [reference documentation](reference) for more information about parameters, and examples for different tasks.
 
-To easily save the resulting model, you can use the `save_pretrained()` method, which will save both the BIN and XML files describing the graph. It is useful to save the tokenizer to the same directory, to enable easy loading of the tokenizer for the model.
-
-```python
-# Save your model
-save_directory = "openvino_distilbert"
-model.save_pretrained(save_directory)
-tokenizer.save_pretrained(save_directory)
-```
-
 As shown in the table below, each task is associated with a class enabling to automatically load your model.
 
 | Task                                 | Auto Class                           |
