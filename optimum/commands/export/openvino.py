@@ -102,7 +102,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         default=None,
         help=(
             "A parameter used when applying 4-bit quantization to control the ratio between 4-bit and 8-bit quantization. If set to 0.8, 80%% of the layers will be quantized to int4 "
-            "while 20%% will be quantized to int8. This helps to achieve better accuracy at the sacrifice of the model size and inference latency."
+            "while 20%% will be quantized to int8. This helps to achieve better accuracy at the sacrifice of the model size and inference latency. Default value is 0.8."
         ),
     )
     optional_group.add_argument(
