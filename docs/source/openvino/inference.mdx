@@ -9,7 +9,7 @@ specific language governing permissions and limitations under the License.
 
 # Inference
 
-Optimum Intel can be used to load optimized models from the [Hub](https://huggingface.co/models?library=openvino&sort=downloads) and create pipelines to run inference with OpenVINO Runtime without rewriting your APIs.
+Optimum Intel can be used to load optimized models from the [Hub](https://huggingface.co/models?library=openvino&sort=downloads) and create pipelines to run inference with OpenVINO Runtime on a variety of Intel processors ([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices)
 
 ## Transformers models
 
@@ -38,6 +38,25 @@ save_directory = "openvino_distilbert"
 model.save_pretrained(save_directory)
 tokenizer.save_pretrained(save_directory)
 ```
+
+As shown in the table below, each task is associated with a class enabling to automatically load your model.
+
+| Task                                 | Auto Class                           |
+|--------------------------------------|--------------------------------------|
+| `text-classification`                | `OVModelForSequenceClassification`   |
+| `token-classification`               | `OVModelForTokenClassification`      |
+| `question-answering`                 | `OVModelForQuestionAnswering`        |
+| `audio-classification`               | `OVModelForAudioClassification`      |
+| `image-classification`               | `OVModelForImageClassification`      |
+| `feature-extraction`                 | `OVModelForFeatureExtraction`        |
+| `fill-mask`                          | `OVModelForMaskedLM`                 |
+| `image-classification`               | `OVModelForImageClassification`      |
+| `audio-classification`               | `OVModelForAudioClassification`      |
+| `text-generation-with-past`          | `OVModelForCausalLM`                 |
+| `text2text-generation-with-past`     | `OVModelForSeq2SeqLM`                |
+| `automatic-speech-recognition`       | `OVModelForSpeechSeq2Seq`            |
+| `image-to-text`                      | `OVModelForVision2Seq`               |
+
 
 ### Weight-only quantization
 
