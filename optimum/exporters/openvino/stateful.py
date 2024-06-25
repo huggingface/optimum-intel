@@ -187,6 +187,15 @@ def ensure_export_task_support_stateful(task: str):
     return task == "text-generation-with-past"
 
 
+def set_symbol(shape: ov.PartialShape, index_to_symbol: list):
+    for idx, symbol in index_to_symbol:
+        assert shape.rank.is_static and shape.rank.get_length() > idx, f"Symbol setting failed for shape {shape} and indices {index_to_symbol}"
+        dim = shape[idx]
+        dim.set_symbol(symbol)
+        shape[idx] = dim
+    return shape
+
+
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     """
     Apply stateful transformation to model to hide key values inputs inside model.
@@ -220,3 +229,26 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     make_stateful(
         ov_model, not_kv_inputs, key_value_input_names, key_value_output_names, batch_dim, num_attention_heads, None
     )
+
+    # setting symbols on Parameters and Variables
+    B, S, attS, varS = ov.Symbol(), ov.Symbol(), ov.Symbol(), ov.Symbol()
+    for parameter in ov_model.parameters:
+        name = parameter.friendly_name
+        shape = parameter.partial_shape
+        if name in ["input_ids", "position_ids"]:
+            set_symbol(shape, [(0, B), (1, S)])
+        elif name == "attention_mask":
+            set_symbol(shape, [(0, B), (1, attS)])
+        elif name == "beam_idx":
+            set_symbol(shape, [(0, B)])
+        parameter.set_partial_shape(shape)
+
+    for variable in ov_model.variables:
+        info = variable.info
+        shape = info.data_shape
+        if config.model_type == "chatglm":
+            set_symbol(shape, [(0, varS), (1, B)])
+        else:
+            set_symbol(shape, [(0, B), (2, varS)])
+        info.data_shape = shape
+        variable.update(info)
