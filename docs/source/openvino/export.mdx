@@ -58,13 +58,13 @@ Optional arguments:
                         'masked-im', 'automatic-speech-recognition', 'fill-mask', 'image-to-text', 'text-generation', 'zero-shot-object-detection', 'multiple-choice', 'object-detection', 'stable-
                         diffusion', 'audio-xvector', 'text-to-audio', 'zero-shot-image-classification', 'token-classification', 'image-classification', 'depth-estimation', 'image-to-image', 'audio-
                         frame-classification', 'semantic-segmentation', 'text-classification']. For decoder models, use `xxx-with-past` to export the model using past key values in the decoder.
-  --framework {pt,tf}   The framework to use for the export. If not provided, will attempt to use the local checkpoint's original framework or what is available in the environment.
+  --framework {pt,tf}   The framework to use for the export. If not provided, will attempt to use the local checkpoints original framework or what is available in the environment.
   --trust-remote-code   Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories you trust and in which you have read the code, as it
                         will execute on your local machine arbitrary code present in the model repository.
   --weight-format {fp32,fp16,int8,int4}
                         The weight format of the exported model.
   --library {transformers,diffusers,timm,sentence_transformers}
-                        The library used to load the model before export. If not provided, will attempt to infer the local checkpoint's library.
+                        The library used to load the model before export. If not provided, will attempt to infer the local checkpoints library.
   --cache_dir CACHE_DIR
                         The path to a directory in which the downloaded model should be cached if the standard cache should not be used.
   --pad-token-id PAD_TOKEN_ID
@@ -78,7 +78,7 @@ Optional arguments:
                         ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models.
   --all-layers          Whether embeddings and last MatMul layers should be compressed to INT4. If not provided an weight compression is applied, they are compressed to INT8.
   --awq                 Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires additional time for tuning weights on a calibration dataset. To run AWQ,
-                        please also provide a dataset argument. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in such case it will be skipped.
+                        please also provide a dataset argument. Note: it is possible that there will be no matching patterns in the model to apply AWQ, in such case it will be skipped.
   --scale-estimation    Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and compressed layers. Providing a dataset is required to run scale
                         estimation. Please note, that applying scale estimation takes additional memory and time.
   --sensitivity-metric SENSITIVITY_METRIC
@@ -115,20 +115,26 @@ You can also load your PyTorch checkpoint and convert it to the OpenVINO format 
 
 To easily save the resulting model, you can use the `save_pretrained()` method, which will save both the BIN and XML files describing the graph. It is useful to save the tokenizer to the same directory, to enable easy loading of the tokenizer for the model.
 
-```python
-from optimum.intel import OVModelForCausalLM
 
-model = OVModelForCausalLM.from_pretrained("gpt2", export=True)
+```diff
+- from transformers import AutoModelForCausalLM
++ from optimum.intel import OVModelForCausalLM
+  from transformers import AutoTokenizer
 
-save_directory = "ov_model"
-model.save_pretrained(save_directory)
-tokenizer.save_pretrained(save_directory)
+  model_id = "gpt2"
+- model = AutoModelForCausalLM.from_pretrained(model_id)
++ model = OVModelForCausalLM.from_pretrained(model_id, export=True)
+  tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+  save_directory = "ov_model"
+  model.save_pretrained(save_directory)
+  tokenizer.save_pretrained(save_directory)
 ```
 
 ## After loading your model
 
 ```python
-from transfomers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM
 from optimum.exporters.openvino import export_from_model
 
 model = AutoModelForCausalLM.from_pretrained("gpt2")
