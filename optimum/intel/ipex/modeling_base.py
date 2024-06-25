@@ -54,7 +54,7 @@ from optimum.utils import NormalizedConfigManager
 from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _IPEX_MINIMUM_VERSION_FOR_PATCHING, _patch_model
 from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
-from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
+from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, recursive_to_device
 
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,6 @@ def ipex_jit_trace(model, task, use_cache):
         # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
         _enable_tpp()
     else:
-        model = patch_decoder_attention_mask(model)
         sample_inputs = prepare_jit_inputs(model, task, use_cache)
 
     model.config.return_dict = False

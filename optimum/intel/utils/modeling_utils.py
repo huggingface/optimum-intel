@@ -18,7 +18,6 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 from huggingface_hub import HfApi, HfFolder
-from transformers.modeling_utils import PreTrainedModel
 
 
 MULTI_QUERY_ATTN_MODELS = {"falcon", "gpt_bigcode"}
@@ -130,27 +129,6 @@ def _prepare_decoder_sliding_window_attention_mask(
         )
 
     return combined_attention_mask
-
-
-def patch_decoder_attention_mask(model: "PreTrainedModel"):
-    """
-    Apply patch on decoder with past model forward to resolve first inference based on model architecture
-
-    Args:
-        model (PretrainedModel): The model to patch.
-
-    Returns:
-        model with applied patch
-    """
-    if model.config.model_type in {"bloom", "mpt"}:
-        model.transformer._prepare_attn_mask = _prepare_attn_mask
-    elif model.config.model_type == "llama":
-        model.model._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
-    elif model.config.model_type == "mistral":
-        model.model._prepare_decoder_attention_mask = _prepare_decoder_sliding_window_attention_mask
-    elif model.config.model_type in {"blenderbot-small", "blenderbot", "opt", "pegasus", "bart"}:
-        model.model.decoder._prepare_decoder_attention_mask = _prepare_decoder_attention_mask
-    return model
 
 
 def get_model_device(model: torch.nn.Module) -> torch.device:
