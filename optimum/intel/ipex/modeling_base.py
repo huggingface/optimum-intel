@@ -55,6 +55,7 @@ from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _IPEX_MINIMUM_V
 from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
+from .utils import _HEAD_TO_AUTOMODELS
 
 
 logger = logging.getLogger(__name__)
@@ -226,7 +227,7 @@ class IPEXModel(OptimizedModel):
             if is_torch_version("<", "2.1.0"):
                 raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
-            task = cls.export_feature
+            task = TasksManager.infer_task_from_model(model_id, subfolder=subfolder, revision=revision)
             config.torch_dtype = torch_dtype
             model = TasksManager.get_model_from_task(
                 task,
@@ -236,6 +237,14 @@ class IPEXModel(OptimizedModel):
                 _commit_hash=commit_hash,
                 **model_kwargs,
             )
+
+            if cls.export_feature != task and cls.export_feature == "feature-extraction":
+                logging.warning(
+                    "Infer model's task is {task}, will map the model class to {_HEAD_TO_AUTOMODELS[task]}"
+                )
+                cls = eval(_HEAD_TO_AUTOMODELS[task])
+            elif cls.export_feature != task and cls.export_feature != "feature-extraction":
+                raise ValueError("Assign the wrong class for the {task} task, please use IPEXModel to load")
 
             return cls(model, config=config, export=True, **kwargs)
 
