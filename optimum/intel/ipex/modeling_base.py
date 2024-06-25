@@ -228,6 +228,12 @@ class IPEXModel(OptimizedModel):
                 raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
             task = TasksManager.infer_task_from_model(model_id, subfolder=subfolder, revision=revision)
+            if cls.export_feature != task and cls.export_feature == "feature-extraction":
+                logging.warning("Map the model class to {_HEAD_TO_AUTOMODELS[task]}")
+                cls = eval(_HEAD_TO_AUTOMODELS[task])
+            else:
+                task = cls.export_feature
+
             config.torch_dtype = torch_dtype
             model = TasksManager.get_model_from_task(
                 task,
@@ -237,14 +243,6 @@ class IPEXModel(OptimizedModel):
                 _commit_hash=commit_hash,
                 **model_kwargs,
             )
-
-            if cls.export_feature != task and cls.export_feature == "feature-extraction":
-                logging.warning(
-                    "Infer model's task is {task}, will map the model class to {_HEAD_TO_AUTOMODELS[task]}"
-                )
-                cls = eval(_HEAD_TO_AUTOMODELS[task])
-            elif cls.export_feature != task and cls.export_feature != "feature-extraction":
-                raise ValueError("Assign the wrong class for the {task} task, please use IPEXModel to load")
 
             return cls(model, config=config, export=True, **kwargs)
 

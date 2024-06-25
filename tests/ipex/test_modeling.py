@@ -25,6 +25,7 @@ from parameterized import parameterized
 from PIL import Image
 from transformers import (
     AutoFeatureExtractor,
+    AutoModel,
     AutoModelForCausalLM,
     AutoModelForQuestionAnswering,
     AutoTokenizer,
@@ -101,7 +102,7 @@ class IPEXModelTest(unittest.TestCase):
 
         # Compare tensor outputs
         for output_name in {"logits", "last_hidden_state"}:
-            if output_name in transformers_outputs:
+            if output_name in transformers_outputs and output_name in outputs:
                 self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-4))
                 self.assertTrue(torch.equal(outputs[output_name], loaded_model_outputs[output_name]))
                 self.assertTrue(torch.equal(outputs[output_name], init_model_outputs[output_name]))
@@ -118,6 +119,14 @@ class IPEXModelTest(unittest.TestCase):
 
         _ = pipe(text)
         self.assertEqual(pipe.device, model.device)
+
+    def test_auto_mapping(self):
+        if not isinstance(self.IPEX_MODEL_CLASS, IPEXModel):
+            return
+        model_id = MODEL_NAMES["llama2"]
+        model = IPEXModel.from_pretrained(model_id, export=True)
+
+        self.assertEqual(model.model.original_name, "LlamaForCausalLM")
 
 
 class IPEXModelForSequenceClassificationTest(IPEXModelTest):
