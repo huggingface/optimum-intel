@@ -80,7 +80,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         type=str,
         choices=["transformers", "diffusers", "timm", "sentence_transformers"],
         default=None,
-        help="The library used to laod the model before export. If not provided, will attempt to infer the local checkpoint's library",
+        help="The library used to load the model before export. If not provided, will attempt to infer the local checkpoint's library",
     )
     optional_group.add_argument(
         "--cache_dir",
