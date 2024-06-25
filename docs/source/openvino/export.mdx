@@ -70,7 +70,7 @@ Optional arguments:
   --pad-token-id PAD_TOKEN_ID
                         This is needed by some models, for some tasks. If not provided, will attempt to use the tokenizer to guess it.
   --ratio RATIO         A parameter used when applying 4-bit quantization to control the ratio between 4-bit and 8-bit quantization. If set to 0.8, 80% of the layers will be quantized to int4 while
-                        20% will be quantized to int8. This helps to achieve better accuracy at the sacrifice of the model size and inference latency.
+                        20% will be quantized to int8. This helps to achieve better accuracy at the sacrifice of the model size and inference latency. Default value is 0.8.
   --sym                 Whether to apply symmetric quantization
   --group-size GROUP_SIZE
                         The group size to use for int4 quantization. Recommended value is 128 and -1 will results in per-column quantization.
@@ -94,7 +94,7 @@ Optional arguments:
                         Do not add converted tokenizer and detokenizer OpenVINO models.
 ```
 
-#### Quantization
+### Quantization
 
 You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
 
@@ -113,7 +113,7 @@ Models larger than 1 billion parameters are exported to the OpenVINO format with
 
 Once the model is exported, you can now [load your OpenVINO model](inference) by replacing the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.
 
-### When loading your model
+## When loading your model
 
 You can also load your PyTorch checkpoint and convert it to the OpenVINO format on-the-fly, by setting `export=True` when loading your model.
 
@@ -124,7 +124,7 @@ model = OVModelForCausalLM.from_pretrained("gpt2", export=True)
 model.save_pretrained("ov_model")
 ```
 
-### After loading your model
+## After loading your model
 
 ```python
 from transfomers import AutoModelForCausalLM

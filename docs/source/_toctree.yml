@@ -14,12 +14,12 @@
   - sections:
     - local: openvino/export
       title: Export
-    - local: openvino/architectures
-      title: Supported Models
     - local: openvino/inference
       title: Inference
     - local: openvino/optimization
       title: Optimization
+    - local: openvino/models
+      title: Supported Models
     - local: openvino/reference
       title: Reference
     title: OpenVINO
