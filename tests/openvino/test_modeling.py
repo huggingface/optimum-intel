@@ -1062,7 +1062,6 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
         inputs = f"This is a {tokenizer.mask_token}."
-        set_seed(SEED)
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
@@ -1094,7 +1093,6 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         "swin",
         "vit",
     )
-
     TIMM_MODELS = ("timm/pit_s_distilled_224.in1k", "timm/vit_tiny_patch16_224.augreg_in21k")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -1133,13 +1131,12 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
         inputs = "http://images.cocodataset.org/val2017/000000039769.jpg"
-        set_seed(SEED)
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
-        ov_pipe = optimum_pipeline("image-classification", model_id, accelerator="openvino")
         set_seed(SEED)
+        ov_pipe = optimum_pipeline("image-classification", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
         del ov_pipe
@@ -1382,13 +1379,11 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
         inputs = [np.random.random(16000)]
-        set_seed(SEED)
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs[0]))
-
-        ov_pipe = optimum_pipeline("audio-classification", model_id, accelerator="openvino")
         set_seed(SEED)
+        ov_pipe = optimum_pipeline("audio-classification", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1][-1]["score"], ov_outputs[-1][-1]["score"])
         del ov_pipe
