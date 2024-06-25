@@ -133,6 +133,8 @@ class OVBaseDecoderModel(OVModel):
         self._first_iter_beam_search = False
         self._second_iter_beam_search = False
         self.update_pkv_precision()
+        if "GPU" in device:
+            self.update_int_precision()
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
         is_stateful_supported = ensure_stateful_is_available(warn=False)
@@ -209,6 +211,14 @@ class OVBaseDecoderModel(OVModel):
                 if self.is_dynamic:
                     self.model = self._reshape(self.model, -1, -1)
                 self.request = None
+
+    def update_int_precision(self):
+        ppp = PrePostProcessor(self.model)
+        for key in self.model.inputs:
+            in_name = key.get_any_name()
+            if key.get_element_type() == Type.i64 and ("input_ids" in in_name or "position_ids" in in_name or "attention_mask" in in_name):
+                ppp.input(in_name).tensor().set_element_type(Type.i32)
+        self.model = ppp.build()
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
