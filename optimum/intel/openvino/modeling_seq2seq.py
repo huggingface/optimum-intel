@@ -36,10 +36,8 @@ from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from transformers.models.whisper.tokenization_whisper import TASK_IDS, TO_LANGUAGE_CODE
 from ...exporters.openvino.stateful import model_has_state
-
-from ..utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
-from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties
+from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties, is_transformers_version
 
 
 if is_transformers_version(">=", "4.43.0"):
@@ -350,7 +348,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             self._device = device.upper()
             self.encoder._device = self._device
             self.decoder._device = self._device
-            if self.use_cache and self.decoder_with_past_model is not None:
+            if self.use_cache and self.decoder_with_past is not None:
                 self.decoder_with_past._device = self._device
             self.clear_requests()
         else:
@@ -388,7 +386,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
                 encoder_attention_mask=attention_mask,
                 decoder_attention_mask=decoder_attention_mask,
-                past_key_values = past_key_values
+                past_key_values=past_key_values,
             )
         else:
             decoder_outputs = self.decoder_with_past(
@@ -429,7 +427,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         return self.encoder
 
     def _reorder_cache(self, past, beam_idx) -> Tuple[Tuple[torch.FloatTensor]]:
-       self.decoder._reorder_cache(past, beam_idx)
+        self.decoder._reorder_cache(past, beam_idx)
 
     def reshape(self, batch_size: int, sequence_length: int):
         """
@@ -464,13 +462,13 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             )
         self.encoder.request = None
         self.decoder.request = None
-        if self.use_cache and self.decoder_with_past_model is not None:
+        if self.use_cache and self.decoder_with_past is not None:
             self.decoder_with_past.request = None
 
     def compile(self):
         self.encoder._compile()
         self.decoder._compile()
-        if self.use_cache and self.decoder_with_past_model is not None:
+        if self.use_cache and self.decoder_with_past is not None:
             self.decoder_with_past._compile()
 
 

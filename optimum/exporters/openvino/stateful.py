@@ -191,11 +191,11 @@ def ensure_stateful_is_available(warn=True):
     return True
 
 
-def ensure_export_task_support_stateful(task: str, is_encoder_decoder:bool = False):
+def ensure_export_task_support_stateful(task: str, is_encoder_decoder: bool = False):
     task = TasksManager.map_from_synonym(task)
     if not is_encoder_decoder:
         return task == "text-generation-with-past"
-    
+
     _ENCODER_DECODER_TASKS_WITH_PAST = (
         "automatic-speech-recognition",
         "document-question-answering",
@@ -206,7 +206,7 @@ def ensure_export_task_support_stateful(task: str, is_encoder_decoder:bool = Fal
 
     is_stateful = task.endswith("-with-past") and task.replace("-with-past", "") in _ENCODER_DECODER_TASKS_WITH_PAST
     return is_stateful
-    
+
 
 def remove_parameters_by_names(model: ov.Model, names: list):
     parameters = [model.input(name).get_node() for name in names]
@@ -310,7 +310,14 @@ def patch_stateful_decoder(config: PretrainedConfig, ov_model: ov.Model):
 
 
 def patch_stateful_encoder_decoder(config, ov_model):
-    encoder_key_value_input_names = [key.get_any_name() for key in ov_model.inputs if any("key_values" in key_name and "encoder" in key_name for key_name in key.get_names())]
+    encoder_key_value_input_names = [
+        key.get_any_name()
+        for key in ov_model.inputs
+        if any("key_values" in key_name and "encoder" in key_name for key_name in key.get_names())
+    ]
     remove_parameters_by_names(ov_model, encoder_key_value_input_names)
     patch_stateful_decoder(config, ov_model)
-    insert_state_for_nodes(ov_model, find_output_nodes_of_dependent_subgraph(ov_model, [ov_model.input("encoder_hidden_states").get_node()]))
+    insert_state_for_nodes(
+        ov_model,
+        find_output_nodes_of_dependent_subgraph(ov_model, [ov_model.input("encoder_hidden_states").get_node()]),
+    )

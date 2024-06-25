@@ -28,7 +28,6 @@ from transformers.utils import is_torch_available
 from openvino.runtime import Core, Type, save_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
-from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.openvino.convert import export_from_model
 from optimum.intel.utils.import_utils import (
     is_nncf_available,
@@ -40,6 +39,7 @@ from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
     _OpenClipForZeroShotImageClassification,
 )
+from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 from .utils import _MAX_UNCOMPRESSED_SIZE, MULTI_MODAL_TEXT_GENERATION_MODELS, clear_class_registry
