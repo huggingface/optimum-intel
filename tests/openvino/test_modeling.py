@@ -699,7 +699,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(ov_model.use_cache)
         self.assertEqual(ov_model.stateful, ov_model.config.model_type not in not_stateful)
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
-        tokens = tokenizer("This is a sample output", return_tensors="pt")
+        tokens = tokenizer(["Today is a nice day and I am", "This is me"], return_tensors="pt", padding=True)
         tokens.pop("token_type_ids", None)
 
         ov_outputs = ov_model(**tokens)
@@ -734,8 +734,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             tokenizer.pad_token_id = tokenizer.bos_token_id
         # Compare batched generation
         tokenizer.padding_side = "left"
-        tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
-        tokens.pop("token_type_ids", None)
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
         ov_model.config.eos_token_id = None

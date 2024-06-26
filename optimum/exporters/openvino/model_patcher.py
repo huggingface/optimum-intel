@@ -441,8 +441,7 @@ def _llama_gemma_update_causal_mask_latest(
     # difference with original modeling
     # using minimum from dtype with larger bandwith (floa32) may lead to overflow
     # during execution on platforms with default lower precision (bfloat16, float16)
-    min_dtype = torch.finfo(torch.float16).min
-
+    min_dtype = torch.finfo(dtype).min
     sequence_length = input_tensor.shape[1]
     if using_static_cache:
         target_length = past_key_values.get_max_length()
