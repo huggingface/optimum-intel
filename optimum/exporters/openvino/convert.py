@@ -1218,7 +1218,6 @@ def _get_encoder_decoder_stateful_models_for_export(
     float_dtype: str = "fp32",
     preprocessors: Optional[List[Any]] = None,
 ):
-    logger.info("HERE")
     export_config_constructor = TasksManager.get_exporter_config_constructor(
         model=model, exporter="openvino", task=task, library_name=library_name
     )
@@ -1239,9 +1238,9 @@ def _get_encoder_decoder_stateful_models_for_export(
     encoder_export_config = export_config.with_behavior("encoder")
     models_for_export[ENCODER_NAME] = (models_for_export[ENCODER_NAME], encoder_export_config)
 
-    decoder_export_config_with_past = export_config.with_behavior(
-        "decoder", use_past=True, use_past_in_inputs=True, stateful=True
-    )
+    decoder_export_config_with_past = export_config.with_behavior("decoder", use_past=True, use_past_in_inputs=True)
+
+    decoder_export_config_with_past.stateful = True
     decoder_with_past_model = models_for_export.pop(DECODER_WITH_PAST_NAME)
     models_for_export[DECODER_NAME] = (
         decoder_with_past_model,

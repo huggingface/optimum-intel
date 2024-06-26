@@ -19,12 +19,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from packaging import version
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel, TFPreTrainedModel
 from optimum.exporters.onnx.base import ConfigBehavior
-
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.base import ConfigBehavior
 from optimum.exporters.onnx.config import (
-    OnnxSeq2SeqConfigWithPast,
     TextDecoderOnnxConfig,
     TextDecoderWithPositionIdsOnnxConfig,
 )
@@ -44,7 +41,9 @@ from optimum.exporters.onnx.model_configs import (
     M2M100OnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
+    Pix2StructOnnxConfig,
     T5OnnxConfig,
+    TrOCROnnxConfig,
     UNetOnnxConfig,
     VisionOnnxConfig,
     VaeDecoderOnnxConfig,
@@ -2230,24 +2229,6 @@ class Phi3VisionOpenVINOConfig(OnnxConfig):
     library_name="transformers",
 )
 class WhisperOpenVINOConfig(WhisperOnnxConfig):
-    def __init__(
-        self,
-        config: PretrainedConfig,
-        task: str = "feature-extraction",
-        int_dtype: str = "int64",
-        float_dtype: str = "fp32",
-        use_past: bool = False,
-        use_past_in_inputs: bool = False,
-        behavior: ConfigBehavior = ConfigBehavior.MONOLITH,
-        preprocessors: Optional[List[Any]] = None,
-        legacy: bool = False,
-        stateful: bool = False,
-    ):
-        self.stateful = stateful
-        super().__init__(
-            config, task, int_dtype, float_dtype, use_past, use_past_in_inputs, behavior, preprocessors, legacy
-        )
-
     def _create_dummy_input_generator_classes(self, **kwargs) -> List[DummyInputGenerator]:
         """
         Instantiates the dummy input generators from `self.DUMMY_INPUT_GENERATOR_CLASSES`.
@@ -2255,50 +2236,11 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
         forces the other generators to use the same batch size, meaning they will all produce inputs of the same batch
         size. Override this method for custom behavior.
         """
-        if self.stateful:
+        if getattr(self, "stateful"):
             if "encoder_sequence_length" not in kwargs:
                 sequence_len = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
                 kwargs["encoder_sequence_length"] = sequence_len + 2
         return super()._create_dummy_input_generator_classes(**kwargs)
-
-    def with_behavior(
-        self,
-        behavior: Union[str, ConfigBehavior],
-        use_past: bool = False,
-        use_past_in_inputs: bool = False,
-        stateful: bool = False,
-    ) -> "OnnxSeq2SeqConfigWithPast":
-        """
-        Creates a copy of the current OnnxConfig but with a different `ConfigBehavior` and `use_past` value.
-
-        Args:
-            behavior ([`ConfigBehavior`]):
-                The behavior to use for the new instance.
-            use_past (`bool`, defaults to `False`):
-                Whether or not the ONNX config to instantiate is for a model using KV cache.
-            use_past_in_inputs (`bool`, defaults to `False`):
-                Whether the KV cache is to be passed as an input to the ONNX.
-
-        Returns:
-            `OnnxSeq2SeqConfigWithPast`
-        """
-        if isinstance(behavior, str) and not isinstance(behavior, ConfigBehavior):
-            behavior = ConfigBehavior(behavior)
-
-        onnx_config = self.__class__(
-            self._config,
-            task=self.task,
-            int_dtype=self.int_dtype,
-            float_dtype=self.float_dtype,
-            use_past=use_past,
-            use_past_in_inputs=use_past_in_inputs,
-            behavior=behavior,
-            preprocessors=self._preprocessors,
-            legacy=self.legacy,
-            stateful=stateful,
-        )
-        onnx_config.variant = self.variant
-        return onnx_config
 
 
 @register_in_tasks_manager(
@@ -2307,63 +2249,6 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
     library_name="transformers",
 )
 class T5OpenVINOConfig(T5OnnxConfig):
-    def __init__(
-        self,
-        config: PretrainedConfig,
-        task: str = "feature-extraction",
-        int_dtype: str = "int64",
-        float_dtype: str = "fp32",
-        use_past: bool = False,
-        use_past_in_inputs: bool = False,
-        behavior: ConfigBehavior = ConfigBehavior.MONOLITH,
-        preprocessors: Optional[List[Any]] = None,
-        legacy: bool = False,
-        stateful: bool = False,
-    ):
-        self.stateful = stateful
-        super().__init__(
-            config, task, int_dtype, float_dtype, use_past, use_past_in_inputs, behavior, preprocessors, legacy
-        )
-
-    def with_behavior(
-        self,
-        behavior: Union[str, ConfigBehavior],
-        use_past: bool = False,
-        use_past_in_inputs: bool = False,
-        stateful: bool = False,
-    ) -> "OnnxSeq2SeqConfigWithPast":
-        """
-        Creates a copy of the current OnnxConfig but with a different `ConfigBehavior` and `use_past` value.
-
-        Args:
-            behavior ([`ConfigBehavior`]):
-                The behavior to use for the new instance.
-            use_past (`bool`, defaults to `False`):
-                Whether or not the ONNX config to instantiate is for a model using KV cache.
-            use_past_in_inputs (`bool`, defaults to `False`):
-                Whether the KV cache is to be passed as an input to the ONNX.
-
-        Returns:
-            `OnnxSeq2SeqConfigWithPast`
-        """
-        if isinstance(behavior, str) and not isinstance(behavior, ConfigBehavior):
-            behavior = ConfigBehavior(behavior)
-
-        onnx_config = self.__class__(
-            self._config,
-            task=self.task,
-            int_dtype=self.int_dtype,
-            float_dtype=self.float_dtype,
-            use_past=use_past,
-            use_past_in_inputs=use_past_in_inputs,
-            behavior=behavior,
-            preprocessors=self._preprocessors,
-            legacy=self.legacy,
-            stateful=stateful,
-        )
-        onnx_config.variant = self.variant
-        return onnx_config
-
     def _create_dummy_input_generator_classes(self, **kwargs) -> List["DummyInputGenerator"]:
         dummy_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](
             self.task, self._normalized_config, **kwargs
@@ -2377,7 +2262,7 @@ class T5OpenVINOConfig(T5OnnxConfig):
             self.task,
             self._normalized_config,
             encoder_sequence_length=dummy_text_input_generator.sequence_length
-            if not self.stateful
+            if not getattr(self, "stateful", False)
             else dummy_text_input_generator.sequence_length + 2,
             **kwargs,
         )
@@ -2414,63 +2299,6 @@ class LongT5OpenVINOConfig(T5OpenVINOConfig):
     library_name="transformers",
 )
 class M2M100OpenVINOConfig(M2M100OnnxConfig):
-    def __init__(
-        self,
-        config: PretrainedConfig,
-        task: str = "feature-extraction",
-        int_dtype: str = "int64",
-        float_dtype: str = "fp32",
-        use_past: bool = False,
-        use_past_in_inputs: bool = False,
-        behavior: ConfigBehavior = ConfigBehavior.MONOLITH,
-        preprocessors: Optional[List[Any]] = None,
-        legacy: bool = False,
-        stateful: bool = False,
-    ):
-        self.stateful = stateful
-        super().__init__(
-            config, task, int_dtype, float_dtype, use_past, use_past_in_inputs, behavior, preprocessors, legacy
-        )
-
-    def with_behavior(
-        self,
-        behavior: Union[str, ConfigBehavior],
-        use_past: bool = False,
-        use_past_in_inputs: bool = False,
-        stateful: bool = False,
-    ) -> "OnnxSeq2SeqConfigWithPast":
-        """
-        Creates a copy of the current OnnxConfig but with a different `ConfigBehavior` and `use_past` value.
-
-        Args:
-            behavior ([`ConfigBehavior`]):
-                The behavior to use for the new instance.
-            use_past (`bool`, defaults to `False`):
-                Whether or not the ONNX config to instantiate is for a model using KV cache.
-            use_past_in_inputs (`bool`, defaults to `False`):
-                Whether the KV cache is to be passed as an input to the ONNX.
-
-        Returns:
-            `OnnxSeq2SeqConfigWithPast`
-        """
-        if isinstance(behavior, str) and not isinstance(behavior, ConfigBehavior):
-            behavior = ConfigBehavior(behavior)
-
-        onnx_config = self.__class__(
-            self._config,
-            task=self.task,
-            int_dtype=self.int_dtype,
-            float_dtype=self.float_dtype,
-            use_past=use_past,
-            use_past_in_inputs=use_past_in_inputs,
-            behavior=behavior,
-            preprocessors=self._preprocessors,
-            legacy=self.legacy,
-            stateful=stateful,
-        )
-        onnx_config.variant = self.variant
-        return onnx_config
-
     def _create_dummy_input_generator_classes(self, **kwargs) -> List["DummyInputGenerator"]:
         dummy_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](
             self.task, self._normalized_config, **kwargs
@@ -2481,7 +2309,7 @@ class M2M100OpenVINOConfig(M2M100OnnxConfig):
         )
         if self.task != "text-generation":
             kwargs["encoder_sequence_length"] = dummy_text_input_generator.sequence_length
-            if self.stateful:
+            if getattr(self, "stateful", False):
                 kwargs["encoder_sequence_length"] = kwargs["encoder_sequence_length"] + 2
 
         dummy_seq2seq_past_key_values_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[2][task](
@@ -2592,5 +2420,76 @@ class MarianOpenVINOConfig(M2M100OpenVINOConfig):
     ],
     library_name="transformers",
 )
-class PegasusOpenVINOConfig(M2M100OnnxConfig):
+class PegasusOpenVINOConfig(M2M100OpenVINOConfig):
     pass
+
+
+@register_in_tasks_manager(
+    "pix2struct",
+    *[
+        "image-to-text",
+        "image-to-text-with-past",
+    ],
+    library_name="transformers",
+)
+class Pix2StructOpenVINOConfig(Pix2StructOnnxConfig):
+    def _create_dummy_input_generator_classes(self, **kwargs) -> List["DummyInputGenerator"]:
+        dummy_inputs_generators = []
+        dummy_inputs_generators.append(self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config))
+
+        if self._preprocessors is None or len(self._preprocessors) != 2:
+            raise ValueError(
+                f"Preprocessors for pix2struct need to be available for the ONNX export to infer input static shapes. Got: {self._preprocessors}"
+            )
+
+        encoder_sequence_length = self._preprocessors[1].image_processor.max_patches
+        if getattr(self, "stateful", False):
+            encoder_sequence_length += 2
+        # A hack for DummyPix2StructInputGenerator to gain access to the preprocessors.
+        # TODO: we should probably pass preprocessors to all dummy input generators.
+        kwargs["preprocessors"] = self._preprocessors
+        for cls_ in self.DUMMY_INPUT_GENERATOR_CLASSES[1:]:
+            dummy_inputs_generators.append(
+                cls_(self.task, self._normalized_config, encoder_sequence_length=encoder_sequence_length, **kwargs)
+            )
+
+        return dummy_inputs_generators
+
+
+@register_in_tasks_manager(
+    "trocr",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "image-to-text",
+        "image-to-text-with-past",
+    ],
+    library_name="transformers",
+)
+class TrOCROpenVINOConfig(TrOCROnnxConfig):
+    def _create_dummy_input_generator_classes(self, **kwargs) -> List["DummyInputGenerator"]:
+        dummy_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](
+            self.task, self._normalized_config, **kwargs
+        )
+        dummy_decoder_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[1](
+            self.task,
+            self._normalized_config,
+            **kwargs,
+        )
+        encoder_sequence_length = dummy_text_input_generator.sequence_length
+
+        if getattr(self, "stateful", False):
+            encoder_sequence_length += 2
+        dummy_seq2seq_past_key_values_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[2](
+            self.task,
+            self._normalized_config,
+            encoder_sequence_length=encoder_sequence_length,
+            **kwargs,
+        )
+        dummy_inputs_generators = [
+            dummy_text_input_generator,
+            dummy_decoder_text_input_generator,
+            dummy_seq2seq_past_key_values_generator,
+        ]
+
+        return dummy_inputs_generators
