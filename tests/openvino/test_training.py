@@ -28,6 +28,7 @@ from typing import Dict, List, Optional, Union
 import cpuinfo
 import evaluate
 import numpy as np
+import pytest
 import torch
 from datasets import load_dataset
 from nncf.experimental.torch.sparsity.movement.algo import MovementSparsityController
@@ -41,6 +42,7 @@ from transformers import (
     AutoTokenizer,
     default_data_collator,
 )
+from transformers.testing_utils import slow
 from transformers.trainer_utils import EvalPrediction, TrainOutput
 from transformers.utils import WEIGHTS_NAME
 
@@ -613,12 +615,14 @@ class OVTrainerImageClassificationTrainingTest(OVTrainerBaseTrainingTest):
     task = "image-classification"
 
     @parameterized.expand(OVTRAINER_IMAGE_CLASSIFICATION_TEST_DESCRIPTORS.items())
+    @pytest.mark.run_slow
+    @slow
     @unittest.skipIf(is_transformers_version("<", "4.41.0"), reason="Mismatch in expected fake quantized op")
     def test_training(self, _, desc: OVTrainerTestDescriptor):
         self.run_ovtrainer_training_checks(desc)
 
     def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
-        self.dataset = load_dataset("hf-internal-testing/cats_vs_dogs_sample")
+        self.dataset = load_dataset("hf-internal-testing/cats_vs_dogs_sample", trust_remote_code=True)
         self.num_labels = len(self.dataset["train"].features["labels"].names)
 
         self.feature_extractor = AutoImageProcessor.from_pretrained(desc.model_id)
@@ -791,6 +795,8 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
     task = "audio-classification"
 
     @parameterized.expand(OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS.items())
+    @pytest.mark.run_slow
+    @slow
     def test_training(self, _, desc: OVTrainerTestDescriptor):
         self.run_ovtrainer_training_checks(desc)
 

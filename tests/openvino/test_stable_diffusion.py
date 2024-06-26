@@ -19,6 +19,7 @@ from typing import Dict
 
 import numpy as np
 import PIL
+import pytest
 import torch
 from diffusers import (
     StableDiffusionPipeline,
@@ -29,6 +30,7 @@ from diffusers.utils import load_image
 from diffusers.utils.testing_utils import floats_tensor
 from openvino.runtime.ie_api import CompiledModel
 from parameterized import parameterized
+from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES, SEED
 
 from optimum.intel import (
@@ -106,6 +108,8 @@ class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
                 self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_callback(self, model_arch: str):
         MODEL_NAMES[model_arch]
 
@@ -178,6 +182,8 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
         self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-1))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
@@ -260,6 +266,8 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
         self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False)
@@ -332,6 +340,8 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
         self.assertTrue(np.allclose(outputs[0, -3:, -3:, -1].flatten(), expected_slice, atol=1e-1))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
@@ -420,6 +430,8 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
         self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False)
@@ -458,6 +470,8 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
         self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
@@ -525,6 +539,8 @@ class OVLatentConsistencyModelPipelineTest(unittest.TestCase):
         self.assertEqual(pipeline.device.type, ov_pipeline.device)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     @unittest.skipIf(is_diffusers_version("<=", "0.21.4"), "not supported with this diffusers version")
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
