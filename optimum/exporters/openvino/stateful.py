@@ -198,10 +198,7 @@ def ensure_export_task_support_stateful(task: str, is_encoder_decoder: bool = Fa
 
     _ENCODER_DECODER_TASKS_WITH_PAST = (
         "automatic-speech-recognition",
-        "document-question-answering",
-        "image-to-text",
         "text2text-generation",
-        "visual-question-answering",
     )
 
     is_stateful = task.endswith("-with-past") and task.replace("-with-past", "") in _ENCODER_DECODER_TASKS_WITH_PAST
@@ -232,6 +229,10 @@ def get_read_value_ops(model: ov.Model):
     return [op for op in model.get_ops() if op.get_type_name() == "ReadValue"]
 
 
+def get_shape_of_ops(model: ov.Model):
+    return [op for op in model.get_ops() if op.get_type_name() == "ShapeOf"]
+
+
 def get_consumer_nodes(node):
     consumer_inputs = set().union(*[output.get_target_inputs() for output in node.outputs()])
     return set(input.get_node() for input in consumer_inputs)
@@ -239,7 +240,7 @@ def get_consumer_nodes(node):
 
 def find_output_nodes_of_dependent_subgraph(model: ov.Model, sources: list):
     # Search for nodes in the model graph that depend on nodes in `starts` list but independent of other model Parameter's/ReadValue's
-    other_inputs = set(model.get_parameters() + get_read_value_ops(model)) - set(sources)
+    other_inputs = set(model.get_parameters() + get_read_value_ops(model) + get_shape_of_ops(model)) - set(sources)
     other_nodes = find_dependent_nodes(model, other_inputs)
     source_dependent_nodes = find_dependent_nodes(model, sources)
     # TODO: Use symbols on dimensions to filter out ShapeOf subexpressions that do not bring new symbols in the subgraph

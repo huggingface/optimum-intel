@@ -27,6 +27,7 @@ from transformers.utils import is_torch_available
 
 from openvino.runtime import Core, Type, save_model
 from optimum.exporters import TasksManager
+from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.openvino.convert import export_from_model
 from optimum.intel.utils.import_utils import (
@@ -39,7 +40,6 @@ from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
     _OpenClipForZeroShotImageClassification,
 )
-from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 from .utils import _MAX_UNCOMPRESSED_SIZE, MULTI_MODAL_TEXT_GENERATION_MODELS, clear_class_registry
@@ -267,6 +267,8 @@ def main_export(
         # some models force flash_attn attention by default that does not support load model on cpu
         if is_transformers_version(">=", "4.36") and model_type in FORCE_ATTN_MODEL_CLASSES:
             loading_kwargs["_attn_implementation"] = FORCE_ATTN_MODEL_CLASSES[model_type]
+        if is_transformers_version(">=", "4.36") and model_type in SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED:
+            loading_kwargs["attn_implementation"] = "eager"
         # there are some difference between remote and in library representation of past key values for some models,
         # for avoiding confusion we disable remote code for them
         if (

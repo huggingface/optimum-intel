@@ -41,9 +41,7 @@ from optimum.exporters.onnx.model_configs import (
     M2M100OnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
-    Pix2StructOnnxConfig,
     T5OnnxConfig,
-    TrOCROnnxConfig,
     UNetOnnxConfig,
     VisionOnnxConfig,
     VaeDecoderOnnxConfig,
@@ -2236,7 +2234,7 @@ class WhisperOpenVINOConfig(WhisperOnnxConfig):
         forces the other generators to use the same batch size, meaning they will all produce inputs of the same batch
         size. Override this method for custom behavior.
         """
-        if getattr(self, "stateful"):
+        if getattr(self, "stateful", False):
             if "encoder_sequence_length" not in kwargs:
                 sequence_len = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
                 kwargs["encoder_sequence_length"] = sequence_len + 2
@@ -2422,74 +2420,3 @@ class MarianOpenVINOConfig(M2M100OpenVINOConfig):
 )
 class PegasusOpenVINOConfig(M2M100OpenVINOConfig):
     pass
-
-
-@register_in_tasks_manager(
-    "pix2struct",
-    *[
-        "image-to-text",
-        "image-to-text-with-past",
-    ],
-    library_name="transformers",
-)
-class Pix2StructOpenVINOConfig(Pix2StructOnnxConfig):
-    def _create_dummy_input_generator_classes(self, **kwargs) -> List["DummyInputGenerator"]:
-        dummy_inputs_generators = []
-        dummy_inputs_generators.append(self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config))
-
-        if self._preprocessors is None or len(self._preprocessors) != 2:
-            raise ValueError(
-                f"Preprocessors for pix2struct need to be available for the ONNX export to infer input static shapes. Got: {self._preprocessors}"
-            )
-
-        encoder_sequence_length = self._preprocessors[1].image_processor.max_patches
-        if getattr(self, "stateful", False):
-            encoder_sequence_length += 2
-        # A hack for DummyPix2StructInputGenerator to gain access to the preprocessors.
-        # TODO: we should probably pass preprocessors to all dummy input generators.
-        kwargs["preprocessors"] = self._preprocessors
-        for cls_ in self.DUMMY_INPUT_GENERATOR_CLASSES[1:]:
-            dummy_inputs_generators.append(
-                cls_(self.task, self._normalized_config, encoder_sequence_length=encoder_sequence_length, **kwargs)
-            )
-
-        return dummy_inputs_generators
-
-
-@register_in_tasks_manager(
-    "trocr",
-    *[
-        "feature-extraction",
-        "feature-extraction-with-past",
-        "image-to-text",
-        "image-to-text-with-past",
-    ],
-    library_name="transformers",
-)
-class TrOCROpenVINOConfig(TrOCROnnxConfig):
-    def _create_dummy_input_generator_classes(self, **kwargs) -> List["DummyInputGenerator"]:
-        dummy_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](
-            self.task, self._normalized_config, **kwargs
-        )
-        dummy_decoder_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[1](
-            self.task,
-            self._normalized_config,
-            **kwargs,
-        )
-        encoder_sequence_length = dummy_text_input_generator.sequence_length
-
-        if getattr(self, "stateful", False):
-            encoder_sequence_length += 2
-        dummy_seq2seq_past_key_values_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[2](
-            self.task,
-            self._normalized_config,
-            encoder_sequence_length=encoder_sequence_length,
-            **kwargs,
-        )
-        dummy_inputs_generators = [
-            dummy_text_input_generator,
-            dummy_decoder_text_input_generator,
-            dummy_seq2seq_past_key_values_generator,
-        ]
-
-        return dummy_inputs_generators

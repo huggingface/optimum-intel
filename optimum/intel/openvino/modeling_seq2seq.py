@@ -657,7 +657,7 @@ class OVDecoder:
         if "beam_idx" in self.input_names:
             batch_size = input_ids.shape[0]
             inputs["beam_idx"] = (
-                self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
+                self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=np.int32)
             )
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
@@ -818,7 +818,9 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
             if is_decoder:
                 if inputs.get_any_name().startswith("past_key_values"):
                     shapes[inputs][2] = -1
-                elif not inputs.get_any_name().startswith("encoder"):
+                elif not inputs.get_any_name().startswith("encoder") and not inputs.get_any_name().startswith(
+                    "beam_idx"
+                ):
                     shapes[inputs][1] = -1
         model.reshape(shapes)
         return model
@@ -901,7 +903,9 @@ class OVModelForPix2Struct(OVModelForSeq2SeqLM):
             if is_decoder:
                 if inputs.get_any_name().startswith("past_key_values"):
                     shapes[inputs][2] = -1
-                elif not inputs.get_any_name().startswith("encoder"):
+                elif not inputs.get_any_name().startswith("encoder") and not inputs.get_any_name().startswith(
+                    "beam_idx"
+                ):
                     shapes[inputs][1] = -1
         model.reshape(shapes)
         return model

@@ -1526,7 +1526,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(ov_model.encoder, OVEncoder)
         self.assertIsInstance(ov_model.decoder, OVDecoder)
         self.assertTrue(ov_model.decoder.stateful)
-        self.assertIsInstance(ov_model.decoder_with_past, None)
+        self.assertTrue(ov_model.decoder_with_past is None)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
 
         transformers_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
