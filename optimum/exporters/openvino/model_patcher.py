@@ -1180,7 +1180,10 @@ def _phi3_self_attn_sdpa_forward(
             use_cache=use_cache,
         )
 
-    from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
+    if is_transformers_version(">=", "4.41.0"):
+        from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
+    else:
+        from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
 
     bsz, q_len, _ = hidden_states.size()
 
