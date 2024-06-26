@@ -49,7 +49,6 @@ from .model_patcher import (
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
     DBRXModelPatcher,
-    GemmaModelPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
     JaisModelPatcher,
@@ -319,7 +318,7 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return GemmaModelPatcher(self, model, model_kwargs=model_kwargs)
+        return LlamaModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(

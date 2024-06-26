@@ -361,30 +361,41 @@ def _llama_gemma_update_causal_mask_legacy(self, attention_mask, input_tensor, c
         target_length = attention_mask.shape[-1] if isinstance(attention_mask, torch.Tensor) else current_length
 
     # difference with original modeling
-    causal_mask = torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
-
-    if sequence_length != 1:
-        causal_mask = torch.triu(causal_mask, diagonal=1)
-    causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
-    causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
+    if self.bias is not None and attention_mask.dim() == 2:
+        causal_mask = self.bias[:, :, target_length - sequence_length : target_length, :target_length]
+    else:
+        causal_mask = (
+            torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
+        )
+        if sequence_length != 1:
+            causal_mask = torch.triu(causal_mask, diagonal=1)
+            causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
+            causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
     if attention_mask is not None:
         causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
-        if attention_mask.dim() == 2:
-            mask_length = attention_mask.shape[-1]
-            padding_mask = causal_mask[..., :mask_length].eq(0.0) * attention_mask[:, None, None, :].eq(0.0)
-            causal_mask[..., :mask_length] = causal_mask[..., :mask_length].masked_fill(padding_mask, min_dtype)
-        elif attention_mask.dim() == 4:
-            # backwards compatibility: we allow passing a 4D attention mask shorter than the input length with
-            # cache. In that case, the 4D attention mask attends to the newest tokens only.
-            if attention_mask.shape[-2] < cache_position[0] + sequence_length:
-                offset = cache_position[0]
-            else:
-                offset = 0
-            mask_shape = attention_mask.shape
-            mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
-            causal_mask[
-                : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
-            ] = mask_slice
+        if self.bias is not None and attention_mask.dim() == 2:
+            attention_mask = attention_mask[:, None, None, :]
+            attention_mask = attention_mask.to(dtype)
+            attention_mask = (1.0 - attention_mask) * min_dtype
+            attention_mask = attention_mask.expand(-1, -1, sequence_length, -1).masked_fill(~causal_mask, min_dtype)
+            return attention_mask
+        else:
+            if attention_mask.dim() == 2:
+                mask_length = attention_mask.shape[-1]
+                padding_mask = causal_mask[..., :mask_length].eq(0.0) * attention_mask[:, None, None, :].eq(0.0)
+                causal_mask[..., :mask_length] = causal_mask[..., :mask_length].masked_fill(padding_mask, min_dtype)
+            elif attention_mask.dim() == 4:
+                # backwards compatibility: we allow passing a 4D attention mask shorter than the input length with
+                # cache. In that case, the 4D attention mask attends to the newest tokens only.
+                if attention_mask.shape[-2] < cache_position[0] + sequence_length:
+                    offset = cache_position[0]
+                else:
+                    offset = 0
+                mask_shape = attention_mask.shape
+                mask_slice = (attention_mask.eq(0.0)).to(dtype=dtype) * min_dtype
+                causal_mask[
+                    : mask_shape[0], : mask_shape[1], offset : mask_shape[2] + offset, : mask_shape[3]
+                ] = mask_slice
 
     if (
         self.config._attn_implementation == "sdpa"
@@ -460,19 +471,23 @@ def _llama_gemma_update_causal_mask_latest(
         causal_mask = attention_mask
     else:
         # difference with original modeling
-        causal_mask = (
-            torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
-        )
+        if self.bias is not None and self.bias.shape[-1] >= target_length:
+            causal_mask = self.bias[:, :, target_length - sequence_length : target_length, :target_length]
+        else:
+            causal_mask = (
+                torch.full((sequence_length, target_length), fill_value=1, dtype=dtype, device=device) * min_dtype
+            )
 
-        if sequence_length != 1:
-            causal_mask = torch.triu(causal_mask, diagonal=1)
+            if sequence_length != 1:
+                causal_mask = torch.triu(causal_mask, diagonal=1)
         causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
         causal_mask = causal_mask[None, None, :, :].expand(input_tensor.shape[0], 1, -1, -1)
         if attention_mask is not None:
             causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
             mask_length = attention_mask.shape[-1]
-            padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
-            padding_mask = padding_mask == 0
+
+            # difference with original modeling
+            padding_mask = causal_mask[:, :, :, :mask_length].eq(0.0) * attention_mask[:, None, None, :].eq(0.0)
             causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
                 padding_mask, min_dtype
             )
@@ -497,49 +512,68 @@ else:
     _llama_gemma_update_causal_mask = _llama_gemma_update_causal_mask_legacy
 
 
-class GemmaModelPatcher(DecoderModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-
-        # gemma has some accuracy issues with bf16 with transformers >= 4.39
-        # fill causal mask in slightly different way for avoid overflow on some platforms
-        if is_transformers_version(">=", "4.39.0"):
-            self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
-            self._model.model._update_causal_mask = types.MethodType(
-                _llama_gemma_update_causal_mask, self._model.model
-            )
-
-        # init inv_freq for torchscript tracing
-        # https://github.com/huggingface/transformers/blob/ed74d97871468f3a4695ede50abdc0b55717a84d/src/transformers/models/gemma/modeling_gemma.py#L108
-        for layer in self._model.model.layers:
-            if layer.self_attn.rotary_emb.inv_freq is None:
-                rotary_emb = layer.self_attn.rotary_emb
-                layer.self_attn.rotary_emb.inv_freq = 1.0 / (
-                    rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
-                )
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        if hasattr(self._model.model, "_orig_update_causal_mask"):
-            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+def llama_gemma_rotary_emb_forward(self, x, position_ids, seq_len=None):
+    if seq_len is None:
+        seq_len = torch.max(position_ids) + 1
+    if seq_len > self.embed_positions.shape[0]:
+        return self._orig_forward(self, x, position_ids, seq_len)
+    sincos = self.embed_positions[position_ids]
+    sin, cos = torch.split(sincos, sincos.shape[-1] // 2, dim=-1)
+    return cos, sin
 
 
 class LlamaModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        # llama has some accuracy issues with bf16 with transformers >= 4.39
+        # llama/gemma has some accuracy issues with bf16 with transformers >= 4.39
         # fill causal mask in slightly different way for avoid overflow on some platforms
         if is_transformers_version(">=", "4.39.0"):
+            max_positions = self._model.config.max_position_embeddings
+            self._model.model.register_buffer(
+                "bias",
+                torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
+                    1, 1, max_positions, max_positions
+                ),
+                persistent=False,
+            )
             self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
             self._model.model._update_causal_mask = types.MethodType(
                 _llama_gemma_update_causal_mask, self._model.model
+            )
+
+        # cos/sin for rotary position embeddings also having issues with bf16 and efficiency due to calculation on each step
+        def create_sinusoidal_positions(num_pos: int, dim: int, base: int = 10000) -> torch.Tensor:
+            inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64) / dim))
+            sinusoid_inp = torch.einsum(
+                "i , j -> i j", torch.arange(num_pos, dtype=torch.int64).float(), inv_freq
+            ).float()
+            emb = torch.cat((sinusoid_inp, sinusoid_inp), dim=-1)
+            return torch.cat((torch.sin(emb), torch.cos(emb)), dim=1)
+
+        base = self._model.model.layers[0].self_attn.rotary_emb.base
+        self._model.model.register_buffer(
+            "embed_positions",
+            create_sinusoidal_positions(max_positions, self._model.config.head_dim, self._model.config, base),
+        )
+
+        # init cos/sin for torchscript tracing
+        # https://github.com/huggingface/transformers/blob/ed74d97871468f3a4695ede50abdc0b55717a84d/src/transformers/models/gemma/modeling_gemma.py#L108
+        for layer in self._model.model.layers:
+            layer.self_attn.rotary_emb.embed_positions = self._model.model.embed_positions
+            layer.self_attn.rotary_emb._orig_forward = layer.self_attn.rotary_emb.forward
+
+            layer.self_attn.rotary_emb.forward = types.MethodType(
+                llama_gemma_rotary_emb_forward, layer.self_attn.rotary_emb
             )
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         if hasattr(self._model.model, "_orig_update_causal_mask"):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+
+        for layer in self._model.model.layers:
+            layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
 
 
 SUPPORT_SDPA = is_torch_version(">", "2.1.0")
