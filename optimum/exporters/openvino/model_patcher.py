@@ -1183,7 +1183,7 @@ def _phi3_self_attn_sdpa_forward(
 
     # TO DO: remove llama imports when transformers with phi3 support will be released
     try:
-        from transformers.models.phi3.modelling_phi3 import apply_rotary_pos_emb, repeat_kv
+        from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
     except ImportError:
         from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
 
