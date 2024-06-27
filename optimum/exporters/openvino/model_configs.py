@@ -41,8 +41,10 @@ from optimum.utils.input_generators import (
 )
 from optimum.utils.normalized_config import NormalizedTextConfig
 
+from ...intel.utils.import_utils import _transformers_version, is_transformers_version
 from .model_patcher import (
     AquilaModelPatcher,
+    ArcticModelPatcher,
     BaichuanModelPatcher,
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
@@ -50,9 +52,11 @@ from .model_patcher import (
     GemmaModelPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
+    JaisModelPatcher,
     LlamaModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
+    PersimmonModelPatcher,
     Phi3ModelPatcher,
     QwenModelPatcher,
     XverseModelPatcher,
@@ -163,24 +167,27 @@ class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         )
         self.multi_query_group_num = normalized_config.multi_query_group_num
         self.head_dim = normalized_config.kv_channels
+        self.standart_cache_layout = hasattr(normalized_config, "rope_ratio")
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        past_key_shape = (
-            self.sequence_length,
-            self.batch_size,
-            self.multi_query_group_num,
-            self.head_dim,
-        )
-        past_value_shape = (
-            self.sequence_length,
-            self.batch_size,
-            self.multi_query_group_num,
-            self.head_dim,
-        )
+        if not self.standart_cache_layout:
+            pkv_shape = (
+                self.sequence_length,
+                self.batch_size,
+                self.multi_query_group_num,
+                self.head_dim,
+            )
+        else:
+            pkv_shape = (
+                self.batch_size,
+                self.multi_query_group_num,
+                self.sequence_length,
+                self.head_dim,
+            )
         return [
             (
-                self.random_float_tensor(past_key_shape, framework=framework, dtype=float_dtype),
-                self.random_float_tensor(past_value_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(pkv_shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(pkv_shape, framework=framework, dtype=float_dtype),
             )
             for _ in range(self.num_layers)
         ]
@@ -225,7 +232,10 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             and "attention_mask" in dummy_inputs
         ):
             # Obtain the past sequence length from the value instead of the key (Bloom). ChatGLM has seq_len in 0 dim instead of -2
-            past_present_length = dummy_inputs["input_ids"].shape[1] + dummy_inputs["past_key_values"][0][1].shape[0]
+            seq_len_dim = 0 if not hasattr(self._normalized_config, "rope_ratio") else -2
+            past_present_length = (
+                dummy_inputs["input_ids"].shape[1] + dummy_inputs["past_key_values"][0][1].shape[seq_len_dim]
+            )
 
             dummy_inputs["attention_mask"] = DummyInputGenerator.pad_input_on_dim(
                 dummy_inputs["attention_mask"],
@@ -256,9 +266,18 @@ class ChatGLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
             decoder_sequence_name = "past_sequence_length + present_lenght"
             name = "present"
 
+        is_v4 = hasattr(self._normalized_config, "rope_ratio")
         for i in range(self._normalized_config.num_layers):
-            inputs_or_outputs[f"{name}.{i}.key"] = {1: "batch_size", 0: decoder_sequence_name}
-            inputs_or_outputs[f"{name}.{i}.value"] = {1: "batch_size", 0: decoder_sequence_name}
+            inputs_or_outputs[f"{name}.{i}.key"] = (
+                {1: "batch_size", 0: decoder_sequence_name}
+                if not is_v4
+                else {0: "batch_size", 2: decoder_sequence_name}
+            )
+            inputs_or_outputs[f"{name}.{i}.value"] = (
+                {1: "batch_size", 0: decoder_sequence_name}
+                if not is_v4
+                else {0: "batch_size", 2: decoder_sequence_name}
+            )
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
@@ -473,7 +492,7 @@ class OrionOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 
 @register_in_tasks_manager("olmo", *["text-generation", "text-generation-with-past"], library_name="transformers")
-class OlmoOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+class OlmoOpenVINOConfig(LlamaOpenVINOConfig):
     DEFAULT_ONNX_OPSET = 14
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
@@ -630,6 +649,11 @@ class PersimmonOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return PersimmonModelPatcher(self, model, model_kwargs=model_kwargs)
+
 
 @register_in_tasks_manager("biogpt", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class BioGPTOpenVINOConfig(TextDecoderOnnxConfig):
@@ -785,3 +809,34 @@ class DBRXOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return DBRXModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "jais",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class JaisOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
+
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = DummyPastKeyValuesGenerator
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return JaisModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager("arctic", *["text-generation", "text-generation-with-past"], library_name="transformers")
+class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        if is_transformers_version("<=", "4.36.0"):
+            raise ValueError(
+                f"Model patching for Arctic models only available for transformers >= v4.37.0, found {_transformers_version}"
+            )
+
+        return ArcticModelPatcher(self, model, model_kwargs=model_kwargs)

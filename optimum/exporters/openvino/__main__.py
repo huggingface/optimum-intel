@@ -44,6 +44,22 @@ _COMPRESSION_OPTIONS = {
 logger = logging.getLogger(__name__)
 
 
+def infer_task(task, model_name_or_path):
+    task = TasksManager.map_from_synonym(task)
+    if task == "auto":
+        try:
+            task = TasksManager.infer_task_from_model(model_name_or_path)
+        except KeyError as e:
+            raise KeyError(
+                f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+            )
+        except RequestsConnectionError as e:
+            raise RequestsConnectionError(
+                f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
+            )
+    return task
+
+
 def main_export(
     model_name_or_path: str,
     output: Union[str, Path],
@@ -174,7 +190,7 @@ def main_export(
             ov_config = OVConfig(quantization_config=q_config)
 
     original_task = task
-    task = TasksManager.map_from_synonym(task)
+    task = infer_task(task, model_name_or_path)
     framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
     library_name_is_not_provided = library_name is None
     library_name = TasksManager.infer_library_from_model(
@@ -187,18 +203,6 @@ def main_export(
             "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
         )
         library_name = "transformers"
-
-    if task == "auto":
-        try:
-            task = TasksManager.infer_task_from_model(model_name_or_path)
-        except KeyError as e:
-            raise KeyError(
-                f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
-        except RequestsConnectionError as e:
-            raise RequestsConnectionError(
-                f"The task could not be automatically inferred as this is available only for models hosted on the Hugging Face Hub. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
-            )
 
     do_gptq_patching = False
     custom_architecture = False
@@ -360,17 +364,35 @@ def main_export(
         **kwargs_shapes,
     )
 
-    # hide openvino import when using other exporters
+    if convert_tokenizer:
+        maybe_convert_tokenizers(library_name, output, model, preprocessors)
+
+    # Unpatch modules after GPTQ export
+    if do_gptq_patching:
+        torch.cuda.is_available = orig_cuda_check
+        GPTQQuantizer.post_init_model = orig_post_init_model
+
+
+def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None):
+    """
+    Tries to convert tokenizers to OV format and export them to disk.
+
+    Arguments:
+        library_name (`str`):
+            The library name.
+        output (`Path`):
+            Path to save converted tokenizers to.
+        model (`PreTrainedModel`, *optional*, defaults to None):
+            Model instance.
+        preprocessors (`Iterable`, *optional*, defaults to None):
+            Iterable possibly containing tokenizers to be converted.
+    """
     from optimum.exporters.openvino.convert import export_tokenizer
 
-    if convert_tokenizer and is_openvino_tokenizers_available():
-        if library_name != "diffusers":
-            tokenizer = next(
-                (preprocessor for preprocessor in preprocessors if isinstance(preprocessor, PreTrainedTokenizerBase)),
-                None,
-            )
-
-            if tokenizer is not None:
+    if is_openvino_tokenizers_available():
+        if library_name != "diffusers" and preprocessors:
+            tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
+            if tokenizer:
                 try:
                     export_tokenizer(tokenizer, output)
                 except Exception as exception:
@@ -378,18 +400,10 @@ def main_export(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
                         f"models won't be generated. Exception: {exception}"
                     )
-        else:
-            tokenizer = getattr(model, "tokenizer", None)
-            if tokenizer is not None:
-                export_tokenizer(tokenizer, output / "tokenizer")
-
-            tokenizer_2 = getattr(model, "tokenizer_2", None)
-            if tokenizer_2 is not None:
-                export_tokenizer(tokenizer_2, output / "tokenizer_2")
-    elif convert_tokenizer and not is_openvino_tokenizers_available():
+        elif model:
+            for tokenizer_name in ("tokenizer", "tokenizer_2"):
+                tokenizer = getattr(model, tokenizer_name, None)
+                if tokenizer:
+                    export_tokenizer(tokenizer, output / tokenizer_name)
+    else:
         logger.warning("Tokenizer won't be converted.")
-
-    # Unpatch modules after GPTQ export
-    if do_gptq_patching:
-        torch.cuda.is_available = orig_cuda_check
-        GPTQQuantizer.post_init_model = orig_post_init_model

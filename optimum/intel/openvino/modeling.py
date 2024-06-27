@@ -205,10 +205,9 @@ class OVModelForSequenceClassification(OVModel):
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
-        # Run inference
-        outputs = self.request(inputs)
+        outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return SequenceClassifierOutput(logits=logits)
 
@@ -271,10 +270,9 @@ class OVModelForQuestionAnswering(OVModel):
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
-        # Run inference
-        outputs = self.request(inputs)
+        outputs = self._inference(inputs)
         start_logits = (
             torch.from_numpy(outputs["start_logits"]).to(self.device) if not np_inputs else outputs["start_logits"]
         )
@@ -341,10 +339,9 @@ class OVModelForTokenClassification(OVModel):
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
-        # Run inference
-        outputs = self.request(inputs)
+        outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return TokenClassifierOutput(logits=logits)
 
@@ -406,10 +403,9 @@ class OVModelForFeatureExtraction(OVModel):
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
-        # Run inference
-        outputs = self.request(inputs)
+        outputs = self._inference(inputs)
         last_hidden_state = (
             torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
             if not np_inputs
@@ -446,6 +442,9 @@ class OVModelForFeatureExtraction(OVModel):
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
+        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
+        # would end-up removing the directory containing the underlying OpenVINO model
+        cls._model_save_dir_tempdirectory_instance = save_dir
 
         # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
         if load_in_8bit is None and not quantization_config:
@@ -537,10 +536,9 @@ class OVModelForMaskedLM(OVModel):
 
         # Add the token_type_ids when needed
         if "token_type_ids" in self.input_names:
-            inputs["token_type_ids"] = token_type_ids
+            inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
-        # Run inference
-        outputs = self.request(inputs)
+        outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return MaskedLMOutput(logits=logits)
 
@@ -676,8 +674,7 @@ class OVModelForImageClassification(OVModel):
             "pixel_values": pixel_values,
         }
 
-        # Run inference
-        outputs = self.request(inputs)
+        outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return ImageClassifierOutput(logits=logits)
 
@@ -741,8 +738,7 @@ class OVModelForAudioClassification(OVModel):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
-        # Run inference
-        outputs = self.request(inputs)
+        outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return SequenceClassifierOutput(logits=logits)
 
@@ -813,8 +809,7 @@ class OVModelForCTC(OVModel):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
-        # Run inference
-        outputs = self.request(inputs)
+        outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         return CausalLMOutput(logits=logits)
 
@@ -894,8 +889,7 @@ class OVModelForAudioXVector(OVModel):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
-        # Run inference
-        outputs = self.request(inputs)
+        outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
         embeddings = (
             torch.from_numpy(outputs["embeddings"]).to(self.device) if not np_inputs else outputs["embeddings"]
@@ -971,8 +965,7 @@ class OVModelForAudioFrameClassification(OVModel):
         if "attention_mask" in self.input_names:
             inputs["attention_mask"] = attention_mask
 
-        # Run inference
-        outputs = self.request(inputs)
+        outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
 
         return TokenClassifierOutput(logits=logits)
@@ -1025,8 +1018,7 @@ class OVModelForCustomTasks(OVModel):
         for input_name in self.input_names:
             inputs[input_name] = np.array(kwargs.pop(input_name)) if not np_inputs else kwargs.pop(input_name)
 
-        outputs = self.request(inputs)
-
+        outputs = self._inference(inputs)
         model_outputs = {}
         for key, value in outputs.items():
             key_name = next(iter(key.names))

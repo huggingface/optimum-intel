@@ -4,9 +4,12 @@ name: OpenVINO - Test
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - v*-release
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -17,14 +20,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.8, 3.11]
+        python-version: ["3.8", "3.12"]
+        transformers-version: ["4.36.0", "4.41.*"]
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Setup Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
@@ -32,8 +36,11 @@ jobs:
         python -m pip install --upgrade pip
         # install PyTorch CPU version to avoid installing CUDA packages on GitHub runner without GPU
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install transformers==${{ matrix.transformers-version }}
         pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
     - name: Test with Pytest
+      env:
+        HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
       run: |
         pytest tests/openvino/ --ignore tests/openvino/test_modeling_basic.py --durations=0
     - name: Test basic
@@ -46,3 +53,4 @@ jobs:
         pip install openvino-nightly
         python -c "from optimum.intel import OVModelForCausalLM; OVModelForCausalLM.from_pretrained('hf-internal-testing/tiny-random-gpt2', export=True, compile=False)"
         optimum-cli export openvino -m hf-internal-testing/tiny-random-gpt2 gpt2-ov
+

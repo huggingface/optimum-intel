@@ -17,6 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from parameterized import parameterized
+from transformers import AutoModelForCausalLM
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     MODEL_NAMES,
@@ -38,6 +39,7 @@ from optimum.intel import (  # noqa
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
+from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
 
@@ -89,6 +91,21 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "opt125m", "int4_sym_g64", 62, 86),
         ("text-generation-with-past", "opt125m", "int4_asym_g64", 62, 86),
         ("text-generation-with-past", "llama_awq", "int4 --ratio 1.0 --sym --group-size 16 --all-layers", 0, 32),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
+            "--sensitivity-metric max_activation_variance",
+            4,
+            28,
+        ),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 16 --scale-estimation --dataset wikitext2 --num-samples 100 ",
+            4,
+            28,
+        ),
     ]
 
     def _openvino_export(
@@ -197,10 +214,11 @@ class OVCLIExportTestCase(unittest.TestCase):
     @parameterized.expand(TEST_4BIT_CONFIGURATONS)
     def test_exporters_cli_int4(self, task: str, model_type: str, option: str, expected_int8: int, expected_int4: int):
         with TemporaryDirectory() as tmpdir:
-            subprocess.run(
+            result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
                 shell=True,
                 check=True,
+                capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
             model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
@@ -208,6 +226,40 @@ class OVCLIExportTestCase(unittest.TestCase):
             _, num_int8, num_int4 = get_num_quantized_nodes(model)
             self.assertEqual(expected_int8, num_int8)
             self.assertEqual(expected_int4, num_int4)
+            self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
+            self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
+
+    def test_exporters_cli_int4_with_local_model_and_default_config(self):
+        with TemporaryDirectory() as tmpdir:
+            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["bloom"])
+            # overload for matching with default configuration
+            pt_model.config._name_or_path = "bigscience/bloomz-7b1"
+            pt_model.save_pretrained(tmpdir)
+            subprocess.run(
+                f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",
+                shell=True,
+                check=True,
+            )
+
+            model = OVModelForCausalLM.from_pretrained(tmpdir)
+            rt_info = model.model.get_rt_info()
+            self.assertTrue("nncf" in rt_info)
+            self.assertTrue("weight_compression" in rt_info["nncf"])
+            default_config = _DEFAULT_4BIT_CONFIGS["bigscience/bloomz-7b1"]
+            model_weight_compression_config = rt_info["nncf"]["weight_compression"]
+            sym = default_config.pop("sym", False)
+            bits = default_config.pop("bits", None)
+            self.assertEqual(bits, 4)
+
+            mode = f'int{bits}_{"sym" if sym else "asym"}'
+            default_config["mode"] = mode
+            for key, value in default_config.items():
+                self.assertTrue(key in model_weight_compression_config)
+                self.assertEqual(
+                    model_weight_compression_config[key].value,
+                    str(value),
+                    f"Parameter {key} not matched with expected, {model_weight_compression_config[key].value} != {value}",
+                )
 
     def test_exporters_cli_help(self):
         subprocess.run(

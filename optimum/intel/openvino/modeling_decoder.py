@@ -38,7 +38,7 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
-from ..utils.import_utils import is_nncf_available
+from ..utils.import_utils import is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import _DEFAULT_4BIT_CONFIGS, OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
@@ -116,7 +116,6 @@ class OVBaseDecoderModel(OVModel):
             quantization_config=quantization_config,
             **kwargs,
         )
-
         self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
         model_has_sinks = model_has_state(self.model)
@@ -224,6 +223,14 @@ class OVBaseDecoderModel(OVModel):
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
 
+        if self.generation_config is not None:
+            try:
+                self.generation_config.save_pretrained(save_directory)
+            except Exception as exception:
+                logger.warning(
+                    f"The generation config will not be saved, saving failed with following error:\n{exception}"
+                )
+
         self._save_openvino_config(save_directory)
 
     @classmethod
@@ -256,6 +263,9 @@ class OVBaseDecoderModel(OVModel):
 
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
+        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
+        # would end-up removing the directory containing the underlying OpenVINO model
+        cls._model_save_dir_tempdirectory_instance = save_dir
 
         if task is None:
             task = cls.export_feature
@@ -318,9 +328,9 @@ class OVBaseDecoderModel(OVModel):
             shapes[inputs][0] = -1
             input_name = inputs.get_any_name()
             if input_name.startswith("past_key_values"):
-                if (
-                    len(inputs.partial_shape) == 3 and input_name.endswith("value")
-                ) or self.config.model_type == "chatglm":
+                if (len(inputs.partial_shape) == 3 and input_name.endswith("value")) or (
+                    self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio")
+                ):
                     shapes[inputs][1] = -1
                 else:
                     shapes[inputs][2] = -1
@@ -411,7 +421,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     model_inputs = self.model.input(input_name)
                     dtype = OV_TO_NP_TYPE[model_inputs.get_element_type().get_type_name()]
                     shape = model_inputs.get_partial_shape()
-                    if self.config.model_type == "chatglm":
+                    if self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"):
                         shape[0] = 0
                         shape[1] = batch_size
                     else:
@@ -561,9 +571,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 ):
                     past_key_values = tuple(
                         tuple(
-                            past_state[indicies]
-                            if not self.config.model_type == "chatglm"
-                            else past_state[:, indicies, ...]
+                            (
+                                past_state[indicies]
+                                if not (self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"))
+                                else past_state[:, indicies, ...]
+                            )
                             for past_state in layer_past
                         )
                         for layer_past in past_key_values
@@ -595,7 +607,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     upd_batch_size = indicies.shape[0]
                     if self.config.model_type == "bloom":
                         upd_batch_size *= self.config.num_attention_heads
-                    shape[0 if not self.config.model_type == "chatglm" else 1] = upd_batch_size
+                    shape[
+                        (
+                            0
+                            if not (self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"))
+                            else 1
+                        )
+                    ] = upd_batch_size
                     upd_model_inputs[input_name] = Tensor(dtype, shape)
         upd_model_inputs["input_ids"] = unique_input_ids
         if "beam_idx" in model_inputs:
@@ -623,8 +641,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
-        _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
-        generation_mode = _generation_config.get_generation_mode(assistant_model)
+        if is_transformers_version(">=", "4.39.0"):
+            _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
+            generation_mode = _generation_config.get_generation_mode(assistant_model)
+        else:
+            _generation_config = generation_config or self.generation_config
+            generation_mode = self._get_generation_mode(_generation_config, assistant_model)
 
         is_beam_search = generation_mode in [
             GenerationMode.BEAM_SEARCH,
@@ -659,7 +681,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         ):
             return past_key_values[0].shape[-2]
         seq_length_dim = -2
-        if self.config.model_type == "chatglm":
+        if self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"):
             seq_length_dim = 0
         elif self.config.model_type == "qwen":
             seq_length_dim = 1
@@ -742,17 +764,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
-        if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
-            quantization_config = _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, quantization_config)
-
-        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
-
-        load_in_4bit = quantization_config.bits == 4 if quantization_config else False
-
-        model = cls.load_model(
-            model_cache_path,
-            quantization_config=None if load_in_4bit else quantization_config,
-        )
+        model = cls.load_model(model_cache_path)
 
         model_type = config.model_type.replace("_", "-")
         if model_type == "bloom":
@@ -762,7 +774,25 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         else:
             init_cls = cls
 
-        enable_compilation = kwargs.pop("compile", True) and not load_in_4bit
+        if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
+            quantization_config = _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, quantization_config)
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+
+        enable_compilation = kwargs.pop("compile", True) and not quantization_config
+
+        try:
+            generation_config = GenerationConfig.from_pretrained(
+                model_id,
+                token=token,
+                revision=revision,
+                cache_dir=cache_dir,
+                force_download=force_download,
+                local_files_only=local_files_only,
+            )
+            kwargs["generation_config"] = generation_config
+        except Exception:
+            pass
+
         causal_model = init_cls(
             model=model,
             config=config,
@@ -772,7 +802,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             **kwargs,
         )
 
-        if load_in_4bit:
+        if quantization_config:
             if not is_nncf_available():
                 raise ImportError(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
