@@ -46,7 +46,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "awq": True,
     },
-    "meta-llama/Llama-2-7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.7},
+    "meta-llama/Llama-2-7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
     "meta-llama/Llama-2-7b-chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "meta-llama/Llama-2-13b-chat": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "stabilityai/stablelm-3b-4e1t": {
@@ -66,11 +66,12 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "awq": True,
     },
+    "stabilityai/stable-code-3b": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
     "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
     "openlm-research/open_llama_3b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
-    "tiiuae/falcon-7b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
+    "tiiuae/falcon-7b-instruct": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
     "psmathur/orca_mini_3b": {
         "bits": 4,
         "sym": True,
@@ -101,7 +102,6 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "awq": True,
     },
-    "stabilityai/stable-code-3b": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
 }
 
 
