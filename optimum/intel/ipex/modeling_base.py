@@ -23,7 +23,6 @@ from typing import Dict, Optional, Tuple, Union
 
 import intel_extension_for_pytorch as ipex
 import torch
-import transformers
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from intel_extension_for_pytorch.cpu._auto_kernel_selection import _enable_tpp
@@ -41,6 +40,7 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
+    is_torch_xpu_available,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
@@ -138,7 +138,7 @@ class IPEXModel(OptimizedModel):
         warmup: bool = True,
         **kwargs,
     ):
-        if transformers.is_torch_xpu_available(check_device=True):
+        if is_torch_xpu_available(check_device=True):
             self._device = torch.device("xpu:0")
         elif torch.cuda.is_available():
             self._device = torch.device("cuda:0")
