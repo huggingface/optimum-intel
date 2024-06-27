@@ -23,6 +23,7 @@ from typing import Dict, Optional, Tuple, Union
 
 import intel_extension_for_pytorch as ipex
 import torch
+import transformers
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from intel_extension_for_pytorch.cpu._auto_kernel_selection import _enable_tpp
@@ -40,7 +41,6 @@ from transformers import (
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
-    is_torch_xpu_available,
 )
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
@@ -55,7 +55,6 @@ from ...exporters.ipex.model_patcher import _IPEX_EXPORTED_TASK, _IPEX_MINIMUM_V
 from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
-from .utils import _HEAD_TO_AUTOMODELS
 
 
 logger = logging.getLogger(__name__)
@@ -139,7 +138,7 @@ class IPEXModel(OptimizedModel):
         warmup: bool = True,
         **kwargs,
     ):
-        if is_torch_xpu_available(check_device=True):
+        if transformers.is_torch_xpu_available(check_device=True):
             self._device = torch.device("xpu:0")
         elif torch.cuda.is_available():
             self._device = torch.device("cuda:0")
@@ -187,6 +186,7 @@ class IPEXModel(OptimizedModel):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
+        task: str = None,
         use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
@@ -221,18 +221,13 @@ class IPEXModel(OptimizedModel):
             "force_download": force_download,
         }
 
+        task = task or cls.export_feature
+
         if not getattr(config, "torchscript", False):
             logger.warning("Detect torchscript is false. Convert to torchscript model!")
 
             if is_torch_version("<", "2.1.0"):
                 raise ImportError("`torch>=2.0.0` is needed to trace your model")
-
-            task = TasksManager.infer_task_from_model(model_id, subfolder=subfolder, revision=revision)
-            if cls.export_feature != task and cls.export_feature == "feature-extraction":
-                logging.warning("Map the model class to {_HEAD_TO_AUTOMODELS[task]}")
-                cls = eval(_HEAD_TO_AUTOMODELS[task])
-            else:
-                task = cls.export_feature
 
             config.torch_dtype = torch_dtype
             model = TasksManager.get_model_from_task(

@@ -124,9 +124,17 @@ class IPEXModelTest(unittest.TestCase):
         if not isinstance(self.IPEX_MODEL_CLASS, IPEXModel):
             return
         model_id = MODEL_NAMES["llama2"]
-        model = IPEXModel.from_pretrained(model_id, export=True)
+        model = IPEXModel.from_pretrained(model_id, export=True, task="text-generation")
+
+        # Test re-load model
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            model.save_pretrained(tmpdirname)
+            loaded_model = IPEXModel.from_pretrained(tmpdirname, task="text-generation")
 
         self.assertEqual(model.model.original_name, "LlamaForCausalLM")
+        self.assertEqual(loaded_model.model.original_name, "LlamaForCausalLM")
+        self.assertEqual(model.__class__.__name__, "IPEXModelForCausalLM")
+        self.assertEqual(loaded_model.__class__.__name__, "IPEXModelForCausalLM")
 
 
 class IPEXModelForSequenceClassificationTest(IPEXModelTest):
