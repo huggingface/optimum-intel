@@ -64,11 +64,7 @@ from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attent
 logger = logging.getLogger(__name__)
 
 
-_IPEX_SUPPORT_MODEL = {
-    "llama": ("text-generation",),
-    "bert": ("question-answering",),
-    "vit": ("image-classification",),
-}
+_IPEX_SUPPORT_MODEL = ("llama", "bert", "vit")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
@@ -86,7 +82,7 @@ def _is_patched_with_ipex(model, task):
         # The ipex IAKV op in patched model requires the hidden size at least 64
         return False
 
-    return task in _IPEX_SUPPORT_MODEL.get(model.config.model_type, ())
+    return model.config.model_type in _IPEX_SUPPORT_MODEL
 
 
 def prepare_inputs_for_ipex_model(model, task, use_cache):
@@ -108,7 +104,7 @@ def ipex_jit_trace(model, task, use_cache):
     else:
         model = patch_decoder_attention_mask(model)
 
-    sample_inputs = prepare_jit_inputs(model, task, use_cache)
+    sample_inputs = prepare_inputs_for_ipex_model(model, task, use_cache)
 
     model.config.return_dict = False
 
