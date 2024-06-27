@@ -120,7 +120,7 @@ class IPEXModelTest(unittest.TestCase):
         _ = pipe(text)
         self.assertEqual(pipe.device, model.device)
 
-    def test_auto_mapping(self):
+    def test_assign_task(self):
         if not isinstance(self.IPEX_MODEL_CLASS, IPEXModel):
             return
         model_id = MODEL_NAMES["llama2"]
