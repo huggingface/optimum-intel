@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+from transformers.models.bert.modeling_bert import BertForQuestionAnswering, BertIntermediate
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaForCausalLM,
@@ -23,6 +24,7 @@ from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_ve
 
 from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
+    _IPEXBertIntermediate,
     _IPEXLlamaDecoderLayer,
     _llama_layer_norm_forward,
     _llama_model_forward,
@@ -33,8 +35,8 @@ from .modeling_utils import (
 _TRANSFORMERS_MIN_VERSION = "4.39.0"
 _TRANSFORMERS_MAX_VERSION = "4.41.2"
 
-_IPEX_EXPORTED_ARCH = ("LlamaForCausalLM",)
-_IPEX_EXPORTED_TASK = ("text-generation",)
+_IPEX_EXPORTED_TASKS = "question-answering"
+_IPEX_EXPORTED_GENERATION_TASKS = ("text-generation",)
 
 
 def convert_func(m, func_name, new_function):
@@ -65,6 +67,18 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 
 def _patch_llama_model(model):
+    convert_functions(model, LlamaModel, "forward", _llama_model_forward)
+    convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
+    convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayer, model.config)
+    return model
+
+
+def _patch_bert_model(model):
+    convert_class(model, BertIntermediate, _IPEXBertIntermediate, model.config)
+    return model
+
+
+def _patch_model(model):
     if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
         raise ImportError(f"Only ipex version >= {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports llama model patching")
     if is_transformers_version("<", _TRANSFORMERS_MIN_VERSION) or is_transformers_version(
@@ -73,13 +87,8 @@ def _patch_llama_model(model):
         raise ImportError(
             f"Only transformers versions {_TRANSFORMERS_MIN_VERSION} ~ {_TRANSFORMERS_MAX_VERSION} are verified."
         )
-    convert_functions(model, LlamaModel, "forward", _llama_model_forward)
-    convert_functions(model, LlamaRMSNorm, "forward", _llama_layer_norm_forward)
-    convert_class(model, LlamaDecoderLayer, _IPEXLlamaDecoderLayer, model.config)
-    return model
-
-
-def _patch_model(model):
     if isinstance(model, LlamaForCausalLM):
         model = _patch_llama_model(model)
+    elif isinstance(model, BertForQuestionAnswering):
+        model = _patch_bert_model(model)
     return model

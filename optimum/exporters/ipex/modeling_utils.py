@@ -398,3 +398,19 @@ class _IPEXLlamaDecoderLayer(nn.Module):
             outputs += (present_key_value,)
 
         return outputs
+
+
+# Adapted from https://github.com/huggingface/transformers/blob/v4.41.2/src/transformers/models/bert/modeling_bert.py#L524
+class _IPEXBertIntermediate(nn.Module):
+    def __init__(self, module, config):
+        super().__init__()
+        _setattr_from_module(self, module)
+
+        from intel_extension_for_pytorch.llm.modules import LinearGelu
+
+        self.linear_gelu = LinearGelu(module.dense)
+        del self.__dict__["_modules"]["dense"]
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.linear_gelu(hidden_states)
+        return hidden_states
