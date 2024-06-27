@@ -35,7 +35,6 @@ from .modeling_utils import (
 _TRANSFORMERS_MIN_VERSION = "4.39.0"
 _TRANSFORMERS_MAX_VERSION = "4.41.2"
 
-_IPEX_EXPORTED_TASKS = "question-answering"
 _IPEX_EXPORTED_GENERATION_TASKS = ("text-generation",)
 
 

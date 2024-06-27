@@ -53,7 +53,6 @@ from optimum.utils import NormalizedConfigManager
 
 from ...exporters.ipex.model_patcher import (
     _IPEX_EXPORTED_GENERATION_TASKS,
-    _IPEX_EXPORTED_TASKS,
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _patch_model,
 )
@@ -65,7 +64,7 @@ from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attent
 logger = logging.getLogger(__name__)
 
 
-_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert")
+_IPEX_SUPPORT_MODEL = {"llama": ("text-generation",), "bert": ("question-answering",)}
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
@@ -75,16 +74,15 @@ def _is_patched_with_ipex(model, task):
 
     if isinstance(model, torch.jit.ScriptModule):
         for node in model.graph.nodes():
-            # Jit will record the codes position so we can check if the node use ipex exporter.
-            if "torch_ipex::rotary_position_embedding" in node.__str__():
+            # Only patched model enabled tpp linear by _enable_tpp().
+            if "torch_ipex::tpp_linear" in node.__str__():
                 return True
         return False
-    else:
+    elif task in _IPEX_EXPORTED_GENERATION_TASKS and model.config.hidden_size < 64:
         # The ipex IAKV op in patched model requires the hidden size at least 64
-        return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES and (
-            (task in _IPEX_EXPORTED_GENERATION_TASKS and model.config.hidden_size >= 64)
-            or (task in _IPEX_EXPORTED_TASKS)
-        )
+        return False
+
+    return task in _IPEX_SUPPORT_MODEL.get(model.config.model_type, ())
 
 
 def prepare_inputs_for_ipex_model(model, task, use_cache):
