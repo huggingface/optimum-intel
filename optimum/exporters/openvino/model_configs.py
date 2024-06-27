@@ -13,27 +13,32 @@
 #  limitations under the License.
 
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from packaging import version
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
+from optimum.exporters.onnx.config import (
+    TextDecoderOnnxConfig,
+    TextDecoderWithPositionIdsOnnxConfig,
+)
 from optimum.exporters.onnx.model_configs import (
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
     LlamaOnnxConfig,
+    M2M100OnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
+    T5OnnxConfig,
     UNetOnnxConfig,
     VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
+    WhisperOnnxConfig,
 )
 from optimum.exporters.tasks import TasksManager
-from optimum.utils import DEFAULT_DUMMY_SHAPES
+from optimum.utils import DEFAULT_DUMMY_SHAPES, DummyInputGenerator
 from optimum.utils.input_generators import (
-    DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummyTextInputGenerator,
     FalconDummyPastKeyValuesGenerator,
@@ -840,3 +845,210 @@ class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
             )
 
         return ArcticModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "whisper",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "audio-classification",
+        "automatic-speech-recognition",
+        "automatic-speech-recognition-with-past",
+    ],
+    library_name="transformers",
+)
+class WhisperOpenVINOConfig(WhisperOnnxConfig):
+    def _create_dummy_input_generator_classes(self, **kwargs) -> List[DummyInputGenerator]:
+        """
+        Instantiates the dummy input generators from `self.DUMMY_INPUT_GENERATOR_CLASSES`.
+        Each dummy input generator is independent, so this method instantiates the first generator, and
+        forces the other generators to use the same batch size, meaning they will all produce inputs of the same batch
+        size. Override this method for custom behavior.
+        """
+        if getattr(self, "stateful", False):
+            if "encoder_sequence_length" not in kwargs:
+                sequence_len = kwargs.get("sequence_length", DEFAULT_DUMMY_SHAPES["sequence_length"])
+                kwargs["encoder_sequence_length"] = sequence_len + 2
+        return super()._create_dummy_input_generator_classes(**kwargs)
+
+
+@register_in_tasks_manager(
+    "t5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class T5OpenVINOConfig(T5OnnxConfig):
+    def _create_dummy_input_generator_classes(self, **kwargs) -> List["DummyInputGenerator"]:
+        dummy_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](
+            self.task, self._normalized_config, **kwargs
+        )
+        dummy_decoder_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[1](
+            self.task,
+            self._normalized_config,
+            **kwargs,
+        )
+        dummy_seq2seq_past_key_values_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[2](
+            self.task,
+            self._normalized_config,
+            encoder_sequence_length=dummy_text_input_generator.sequence_length
+            if not getattr(self, "stateful", False)
+            else dummy_text_input_generator.sequence_length + 2,
+            **kwargs,
+        )
+        dummy_inputs_generators = [
+            dummy_text_input_generator,
+            dummy_decoder_text_input_generator,
+            dummy_seq2seq_past_key_values_generator,
+        ]
+
+        return dummy_inputs_generators
+
+
+@register_in_tasks_manager(
+    "mt5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class MT5OpenVINOConfig(T5OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "longt5",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class LongT5OpenVINOConfig(T5OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "m2m-100",
+    *["feature-extraction", "feature-extraction-with-past", "text2text-generation", "text2text-generation-with-past"],
+    library_name="transformers",
+)
+class M2M100OpenVINOConfig(M2M100OnnxConfig):
+    def _create_dummy_input_generator_classes(self, **kwargs) -> List["DummyInputGenerator"]:
+        dummy_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](
+            self.task, self._normalized_config, **kwargs
+        )
+        task = "feature-extraction" if self.task != "text-generation" else "text-generation"
+        dummy_decoder_text_input_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[1][task](
+            self.task, self._normalized_config, **kwargs
+        )
+        if self.task != "text-generation":
+            kwargs["encoder_sequence_length"] = dummy_text_input_generator.sequence_length
+            if getattr(self, "stateful", False):
+                kwargs["encoder_sequence_length"] = kwargs["encoder_sequence_length"] + 2
+
+        dummy_seq2seq_past_key_values_generator = self.DUMMY_INPUT_GENERATOR_CLASSES[2][task](
+            self.task, self._normalized_config, **kwargs
+        )
+        dummy_inputs_generators = [
+            dummy_text_input_generator,
+            dummy_decoder_text_input_generator,
+            dummy_seq2seq_past_key_values_generator,
+        ]
+
+        return dummy_inputs_generators
+
+
+@register_in_tasks_manager(
+    "bart",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+        "text-classification",
+        "question-answering",
+    ],
+    library_name="transformers",
+)
+class BartOpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "mbart",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+        "text-classification",
+        "question-answering",
+    ],
+    library_name="transformers",
+)
+class MBartOpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "blenderbot",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BlenderbotOpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "blenderbot-small",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class BlenderbotSmallOpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "marian",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class MarianOpenVINOConfig(M2M100OpenVINOConfig):
+    pass
+
+
+@register_in_tasks_manager(
+    "pegasus",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text2text-generation",
+        "text2text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class PegasusOpenVINOConfig(M2M100OpenVINOConfig):
+    pass

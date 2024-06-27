@@ -27,6 +27,7 @@ from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from ...exporters.openvino import main_export
+from ...exporters.openvino.stateful import model_has_state
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
@@ -64,7 +65,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         **kwargs,
     ):
         self.config = config
-        self.use_cache = decoder_with_past is not None
+        self.use_cache = decoder_with_past is not None or model_has_state(decoder)
         self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
@@ -74,7 +75,8 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         if self.is_dynamic:
             encoder = self._reshape(encoder, -1, -1, is_decoder=False)
             decoder = self._reshape(decoder, -1, -1)
-            decoder_with_past = self._reshape(decoder_with_past, -1, -1) if self.use_cache else None
+            if decoder_with_past is not None:
+                decoder_with_past = self._reshape(decoder_with_past, -1, -1) if self.use_cache else None
         self.encoder_model = encoder
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
@@ -98,7 +100,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         """
         src_files = [self.encoder_model, self.decoder_model]
         dst_file_names = [OV_ENCODER_NAME, OV_DECODER_NAME]
-        if self.use_cache:
+        if self.decoder_with_past_model is not None:
             src_files.append(self.decoder_with_past_model)
             dst_file_names.append(OV_DECODER_WITH_PAST_NAME)
 
@@ -192,7 +194,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         if os.path.isdir(model_id):
             encoder = cls.load_model(os.path.join(model_id, encoder_file_name), quantization_config)
             decoder = cls.load_model(os.path.join(model_id, decoder_file_name), quantization_config)
-            if use_cache:
+            if use_cache and os.path.exists(os.path.join(model_id, decoder_with_past_file_name)):
                 decoder_with_past = cls.load_model(
                     os.path.join(model_id, decoder_with_past_file_name), quantization_config
                 )
@@ -351,7 +353,8 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             if inputs.get_any_name().startswith("past_key_values"):
                 shapes[inputs][2] = -1
             elif is_decoder and not inputs.get_any_name().startswith("encoder"):
-                shapes[inputs][1] = -1
+                if not inputs.get_any_name().startswith("beam_idx"):
+                    shapes[inputs][1] = -1
             else:
                 shapes[inputs][1] = sequence_length
         model.reshape(shapes)
@@ -371,7 +374,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.encoder_model = self._reshape(self.encoder_model, batch_size, sequence_length, is_decoder=False)
         self.decoder_model = self._reshape(self.decoder_model, batch_size, sequence_length)
-        if self.use_cache:
+        if self.decoder_with_past_model is not None:
             self.decoder_with_past_model = self._reshape(self.decoder_with_past_model, batch_size, sequence_length)
 
     def half(self):
@@ -382,7 +385,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         apply_moc_transformations(self.decoder_model, cf=False)
         compress_model_transformation(self.encoder_model)
         compress_model_transformation(self.decoder_model)
-        if self.use_cache:
+        if self.decoder_with_past_model is not None:
             apply_moc_transformations(self.decoder_with_past_model, cf=False)
             compress_model_transformation(self.decoder_with_past_model)
         return self
