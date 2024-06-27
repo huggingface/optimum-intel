@@ -64,7 +64,11 @@ from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attent
 logger = logging.getLogger(__name__)
 
 
-_IPEX_SUPPORT_MODEL = {"llama": ("text-generation",), "bert": ("question-answering",)}
+_IPEX_SUPPORT_MODEL = {
+    "llama": ("text-generation",),
+    "bert": ("question-answering",),
+    "vit": ("image-classification",),
+}
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 

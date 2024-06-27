@@ -401,7 +401,7 @@ class _IPEXLlamaDecoderLayer(nn.Module):
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.41.2/src/transformers/models/bert/modeling_bert.py#L524
-class _IPEXBertIntermediate(nn.Module):
+class _IPEXIntermediate(nn.Module):
     def __init__(self, module, config):
         super().__init__()
         _setattr_from_module(self, module)
@@ -414,3 +414,13 @@ class _IPEXBertIntermediate(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.linear_gelu(hidden_states)
         return hidden_states
+
+
+class _IPEXBertIntermediate(_IPEXIntermediate):
+    def __init__(self, module, config):
+        super().__init__(module, config)
+
+
+class _IPEXViTIntermediate(_IPEXIntermediate):
+    def __init__(self, module, config):
+        super().__init__(module, config)

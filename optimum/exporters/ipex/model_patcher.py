@@ -19,6 +19,7 @@ from transformers.models.llama.modeling_llama import (
     LlamaModel,
     LlamaRMSNorm,
 )
+from transformers.models.vit.modeling_vit import ViTForImageClassification, ViTIntermediate
 
 from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
 
@@ -26,6 +27,7 @@ from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _IPEXBertIntermediate,
     _IPEXLlamaDecoderLayer,
+    _IPEXViTIntermediate,
     _llama_layer_norm_forward,
     _llama_model_forward,
 )
@@ -50,7 +52,7 @@ def convert_functions(m, target_m, new_function_name, new_function):
         convert_functions(sub_m, target_m, new_function_name, new_function)
 
 
-def convert_class(m, target_m, new_class, config):
+def convert_class(m, target_m, new_class, config=None):
     for name, sub_m in m.named_children():
         if isinstance(sub_m, target_m):
             new_m = new_class(sub_m, config)
@@ -73,7 +75,12 @@ def _patch_llama_model(model):
 
 
 def _patch_bert_model(model):
-    convert_class(model, BertIntermediate, _IPEXBertIntermediate, model.config)
+    convert_class(model, BertIntermediate, _IPEXBertIntermediate)
+    return model
+
+
+def _patch_vit_model(model):
+    convert_class(model, ViTIntermediate, _IPEXViTIntermediate)
     return model
 
 
@@ -90,4 +97,6 @@ def _patch_model(model):
         model = _patch_llama_model(model)
     elif isinstance(model, BertForQuestionAnswering):
         model = _patch_bert_model(model)
+    elif isinstance(model, ViTForImageClassification):
+        model = _patch_vit_model(model)
     return model
