@@ -101,6 +101,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "awq": True,
     },
+    "stabilityai/stable-code-3b": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
 }
 
 
