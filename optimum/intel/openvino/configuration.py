@@ -57,7 +57,6 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "awq": True,
     },
-    "stablelm-epoch-3b-preview": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "stabilityai/stablelm-zephyr-3b": {
         "bits": 4,
         "sym": False,
