@@ -584,6 +584,7 @@ def export_from_model(
         preprocessors=preprocessors,
         library_name=library_name,
         model_kwargs=model_kwargs,
+        int_dtype="int32",
         _variant="default",
         legacy=False,
         exporter="openvino",
