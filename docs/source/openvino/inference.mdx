@@ -32,69 +32,80 @@ Once [your model was exported](export), you can load it by replacing the `AutoMo
 See the [reference documentation](reference) for more information about parameters, and examples for different tasks.
 
 
-## Compilation
+### Compilation
 
-By default the model will be compiled when instantiating an `OVModel`. In the case where the model is reshaped or placed to another device, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by setting `compile=False`. The model can be compiled before the first inference with `model.compile()`.
+By default the model will be compiled when instantiating an `OVModel`. In the case where the model is reshaped or placed to another device, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by setting `compile=False`.
 
 ```python
-from optimum.intel import OVModelForSequenceClassification
+from optimum.intel import OVModelForQuestionAnswering
 
-model_id = "distilbert-base-uncased-finetuned-sst-2-english"
+model_id = "distilbert/distilbert-base-cased-distilled-squad"
 # Load the model and disable the model compilation
-model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, compile=False)
-# Reshape to a static sequence length of 128
-model.reshape(1,128)
-# Compile the model before the first inference
-model.compile()
+model = OVModelForQuestionAnswering.from_pretrained(model_id, compile=False)
 ```
 
 To run inference on Intel integrated or discrete GPU, use `.to("gpu")`. On GPU, models run in FP16 precision by default. (See [OpenVINO documentation](https://docs.openvino.ai/2024/get-started/configurations/configurations-intel-gpu.html) about installing drivers for GPU inference).
 
 ```python
-# Static shapes speed up inference
-model.reshape(1, 9)
 model.to("gpu")
-# Compile the model before the first inference
-model.compile()
 ```
 
+The model can be compiled with `model.compile()`.
+
+```python
+model.compile()
+```
 
 ### Static shape
 
 By default, `OVModelForXxx` support dynamic shapes, enabling inputs of every shapes. To speed up inference, static shapes can be enabled by giving the desired inputs shapes.
 
 ```python
-# Fix the batch size to 1 and the sequence length to 9
-model.reshape(1, 9)
-# Compile the model before the first inference
-model.compile()
+# Fix the batch size to 1 and the sequence length to 40
+batch_size, seq_len = 1, 40
+model.reshape(batch_size, seq_len)
 ```
 
-When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape. When instantiating your pipeline, you can specify the maximum total input sequence length after tokenization in order for shorter sequences to be padded and for longer sequences to be truncated.
+When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape.
 
 ```python
-from transformers import AutoTokenizer, pipeline
-from optimum.intel import OVModelForSequenceClassification
 
-model_id = "helenai/distilbert-base-uncased-finetuned-sst-2-english-ov-fp32"
-model = OVModelForSequenceClassification.from_pretrained(model_id, compile=False)
+from transformers import AutoTokenizer
+from optimum.intel import OVModelForQuestionAnswering
+
+model_id = "distilbert/distilbert-base-cased-distilled-squad"
+model = OVModelForQuestionAnswering.from_pretrained(model_id, compile=False)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-batch_size, seq_len = 1, 10
+batch_size, seq_len = 1, 40
 model.reshape(batch_size, seq_len)
-inputs = "He's a dreadful magician"
-tokens = tokenizer(inputs, max_length=seq_len, padding="max_length", return_tensors="np")
+# Compile the model before the first inference
+model.compile()
 
-# verifying that the inputs shapes match the defined batch size and sequence length
-print(tokens["input_ids"].shape)
-# (1, 10)
+question = "Which name is also used to describe the Amazon rainforest ?"
+context = "The Amazon rainforest, also known as Amazonia or the Amazon Jungle"
+tokens = tokenizer(question, context, max_length=seq_len, padding="max_length", return_tensors="np")
 
 outputs = model(**tokens)
-
-
-pipeline
 ```
 
+When instantiating your pipeline, you can specify the maximum total input sequence length after tokenization in order for shorter sequences to be padded and for longer sequences to be truncated.
+
+```python
+
+from transformers import pipeline
+
+qa_pipe = pipeline(
+    "question-answering",
+    model=model,
+    tokenizer=tokenizer,
+    max_seq_len=seq_len,
+    padding="max_length",
+    truncation=True,
+)
+
+results = qa_pipe(question=question, context=context)
+```
 
 ### Configuration
 
