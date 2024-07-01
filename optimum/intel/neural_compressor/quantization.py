@@ -307,7 +307,7 @@ class INCQuantizer(OptimumQuantizer):
                 )
 
             op_type_dict = getattr(quantization_config, "op_type_dict", None)
-            if save_onnx_model and op_type_dict is None or "Embedding" not in op_type_dict:
+            if save_onnx_model and (op_type_dict is None or "Embedding" not in op_type_dict):
                 logger.warning(
                     "ONNX export is no supported for model with quantized embeddings. "
                     "Setting `save_onnx_model` to False."
