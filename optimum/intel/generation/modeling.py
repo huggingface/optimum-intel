@@ -34,7 +34,7 @@ from optimum.utils import NormalizedConfigManager
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_torch_version
-from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
+from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 
 
 logger = logging.getLogger(__name__)
@@ -454,7 +454,6 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        model = patch_decoder_attention_mask(model)
 
         traced_model = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
