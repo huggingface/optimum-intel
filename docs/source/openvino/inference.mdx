@@ -31,6 +31,9 @@ Once [your model was exported](export), you can load it by replacing the `AutoMo
 
 See the [reference documentation](reference) for more information about parameters, and examples for different tasks.
 
+[[autodoc]] openvino.modeling_base.OVBaseModel
+    - _from_pretrained
+
 
 ## Compilation
 
@@ -107,6 +110,10 @@ qa_pipe = pipeline(
 results = qa_pipe(question=question, context=context)
 ```
 
+[[autodoc]] openvino.modeling_base.OVBaseModel
+    - reshape
+
+
 ## Configuration
 
 It is possible to pass an `ov_config` parameter to `from_pretrained()` with custom OpenVINO configuration values. This can be used for example to enable full precision inference on devices where FP16 or BF16 inference precision is used by default.
@@ -123,7 +130,7 @@ ov_config = {"PERFORMANCE_HINT": "LATENCY", "CACHE_DIR":""}
 model = OVModelForSequenceClassification.from_pretrained(model_id, device="gpu", ov_config=ov_config)
 ```
 
-### Weight quantization
+## Weight quantization
 
 You can also apply fp16, 8-bit or 4-bit weight compression on the Linear, Convolutional and Embedding layers when loading your model to reduce the memory footprint and inference latency.
 
@@ -138,7 +145,6 @@ If not specified, `load_in_8bit` will be set to `True` by default when models la
 It's also possible to apply quantization on both weights and activations using the `OVQuantizer`, more information in the [documentation](optimization#static-quantization).
 
 
-[[autodoc]] openvino.modeling_base.OVBaseModel
 
 
 ## Transformers models
