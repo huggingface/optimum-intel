@@ -1161,7 +1161,7 @@ class InternLM2Patcher(DecoderModelPatcher):
                 block.attention.forward = block.attention._orig_forward
 
 
-# Adapted from https://github.com/huggingface/transformers/blob/ccdabc5642bf84849af93f591e207dc625c8e1e1/src/transformers/models/phi3/modeling_phi3.py#L426
+# Adapted from https://github.com/huggingface/transformers/blob/ccdabc5642bf84849af93f591e207dc625c8e1e1/src/transformers/models/phi3/modeling_phi3.py#L729
 def _phi3_self_attn_sdpa_forward(
     self,
     hidden_states: torch.Tensor,
@@ -1170,6 +1170,7 @@ def _phi3_self_attn_sdpa_forward(
     past_key_value: Optional[Tuple[torch.Tensor]] = None,
     output_attentions: bool = False,
     use_cache: bool = False,
+    cache_position: Optional[torch.LongTensor] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     if output_attentions:
         return self._orig_forward(
@@ -1181,10 +1182,9 @@ def _phi3_self_attn_sdpa_forward(
             use_cache=use_cache,
         )
 
-    # TO DO: remove llama imports when transformers with phi3 support will be released
-    try:
+    if is_transformers_version(">=", "4.41.0"):
         from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
-    except ImportError:
+    else:
         from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
 
     bsz, q_len, _ = hidden_states.size()
@@ -1206,17 +1206,15 @@ def _phi3_self_attn_sdpa_forward(
     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
     if past_key_value is not None:
-        cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
+        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
         key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
     key_states = repeat_kv(key_states, self.num_key_value_groups)
     value_states = repeat_kv(value_states, self.num_key_value_groups)
 
+    causal_mask = attention_mask
     if attention_mask is not None:
-        if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-            raise ValueError(
-                f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-            )
+        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
 
     # SDPA with memory-efficient backend is currently (torch==2.1.2) bugged with non-contiguous inputs with custom attn_mask,
     # Reference: https://github.com/pytorch/pytorch/issues/112577.
@@ -1229,7 +1227,7 @@ def _phi3_self_attn_sdpa_forward(
         query_states,
         key_states,
         value_states,
-        attn_mask=attention_mask,
+        attn_mask=causal_mask,
         dropout_p=self.attention_dropout if self.training else 0.0,
         # The q_len > 1 is necessary to match with AttentionMaskConverter.to_causal_4d that does not create a causal mask in case q_len == 1.
         is_causal=self.is_causal and attention_mask is None and q_len > 1,
@@ -1561,7 +1559,7 @@ class CodeGenModelPatcher(DecoderModelPatcher):
                 layer.attn._attn = layer.attn._orig_attn
 
 
-# adapted from https://github.com/huggingface/transformers/blob/v4.40.2/src/transformers/models/dbrx/modeling_dbrx.py#L763
+# Adapted from https://github.com/huggingface/transformers/blob/v4.40.2/src/transformers/models/dbrx/modeling_dbrx.py#L763
 def _dbrx_experts_forward(
     self, x: torch.Tensor, weights: torch.Tensor, top_weights: torch.Tensor, top_experts: torch.LongTensor
 ):
@@ -1606,7 +1604,7 @@ def _dbrx_experts_forward(
     return out
 
 
-# adapted from https://github.com/huggingface/transformers/blob/v4.40.2/src/transformers/models/dbrx/modeling_dbrx.py#L1228
+# Adapted from https://github.com/huggingface/transformers/blob/v4.40.2/src/transformers/models/dbrx/modeling_dbrx.py#L1228
 def _dbrx_update_causal_mask_legacy(
     self, attention_mask: Optional[torch.Tensor], input_tensor: torch.Tensor, cache_position: torch.Tensor
 ) -> Optional[torch.Tensor]:
@@ -1803,6 +1801,7 @@ class DBRXModelPatcher(DecoderModelPatcher):
             block.ffn.experts.forward = block.ffn.experts._orig_forward
 
 
+# Adapted from https://github.com/huggingface/transformers/blob/v4.41.0/src/transformers/models/persimmon/modeling_persimmon.py#L264
 def _persimmon_self_attn_sdpa_forward(
     self,
     hidden_states: torch.Tensor,
@@ -1811,6 +1810,7 @@ def _persimmon_self_attn_sdpa_forward(
     past_key_value: Optional["Cache"] = None,
     output_attentions: bool = False,
     use_cache: bool = False,
+    cache_position: Optional[torch.LongTensor] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     from transformers.models.persimmon.modeling_persimmon import apply_rotary_pos_emb
 
@@ -1865,14 +1865,23 @@ def _persimmon_self_attn_sdpa_forward(
 
     if past_key_value is not None:
         # Specific to RoPE models with partial rotation
-        cache_kwargs = {"sin": sin, "cos": cos, "partial_rotation_size": self.rotary_emb.dim}
+        cache_kwargs = {
+            "sin": sin,
+            "cos": cos,
+            "partial_rotation_size": self.rotary_emb.dim,
+            "cache_position": cache_position,
+        }
         key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+
+    causal_mask = attention_mask
+    if attention_mask is not None:  # no matter the length, we just slice it
+        causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
 
     attn_output = F.scaled_dot_product_attention(
         query_states,
         key_states,
         value_states,
-        attention_mask,
+        causal_mask,
         scale=1 / math.sqrt(self.head_dim),
         dropout_p=self.attention_dropout.p,
     )

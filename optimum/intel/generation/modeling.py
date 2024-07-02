@@ -90,6 +90,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
     export_feature = "text-generation"
     main_input_name = "input_ids"
     base_model_prefix = "torch_script_model"
+    _supports_cache_class = False
 
     def __init__(
         self,
