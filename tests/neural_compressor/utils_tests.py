@@ -141,6 +141,7 @@ class INCTestMixin(unittest.TestCase):
         task,
         tokenizer,
         save_directory,
+        expected_quantized_matmuls,
         is_static=True,
         load_inc_model=True,
         num_samples=None,

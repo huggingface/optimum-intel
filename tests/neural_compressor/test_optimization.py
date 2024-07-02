@@ -90,12 +90,10 @@ class QuantizationTest(INCTestMixin):
         model_class = TasksManager.get_model_class_for_task(task)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        quantized_model = None
-        model_kwargs = {"use_cache": False, "use_io_binding": False} if task == "text-generation" else {}
         quantization_config = PostTrainingQuantConfig(approach="dynamic")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            model = model_class.auto_model_class.from_pretrained(model_name)
+            model = model_class.from_pretrained(model_name)
             quantizer = INCQuantizer.from_pretrained(model, task=task)
             quantizer.quantize(
                 quantization_config=quantization_config,
@@ -124,10 +122,9 @@ class QuantizationTest(INCTestMixin):
 
         quantized_model = None
         quantization_config = PostTrainingQuantConfig(approach="static")
-        model_kwargs = {"use_cache": False, "use_io_binding": False} if task == "text-generation" else {}
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            model = model_class.auto_model_class.from_pretrained(model_name)
+            model = model_class.from_pretrained(model_name)
             quantizer = INCQuantizer.from_pretrained(model, task=task)
             calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
             quantizer.quantize(
@@ -273,7 +270,6 @@ class TrainingOptimizationTest(INCTestMixin):
                 task=task,
                 tokenizer=trainer.tokenizer,
                 save_directory=tmp_dir,
-                expected_quantized_matmuls=expected_quantized_matmuls,
                 is_static=True,
             )
 

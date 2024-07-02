@@ -126,6 +126,7 @@ class INCTrainer(Trainer):
         quantization_config: Optional[_BaseQuantizationConfig] = None,
         pruning_config: Optional[_BaseQuantizationConfig] = None,
         distillation_config: Optional[_BaseQuantizationConfig] = None,
+        task: Optional[str] = None,
     ):
         self.neftune_noise_alpha = None
 
@@ -150,6 +151,7 @@ class INCTrainer(Trainer):
             )
 
         inc_config = []
+        self.task = task
         self.quantization_config = quantization_config
         self.pruning_config = pruning_config
         self.distillation_config = distillation_config
