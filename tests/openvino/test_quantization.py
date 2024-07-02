@@ -90,8 +90,10 @@ class OVQuantizerTest(unittest.TestCase):
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
         file_name = "openvino_quantized_model.xml"
 
-        if model_name == "bert" and is_transformers_version("<", "4.41.0"):
+        if is_transformers_version("<", "4.41.0") and model_name == "bert":
             expected_fake_quantize = 32
+        if is_transformers_version("<", "4.42.0") and model_name == "gpt2":
+            expected_fake_quantize = 41
 
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
