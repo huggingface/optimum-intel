@@ -12,14 +12,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import copy
 import math
 import os
 import shutil
 import sys
 import time
 from collections.abc import Mapping
-from itertools import chain
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 
@@ -64,9 +62,7 @@ from transformers.utils import (
     logging,
 )
 
-from optimum.exporters import TasksManager
-
-from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, TRAINING_ARGS_NAME
+from ..utils.constant import TRAINING_ARGS_NAME
 from ..utils.import_utils import is_neural_compressor_version, is_transformers_version
 from .configuration import INCConfig
 
@@ -103,15 +99,6 @@ if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
 
 
-if TYPE_CHECKING:
-    from optimum.exporters.onnx import OnnxConfig
-
-if is_neural_compressor_version("<", "2.6"):
-    from neural_compressor.experimental.export import torch_to_fp32_onnx, torch_to_int8_onnx
-else:
-    from neural_compressor.utils.export import torch_to_fp32_onnx, torch_to_int8_onnx
-
-
 __version__ = "4.22.2"
 
 
@@ -139,8 +126,6 @@ class INCTrainer(Trainer):
         quantization_config: Optional[_BaseQuantizationConfig] = None,
         pruning_config: Optional[_BaseQuantizationConfig] = None,
         distillation_config: Optional[_BaseQuantizationConfig] = None,
-        task: Optional[str] = None,
-        save_onnx_model: bool = False,
     ):
         self.neftune_noise_alpha = None
 
@@ -165,18 +150,13 @@ class INCTrainer(Trainer):
             )
 
         inc_config = []
-        self.task = task
         self.quantization_config = quantization_config
         self.pruning_config = pruning_config
         self.distillation_config = distillation_config
         self._compression_manager = None
         self.distillation_callback = None
-        self.save_onnx_model = save_onnx_model
         # TODO : To deprecate once support transformers > 4.30.0
         self.deepspeed = None
-
-        if save_onnx_model:
-            logger.warning("ONNX model saving is deprecated and will be removed soon.")
 
         # Attach dtype and architecture to the config
         if quantization_config is not None:
@@ -208,9 +188,8 @@ class INCTrainer(Trainer):
 
         self.inc_config = INCConfig(
             quantization=self.quantization_config,
-            pruning=self.pruning_config,
             distillation=self.distillation_config,
-            save_onnx_model=save_onnx_model,
+            pruning=self.pruning_config,
         )
 
     def _inner_training_loop(
@@ -678,11 +657,7 @@ class INCTrainer(Trainer):
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
 
-    def save_model(
-        self,
-        output_dir: Optional[str] = None,
-        save_onnx_model: bool = False,
-    ):
+    def save_model(self, output_dir: Optional[str] = None):
         """
         Will save the model, so you can reload it using `from_pretrained()`.
         Will only save from the main process.
@@ -691,17 +666,9 @@ class INCTrainer(Trainer):
             output_dir = self.args.output_dir
 
         if self.args.should_save:
-            self._save(
-                output_dir=output_dir,
-                save_onnx_model=save_onnx_model,
-            )
+            self._save(output_dir=output_dir)
 
-    def _save(
-        self,
-        output_dir=None,
-        state_dict=None,
-        save_onnx_model=False,
-    ):
+    def _save(self, output_dir=None, state_dict=None):
         # If we are executing this function, we are the process zero, so we don't check for that.
         output_dir = output_dir if output_dir is not None else self.args.output_dir
 
@@ -732,75 +699,11 @@ class INCTrainer(Trainer):
                 state_dict["best_configure"] = self._compression_manager.model.q_config
         torch.save(state_dict, output_model_file)
 
-        # Disable ONNX export for quantized model as deprecated in neural-compressor>=2.2.0
-        if save_onnx_model and self.dtype == "int8":
-            logger.warning(
-                "ONNX export for quantized model is no longer supported by neural-compressor>=2.2.0. "
-                "Setting `save_onnx_model` to False."
-            )
-            save_onnx_model = False
-
-        # Export the compressed model to the ONNX format
-        if save_onnx_model:
-            self._set_task()
-            model_type = self.model.config.model_type.replace("_", "-")
-            model_name = getattr(self.model, "name", None)
-            onnx_config_class = TasksManager.get_exporter_config_constructor(
-                exporter="onnx", model=self.model, task=self.task, model_type=model_type, model_name=model_name
-            )
-            onnx_config = onnx_config_class(self.model.config)
-            output_onnx_path = os.path.join(output_dir, ONNX_WEIGHTS_NAME)
-
-            signature_columns = copy.deepcopy(self._signature_columns)
-            self._signature_columns = list(
-                set(self._signature_columns) - set(["label", "label_ids"] + self.label_names)
-            )
-            self._signature_columns = signature_columns
-
-            self.model.eval()
-            self._onnx_export(self.model, onnx_config, output_onnx_path)
-
         if self.pruning_config is not None:
             self.inc_config.pruning["sparsity"] = round(self.get_model_sparsity(), 2)
-        self.inc_config.save_onnx_model = save_onnx_model
         self.inc_config.save_pretrained(output_dir)
 
         logger.info(f"Model weights saved in {output_model_file}")
-
-    def _set_task(self):
-        if self.task is None:
-            raise ValueError("The model task defining the model topology needs to be specified for the ONNX export.")
-        self.task = _TASK_ALIASES.get(self.task, self.task)
-
-    def _onnx_export(self, model: nn.Module, config: "OnnxConfig", output_path: str):
-        opset = min(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
-        dynamic_axes = dict(chain(config.inputs.items(), config.outputs.items()))
-        inputs = config.generate_dummy_inputs(framework="pt")
-        device = model.device
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-
-        if self.dtype == "int8":
-            torch_to_int8_onnx(
-                model,
-                q_config=self._compression_manager.model.q_config,
-                save_path=output_path,
-                example_inputs=inputs,
-                opset_version=opset,
-                dynamic_axes=dynamic_axes,
-                input_names=list(config.inputs.keys()),
-                output_names=list(config.outputs.keys()),
-            )
-        else:
-            torch_to_fp32_onnx(
-                model,
-                save_path=output_path,
-                example_inputs=inputs,
-                opset_version=opset,
-                dynamic_axes=dynamic_axes,
-                input_names=list(config.inputs.keys()),
-                output_names=list(config.outputs.keys()),
-                do_constant_folding=True,
-            )
 
     def _remove_unused_columns(self, dataset: "datasets.Dataset", description: Optional[str] = None):
         if not self.args.remove_unused_columns:
