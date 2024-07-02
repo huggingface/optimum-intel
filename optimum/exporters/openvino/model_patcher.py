@@ -1876,7 +1876,7 @@ def _persimmon_self_attn_sdpa_forward(
     causal_mask = attention_mask
     if attention_mask is not None:  # no matter the length, we just slice it
         causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
-        
+
     attn_output = F.scaled_dot_product_attention(
         query_states,
         key_states,
