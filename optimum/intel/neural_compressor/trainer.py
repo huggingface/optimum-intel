@@ -18,7 +18,7 @@ import shutil
 import sys
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 
 # Integrations must be imported before ML frameworks:

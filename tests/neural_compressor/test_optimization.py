@@ -270,6 +270,7 @@ class TrainingOptimizationTest(INCTestMixin):
                 task=task,
                 tokenizer=trainer.tokenizer,
                 save_directory=tmp_dir,
+                expected_quantized_matmuls=expected_quantized_matmuls,
                 is_static=True,
             )
 
