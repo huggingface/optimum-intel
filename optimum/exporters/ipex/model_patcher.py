@@ -12,14 +12,14 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from transformers.models.bert.modeling_bert import BertForQuestionAnswering, BertIntermediate
+from transformers.models.bert.modeling_bert import BertIntermediate
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaForCausalLM,
     LlamaModel,
     LlamaRMSNorm,
 )
-from transformers.models.vit.modeling_vit import ViTForImageClassification, ViTIntermediate
+from transformers.models.vit.modeling_vit import ViTIntermediate
 
 from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
 
@@ -94,8 +94,8 @@ def _patch_model(model):
         )
     if isinstance(model, LlamaForCausalLM):
         model = _patch_llama_model(model)
-    elif isinstance(model, BertForQuestionAnswering):
+    elif model.config.model_type == "bert":
         model = _patch_bert_model(model)
-    elif isinstance(model, ViTForImageClassification):
+    elif model.config.model_type == "vit":
         model = _patch_vit_model(model)
     return model

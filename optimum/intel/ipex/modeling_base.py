@@ -58,7 +58,7 @@ from ...exporters.ipex.model_patcher import (
 )
 from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
-from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask, recursive_to_device
+from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, recursive_to_device
 
 
 logger = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ def _is_patched_with_ipex(model, task):
     return model.config.model_type in _IPEX_SUPPORT_MODEL_TYPES
 
 
-def prepare_inputs_for_ipex_model(model, task, use_cache):
+def _prepare_inputs_for_ipex_model(model, task, use_cache):
     if task in _IPEX_EXPORTED_GENERATION_TASKS and _is_patched_with_ipex(model, task):
         return get_dummy_input(model, return_dict=True)
     else:
@@ -101,10 +101,8 @@ def ipex_jit_trace(model, task, use_cache):
         model = _patch_model(model)
         # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
         _enable_tpp()
-    else:
-        model = patch_decoder_attention_mask(model)
 
-    sample_inputs = prepare_inputs_for_ipex_model(model, task, use_cache)
+    sample_inputs = _prepare_inputs_for_ipex_model(model, task, use_cache)
 
     model.config.return_dict = False
 
