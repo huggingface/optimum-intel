@@ -200,9 +200,15 @@ class INCQuantizer(OptimumQuantizer):
         use_xpu = device == torch.device("xpu") or device == "xpu"
         calibration_dataloader = None
 
+        if save_onnx_model:
+            logger.warning("ONNX model export is deprecated and will be removed soon.")
+
+        if isinstance(self._original_model, ORTModel):
+            logger.warning("ONNX model quantization is deprecated and will be removed soon.")
+
         if save_onnx_model and isinstance(self._original_model, ORTModel):
+            logger.warning("The model provided is already an ONNX model. Setting `save_onnx_model` to False.")
             save_onnx_model = False
-            logger.warning("Model provided is an ONNX model, `save_onnx_model` is set to False")
 
         default_name = WEIGHTS_NAME if not isinstance(self._original_model, ORTModel) else ONNX_WEIGHTS_NAME
         self._set_task()
@@ -223,13 +229,16 @@ class INCQuantizer(OptimumQuantizer):
                 f"but only version {IPEX_MINIMUM_VERSION} or higher is supported."
             )
 
-        if save_onnx_model:
-            if (
-                not isinstance(quantization_config, PostTrainingQuantConfig)
-                or INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.DYNAMIC
-            ):
-                logger.warning("ONNX export for dynamic and weight only quantized model is not supported.")
-                save_onnx_model = False
+        if save_onnx_model and (
+            not isinstance(quantization_config, PostTrainingQuantConfig)
+            or INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.DYNAMIC
+        ):
+            logger.warning(
+                "ONNX export for dynamic and weight only quantized model is not supported. "
+                "Only static quantization model can be exported to ONNX format. "
+                "Setting `save_onnx_model` to False."
+            )
+            save_onnx_model = False
 
         # ITREX Weight Only Quantization
         if not isinstance(quantization_config, PostTrainingQuantConfig):
@@ -296,9 +305,13 @@ class INCQuantizer(OptimumQuantizer):
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
                 )
+
             op_type_dict = getattr(quantization_config, "op_type_dict", None)
-            if op_type_dict is None or "Embedding" not in op_type_dict:
-                logger.warning("ONNX export is no supported for model with quantized embeddings")
+            if save_onnx_model and (op_type_dict is None or "Embedding" not in op_type_dict):
+                logger.warning(
+                    "ONNX export is no supported for model with quantized embeddings. "
+                    "Setting `save_onnx_model` to False."
+                )
                 save_onnx_model = False
 
         if not isinstance(quantization_config, PostTrainingQuantConfig):
