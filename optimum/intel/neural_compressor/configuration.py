@@ -41,7 +41,6 @@ class INCConfig(BaseConfig):
         quantization: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
         pruning: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
         distillation: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
-        save_onnx_model: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -50,10 +49,6 @@ class INCConfig(BaseConfig):
         self.quantization = self._create_quantization_config(quantization) or {}
         self.pruning = self._create_pruning_config(pruning) or {}
         self.distillation = self._create_distillation_config(distillation) or {}
-        self.save_onnx_model = save_onnx_model
-
-        if self.save_onnx_model:
-            logger.warning("ONNX model saving is deprecated and will be removed soon.")
 
     @staticmethod
     def _create_quantization_config(config: Union[Dict, _BaseQuantizationConfig]):
