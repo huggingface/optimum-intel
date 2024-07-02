@@ -76,7 +76,7 @@ _TASK_TO_DATASET = {
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
         (OVModelForSequenceClassification, "bert", 22, 35),
-        (OVModelForCausalLM, "gpt2", 41, 3),
+        (OVModelForCausalLM, "gpt2", 21, 3),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
