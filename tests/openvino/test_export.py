@@ -78,6 +78,7 @@ class ExportModelTest(unittest.TestCase):
         model_type: str,
         compression_option: Optional[str] = None,
         stateful: bool = True,
+        patch_16bit_model: bool = False,
     ):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature
@@ -170,6 +171,32 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(ov_model.generation_config is not None)
                     self.assertIsInstance(ov_model.generation_config, GenerationConfig)
                     self.assertTrue(ov_model.generation_config.top_k == 42)
+
+    def test_export_fp16_model(self):
+        auto_model = self.SUPPORTED_ARCHITECTURES["gpt2"]
+        task = auto_model.export_feature
+        model_name = MODEL_NAMES["gpt2"]
+        model = auto_model.auto_model_class.from_pretrained(model_name, torch_dtype=torch.float16)
+        stateful = True
+
+        for supported_task in [task, task + "with-past"]:
+            with TemporaryDirectory() as tmpdirname:
+                export_from_model(
+                    model=model,
+                    output=Path(tmpdirname),
+                    task=task,
+                    preprocessors=None,
+                    patch_16bit_model=True,
+                    stateful=stateful,
+                )
+                use_cache = supported_task.endswith("-with-past")
+                ov_model = auto_model.from_pretrained(tmpdirname, use_cache=use_cache)
+                self.assertIsInstance(ov_model, OVBaseModel)
+                self.assertEqual(ov_model.use_cache, use_cache)
+                self.assertEqual(ov_model.stateful, stateful and use_cache)
+                self.assertEqual(
+                    ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
+                )
 
 
 class CustomExportModelTest(unittest.TestCase):

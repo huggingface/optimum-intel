@@ -105,6 +105,7 @@ def export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
+    patch_16bit_model: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a Pytorch or TensorFlow model to an OpenVINO Intermediate Representation.
@@ -156,6 +157,7 @@ def export(
             ov_config=ov_config,
             model_kwargs=model_kwargs,
             stateful=stateful,
+            patch_16bit_model=patch_16bit_model,
         )
 
     elif is_tf_available() and issubclass(type(model), TFPreTrainedModel):
@@ -265,6 +267,7 @@ def export_pytorch(
     model_kwargs: Optional[Dict[str, Any]] = None,
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = False,
+    patch_16bit_model: bool = False,
 ) -> Tuple[List[str], List[str]]:
     """
     Exports a PyTorch model to an OpenVINO Intermediate Representation.
@@ -344,6 +347,11 @@ def export_pytorch(
             patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
             patched_forward = patcher.patched_forward
 
+            if patch_16bit_model:
+                from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
+
+                __make_16bit_traceable(model)
+
             @functools.wraps(patched_forward)
             def ts_patched_forward(*args, **kwargs):
                 for i in range(len(dict_inputs)):
@@ -377,6 +385,13 @@ def export_pytorch(
                     "A stateless model will be exported instead. It may result in sub-optimal inference performance."
                     "Provide a model that can be converted to OpenVINO without fallback to ONNX conversion path."
                 )
+
+            if patch_16bit_model:
+                from openvino.frontend.pytorch.patch_model import unpatch_model
+
+                unpatch_model(model, "_openvino_module_extension_patch_orig_forward")
+                model.to(torch.float32)
+
             return export_pytorch_via_onnx(
                 model,
                 config,
@@ -432,6 +447,7 @@ def export_models(
     model_kwargs: Optional[Dict[str, Any]] = None,
     ov_config: Optional["OVConfig"] = None,
     stateful: bool = True,
+    patch_16bit_model: bool = False,
 ) -> Tuple[List[List[str]], List[List[str]]]:
     """
     Export the models to OpenVINO IR format
@@ -483,6 +499,7 @@ def export_models(
                 model_kwargs=model_kwargs,
                 ov_config=ov_config,
                 stateful=stateful,
+                patch_16bit_model=patch_16bit_model,
             )
         )
 
@@ -503,6 +520,7 @@ def export_from_model(
     preprocessors: List = None,
     device: str = "cpu",
     trust_remote_code: bool = False,
+    patch_16bit_model: bool = False,
     **kwargs_shapes,
 ):
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
@@ -664,6 +682,7 @@ def export_from_model(
         stateful=stateful,
         opset=opset,
         model_kwargs=model_kwargs,
+        patch_16bit_model=patch_16bit_model,
     )
 
 

@@ -280,6 +280,13 @@ class OVBaseDecoderModel(OVModel):
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
 
+        torch_dtype = kwargs.pop("torch_dtype", None)
+
+        model_loading_kwargs = {}
+
+        if torch_dtype is not None:
+            model_loading_kwargs["torch_dtype"] = torch_dtype
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -293,6 +300,7 @@ class OVBaseDecoderModel(OVModel):
             trust_remote_code=trust_remote_code,
             ov_config=ov_export_config,
             stateful=stateful,
+            model_loading_kwargs=model_loading_kwargs,
         )
 
         config.is_decoder = True
