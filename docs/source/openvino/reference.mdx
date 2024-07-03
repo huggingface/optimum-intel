@@ -16,6 +16,8 @@ limitations under the License.
 
 # Models
 
+## Generic model classes
+
 [[autodoc]] openvino.modeling_base.OVBaseModel
     - _from_pretrained
     - reshape
@@ -126,11 +128,17 @@ The following classes are available for the following multimodal tasks.
 
 ## Text-to-image
 
+### OVStableDiffusionPipeline
+
 [[autodoc]] openvino.modeling_diffusion.OVStableDiffusionPipeline
     - forward
 
+### OVStableDiffusionXLPipeline
+
 [[autodoc]] openvino.modeling_diffusion.OVStableDiffusionXLPipeline
     - forward
+
+### OVLatentConsistencyModelPipeline
 
 [[autodoc]] openvino.modeling_diffusion.OVLatentConsistencyModelPipeline
     - forward
@@ -138,20 +146,20 @@ The following classes are available for the following multimodal tasks.
 
 ## Image-to-image
 
+### OVStableDiffusionImg2ImgPipeline
+
 [[autodoc]] openvino.modeling_diffusion.OVStableDiffusionImg2ImgPipeline
     - forward
+
+### OVStableDiffusionXLImg2ImgPipeline
 
 [[autodoc]] openvino.modeling_diffusion.OVStableDiffusionXLImg2ImgPipeline
     - forward
 
 ## Inpainting
 
+### OVStableDiffusionInpaintPipeline
+
 [[autodoc]] openvino.modeling_diffusion.OVStableDiffusionInpaintPipeline
     - forward
 
-
-# Quantization
-
-### OVQuantizer
-
-[[autodoc]] openvino.quantization.OVQuantizer

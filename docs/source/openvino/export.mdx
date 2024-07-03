@@ -20,19 +20,6 @@ optimum-cli export openvino --model gpt2 ov_model/
 The model argument can either be the model ID of a model hosted on the [Hub](https://huggingface.co/models) or a path to a model hosted locally. For local models, you need to specify the task for which the model should be loaded before export, among the list of the [supported tasks](https://huggingface.co/docs/optimum/main/en/exporters/task_manager).
 
 
-```bash
-optimum-cli export openvino --model local_model_dir --task text-generation-with-past ov_model/
-```
-
-The `-with-past` suffix enable the re-use of past keys and values. This allows to avoid recomputing the same intermediate activations during the generation. to export the model without, you will need to remove this suffix.
-
-| With K-V cache                           | Without K-V cache                    |
-|------------------------------------------|--------------------------------------|
-| `text-generation-with-past`              | `text-generation`                    |
-| `text2text-generation-with-past`         | `text2text-generation`               |
-| `automatic-speech-recognition-with-past` | `automatic-speech-recognition`       |
-
-
 Check out the help for more options:
 
 ```bash
@@ -108,6 +95,35 @@ For more information on the quantization parameters checkout the [documentation]
 Models larger than 1 billion parameters are exported to the OpenVINO format with 8-bit weights by default. You can disable it with `--weight-format fp32`.
 
 </Tip>
+
+
+### Decoder models
+
+```bash
+optimum-cli export openvino --model  meta-llama/Meta-Llama-3-8B --task text-generation-with-past ov_model/
+```
+
+The `-with-past` suffix enable the re-use of past keys and values. This allows to avoid recomputing the same intermediate activations during the generation. to export the model without, you will need to remove this suffix.
+
+| With K-V cache                           | Without K-V cache                    |
+|------------------------------------------|--------------------------------------|
+| `text-generation-with-past`              | `text-generation`                    |
+| `text2text-generation-with-past`         | `text2text-generation`               |
+| `automatic-speech-recognition-with-past` | `automatic-speech-recognition`       |
+
+
+### Diffusion models
+
+When Stable Diffusion models are exported to the OpenVINO format, they are decomposed into different components that are later combined during inference:
+
+* Text encoder(s)
+* U-Net
+* VAE encoder
+* VAE decoder
+
+```bash
+optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0  --task table-diffusion-xl ov_model/
+```
 
 ## When loading your model
 
