@@ -127,7 +127,7 @@ img = Image.open(requests.get(example_url, stream=True).raw)
 # fig = visualize_pose_results(img, pose)
 # plt.savefig("torch.png")
 
-OPENPOSE_OV_PATH = Path("/home/chentianmeng/workspace/optimum-intel-controlnet/model/ov/openpose.xml")
+OPENPOSE_OV_PATH = Path("/home/chentianmeng/workspace/optimum-intel-controlnet/model/ov_ControlNet/openpose.xml")
 if not OPENPOSE_OV_PATH.exists():
     with torch.no_grad():
         ov_model = ov.convert_model(
@@ -146,6 +146,8 @@ core = ov.Core()
 ov_openpose = OpenPoseOVModel(core, OPENPOSE_OV_PATH, device="CPU")
 pose_estimator.body_estimation.model = ov_openpose  
 pose = pose_estimator(img)
+pose.save("pose.png")
+
 fig = visualize_pose_results(img, pose)
 plt.savefig("ov.png")
 
@@ -160,7 +162,7 @@ inputs = {
 
 input_info = [(name, ov.PartialShape(inp.shape)) for name, inp in inputs.items()]
 
-CONTROLNET_OV_PATH = Path("/home/chentianmeng/workspace/optimum-intel-controlnet/model/ov/controlnet-pose.xml")
+CONTROLNET_OV_PATH = Path("/home/chentianmeng/workspace/optimum-intel-controlnet/model/ov_ControlNet/controlnet-pose.xml")
 controlnet.eval()
 with torch.no_grad():
     down_block_res_samples, mid_block_res_sample = controlnet(**inputs, return_dict=False)
@@ -181,7 +183,7 @@ del controlnet
 
 
 
-UNET_OV_PATH = Path("/home/chentianmeng/workspace/optimum-intel-controlnet/model/ov/unet_controlnet.xml")
+UNET_OV_PATH = Path("/home/chentianmeng/workspace/optimum-intel-controlnet/model/ov_ControlNet/unet_controlnet.xml")
 
 dtype_mapping = {
     torch.float32: ov.Type.f32,
@@ -270,7 +272,7 @@ else:
     print(f"Unet will be loaded from {UNET_OV_PATH}")
 
 
-TEXT_ENCODER_OV_PATH = Path("/home/chentianmeng/workspace/optimum-intel-controlnet/model/ov/text_encoder.xml")
+TEXT_ENCODER_OV_PATH = Path("/home/chentianmeng/workspace/optimum-intel-controlnet/model/ov_ControlNet/text_encoder.xml")
 
 
 def convert_encoder(text_encoder: torch.nn.Module, ir_path: Path):
@@ -309,7 +311,7 @@ del pipe.text_encoder
 
 
 
-VAE_DECODER_OV_PATH = Path("/home/chentianmeng/workspace/optimum-intel-controlnet/model/ov/vae_decoder.xml")
+VAE_DECODER_OV_PATH = Path("/home/chentianmeng/workspace/optimum-intel-controlnet/model/ov_ControlNet/vae_decoder.xml")
 
 
 def convert_vae_decoder(vae: torch.nn.Module, ir_path: Path):
@@ -564,6 +566,10 @@ class OVContrlNetStableDiffusionPipeline(DiffusionPipeline):
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 result = self.controlnet([latent_model_input, t, text_embeddings, image])
+                for _, sample in result.items():
+                    print(type(sample))
+                    print(sample.shape)
+
                 down_and_mid_blok_samples = [sample * controlnet_conditioning_scale for _, sample in result.items()]
 
                 # predict the noise residual

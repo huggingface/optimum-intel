@@ -26,6 +26,8 @@ import numpy as np
 import openvino
 import PIL
 from diffusers import (
+    ConfigMixin,
+    StableDiffusionControlNetPipeline,
     DDIMScheduler,
     LMSDiscreteScheduler,
     PNDMScheduler,
@@ -39,6 +41,7 @@ from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
+import openvino.runtime
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
 
 from optimum.pipelines.diffusers.pipeline_latent_consistency import LatentConsistencyPipelineMixin
@@ -67,6 +70,9 @@ from .utils import (
     _print_compiled_model_properties,
 )
 
+import torch
+from typing import Union, List, Optional, Tuple
+from tqdm.auto import tqdm
 
 core = Core()
 
@@ -1101,173 +1107,276 @@ def _raise_invalid_batch_size(
             "or reshape it again accordingly using the `.reshape()` method by setting `batch_size` to -1. " + msg
         )
 
-class OVContrlNetStableDiffusionPipeline(DiffusionPipeline):
-    """
-    OpenVINO inference pipeline for Stable Diffusion with ControlNet guidence
-    """
-
+class OVModelControlNet(OVModelPart):
     def __init__(
-        self,
-        tokenizer: CLIPTokenizer,
-        scheduler,
-        core: ov.Core,
-        controlnet: ov.Model,
-        text_encoder: ov.Model,
-        unet: ov.Model,
-        vae_decoder: ov.Model,
-        device: str = "AUTO",
+        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
     ):
-        super().__init__()
-        self.tokenizer = tokenizer
-        self.vae_scale_factor = 8
-        self.scheduler = scheduler
-        self.load_models(core, device, controlnet, text_encoder, unet, vae_decoder)
-        self.set_progress_bar_config(disable=True)
-
-    def load_models(
-        self,
-        core: ov.Core,
-        device: str,
-        controlnet: ov.Model,
-        text_encoder: ov.Model,
-        unet: ov.Model,
-        vae_decoder: ov.Model,
-    ):
-        """
-        Function for loading models on device using OpenVINO
-
-        Parameters:
-          core (Core): OpenVINO runtime Core class instance
-          device (str): inference device
-          controlnet (Model): OpenVINO Model object represents ControlNet
-          text_encoder (Model): OpenVINO Model object represents text encoder
-          unet (Model): OpenVINO Model object represents UNet
-          vae_decoder (Model): OpenVINO Model object represents vae decoder
-        Returns
-          None
-        """
-        self.text_encoder = core.compile_model(text_encoder, device)
-        self.text_encoder_out = self.text_encoder.output(0)
-        self.register_to_config(controlnet=core.compile_model(controlnet, device))
-        self.register_to_config(unet=core.compile_model(unet, device))
-        self.unet_out = self.unet.output(0)
-        self.vae_decoder = core.compile_model(vae_decoder)
-        self.vae_decoder_out = self.vae_decoder.output(0)
+        super().__init__(model, parent_model, ov_config, "unet")
 
     def __call__(
         self,
-        prompt: Union[str, List[str]],
-        image: Image.Image,
-        num_inference_steps: int = 10,
-        negative_prompt: Union[str, List[str]] = None,
-        guidance_scale: float = 7.5,
-        controlnet_conditioning_scale: float = 1.0,
-        eta: float = 0.0,
-        latents: Optional[np.array] = None,
-        output_type: Optional[str] = "pil",
+        sample: np.ndarray,
+        timestep: np.ndarray,
+        encoder_hidden_states: np.ndarray,
+        controlnet_cond: np.ndarray,
+        text_embeds: Optional[np.ndarray] = None,
+        time_ids: Optional[np.ndarray] = None,
+        timestep_cond: Optional[np.ndarray] = None,
     ):
-        """
-        Function invoked when calling the pipeline for generation.
+        self._compile()
 
-        Parameters:
-            prompt (`str` or `List[str]`):
-                The prompt or prompts to guide the image generation.
-            image (`Image.Image`):
-                `Image`, or tensor representing an image batch which will be repainted according to `prompt`.
-            num_inference_steps (`int`, *optional*, defaults to 100):
-                The number of denoising steps. More denoising steps usually lead to a higher quality image at the
-                expense of slower inference.
-            negative_prompt (`str` or `List[str]`):
-                negative prompt or prompts for generation
-            guidance_scale (`float`, *optional*, defaults to 7.5):
-                Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://arxiv.org/abs/2207.12598).
-                `guidance_scale` is defined as `w` of equation 2. of [Imagen
-                Paper](https://arxiv.org/pdf/2205.11487.pdf). Guidance scale is enabled by setting `guidance_scale >
-                1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
-                usually at the expense of lower image quality. This pipeline requires a value of at least `1`.
-            latents (`np.ndarray`, *optional*):
-                Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image
-                generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
-                tensor will ge generated by sampling using the supplied random `generator`.
-            output_type (`str`, *optional*, defaults to `"pil"`):
-                The output format of the generate image. Choose between
-                [PIL](https://pillow.readthedocs.io/en/stable/): `Image.Image` or `np.array`.
-        Returns:
-            image ([List[Union[np.ndarray, Image.Image]]): generaited images
+        inputs = {
+            "sample": sample,
+            "timestep": timestep,
+            "encoder_hidden_states": encoder_hidden_states,
+            "controlnet_cond": controlnet_cond,
+        }
 
-        """
+        if text_embeds is not None:
+            inputs["text_embeds"] = text_embeds
+        if time_ids is not None:
+            inputs["time_ids"] = time_ids
+        if timestep_cond is not None:
+            inputs["timestep_cond"] = timestep_cond
 
-        # 1. Define call parameters
-        batch_size = 1 if isinstance(prompt, str) else len(prompt)
-        # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
-        # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
-        # corresponds to doing no classifier free guidance.
-        do_classifier_free_guidance = guidance_scale > 1.0
-        # 2. Encode input prompt
-        text_embeddings = self._encode_prompt(prompt, negative_prompt=negative_prompt)
+        outputs = self.request(inputs, share_inputs=True)
+        return list(outputs.values())
+    
+class OVModelUnetControlNet(OVModelPart):
+    def __init__(
+        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+    ):
+        super().__init__(model, parent_model, ov_config, "unet")
 
-        # 3. Preprocess image
-        orig_width, orig_height = image.size
-        image, pad = preprocess(image)
-        height, width = image.shape[-2:]
-        if do_classifier_free_guidance:
-            image = np.concatenate(([image] * 2))
+    def __call__(
+        self,
+        sample: np.ndarray,
+        timestep: np.ndarray,
+        encoder_hidden_states: np.ndarray,
+        down_and_mid_blok_samples: np.ndarray,
+        text_embeds: Optional[np.ndarray] = None,
+        time_ids: Optional[np.ndarray] = None,
+        timestep_cond: Optional[np.ndarray] = None,
+    ):
+        self._compile()
 
-        # 4. set timesteps
-        self.scheduler.set_timesteps(num_inference_steps)
-        timesteps = self.scheduler.timesteps
+        inputs = {
+            "sample": sample,
+            "timestep": timestep,
+            "encoder_hidden_states": encoder_hidden_states,
+            "down_and_mid_blok_samples": down_and_mid_blok_samples,
+        }
 
-        # 6. Prepare latent variables
-        num_channels_latents = 4
-        latents = self.prepare_latents(
-            batch_size,
-            num_channels_latents,
-            height,
-            width,
-            text_embeddings.dtype,
-            latents,
-        )
+        if text_embeds is not None:
+            inputs["text_embeds"] = text_embeds
+        if time_ids is not None:
+            inputs["time_ids"] = time_ids
+        if timestep_cond is not None:
+            inputs["timestep_cond"] = timestep_cond
 
-        # 7. Denoising loop
-        num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t in enumerate(timesteps):
-                # Expand the latents if we are doing classifier free guidance.
-                # The latents are expanded 3 times because for pix2pix the guidance\
-                # is applied for both the text and the input image.
-                latent_model_input = np.concatenate([latents] * 2) if do_classifier_free_guidance else latents
-                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+        outputs = self.request(inputs, share_inputs=True)
+        return list(outputs.values())
 
-                result = self.controlnet([latent_model_input, t, text_embeddings, image])
-                down_and_mid_blok_samples = [sample * controlnet_conditioning_scale for _, sample in result.items()]
+class OVStableDiffusionContrlNetPipelineBase(OVStableDiffusionPipelineBase):
+    """
+    OpenVINO inference pipeline for Stable Diffusion with ControlNet guidence
+    """
+    auto_model_class = StableDiffusionControlNetPipeline
+    export_feature = "stable-diffusion"
+    
+    def __init__(
+        self,
+        unet: openvino.runtime.Model,
+        controlnet: openvino.runtime.Model,
+        scheduler: Union[None, "DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"],
+        text_encoder: Optional[openvino.runtime.Model] = None,
+        vae_decoder: Optional[openvino.runtime.Model] = None,
+        tokenizer: Optional["CLIPTokenizer"] = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = False,
+        compile: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
+        **kwargs,
+    ):
+        # super().__init__()
+        self._device = device.upper()
+        self.ov_config = {} if ov_config is None else {**ov_config}
+        self.is_dynamic = dynamic_shapes
 
-                # predict the noise residual
-                noise_pred = self.unet([latent_model_input, t, text_embeddings, *down_and_mid_blok_samples])[self.unet_out]
-
-                # perform guidance
-                if do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = noise_pred[0], noise_pred[1]
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-                # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(torch.from_numpy(noise_pred), t, torch.from_numpy(latents)).prev_sample.numpy()
-
-                # update progress
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                    progress_bar.update()
-
-        # 8. Post-processing
-        image = self.decode_latents(latents, pad)
-
-        # 9. Convert to PIL
-        if output_type == "pil":
-            image = self.numpy_to_pil(image)
-            image = [img.resize((orig_width, orig_height), Image.Resampling.LANCZOS) for img in image]
+        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
+        # would end-up removing the directory containing the underlying OpenVINO model
+        self._model_save_dir_tempdirectory_instance = None
+        if isinstance(model_save_dir, TemporaryDirectory):
+            self._model_save_dir_tempdirectory_instance = model_save_dir
+            self._model_save_dir = Path(model_save_dir.name)
+        elif isinstance(model_save_dir, str):
+            self._model_save_dir = Path(model_save_dir)
         else:
-            image = [cv2.resize(img, (orig_width, orig_width)) for img in image]
+            self._model_save_dir = model_save_dir
 
-        return image
+        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
+        self.unet = OVModelUnetControlNet(unet, self)
+        self.controlnet = OVModelControlNet(controlnet, self)
+        self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
+        
+        self.vae_scale_factor = 8
 
+        self.scheduler = scheduler
+
+
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
+        self.tokenizer = tokenizer
+    
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: Dict[str, Any],
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        vae_decoder_file_name: Optional[str] = None,
+        text_encoder_file_name: Optional[str] = None,
+        unet_file_name: Optional[str] = None,
+        controlnet_file_name: Optional[str] = None,
+        vae_encoder_file_name: Optional[str] = None,
+        text_encoder_2_file_name: Optional[str] = None,
+        local_files_only: bool = False,
+        from_onnx: bool = False,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        load_in_8bit: bool = False,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
+        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
+        vae_decoder_file_name = vae_decoder_file_name or default_file_name
+        text_encoder_file_name = text_encoder_file_name or default_file_name
+        text_encoder_2_file_name = text_encoder_2_file_name or default_file_name
+        unet_file_name = unet_file_name or default_file_name
+        controlnet_file_name = controlnet_file_name or default_file_name
+        vae_encoder_file_name = vae_encoder_file_name or default_file_name
+        model_id = str(model_id)
+        patterns = set(config.keys())
+        sub_models_names = patterns.intersection({"feature_extractor", "tokenizer", "tokenizer_2", "scheduler"})
+
+        if not os.path.isdir(model_id):
+            patterns.update({"vae_encoder", "vae_decoder"})
+            allow_patterns = {os.path.join(k, "*") for k in patterns if not k.startswith("_")}
+            allow_patterns.update(
+                {
+                    vae_decoder_file_name,
+                    text_encoder_file_name,
+                    text_encoder_2_file_name,
+                    unet_file_name,
+                    controlnet_file_name,
+                    vae_encoder_file_name,
+                    vae_decoder_file_name.replace(".xml", ".bin"),
+                    text_encoder_file_name.replace(".xml", ".bin"),
+                    text_encoder_2_file_name.replace(".xml", ".bin"),
+                    unet_file_name.replace(".xml", ".bin"),
+                    controlnet_file_name.replace(".xml", ".bin"),
+                    vae_encoder_file_name.replace(".xml", ".bin"),
+                    SCHEDULER_CONFIG_NAME,
+                    CONFIG_NAME,
+                    cls.config_name,
+                }
+            )
+            ignore_patterns = ["*.msgpack", "*.safetensors", "*pytorch_model.bin"]
+            if not from_onnx:
+                ignore_patterns.extend(["*.onnx", "*.onnx_data"])
+            # Downloads all repo's files matching the allowed patterns
+            model_id = snapshot_download(
+                model_id,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+                token=token,
+                revision=revision,
+                allow_patterns=allow_patterns,
+                ignore_patterns=ignore_patterns,
+            )
+        new_model_save_dir = Path(model_id)
+
+        for name in sub_models_names:
+            # Check if the subcomponent needs to be loaded
+            if kwargs.get(name, None) is not None:
+                continue
+            library_name, library_classes = config[name]
+            if library_classes is not None:
+                library = importlib.import_module(library_name)
+                class_obj = getattr(library, library_classes)
+                load_method = getattr(class_obj, "from_pretrained")
+                # Check if the module is in a subdirectory
+                if (new_model_save_dir / name).is_dir():
+                    kwargs[name] = load_method(new_model_save_dir / name)
+                else:
+                    kwargs[name] = load_method(new_model_save_dir)
+
+        unet_path = new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name
+        controlnet_path = new_model_save_dir / "controlnet" /controlnet_file_name
+        components = {
+            "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
+            "vae_decoder": new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
+            "text_encoder": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER / text_encoder_file_name,
+            "text_encoder_2": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
+        }
+
+        if model_save_dir is None:
+            model_save_dir = new_model_save_dir
+
+        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
+        if quantization_config is None or quantization_config.dataset is None:
+            unet = cls.load_model(unet_path, quantization_config)
+            controlnet = cls.load_model(controlnet_path)
+            for key, value in components.items():
+                components[key] = cls.load_model(value, quantization_config) if value.is_file() else None
+        else:
+            # Load uncompressed models to apply hybrid quantization further
+            unet = cls.load_model(unet_path)
+            controlnet = cls.load_model(controlnet_path)
+            for key, value in components.items():
+                components[key] = cls.load_model(value) if value.is_file() else None
+            sd_model = cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
+
+            supported_pipelines = (
+                OVStableDiffusionPipeline,
+                OVStableDiffusionXLPipeline,
+                OVLatentConsistencyModelPipeline,
+            )
+            if not isinstance(sd_model, supported_pipelines):
+                raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
+
+            from optimum.intel import OVQuantizer
+
+            hybrid_quantization_config = deepcopy(quantization_config)
+            hybrid_quantization_config.quant_method = OVQuantizationMethod.HYBRID
+            quantizer = OVQuantizer(sd_model)
+            quantizer.quantize(ov_config=OVConfig(quantization_config=hybrid_quantization_config))
+
+            return sd_model
+
+        return cls(
+            unet=unet,
+            controlnet=controlnet,
+            config=config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **components,
+            **kwargs,
+        )
+    
+class OVStableDiffusionContrlNetPipeline(OVStableDiffusionContrlNetPipelineBase, ConfigMixin):
     def _encode_prompt(
         self,
         prompt: Union[str, List[str]],
@@ -1298,7 +1407,7 @@ class OVContrlNetStableDiffusionPipeline(DiffusionPipeline):
         )
         text_input_ids = text_inputs.input_ids
 
-        text_embeddings = self.text_encoder(text_input_ids)[self.text_encoder_out]
+        text_embeddings = self.text_encoder(input_ids=text_input_ids.astype(np.int32))[0]
 
         # duplicate text embeddings for each generation per prompt
         if num_images_per_prompt != 1:
@@ -1324,7 +1433,7 @@ class OVContrlNetStableDiffusionPipeline(DiffusionPipeline):
                 return_tensors="np",
             )
 
-            uncond_embeddings = self.text_encoder(uncond_input.input_ids)[self.text_encoder_out]
+            uncond_embeddings = self.text_encoder(input_ids=uncond_input.input_ids.astype(np.int32))[0]
 
             # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
             seq_len = uncond_embeddings.shape[1]
@@ -1368,7 +1477,7 @@ class OVContrlNetStableDiffusionPipeline(DiffusionPipeline):
             width // self.vae_scale_factor,
         )
         if latents is None:
-            latents = randn_tensor(shape, dtype=dtype)
+            latents = self.randn_tensor(shape, dtype=dtype)
         else:
             latents = latents
 
@@ -1387,7 +1496,7 @@ class OVContrlNetStableDiffusionPipeline(DiffusionPipeline):
            image: decoded by VAE decoder image
         """
         latents = 1 / 0.18215 * latents
-        image = self.vae_decoder(latents)[self.vae_decoder_out]
+        image = self.vae_decoder(latents)[0]
         (_, end_h), (_, end_w) = pad[1:3]
         h, w = image.shape[2:]
         unpad_h = h - end_h
@@ -1395,4 +1504,189 @@ class OVContrlNetStableDiffusionPipeline(DiffusionPipeline):
         image = image[:, :, :unpad_h, :unpad_w]
         image = np.clip(image / 2 + 0.5, 0, 1)
         image = np.transpose(image, (0, 2, 3, 1))
+        return image
+    
+    def scale_fit_to_window(self, dst_width: int, dst_height: int, image_width: int, image_height: int):
+        """
+        Preprocessing helper function for calculating image size for resize with peserving original aspect ratio
+        and fitting image to specific window size
+
+        Parameters:
+        dst_width (int): destination window width
+        dst_height (int): destination window height
+        image_width (int): source image width
+        image_height (int): source image height
+        Returns:
+        result_width (int): calculated width for resize
+        result_height (int): calculated height for resize
+        """
+        im_scale = min(dst_height / image_height, dst_width / image_width)
+        return int(im_scale * image_width), int(im_scale * image_height)
+
+    def preprocess(self, image: PIL.Image.Image):
+        """
+        Image preprocessing function. Takes image in PIL.Image format, resizes it to keep aspect ration and fits to model input window 512x512,
+        then converts it to np.ndarray and adds padding with zeros on right or bottom side of image (depends from aspect ratio), after that
+        converts data to float32 data type and change range of values from [0, 255] to [-1, 1], finally, converts data layout from planar NHWC to NCHW.
+        The function returns preprocessed input tensor and padding size, which can be used in postprocessing.
+
+        Parameters:
+        image (PIL.Image.Image): input image
+        Returns:
+        image (np.ndarray): preprocessed image tensor
+        pad (Tuple[int]): pading size for each dimension for restoring image size in postprocessing
+        """
+        src_width, src_height = image.size
+        dst_width, dst_height = self.scale_fit_to_window(512, 512, src_width, src_height)
+        image = np.array(image.resize((dst_width, dst_height), resample=PIL.Image.Resampling.LANCZOS))[None, :]
+        pad_width = 512 - dst_width
+        pad_height = 512 - dst_height
+        pad = ((0, 0), (0, pad_height), (0, pad_width), (0, 0))
+        image = np.pad(image, pad, mode="constant")
+        image = image.astype(np.float32) / 255.0
+        image = image.transpose(0, 3, 1, 2)
+        return image, pad
+
+    def randn_tensor(self,
+        shape: Union[Tuple, List],
+        dtype: Optional[np.dtype] = np.float32,
+    ):
+        """
+        Helper function for generation random values tensor with given shape and data type
+
+        Parameters:
+        shape (Union[Tuple, List]): shape for filling random values
+        dtype (np.dtype, *optiona*, np.float32): data type for result
+        Returns:
+        latents (np.ndarray): tensor with random values with given data type and shape (usually represents noise in latent space)
+        """
+        latents = np.random.randn(*shape).astype(dtype)
+
+        return latents
+    
+    def progress_bar(self, iterable=None, total=None):
+        if not hasattr(self, "_progress_bar_config"):
+            self._progress_bar_config = {}
+        elif not isinstance(self._progress_bar_config, dict):
+            raise ValueError(
+                f"`self._progress_bar_config` should be of type `dict`, but is {type(self._progress_bar_config)}."
+            )
+
+        if iterable is not None:
+            return tqdm(iterable, **self._progress_bar_config)
+        elif total is not None:
+            return tqdm(total=total, **self._progress_bar_config)
+        else:
+            raise ValueError("Either `total` or `iterable` has to be defined.")
+
+    def set_progress_bar_config(self, **kwargs):
+        self._progress_bar_config = kwargs
+        
+    def __call__(
+        self,
+        prompt: Union[str, List[str]],
+        image: PIL.Image.Image,
+        num_inference_steps: int = 10,
+        negative_prompt: Union[str, List[str]] = None,
+        guidance_scale: float = 7.5,
+        controlnet_conditioning_scale: float = 1.0,
+        eta: float = 0.0,
+        latents: Optional[np.array] = None,
+    ):
+        """
+        Function invoked when calling the pipeline for generation.
+
+        Parameters:
+            prompt (`str` or `List[str]`):
+                The prompt or prompts to guide the image generation.
+            image (`PIL.Image.Image`):
+                `PIL.Image`, or tensor representing an image batch which will be repainted according to `prompt`.
+            num_inference_steps (`int`, *optional*, defaults to 100):
+                The number of denoising steps. More denoising steps usually lead to a higher quality image at the
+                expense of slower inference.
+            negative_prompt (`str` or `List[str]`):
+                negative prompt or prompts for generation
+            guidance_scale (`float`, *optional*, defaults to 7.5):
+                Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://arxiv.org/abs/2207.12598).
+                `guidance_scale` is defined as `w` of equation 2. of [Imagen
+                Paper](https://arxiv.org/pdf/2205.11487.pdf). Guidance scale is enabled by setting `guidance_scale >
+                1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
+                usually at the expense of lower image quality. This pipeline requires a value of at least `1`.
+            latents (`np.ndarray`, *optional*):
+                Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image
+                generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
+                tensor will ge generated by sampling using the supplied random `generator`.
+        Returns:
+            image ([List[Union[np.ndarray, PIL.Image.Image]]): generaited images
+
+        """
+
+        # 1. Define call parameters
+        batch_size = 1 if isinstance(prompt, str) else len(prompt)
+        # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
+        # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
+        # corresponds to doing no classifier free guidance.
+        do_classifier_free_guidance = guidance_scale > 1.0
+        # 2. Encode input prompt
+        text_embeddings = self._encode_prompt(prompt, negative_prompt=negative_prompt)
+
+        # 3. Preprocess image
+        orig_width, orig_height = image.size
+        image, pad = self.preprocess(image)
+        height, width = image.shape[-2:]
+        if do_classifier_free_guidance:
+            image = np.concatenate(([image] * 2))
+
+        # 4. set timesteps
+        self.scheduler.set_timesteps(num_inference_steps)
+        timesteps = self.scheduler.timesteps
+
+        # 6. Prepare latent variables
+        num_channels_latents = 4
+        latents = self.prepare_latents(
+            batch_size,
+            num_channels_latents,
+            height,
+            width,
+            text_embeddings.dtype,
+            latents,
+        )
+
+        # 7. Denoising loop
+        num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
+        self.set_progress_bar_config(disable=True)
+        with self.progress_bar(total=num_inference_steps) as progress_bar:
+            for i, t in enumerate(timesteps):
+                # Expand the latents if we are doing classifier free guidance.
+                # The latents are expanded 3 times because for pix2pix the guidance\
+                # is applied for both the text and the input image.
+                latent_model_input = np.concatenate([latents] * 2) if do_classifier_free_guidance else latents
+                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+
+                result = self.controlnet(sample=latent_model_input, timestep=t, encoder_hidden_states=text_embeddings, controlnet_cond=image)
+
+                down_and_mid_blok_samples = [sample * controlnet_conditioning_scale for sample in result]
+ 
+                # predict the noise residual
+                noise_pred = self.unet(sample=latent_model_input, timestep=t, encoder_hidden_states=text_embeddings, down_and_mid_blok_samples=down_and_mid_blok_samples)
+
+                # perform guidance
+                if do_classifier_free_guidance:
+                    noise_pred_uncond, noise_pred_text = noise_pred[0], noise_pred[1]
+                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+                # compute the previous noisy sample x_t -> x_t-1
+                latents = self.scheduler.step(torch.from_numpy(noise_pred), t, torch.from_numpy(latents)).prev_sample.numpy()
+
+                # update progress
+                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                    progress_bar.update()
+
+        # 8. Post-processing
+        image = self.decode_latents(latents, pad)
+
+        # 9. Convert to PIL
+        image = self.numpy_to_pil(image)
+        image = [img.resize((orig_width, orig_height), PIL.Image.Resampling.LANCZOS) for img in image]
+
         return image
