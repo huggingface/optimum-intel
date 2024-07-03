@@ -20,6 +20,13 @@
       title: Optimization
     - local: openvino/models
       title: Supported Models
+    - sections:
+      - local: openvino/tutorials/notebooks
+        title: Notebooks
+      - local: openvino/tutorials/diffusers
+        title: Generate images with Stable Diffusion models
+      title: Tutorials
+      isExpanded: false
     - local: openvino/reference
       title: Reference
     title: OpenVINO
