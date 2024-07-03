@@ -31,10 +31,6 @@ Once [your model was exported](export), you can load it by replacing the `AutoMo
 
 See the [reference documentation](reference) for more information about parameters, and examples for different tasks.
 
-[[autodoc]] openvino.modeling_base.OVBaseModel
-    - _from_pretrained
-
-
 ## Compilation
 
 By default the model will be compiled when instantiating an `OVModel`. In the case where the model is reshaped or placed to another device, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by setting `compile=False`.
@@ -62,6 +58,8 @@ model.compile()
 ## Static shape
 
 By default, `OVModelForXxx` support dynamic shapes, enabling inputs of every shapes. To speed up inference, static shapes can be enabled by giving the desired inputs shapes.
+
+See the [reference documentation](inference#optimum.intel.openvino.modeling_base.OVBaseModel.reshape) for more information about parameters.
 
 ```python
 # Fix the batch size to 1 and the sequence length to 40
@@ -110,12 +108,9 @@ qa_pipe = pipeline(
 results = qa_pipe(question=question, context=context)
 ```
 
-[[autodoc]] openvino.modeling_base.OVBaseModel - reshape
-
-
 ## Configuration
 
-It is possible to pass an `ov_config` parameter to `from_pretrained()` with custom OpenVINO configuration values. This can be used for example to enable full precision inference on devices where FP16 or BF16 inference precision is used by default.
+The `ov_config` parameter allow to provide custom OpenVINO configuration values. This can be used for example to enable full precision inference on devices where FP16 or BF16 inference precision is used by default.
 
 ```python
 ov_config = {"INFERENCE_PRECISION_HINT":"f32"}
@@ -144,41 +139,37 @@ If not specified, `load_in_8bit` will be set to `True` by default when models la
 It's also possible to apply quantization on both weights and activations using the `OVQuantizer`, more information in the [documentation](optimization#static-quantization).
 
 
-
-
 ## Transformers models
 
 As shown in the table below, each task is associated with a class enabling to automatically load your model.
 
-| Task                                 | Auto Class                           |
+| Auto Class                           | Task                                 |
 |--------------------------------------|--------------------------------------|
-| `text-classification`                | `OVModelForSequenceClassification`   |
-| `token-classification`               | `OVModelForTokenClassification`      |
-| `question-answering`                 | `OVModelForQuestionAnswering`        |
-| `audio-classification`               | `OVModelForAudioClassification`      |
-| `image-classification`               | `OVModelForImageClassification`      |
-| `feature-extraction`                 | `OVModelForFeatureExtraction`        |
-| `fill-mask`                          | `OVModelForMaskedLM`                 |
-| `image-classification`               | `OVModelForImageClassification`      |
-| `audio-classification`               | `OVModelForAudioClassification`      |
-| `text-generation-with-past`          | `OVModelForCausalLM`                 |
-| `text2text-generation-with-past`     | `OVModelForSeq2SeqLM`                |
-| `automatic-speech-recognition`       | `OVModelForSpeechSeq2Seq`            |
-| `image-to-text`                      | `OVModelForVision2Seq`               |
+| `OVModelForSequenceClassification`   | `text-classification`                |
+| `OVModelForTokenClassification`      | `token-classification`               |
+| `OVModelForQuestionAnswering`        | `question-answering`                 |
+| `OVModelForAudioClassification`      | `audio-classification`               |
+| `OVModelForImageClassification`      | `image-classification`               |
+| `OVModelForFeatureExtraction`        | `feature-extraction`                 |
+| `OVModelForMaskedLM`                 | `fill-mask`                          |
+| `OVModelForImageClassification`      | `image-classification`               |
+| `OVModelForAudioClassification`      | `audio-classification`               |
+| `OVModelForCausalLM`                 | `text-generation-with-past`          |
+| `OVModelForSeq2SeqLM`                | `text2text-generation-with-past`     |
+| `OVModelForSpeechSeq2Seq`            | `automatic-speech-recognition`       |
+| `OVModelForVision2Seq`               | `image-to-text`                      |
 
 
-Sequence-to-sequence (Seq2Seq) models, that generate a new sequence from an input, can also be used when running inference with OpenVINO. When Seq2Seq models are exported to the OpenVINO IR, they are decomposed into two parts : the encoder and the "decoder" (which actually consists of the decoder with the language modeling head), that are later combined during inference.
-To speed up sequential decoding, a cache with pre-computed key/values hidden-states will be used by default. An additional model component will be exported: the "decoder" with pre-computed key/values as one of its inputs.  This specific export comes from the fact that during the first pass, the decoder has no pre-computed key/values hidden-states, while during the rest of the generation past key/values will be used to speed up sequential decoding. To disable this cache, set `use_cache=False` in the `from_pretrained()` method.
+See the [reference documentation](reference) for more information about parameters, and examples for different tasks.
 
-Here is an example on how you can run inference for a translation task using a T5 model and then export it to OpenVINO IR:
-
+Here is an example on how you can run inference for a translation task using a T5 model:
 
 ```python
 from transformers import AutoTokenizer, pipeline
 from optimum.intel import OVModelForSeq2SeqLM
 
-model_id = "t5-small"
-model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True)
+model_id = "echarlaix/t5-small-openvino"
+model = OVModelForSeq2SeqLM.from_pretrained(model_id)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 translation_pipe = pipeline("translation_en_to_fr", model=model, tokenizer=tokenizer)
 text = "He never went out without a book under his arm, and he often came back with two."
@@ -199,6 +190,18 @@ Make sure you have 🤗 Diffusers installed. To install `diffusers`:
 ```bash
 pip install optimum[diffusers]
 ```
+
+As shown in the table below, each task is associated with a class enabling to automatically load your model.
+
+| Auto Class                           | Task                                 |
+|--------------------------------------|--------------------------------------|
+| `OVStableDiffusionPipeline`          | `text-to-image`                      |
+| `OVStableDiffusionImg2ImgPipeline`   | `image-to-image`                     |
+| `OVStableDiffusionInpaintPipeline`   | `inpaint`                            |
+| `OVStableDiffusionXLPipeline`        | `text-to-image`                      |
+| `OVStableDiffusionXLImg2ImgPipeline` | `image-to-image`                     |
+| `OVLatentConsistencyModelPipeline`   | `text-to-image`                      |
+
 
 ### Stable Diffusion
 
