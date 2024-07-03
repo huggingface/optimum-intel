@@ -18,6 +18,20 @@ Optimum Intel can be used to load optimized models from the [Hub](https://huggin
 
 Once [your model was exported](export), you can load it by replacing the `AutoModelForXxx` class with the corresponding `OVModelForXxx`.
 
+```diff
+- from transformers import AutoModelForCausalLM
++ from optimum.intel import OVModelForCausalLM
+  from transformers import AutoTokenizer, pipeline
+
+  model_id = "helenai/gpt2-ov"
+- model = AutoModelForCausalLM.from_pretrained(model_id)
+  # here the model was already exported so no need to set export=True
++ model = OVModelForCausalLM.from_pretrained(model_id)
+  tokenizer = AutoTokenizer.from_pretrained(model_id)
+  pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+  results = pipe("He's a dreadful magician and")
+```
+
 As shown in the table below, each task is associated with a class enabling to automatically load your model.
 
 | Auto Class                           | Task                                 |
@@ -37,20 +51,6 @@ As shown in the table below, each task is associated with a class enabling to au
 | `OVModelForVision2Seq`               | `image-to-text`                      |
 
 
-```diff
-- from transformers import AutoModelForCausalLM
-+ from optimum.intel import OVModelForCausalLM
-  from transformers import AutoTokenizer, pipeline
-
-  model_id = "helenai/gpt2-ov"
-- model = AutoModelForCausalLM.from_pretrained(model_id)
-  # here the model was already exported so no need to set export=True
-+ model = OVModelForCausalLM.from_pretrained(model_id)
-  tokenizer = AutoTokenizer.from_pretrained(model_id)
-  pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-  results = pipe("He's a dreadful magician and")
-```
-
 ### Diffusers models
 
 Make sure you have 🤗 Diffusers installed. To install `diffusers`:
@@ -58,17 +58,6 @@ Make sure you have 🤗 Diffusers installed. To install `diffusers`:
 ```bash
 pip install optimum[diffusers]
 ```
-As shown in the table below, each task is associated with a class enabling to automatically load your model.
-
-| Auto Class                           | Task                                 |
-|--------------------------------------|--------------------------------------|
-| `OVStableDiffusionPipeline`          | `text-to-image`                      |
-| `OVStableDiffusionImg2ImgPipeline`   | `image-to-image`                     |
-| `OVStableDiffusionInpaintPipeline`   | `inpaint`                            |
-| `OVStableDiffusionXLPipeline`        | `text-to-image`                      |
-| `OVStableDiffusionXLImg2ImgPipeline` | `image-to-image`                     |
-| `OVLatentConsistencyModelPipeline`   | `text-to-image`                      |
-
 
 ```diff
 - from diffusers import StableDiffusionPipeline
@@ -80,6 +69,19 @@ As shown in the table below, each task is associated with a class enabling to au
   prompt = "sailing ship in storm by Rembrandt"
   images = pipeline(prompt).images
 ```
+
+
+As shown in the table below, each task is associated with a class enabling to automatically load your model.
+
+| Auto Class                           | Task                                 |
+|--------------------------------------|--------------------------------------|
+| `OVStableDiffusionPipeline`          | `text-to-image`                      |
+| `OVStableDiffusionImg2ImgPipeline`   | `image-to-image`                     |
+| `OVStableDiffusionInpaintPipeline`   | `inpaint`                            |
+| `OVStableDiffusionXLPipeline`        | `text-to-image`                      |
+| `OVStableDiffusionXLImg2ImgPipeline` | `image-to-image`                     |
+| `OVLatentConsistencyModelPipeline`   | `text-to-image`                      |
+
 
 See the [reference documentation](reference) for more information about parameters, and examples for different tasks.
 

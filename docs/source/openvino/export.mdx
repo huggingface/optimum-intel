@@ -100,7 +100,7 @@ Models larger than 1 billion parameters are exported to the OpenVINO format with
 ### Decoder models
 
 ```bash
-optimum-cli export openvino --model  meta-llama/Meta-Llama-3-8B --task text-generation-with-past ov_model/
+optimum-cli export openvino --model  meta-llama/Meta-Llama-3-8B --task text-generation-with-past ov_llama/
 ```
 
 The `-with-past` suffix enable the re-use of past keys and values. This allows to avoid recomputing the same intermediate activations during the generation. to export the model without, you will need to remove this suffix.
@@ -122,7 +122,7 @@ When Stable Diffusion models are exported to the OpenVINO format, they are decom
 * VAE decoder
 
 ```bash
-optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0  --task table-diffusion-xl ov_model/
+optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0  --task table-diffusion-xl ov_sdxl/
 ```
 
 ## When loading your model
