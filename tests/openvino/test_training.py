@@ -45,6 +45,7 @@ from transformers import (
 from transformers.testing_utils import slow
 from transformers.trainer_utils import EvalPrediction, TrainOutput
 from transformers.utils import WEIGHTS_NAME
+from utils_tests import MODEL_NAMES
 
 from optimum.intel.openvino import OVTrainingArguments
 from optimum.intel.openvino.configuration import OVConfig
@@ -58,7 +59,6 @@ from optimum.intel.openvino.trainer import DEFAULT_QUANTIZATION_CONFIG, OVTraine
 from optimum.intel.openvino.utils import OV_XML_FILE_NAME
 from optimum.intel.utils.import_utils import is_transformers_version
 
-from utils_tests import MODEL_NAMES
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
 
@@ -743,7 +743,7 @@ OVTRAINER_AUDIO_CLASSIFICATION_TEST_DESCRIPTORS = {
         compression_metrics=["compression_loss"],
     ),
     "structured_movement_sparsity": OVTrainerTestDescriptor(
-        model_id=MODEL_NAMES["wav2vec2-hf"]
+        model_id=MODEL_NAMES["wav2vec2-hf"],
         nncf_compression_config=[STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_WAV2VEC2],
         expected_binary_masks=48,
         compression_metrics=["compression_loss"],
