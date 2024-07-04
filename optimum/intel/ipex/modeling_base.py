@@ -230,6 +230,7 @@ class IPEXModel(OptimizedModel):
             model = TasksManager.get_model_from_task(
                 task,
                 model_id,
+                library_name="transformers",
                 trust_remote_code=trust_remote_code,
                 torch_dtype=torch_dtype,
                 _commit_hash=commit_hash,
@@ -265,6 +266,7 @@ class IPEXModel(OptimizedModel):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
         token_type_ids: torch.Tensor = None,
+        position_ids: torch.Tensor = None,
         **kwargs,
     ):
         inputs = {
@@ -274,6 +276,9 @@ class IPEXModel(OptimizedModel):
 
         if "token_type_ids" in self.input_names:
             inputs["token_type_ids"] = token_type_ids
+
+        if "position_ids" in self.input_names:
+            inputs["position_ids"] = position_ids
 
         outputs = self._call_model(**inputs)
         if isinstance(outputs, dict):
