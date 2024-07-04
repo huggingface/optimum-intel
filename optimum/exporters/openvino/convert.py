@@ -651,16 +651,17 @@ def export_from_model(
     
     logging.disable(logging.INFO)
 
-
     if library_name == "open_clip":
         custom_architecture = True
         custom_export_configs, fn_get_submodels = _get_open_clip_submodels_fn_and_export_configs(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
-    elif ( 
-        stateful and 
-        (task.startswith(TasksManager._ENCODER_DECODER_TASKS) and getattr(model.config, "is_encoder_decoder", False))
+    elif (
+        stateful
+        and (
+            task.startswith(TasksManager._ENCODER_DECODER_TASKS) and getattr(model.config, "is_encoder_decoder", False)
+        )
         and not custom_architecture
     ):
         export_config, models_and_export_configs = _get_encoder_decoder_stateful_models_for_export(

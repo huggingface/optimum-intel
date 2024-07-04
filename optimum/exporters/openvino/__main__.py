@@ -27,8 +27,8 @@ from transformers.utils import is_torch_available
 
 from openvino.runtime import Core, Type, save_model
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.onnx.base import OnnxConfig
+from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.openvino.convert import export_from_model
 from optimum.intel.utils.import_utils import (
     is_nncf_available,

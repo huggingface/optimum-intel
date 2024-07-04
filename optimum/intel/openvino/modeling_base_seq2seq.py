@@ -234,8 +234,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         # Load model from hub
         else:
             model_file_names = {"encoder": encoder_file_name, "decoder": decoder_file_name}
-            if use_cache:
-                model_file_names["decoder_with_past"] = decoder_with_past_file_name
 
             # If not ONNX then OpenVINO IR : adds binary files
             if not from_onnx:
@@ -259,7 +257,21 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             if not compile_only:
                 encoder = cls.load_model(file_names["encoder"], quantization_config)
                 decoder = cls.load_model(file_names["decoder"], quantization_config)
-                if use_cache:
+                if use_cache and not model_has_state(decoder):
+                    model_file_names["decoder_with_past"] = decoder_with_past_file_name
+                    model_file_names["decoder_with_past_bin"] = decoder_with_past_file_name.replace(".xml", ".bin")
+                    for name in ["decoder_with_past", "decoder_with_past_bin"]:
+                        model_cache_path = hf_hub_download(
+                        repo_id=model_id,
+                        filename=model_file_names[name],
+                        token=token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                        subfolder=subfolder,
+                    )
+                        file_names[name] = model_cache_path
                     decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
             else:
                 encoder = cls._compile_model(
@@ -268,7 +280,21 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 decoder = cls._compile_model(
                     file_names["decoder"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_save_dir
                 )
-                if use_cache:
+                if use_cache and not model_has_state(decoder):
+                    model_file_names["decoder_with_past"] = decoder_with_past_file_name
+                    model_file_names["decoder_with_past_bin"] = decoder_with_past_file_name.replace(".xml", ".bin")
+                    for name in ["decoder_with_past", "decoder_with_past_bin"]:
+                        model_cache_path = hf_hub_download(
+                        repo_id=model_id,
+                        filename=model_file_names[name],
+                        token=token,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        force_download=force_download,
+                        local_files_only=local_files_only,
+                        subfolder=subfolder,
+                    )
+                        file_names[name] = model_cache_path
                     decoder_with_past = cls._compile_model(
                         file_names["decoder_with_past"],
                         kwargs.get("device", "CPU"),
