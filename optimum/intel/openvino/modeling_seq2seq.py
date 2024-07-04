@@ -380,7 +380,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             encoder_outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
 
         # Decode
-        if past_key_values is None or self.decoder_with_past is None:
+        if past_key_values is None or self.decoder.stateful:
             decoder_outputs = self.decoder(
                 input_ids=decoder_input_ids[:, -1:] if past_key_values is not None else decoder_input_ids,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
@@ -481,7 +481,7 @@ class OVEncoder:
             The OpenVINO inference request associated to the encoder.
     """
 
-    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM, merged=False):
+    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
         self.parent_model = parent_model
         self._comple_only = parent_model._compile_only

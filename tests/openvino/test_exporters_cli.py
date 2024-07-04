@@ -261,7 +261,7 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             if task.startswith("text2text-generation"):
                 models = [model.encoder, model.decoder]
-                if task.endswith("with-past"):
+                if task.endswith("with-past") and not model.decoder.stateful:
                     models.append(model.decoder_with_past)
             elif model_type.startswith("stable-diffusion") or model_type.startswith("flux"):
                 models = [model.unet or model.transformer, model.vae_encoder, model.vae_decoder]

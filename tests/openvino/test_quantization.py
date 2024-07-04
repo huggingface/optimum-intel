@@ -566,7 +566,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(model._openvino_config.dtype, "int8")
 
         if model.export_feature.startswith("text2text-generation"):
-            models = [model.encoder, model.decoder, model.decoder_with_past]
+            models = [model.encoder, model.decoder]
         elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
             models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
@@ -706,8 +706,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             MODEL_NAMES[model_type], export=True, load_in_8bit=False, trust_remote_code=trust_remote_code
         )
         if model.export_feature.startswith("text2text-generation"):
-            models = [model.encoder, model.decoder, model.decoder_with_past]
-        elif model.export_feature == "text-to-image":
+            models = [model.encoder, model.decoder]
+        elif model.export_feature.startswith("text-to-image"):
             models = [model.unet, model.vae_encoder, model.vae_decoder]
             models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
         elif model_type == "open-clip":
@@ -1126,11 +1126,12 @@ class InferRequestWrapperTest(unittest.TestCase):
     @parameterized.expand(itertools.product(MODEL_ID, APPLY_CACHING))
     def test_calibration_data_uniqueness(self, model_id, apply_caching):
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, compile=True)
+        self.assertTrue(ov_model.decoder_with_past is None)
         processor = AutoProcessor.from_pretrained(model_id)
 
         calibration_data = []
-        ov_model.decoder_with_past.request = InferRequestWrapper(
-            ov_model.decoder_with_past.request, calibration_data, apply_caching=apply_caching
+        ov_model.decoder.request = InferRequestWrapper(
+            ov_model.decoder.request, calibration_data, apply_caching=apply_caching
         )
         for _ in range(2):
             input_features = self._generate_random_audio_data(processor)

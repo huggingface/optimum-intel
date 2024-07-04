@@ -319,7 +319,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 logger.info(
                     "Generation config file not found, using a generation config created from the model config."
                 )
-
         return cls(
             encoder=encoder,
             decoder=decoder,
@@ -393,6 +392,8 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             ov_config = None
         else:
             ov_config = OVConfig(dtype="fp32")
+        
+        stateful = kwargs.get("stateful", True)
 
         main_export(
             model_name_or_path=model_id,
@@ -406,6 +407,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             force_download=force_download,
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
+            stateful=stateful
         )
 
         return cls._from_pretrained(
