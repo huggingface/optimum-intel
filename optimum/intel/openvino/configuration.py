@@ -103,6 +103,14 @@ _DEFAULT_4BIT_CONFIGS = {
     },
 }
 
+_DEFAULT_4BIT_CONFIG = {
+    "bits": 4,
+    "ratio": 1.0,
+    "sym": False,
+    "group_size": 128,
+    "all_layers": None,
+}
+
 
 class OVQuantizationMethod(str, Enum):
     DEFAULT = "default"
