@@ -748,11 +748,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
-
-        # TODO: update _update_model_kwargs_for_generation so that it's compatibile with transformers >= v4.42.0
-        if model_arch not in ["chatglm", "glm4"] and is_transformers_version(">=", "4.42.0"):
-            return
-
         transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
         self.assertTrue(torch.allclose(ov_outputs, transformers_outputs))
 
