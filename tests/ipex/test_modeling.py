@@ -472,3 +472,17 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
+
+    def test_patched_model(self):
+        ipex_model = IPEXModelForQuestionAnswering.from_pretrained(
+            "Jiqing/patched_tiny_random_vit_for_image_classification"
+        )
+        transformers_model = AutoModelForQuestionAnswering.from_pretrained("hf-internal-testing/tiny-random-vit")
+        preprocessor = AutoFeatureExtractor.from_pretrained("hf-internal-testing/tiny-random-vit")
+        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        image = Image.open(requests.get(url, stream=True).raw)
+        inputs = preprocessor(images=image, return_tensors="pt")
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        outputs = ipex_model(**inputs)
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
