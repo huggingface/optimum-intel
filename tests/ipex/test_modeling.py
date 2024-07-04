@@ -188,6 +188,7 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
 
+    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
     def test_patched_model(self):
         ipex_model = IPEXModelForQuestionAnswering.from_pretrained(
             "Jiqing/patched_tiny_random_bert_for_question_answering"
@@ -473,6 +474,7 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
 
+    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
     def test_patched_model(self):
         ipex_model = IPEXModelForImageClassification.from_pretrained(
             "Jiqing/patched_tiny_random_vit_for_image_classification"
