@@ -327,7 +327,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.encoder = OVEncoder(self.encoder_model, parent_model=self)
         self.decoder = OVDecoder(self.decoder_model, parent_model=self)
 
-        if self.use_cache and self.decoder_with_past is not None:
+        if self.use_cache and self.decoder_with_past_model is not None:
             self.decoder_with_past = OVDecoder(self.decoder_with_past_model, parent_model=self)
         if enable_compilation:
             self.compile()
