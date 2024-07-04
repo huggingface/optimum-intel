@@ -257,9 +257,22 @@ if not UNET_OV_PATH.exists():
         ov_model = ov.convert_model(unet, example_input=inputs)
 
     flatten_inputs = flattenize_inputs(inputs.values())
+    a = 1
     for input_data, input_tensor in zip(flatten_inputs, ov_model.inputs):
         input_tensor.get_node().set_partial_shape(ov.PartialShape(input_data.shape))
         input_tensor.get_node().set_element_type(dtype_mapping[input_data.dtype])
+        r_name = input_tensor.get_node().get_friendly_name()
+        
+        tn = "down_block_additional_residual."
+        if r_name not in ["sample", "timestep", "encoder_hidden_states", "mid_block_additional_residual"]:
+            print(r_name)
+            n_name = tn + str(a)
+            print(n_name)
+            if a == 23:
+                n_name = "down_block_additional_residual"
+            input_tensor.get_node().set_friendly_name(n_name)
+            a = a + 2
+
     ov_model.validate_nodes_and_infer_types()
     ov.save_model(ov_model, UNET_OV_PATH)
     del ov_model
@@ -336,17 +349,18 @@ def convert_vae_decoder(vae: torch.nn.Module, ir_path: Path):
 
     if not ir_path.exists():
         vae_decoder = VAEDecoderWrapper(vae)
-        latents = torch.zeros((1, 4, 64, 64))
+        latent_sample = torch.zeros((1, 4, 64, 64))
 
         vae_decoder.eval()
         with torch.no_grad():
             ov_model = ov.convert_model(
                 vae_decoder,
-                example_input=latents,
+                example_input=latent_sample,
                 input=[
                     (1, 4, 64, 64),
                 ],
             )
+            
             ov.save_model(ov_model, ir_path)
         del ov_model
         cleanup_torchscript_cache()

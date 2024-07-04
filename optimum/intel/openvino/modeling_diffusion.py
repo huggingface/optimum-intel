@@ -73,6 +73,7 @@ from .utils import (
 import torch
 from typing import Union, List, Optional, Tuple
 from tqdm.auto import tqdm
+from diffusers.utils import numpy_to_pil
 
 core = Core()
 
@@ -1153,7 +1154,7 @@ class OVModelUnetControlNet(OVModelPart):
         sample: np.ndarray,
         timestep: np.ndarray,
         encoder_hidden_states: np.ndarray,
-        down_and_mid_blok_samples: np.ndarray,
+        down_and_mid_block_samples: Tuple[np.ndarray],
         text_embeds: Optional[np.ndarray] = None,
         time_ids: Optional[np.ndarray] = None,
         timestep_cond: Optional[np.ndarray] = None,
@@ -1164,8 +1165,16 @@ class OVModelUnetControlNet(OVModelPart):
             "sample": sample,
             "timestep": timestep,
             "encoder_hidden_states": encoder_hidden_states,
-            "down_and_mid_blok_samples": down_and_mid_blok_samples,
+            "mid_block_additional_residual": down_and_mid_block_samples[-1],
         }
+        a = 1
+        for block in down_and_mid_block_samples:
+            if a == 23:
+                inputs[f"down_block_additional_residual"] = block
+                break
+            else:
+                inputs[f"down_block_additional_residual.{a}"] = block
+            a += 2
 
         if text_embeds is not None:
             inputs["text_embeds"] = text_embeds
@@ -1664,12 +1673,12 @@ class OVStableDiffusionContrlNetPipeline(OVStableDiffusionContrlNetPipelineBase,
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
                 result = self.controlnet(sample=latent_model_input, timestep=t, encoder_hidden_states=text_embeddings, controlnet_cond=image)
-
-                down_and_mid_blok_samples = [sample * controlnet_conditioning_scale for sample in result]
- 
+                
+                down_and_mid_block_samples = [sample * controlnet_conditioning_scale for sample in result]
+                down_and_mid_block_samples = tuple(down_and_mid_block_samples)
                 # predict the noise residual
-                noise_pred = self.unet(sample=latent_model_input, timestep=t, encoder_hidden_states=text_embeddings, down_and_mid_blok_samples=down_and_mid_blok_samples)
-
+                noise_pred = self.unet(sample=latent_model_input, timestep=t, encoder_hidden_states=text_embeddings, down_and_mid_block_samples=down_and_mid_block_samples)[0]
+                # import pdb; pdb.set_trace()
                 # perform guidance
                 if do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred[0], noise_pred[1]
@@ -1686,7 +1695,7 @@ class OVStableDiffusionContrlNetPipeline(OVStableDiffusionContrlNetPipelineBase,
         image = self.decode_latents(latents, pad)
 
         # 9. Convert to PIL
-        image = self.numpy_to_pil(image)
+        image = numpy_to_pil(image)
         image = [img.resize((orig_width, orig_height), PIL.Image.Resampling.LANCZOS) for img in image]
 
         return image

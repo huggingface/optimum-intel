@@ -17,6 +17,7 @@ import openvino as ov
 
 from PIL import Image
 import sys
+from diffusers import UniPCMultistepScheduler
 
 
 # pipe = OVStableDiffusionPipeline.from_pretrained("/home/chentianmeng/workspace/optimum-intel-controlnet/model/stable-diffusion-pokemons-fp32", compile=False)
@@ -33,8 +34,8 @@ import sys
 
 # output.images[0].save("output_0.png")
 
-
-ov_pipe = OVStableDiffusionContrlNetPipeline.from_pretrained("/home/chentianmeng/workspace/optimum-intel-controlnet/model/stable-diffusion-controlnet-openpose", compile=False)
+scheduler = UniPCMultistepScheduler.from_config("/home/chentianmeng/workspace/optimum-intel-controlnet/model/stable-diffusion-controlnet-openpose/scheduler/scheduler_config.json")
+ov_pipe = OVStableDiffusionContrlNetPipeline.from_pretrained("/home/chentianmeng/workspace/optimum-intel-controlnet/model/stable-diffusion-controlnet-openpose", scheduler=scheduler,compile=False)
 
 
 np.random.seed(42)
