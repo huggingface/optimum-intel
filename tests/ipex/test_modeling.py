@@ -188,6 +188,20 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
 
+    def test_patched_model(self):
+        ipex_model = IPEXModelForQuestionAnswering.from_pretrained(
+            "Jiqing/patched_tiny_random_bert_for_question_answering"
+        )
+        transformers_model = AutoModelForQuestionAnswering.from_pretrained("hf-internal-testing/tiny-random-bert")
+        tokenizer = AutoTokenizer.from_pretrained("hf-internal-testing/tiny-random-bert")
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt")
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        outputs = ipex_model(**tokens)
+        self.assertTrue(torch.allclose(outputs.start_logits, transformers_outputs.start_logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.end_logits, transformers_outputs.end_logits, atol=1e-4))
+
 
 class IPEXModelForCausalLMTest(unittest.TestCase):
     IPEX_MODEL_CLASS = IPEXModelForCausalLM

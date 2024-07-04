@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import logging
 import math
 from typing import List, Optional, Tuple, Union
 
@@ -25,18 +26,23 @@ from optimum.intel.utils.import_utils import is_ipex_version
 from optimum.intel.utils.modeling_utils import _setattr_from_module
 
 
+logger = logging.getLogger(__name__)
+
 _IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.3.0"
 
-if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
-    raise ImportError(f"Only ipex version > {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports patching")
 
-from intel_extension_for_pytorch.llm.modules import (
-    IndirectAccessKVCacheAttention,
-    Linear2SiluMul,
-    LinearAdd,
-    LinearGelu,
-    RotaryEmbedding,
-)
+if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
+    logger.warning(
+        f"Please upgrade the IPEX version to at least {_IPEX_MINIMUM_VERSION_FOR_PATCHING} if you want to patch the model."
+    )
+else:
+    from intel_extension_for_pytorch.llm.modules import (
+        IndirectAccessKVCacheAttention,
+        Linear2SiluMul,
+        LinearAdd,
+        LinearGelu,
+        RotaryEmbedding,
+    )
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
