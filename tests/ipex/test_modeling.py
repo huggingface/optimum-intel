@@ -474,10 +474,10 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertTrue(isinstance(outputs[0]["label"], str))
 
     def test_patched_model(self):
-        ipex_model = IPEXModelForQuestionAnswering.from_pretrained(
+        ipex_model = IPEXModelForImageClassification.from_pretrained(
             "Jiqing/patched_tiny_random_vit_for_image_classification"
         )
-        transformers_model = AutoModelForQuestionAnswering.from_pretrained("hf-internal-testing/tiny-random-vit")
+        transformers_model = self.IPEX_MODEL_CLASS.from_pretrained("hf-internal-testing/tiny-random-vit")
         preprocessor = AutoFeatureExtractor.from_pretrained("hf-internal-testing/tiny-random-vit")
         url = "http://images.cocodataset.org/val2017/000000039769.jpg"
         image = Image.open(requests.get(url, stream=True).raw)
