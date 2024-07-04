@@ -35,7 +35,6 @@ import torch
 import torch.distributed as dist
 from neural_compressor import training
 from neural_compressor.compression import DistillationCallbacks
-from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
 from packaging import version
 from torch import nn
 from torch.utils.data import Dataset, RandomSampler
@@ -107,8 +106,10 @@ if TYPE_CHECKING:
     from optimum.exporters.onnx import OnnxConfig
 
 if is_neural_compressor_version("<", "2.6"):
+    from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
     from neural_compressor.experimental.export import torch_to_fp32_onnx, torch_to_int8_onnx
 else:
+    from neural_compressor.config import _BaseQuantizationConfig
     from neural_compressor.utils.export import torch_to_fp32_onnx, torch_to_int8_onnx
 
 
