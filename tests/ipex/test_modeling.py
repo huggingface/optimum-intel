@@ -188,6 +188,21 @@ class IPEXModelForQuestionAnsweringTest(unittest.TestCase):
         self.assertGreaterEqual(outputs["score"], 0.0)
         self.assertIsInstance(outputs["answer"], str)
 
+    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    def test_patched_model(self):
+        ipex_model = IPEXModelForQuestionAnswering.from_pretrained(
+            "Jiqing/patched_tiny_random_bert_for_question_answering"
+        )
+        transformers_model = AutoModelForQuestionAnswering.from_pretrained("hf-internal-testing/tiny-random-bert")
+        tokenizer = AutoTokenizer.from_pretrained("hf-internal-testing/tiny-random-bert")
+        inputs = "This is a sample input"
+        tokens = tokenizer(inputs, return_tensors="pt")
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**tokens)
+        outputs = ipex_model(**tokens)
+        self.assertTrue(torch.allclose(outputs.start_logits, transformers_outputs.start_logits, atol=1e-4))
+        self.assertTrue(torch.allclose(outputs.end_logits, transformers_outputs.end_logits, atol=1e-4))
+
 
 class IPEXModelForCausalLMTest(unittest.TestCase):
     IPEX_MODEL_CLASS = IPEXModelForCausalLM
@@ -458,3 +473,18 @@ class IPEXModelForImageClassificationIntegrationTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertTrue(isinstance(outputs[0]["label"], str))
+
+    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    def test_patched_model(self):
+        ipex_model = IPEXModelForImageClassification.from_pretrained(
+            "Jiqing/patched_tiny_random_vit_for_image_classification"
+        )
+        transformers_model = self.IPEX_MODEL_CLASS.from_pretrained("hf-internal-testing/tiny-random-vit")
+        preprocessor = AutoFeatureExtractor.from_pretrained("hf-internal-testing/tiny-random-vit")
+        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
+        image = Image.open(requests.get(url, stream=True).raw)
+        inputs = preprocessor(images=image, return_tensors="pt")
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        outputs = ipex_model(**inputs)
+        self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
