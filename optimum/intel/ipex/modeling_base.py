@@ -127,6 +127,7 @@ class IPEXModel(OptimizedModel):
     base_model_prefix = "ipex_model"
     main_input_name = "input_ids"
     output_name = "last_hidden_state"
+    _supports_cache_class = False
 
     def __init__(
         self,

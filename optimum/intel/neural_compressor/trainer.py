@@ -682,6 +682,7 @@ class INCTrainer(Trainer):
     def save_model(
         self,
         output_dir: Optional[str] = None,
+        _internal_call: bool = False,
         save_onnx_model: bool = False,
     ):
         """
@@ -696,6 +697,7 @@ class INCTrainer(Trainer):
                 output_dir=output_dir,
                 save_onnx_model=save_onnx_model,
             )
+        # TODO: push to hub if self.args.push_to_hub and not _internal_call
 
     def _save(
         self,
