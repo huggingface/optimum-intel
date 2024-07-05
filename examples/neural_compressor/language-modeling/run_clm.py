@@ -223,7 +223,7 @@ class OptimizationArguments:
         metadata={"help": "Scheme for weight only quantization. Choose from 'sym' and 'asym'."},
     )
     quantization_methodology: str = field(
-        choices=["rtn", "gptq"],
+        # choices=["rtn", "gptq"],
         default="rtn",
         metadata={"help": "Quantization methodology for weight only quantization. Choose from 'rtn' and 'gptq'."},
     )
