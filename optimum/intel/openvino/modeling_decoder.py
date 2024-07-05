@@ -40,7 +40,13 @@ from ...exporters.openvino import ensure_stateful_is_available, main_export, pat
 from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
-from .configuration import _DEFAULT_4BIT_CONFIG, _DEFAULT_4BIT_CONFIGS, OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
+from .configuration import (
+    _DEFAULT_4BIT_CONFIG,
+    _DEFAULT_4BIT_CONFIGS,
+    OVConfig,
+    OVWeightQuantizationConfig,
+    _check_default_4bit_configs,
+)
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
