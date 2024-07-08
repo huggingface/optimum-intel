@@ -75,8 +75,8 @@ _TASK_TO_DATASET = {
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
-        (OVModelForSequenceClassification, "bert", 22, 35),
-        (OVModelForCausalLM, "gpt2", 41, 3),
+        (OVModelForSequenceClassification, "bert", 32 if is_transformers_version("<", "4.41.0") else 22, 35),
+        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 21, 3),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
@@ -89,9 +89,6 @@ class OVQuantizerTest(unittest.TestCase):
         task = model_cls.export_feature
         dataset_name, dataset_config_name, column_name = _TASK_TO_DATASET[task]
         file_name = "openvino_quantized_model.xml"
-
-        if model_name == "bert" and is_transformers_version("<", "4.41.0"):
-            expected_fake_quantize = 32
 
         def preprocess_function(examples, tokenizer):
             return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
