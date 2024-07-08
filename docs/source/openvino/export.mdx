@@ -121,8 +121,10 @@ When Stable Diffusion models are exported to the OpenVINO format, they are decom
 * VAE encoder
 * VAE decoder
 
+To export your Stable Diffusion XL model to the OpenVINO IR format with the CLI you can do as follows:
+
 ```bash
-optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0  --task table-diffusion-xl ov_sdxl/
+optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0 ov_sdxl/
 ```
 
 ## When loading your model
