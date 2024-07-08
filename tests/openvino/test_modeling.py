@@ -966,7 +966,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
 
         gen_configs = [
-            beam_sample_gen_config,
             beam_search_gen_config,
             beam_sample_gen_config,
             group_beam_search_gen_config,
