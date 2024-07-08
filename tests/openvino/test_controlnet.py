@@ -160,8 +160,20 @@ inputs = {
     "controlnet_cond": torch.randn((2, 3, 512, 512)),
 }
 
-input_info = [(name, ov.PartialShape(inp.shape)) for name, inp in inputs.items()]
+# input_info = [(name, ov.PartialShape(inp.shape)) for name, inp in inputs.items()]
+input_info = []
+for name, inp in inputs.items():
+    shape = ov.PartialShape(inp.shape)
+    # element_type = dtype_mapping[input_tensor.dtype]
+    if len(shape) == 4:
+        shape[0] = -1
+        shape[2] = -1
+        shape[3] = -1
+    elif len(shape) == 3:
+        shape[0] = -1
+    input_info.append((shape))
 
+ 
 CONTROLNET_OV_PATH = Path("/home/chentianmeng/workspace/optimum-intel-controlnet/model/ov_ControlNet/controlnet-pose.xml")
 controlnet.eval()
 with torch.no_grad():
@@ -247,9 +259,21 @@ def flattenize_inputs(inputs):
 
 if not UNET_OV_PATH.exists():
     inputs.pop("controlnet_cond", None)
+    
     inputs["down_block_additional_residuals"] = down_block_res_samples
     inputs["mid_block_additional_residual"] = mid_block_res_sample
 
+    # for name, input_tensor in inputs.items():
+    #     if name == "down_block_additional_residuals":
+    #         down_block_additional_residuals = [res for res in down_block_additional_residuals]
+    #     shape = ov.PartialShape(input_tensor.shape)
+    #     # element_type = dtype_mapping[input_tensor.dtype]
+    #     if len(shape) == 4:
+    #         shape[0] = -1
+    #         shape[2] = -1
+    #         shape[3] = -1
+    #     input_info.append((shape))
+    # print(input_info)
     unet = UnetWrapper(pipe.unet)
     unet.eval()
 
@@ -258,20 +282,36 @@ if not UNET_OV_PATH.exists():
 
     flatten_inputs = flattenize_inputs(inputs.values())
     a = 1
+
     for input_data, input_tensor in zip(flatten_inputs, ov_model.inputs):
-        input_tensor.get_node().set_partial_shape(ov.PartialShape(input_data.shape))
-        input_tensor.get_node().set_element_type(dtype_mapping[input_data.dtype])
         r_name = input_tensor.get_node().get_friendly_name()
-        
+        r_shape = ov.PartialShape(input_data.shape)
+        if r_name == "sample":
+            r_shape[0] = -1
+            r_shape[2] = -1
+            r_shape[3] = -1
+        elif r_name == "encoder_hidden_states":
+            r_shape[0] = -1
+        elif r_name == "mid_block_additional_residual":
+            r_shape[0] = -1
+            r_shape[2] = -1
+            r_shape[3] = -1
+            
         tn = "down_block_additional_residual."
         if r_name not in ["sample", "timestep", "encoder_hidden_states", "mid_block_additional_residual"]:
             print(r_name)
+            r_shape[0] = -1
+            r_shape[2] = -1
+            r_shape[3] = -1
             n_name = tn + str(a)
             print(n_name)
             if a == 23:
                 n_name = "down_block_additional_residual"
             input_tensor.get_node().set_friendly_name(n_name)
             a = a + 2
+        print(name, r_shape)
+        input_tensor.get_node().set_partial_shape(r_shape)
+        input_tensor.get_node().set_element_type(dtype_mapping[input_data.dtype])
 
     ov_model.validate_nodes_and_infer_types()
     ov.save_model(ov_model, UNET_OV_PATH)
@@ -747,6 +787,7 @@ from transformers import CLIPTokenizer
 from diffusers import UniPCMultistepScheduler
 
 tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+
 scheduler = UniPCMultistepScheduler.from_config(pipe.scheduler.config)
 
 

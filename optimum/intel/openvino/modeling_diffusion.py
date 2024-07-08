@@ -1352,28 +1352,7 @@ class OVStableDiffusionContrlNetPipelineBase(OVStableDiffusionPipelineBase):
                 components[key] = cls.load_model(value, quantization_config) if value.is_file() else None
         else:
             # Load uncompressed models to apply hybrid quantization further
-            unet = cls.load_model(unet_path)
-            controlnet = cls.load_model(controlnet_path)
-            for key, value in components.items():
-                components[key] = cls.load_model(value) if value.is_file() else None
-            sd_model = cls(unet=unet, config=config, model_save_dir=model_save_dir, **components, **kwargs)
-
-            supported_pipelines = (
-                OVStableDiffusionPipeline,
-                OVStableDiffusionXLPipeline,
-                OVLatentConsistencyModelPipeline,
-            )
-            if not isinstance(sd_model, supported_pipelines):
-                raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
-
-            from optimum.intel import OVQuantizer
-
-            hybrid_quantization_config = deepcopy(quantization_config)
-            hybrid_quantization_config.quant_method = OVQuantizationMethod.HYBRID
-            quantizer = OVQuantizer(sd_model)
-            quantizer.quantize(ov_config=OVConfig(quantization_config=hybrid_quantization_config))
-
-            return sd_model
+            raise NotImplementedError(f"Quantization in hybrid mode is not supported for {cls.__name__}")
 
         return cls(
             unet=unet,
@@ -1385,7 +1364,7 @@ class OVStableDiffusionContrlNetPipelineBase(OVStableDiffusionPipelineBase):
             **kwargs,
         )
     
-class OVStableDiffusionContrlNetPipeline(OVStableDiffusionContrlNetPipelineBase, ConfigMixin):
+class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
     def _encode_prompt(
         self,
         prompt: Union[str, List[str]],
@@ -1699,3 +1678,63 @@ class OVStableDiffusionContrlNetPipeline(OVStableDiffusionContrlNetPipelineBase,
         image = [img.resize((orig_width, orig_height), PIL.Image.Resampling.LANCZOS) for img in image]
 
         return image
+    
+class OVStableDiffusionContrlNetPipeline(OVStableDiffusionContrlNetPipelineBase, StableDiffusionContrlNetPipelineMixin):
+    def __call__(
+        self,
+        prompt: Optional[Union[str, List[str]]] = None,
+        image: Optional[PIL.Image.Image] = None,
+        num_inference_steps: int = 10,
+        guidance_scale: float = 7.5,
+        controlnet_conditioning_scale: float = 1.0,
+        eta: float = 0.0,
+        latents: Optional[np.array] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+        negative_prompt: Optional[Union[str, List[str]]] = None,
+        num_images_per_prompt: int = 1,
+        **kwargs,
+    ):
+        height = height or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
+        width = width or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
+        _height = self.height
+        _width = self.width
+        expected_batch_size = self._batch_size
+
+        if _height != -1 and height != _height:
+            logger.warning(
+                f"`height` was set to {height} but the static model will output images of height {_height}."
+                "To fix the height, please reshape your model accordingly using the `.reshape()` method."
+            )
+            height = _height
+
+        if _width != -1 and width != _width:
+            logger.warning(
+                f"`width` was set to {width} but the static model will output images of width {_width}."
+                "To fix the width, please reshape your model accordingly using the `.reshape()` method."
+            )
+            width = _width
+
+        if expected_batch_size != -1:
+            if isinstance(prompt, str):
+                batch_size = 1
+            elif isinstance(prompt, list):
+                batch_size = len(prompt)
+            else:
+                batch_size = kwargs.get("prompt_embeds").shape[0]
+
+            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
+
+        return StableDiffusionContrlNetPipelineMixin.__call__(
+            self,
+            prompt = prompt,
+            image = image,
+            num_inference_steps = num_inference_steps,
+            negative_prompt = negative_prompt,
+            guidance_scale = guidance_scale,
+            controlnet_conditioning_scale = controlnet_conditioning_scale,
+            eta = eta,
+            latents = latents,
+        )
+
+
