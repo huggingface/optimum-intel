@@ -238,7 +238,7 @@ image = refiner(prompt=prompt, image=image[None, :]).images[0]
 
 ### Text-to-Image
 
-Here is an example of how you can load a Latent Consistency Models (LCMs) from [SimianLuo/LCM_Dreamshaper_v7](https://huggingface.co/SimianLuo/LCM_Dreamshaper_v7) and run inference using OpenVINO :
+Here is an example of how you can load a Latent Consistency Model (LCM) from [SimianLuo/LCM_Dreamshaper_v7](https://huggingface.co/SimianLuo/LCM_Dreamshaper_v7) and run inference using OpenVINO :
 
 ```python
 from optimum.intel import OVLatentConsistencyModelPipeline
