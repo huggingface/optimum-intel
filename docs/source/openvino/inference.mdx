@@ -143,7 +143,7 @@ tokens = tokenizer(question, context, max_length=seq_len, padding="max_length", 
 outputs = model(**tokens)
 ```
 
-For models that handles images, you can also specify the `height` and `width` when reshaping your model:
+For models that handle images, you can also specify the `height` and `width` when reshaping your model:
 
 ```python
 batch_size, num_images, height, width = 1, 1, 512, 512
