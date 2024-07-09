@@ -24,12 +24,10 @@ jobs:
         transformers-version: [4.39.0, 4.41.2]
         ipex-version: [2.2.0, 2.3.*]
         os: [ubuntu-latest]
-        exclude:
-        - ipex-version: 3.8
-          transformers-version: 4.39.0
-        - ipex-version: 3.8
-          transformers-version: 4.41.2
-          ipex-version: 2.2.0
+        include:
+          - python-version: 3.8
+            transformers-version: 4.39.0
+            ipex-version: 2.2.0
 
     runs-on: ${{ matrix.os }}
     steps:
