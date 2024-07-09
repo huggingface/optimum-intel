@@ -41,8 +41,8 @@ jobs:
         pip install torch==${{ matrix.ipex-version }} --extra-index-url https://download.pytorch.org/whl/cpu
         pip install intel_extension_for_pytorch==${{ matrix.ipex-version }}
         pip install Pillow parameterized
+        pip install transformers[testing]==${{ matrix.transformers-version }}
         pip install .[ipex]
-        pip install transformers==${{ matrix.transformers-version }}
     - name: Test with Pytest
       run: |
         pytest tests/ipex/
