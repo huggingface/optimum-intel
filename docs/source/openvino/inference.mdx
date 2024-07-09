@@ -112,7 +112,7 @@ model.compile()
 
 ## Static shape
 
-By default, support dynamic shapes are supported, enabling inference for inputs of every shapes. To speed up inference, static shapes can be enabled by giving the desired inputs shapes wtih [.reshape()](reference#optimum.intel.OVBaseModel.reshape).
+By default, dynamic shapes are supported, enabling inference for inputs of every shape. To speed up inference, static shapes can be enabled by giving the desired input shapes with [.reshape()](reference#optimum.intel.OVBaseModel.reshape).
 
 ```python
 # Fix the batch size to 1 and the sequence length to 40
