@@ -24,6 +24,9 @@ jobs:
         transformers-version: [4.39.0, 4.41.2]
         ipex-version: [2.2.0, 2.3.*]
         os: [ubuntu-latest]
+        exclude:
+        - os: ubuntu-latest
+          ipex-version: 3.8
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -43,8 +46,3 @@ jobs:
     - name: Test with Pytest
       run: |
         pytest tests/ipex/
-    - name: Test Python3.8
-      with: 
-        python-version: 3.8
-      run: |
-        pytest tests/ipex/test_modeling.py::IPEXModelTest
