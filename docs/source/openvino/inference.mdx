@@ -155,7 +155,7 @@ images = pipeline(prompt, height=height, width=width, num_images_per_prompt=num_
 The `ov_config` parameter allow to provide custom OpenVINO configuration values. This can be used for example to enable full precision inference on devices where FP16 or BF16 inference precision is used by default.
 
 ```python
-ov_config = {"INFERENCE_PRECISION_HINT":"f32"}
+ov_config = {"INFERENCE_PRECISION_HINT": "f32"}
 model = OVModelForSequenceClassification.from_pretrained(model_id, ov_config=ov_config)
 ```
 
