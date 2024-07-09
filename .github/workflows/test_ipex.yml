@@ -29,7 +29,6 @@ jobs:
             transformers-version: 4.39.0
             ipex-version: 2.2.0
 
-    runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v2
     - name: Setup Python ${{ matrix.python-version }}
