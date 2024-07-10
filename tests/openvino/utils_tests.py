@@ -118,6 +118,7 @@ MODEL_NAMES = {
     "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",
     "arctic": "katuni4ka/tiny-random-snowflake",
     "swin": "hf-internal-testing/tiny-random-SwinModel",
+    "swin-window": "yujiepan/tiny-random-swin-patch4-window7-224",
     "t5": "hf-internal-testing/tiny-random-t5",
     "trocr": "microsoft/trocr-small-handwritten",
     "unispeech": "hf-internal-testing/tiny-random-unispeech",
