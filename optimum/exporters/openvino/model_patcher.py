@@ -539,7 +539,7 @@ class LlamaModelPatcher(DecoderModelPatcher):
 
             base = self._model.model.layers[0].self_attn.rotary_emb.base
             dim = self._model.model.layers[0].self_attn.rotary_emb.dim
-            embed_positions = create_sinusoidal_positions(max_positions, dim, base),
+            embed_positions = create_sinusoidal_positions(max_positions, dim, base)
 
             for layer in self._model.model.layers:
                 layer.self_attn.rotary_emb.register_buffer("embed_positions", embed_positions)
