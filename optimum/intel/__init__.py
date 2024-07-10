@@ -100,6 +100,7 @@ except OptionalDependencyNotAvailable:
         "OVStableDiffusionXLPipeline",
         "OVStableDiffusionXLImg2ImgPipeline",
         "OVLatentConsistencyModelPipeline",
+        "OVStableDiffusionControlNetPipeline",
     ]
 else:
     _import_structure["openvino"].extend(
@@ -110,6 +111,7 @@ else:
             "OVStableDiffusionXLPipeline",
             "OVStableDiffusionXLImg2ImgPipeline",
             "OVLatentConsistencyModelPipeline",
+            "OVStableDiffusionControlNetPipeline",
         ]
     )
 
@@ -238,6 +240,7 @@ if TYPE_CHECKING:
             OVStableDiffusionPipeline,
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLPipeline,
+            OVStableDiffusionControlNetPipeline,
         )
     else:
         from .openvino import (
@@ -247,6 +250,7 @@ if TYPE_CHECKING:
             OVStableDiffusionPipeline,
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLPipeline,
+            OVStableDiffusionControlNetPipeline,
         )
 
     try:

@@ -604,6 +604,74 @@ class UNetOpenVINOConfig(UNetOnnxConfig):
         }
 
 
+@register_in_tasks_manager("unet-controlnet", *["semantic-segmentation"], library_name="diffusers")
+class UNetControlNetOpenVINOConfig(UNetOnnxConfig):
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "sample": {0: "batch_size", 2: "height", 3: "width"},
+            "timestep": {0: "steps"},
+            "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            "mid_block_additional_residual": {0: "batch_size", 2: "height", 3: "width"}, 
+        }   
+        for a in range(1, 25, 2):
+            if a == 23:
+                common_inputs[f"down_block_additional_residual"] = {0: "batch_size", 2: "height", 3: "width"}
+                break
+            else:
+                common_inputs[f"down_block_additional_residual.{a}"] = {0: "batch_size", 2: "height", 3: "width"}
+        # TODO : add text_image, image and image_embeds
+        if getattr(self._normalized_config, "addition_embed_type", None) == "text_time":
+            common_inputs["text_embeds"] = {0: "batch_size"}
+            common_inputs["time_ids"] = {0: "batch_size"}
+
+        if getattr(self._normalized_config, "time_cond_proj_dim", None) is not None:
+            common_inputs["timestep_cond"] = {0: "batch_size"}
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "out_sample": {0: "batch_size", 2: "height", 3: "width"},
+        }
+    
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
+
+        dummy_inputs = {}
+        for input_name in self.inputs:
+            for dummy_input_gen in dummy_inputs_generators:
+                if dummy_input_gen.supports_input(input_name):
+                    dummy_inputs[input_name] = dummy_input_gen.generate(
+                        input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+                    )
+                    break
+                
+        import torch
+        dummy_inputs["mid_block_additional_residual"] = torch.randn(2, 1280, 8, 8)
+        dummy_inputs["down_block_additional_residual_1"] = torch.randn(2, 320, 64, 64)
+        dummy_inputs["down_block_additional_residual_3"] = torch.randn(2, 320, 64, 64)
+        dummy_inputs["down_block_additional_residual_5"] = torch.randn(2, 320, 64, 64)
+        dummy_inputs["down_block_additional_residual_7"] = torch.randn(2, 320, 32, 32)
+        dummy_inputs["down_block_additional_residual_9"] = torch.randn(2, 640, 32, 32)
+        dummy_inputs["down_block_additional_residual_11"] = torch.randn(2, 640, 32, 32)
+        dummy_inputs["down_block_additional_residual_13"] = torch.randn(2, 640, 16, 16)
+        dummy_inputs["down_block_additional_residual_15"] = torch.randn(2, 1280, 16, 16)
+        dummy_inputs["down_block_additional_residual_17"] = torch.randn(2, 1280, 16, 16)
+        dummy_inputs["down_block_additional_residual_19"] = torch.randn(2, 1280, 8, 8)
+        dummy_inputs["down_block_additional_residual_21"] = torch.randn(2, 1280, 8, 8)
+        dummy_inputs["down_block_additional_residual"] = torch.randn(2, 1280, 8, 8)
+
+        dummy_inputs["encoder_hidden_states"] = dummy_inputs["encoder_hidden_states"][0]
+
+        if getattr(self._normalized_config, "addition_embed_type", None) == "text_time":
+            dummy_inputs["added_cond_kwargs"] = {
+                "text_embeds": dummy_inputs.pop("text_embeds"),
+                "time_ids": dummy_inputs.pop("time_ids"),
+            }
+
+        return dummy_inputs
+    
 @register_in_tasks_manager("vae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
     @property
