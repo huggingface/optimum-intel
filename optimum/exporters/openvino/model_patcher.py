@@ -501,9 +501,9 @@ def llama_gemma_rotary_emb_forward(self, x, position_ids, seq_len=None):
     _seq_len = torch.max(position_ids) + 1 if seq_len is None else seq_len
     if _seq_len > self.embed_positions.shape[0]:
         if seq_len is None:
-            return self._orig_forward(self, x, position_ids)
+            return self._orig_forward(x, position_ids)
         else:
-            return self._orig_forward(self, x, position_ids, seq_len)
+            return self._orig_forward(x, position_ids, seq_len)
     sincos = self.embed_positions[position_ids]
     sin, cos = torch.split(sincos, sincos.shape[-1] // 2, dim=-1)
     return cos, sin
