@@ -28,8 +28,8 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "transformers>=4.36.0,<4.42.0",
-    "optimum~=1.20",
+    "transformers>=4.36.0,<4.43.0",
+    "optimum>=1.21.2,<1.22.0",
     "datasets>=1.4.0",
     "sentencepiece",
     "setuptools",
@@ -56,7 +56,7 @@ TESTS_REQUIRE = [
     "sentence-transformers",
 ]
 
-QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
+QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
     "neural-compressor": ["neural-compressor>=2.2.0", "onnxruntime<1.15.0", "accelerate"],

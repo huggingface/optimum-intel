@@ -221,7 +221,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
     def run(self):
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
-        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, OVConfig
+        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, _DEFAULT_4BIT_CONFIGS, OVConfig
 
         def _get_default_int4_config(model_id_or_path, library_name):
             if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
@@ -233,13 +233,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 if original_model_name in _DEFAULT_4BIT_CONFIGS:
                     return _DEFAULT_4BIT_CONFIGS[original_model_name]
 
-            return {
-                "bits": 4,
-                "ratio": 0.8,
-                "sym": False,
-                "group_size": None,
-                "all_layers": None,
-            }
+            return _DEFAULT_4BIT_CONFIG
 
         library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
         if library_name == "sentence_transformers" and self.args.library is None:

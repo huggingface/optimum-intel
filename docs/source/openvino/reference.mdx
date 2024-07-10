@@ -16,6 +16,12 @@ limitations under the License.
 
 # Models
 
+## Generic model classes
+
+[[autodoc]] openvino.modeling_base.OVBaseModel
+    - _from_pretrained
+    - reshape
+
 ## Natural Language Processing
 
 The following classes are available for the following natural language processing tasks.
@@ -106,6 +112,7 @@ The following classes are available for the following multimodal tasks.
 [[autodoc]] openvino.modeling_seq2seq.OVModelForPix2Struct
     - forward
 
+
 ##  Custom Tasks
 
 ### OVModelForCustomTasks
@@ -119,8 +126,40 @@ The following classes are available for the following multimodal tasks.
     - forward
 
 
-# Quantization
+## Text-to-image
 
-### OVQuantizer
+### OVStableDiffusionPipeline
 
-[[autodoc]] openvino.quantization.OVQuantizer
+[[autodoc]] openvino.modeling_diffusion.OVStableDiffusionPipeline
+    - forward
+
+### OVStableDiffusionXLPipeline
+
+[[autodoc]] openvino.modeling_diffusion.OVStableDiffusionXLPipeline
+    - forward
+
+### OVLatentConsistencyModelPipeline
+
+[[autodoc]] openvino.modeling_diffusion.OVLatentConsistencyModelPipeline
+    - forward
+
+
+## Image-to-image
+
+### OVStableDiffusionImg2ImgPipeline
+
+[[autodoc]] openvino.modeling_diffusion.OVStableDiffusionImg2ImgPipeline
+    - forward
+
+### OVStableDiffusionXLImg2ImgPipeline
+
+[[autodoc]] openvino.modeling_diffusion.OVStableDiffusionXLImg2ImgPipeline
+    - forward
+
+## Inpainting
+
+### OVStableDiffusionInpaintPipeline
+
+[[autodoc]] openvino.modeling_diffusion.OVStableDiffusionInpaintPipeline
+    - forward
+

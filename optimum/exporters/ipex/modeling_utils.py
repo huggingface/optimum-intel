@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import logging
 import math
 from typing import List, Optional, Tuple, Union
 
@@ -25,11 +26,27 @@ from optimum.intel.utils.import_utils import is_ipex_version
 from optimum.intel.utils.modeling_utils import _setattr_from_module
 
 
+logger = logging.getLogger(__name__)
+
 _IPEX_MINIMUM_VERSION_FOR_PATCHING = "2.3.0"
 
 
+if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
+    logger.warning(
+        f"Please upgrade the IPEX version to at least {_IPEX_MINIMUM_VERSION_FOR_PATCHING} if you want to patch the model."
+    )
+else:
+    from intel_extension_for_pytorch.llm.modules import (
+        IndirectAccessKVCacheAttention,
+        Linear2SiluMul,
+        LinearAdd,
+        LinearGelu,
+        RotaryEmbedding,
+    )
+
+
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L83
-def _llama_layer_norm_forward(self, hidden_states):
+def _ipex_rms_layer_norm_forward(self, hidden_states):
     return torch.ops.torch_ipex.rmsnorm(hidden_states, self.weight, self.variance_epsilon)
 
 
@@ -139,14 +156,9 @@ def _llama_model_forward(
 # Adapted from https://github.com/huggingface/transformers/blob/v4.38.2/src/transformers/models/llama/modeling_llama.py#L321
 class _IPEXLlamaAttention(nn.Module):
     def __init__(self, module, config) -> None:
-        if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
-            raise ImportError(
-                f"Only ipex version > {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports IndirectAccessKVCacheAttention, LinearAdd, RotaryEmbedding"
-            )
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        from intel_extension_for_pytorch.llm.modules import IndirectAccessKVCacheAttention, LinearAdd, RotaryEmbedding
 
         if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
             self.mha_linear_add = LinearAdd(module.o_proj)
@@ -296,14 +308,9 @@ class _IPEXLlamaAttention(nn.Module):
 # Adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L186
 class _IPEXLlamaMLP(nn.Module):
     def __init__(self, module, config) -> None:
-        if is_ipex_version("<", _IPEX_MINIMUM_VERSION_FOR_PATCHING):
-            raise ImportError(
-                f"Only ipex version > {_IPEX_MINIMUM_VERSION_FOR_PATCHING} supports Linear2SiluMul, LinearAdd"
-            )
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        from intel_extension_for_pytorch.llm.modules import Linear2SiluMul, LinearAdd
 
         # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
         if module.down_proj.__class__.__name__ not in ["LinearAllreduce"]:
@@ -398,3 +405,16 @@ class _IPEXLlamaDecoderLayer(nn.Module):
             outputs += (present_key_value,)
 
         return outputs
+
+
+# Adapted from https://github.com/huggingface/transformers/blob/v4.41.2/src/transformers/models/bert/modeling_bert.py#L524
+class _IPEXIntermediate(nn.Module):
+    def __init__(self, module, config):
+        super().__init__()
+        _setattr_from_module(self, module)
+        self.linear_gelu = LinearGelu(module.dense)
+        del self.__dict__["_modules"]["dense"]
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.linear_gelu(hidden_states)
+        return hidden_states

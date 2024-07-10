@@ -35,7 +35,6 @@ import torch
 import torch.distributed as dist
 from neural_compressor import training
 from neural_compressor.compression import DistillationCallbacks
-from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
 from packaging import version
 from torch import nn
 from torch.utils.data import Dataset, RandomSampler
@@ -107,8 +106,10 @@ if TYPE_CHECKING:
     from optimum.exporters.onnx import OnnxConfig
 
 if is_neural_compressor_version("<", "2.6"):
+    from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
     from neural_compressor.experimental.export import torch_to_fp32_onnx, torch_to_int8_onnx
 else:
+    from neural_compressor.config import _BaseQuantizationConfig
     from neural_compressor.utils.export import torch_to_fp32_onnx, torch_to_int8_onnx
 
 
@@ -174,6 +175,9 @@ class INCTrainer(Trainer):
         self.save_onnx_model = save_onnx_model
         # TODO : To deprecate once support transformers > 4.30.0
         self.deepspeed = None
+
+        if save_onnx_model:
+            logger.warning("ONNX model saving is deprecated and will be removed soon.")
 
         # Attach dtype and architecture to the config
         if quantization_config is not None:
@@ -679,14 +683,12 @@ class INCTrainer(Trainer):
         self,
         output_dir: Optional[str] = None,
         _internal_call: bool = False,
-        save_onnx_model: Optional[bool] = None,
+        save_onnx_model: bool = False,
     ):
         """
         Will save the model, so you can reload it using `from_pretrained()`.
         Will only save from the main process.
         """
-        save_onnx_model = save_onnx_model if save_onnx_model is not None else self.save_onnx_model
-
         if output_dir is None:
             output_dir = self.args.output_dir
 
@@ -695,6 +697,7 @@ class INCTrainer(Trainer):
                 output_dir=output_dir,
                 save_onnx_model=save_onnx_model,
             )
+        # TODO: push to hub if self.args.push_to_hub and not _internal_call
 
     def _save(
         self,
@@ -734,7 +737,10 @@ class INCTrainer(Trainer):
 
         # Disable ONNX export for quantized model as deprecated in neural-compressor>=2.2.0
         if save_onnx_model and self.dtype == "int8":
-            logger.warning("ONNX export for quantized model is no longer supported by neural-compressor>=2.2.0. ")
+            logger.warning(
+                "ONNX export for quantized model is no longer supported by neural-compressor>=2.2.0. "
+                "Setting `save_onnx_model` to False."
+            )
             save_onnx_model = False
 
         # Export the compressed model to the ONNX format
