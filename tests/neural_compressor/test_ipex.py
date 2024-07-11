@@ -41,8 +41,7 @@ from optimum.intel import (
     INCQuantizer,
     INCSeq2SeqTrainer,
 )
-from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
-from optimum.pipelines import ORT_SUPPORTED_TASKS
+from optimum.exporters import TasksManager
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -58,7 +57,7 @@ class IPEXQuantizationTest(INCTestMixin):
         num_samples = 10
         model_name = MODEL_NAMES[model_arch]
         quantization_config = PostTrainingQuantConfig(approach="static", backend="ipex", recipes=recipes)
-        model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
+        model = TasksManager.get_model_class_for_task(task).from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -70,7 +69,6 @@ class IPEXQuantizationTest(INCTestMixin):
                 quantization_config=quantization_config,
                 calibration_dataset=calibration_dataset,
                 save_directory=tmp_dir,
-                save_onnx_model=False,
             )
             self.check_model_outputs(
                 q_model=quantizer._quantized_model,
@@ -79,7 +77,6 @@ class IPEXQuantizationTest(INCTestMixin):
                 save_directory=tmp_dir,
                 expected_quantized_matmuls=expected_quantized_matmuls,
                 is_static=True,
-                load_onnx_model=False,
                 num_samples=num_samples,
                 load_inc_model=False,
                 load_ipex_model=True,
