@@ -370,11 +370,6 @@ def export_pytorch(
             patcher = config.patch_model_for_export(model, model_kwargs=model_kwargs)
             patched_forward = patcher.patched_forward
 
-            if patch_16bit_model:
-                from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
-
-                __make_16bit_traceable(model)
-
             @functools.wraps(patched_forward)
             def ts_patched_forward(*args, **kwargs):
                 for i in range(len(dict_inputs)):
@@ -388,6 +383,9 @@ def export_pytorch(
             patcher.patched_forward = ts_patched_forward
 
             with patcher:
+                if patch_16bit_model:
+                    from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
+                    __make_16bit_traceable(model)
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
                 sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
                 inputs = config.ordered_inputs(model)
