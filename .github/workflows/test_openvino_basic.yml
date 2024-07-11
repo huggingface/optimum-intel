@@ -24,6 +24,11 @@ jobs:
         # This also ensures that the test fails if dependencies break for Python 3.7
         python-version: ["3.8", "3.12"]
         os: ["ubuntu-22.04", "windows-latest"]
+        transformers-version: ["4.42.*"]
+        include:
+          - transformers-version: "4.36.0"
+            python-version: "3.12"
+            os: "ubuntu-22.04"
 
     runs-on: ${{ matrix.os }}
 
@@ -40,6 +45,7 @@ jobs:
         # optimum or transformers to a specific version
         # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install transformers==${{ matrix.transformers-version }}
         pip install .[tests] openvino
 
     - name: Pip freeze
