@@ -241,7 +241,6 @@ if TYPE_CHECKING:
             OVStableDiffusionPipeline,
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLPipeline,
-            OVStableDiffusionControlNetPipeline,
         )
     else:
         from .openvino import (
@@ -252,7 +251,6 @@ if TYPE_CHECKING:
             OVStableDiffusionPipeline,
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLPipeline,
-            OVStableDiffusionControlNetPipeline,
         )
 
     try:
