@@ -72,7 +72,10 @@ Below are examples of how to use OpenVINO and its [NNCF](https://docs.openvino.a
 
 #### Export:
 
-It is possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
+To export a model hosted on the [Hub](https://huggingface.co/models) you can use our [space](https://huggingface.co/spaces/echarlaix/openvino-export).
+After export, your model will be pushed in a repo under your namepspace, this repo can be either public or private. Before conversion, make sure you are properly logged in.
+
+It is also possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
 
 ```plain
 optimum-cli export openvino --model gpt2 ov_model
