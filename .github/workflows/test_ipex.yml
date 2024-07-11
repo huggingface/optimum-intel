@@ -21,7 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: [3.8, 3.9]
-        transformers-version: [4.39.0, 4.41.2]
+        transformers-version: [4.39.0, 4.42.3]
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
