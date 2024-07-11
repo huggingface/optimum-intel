@@ -528,9 +528,8 @@ class LlamaModelPatcher(DecoderModelPatcher):
             # use precomputed
             def create_sinusoidal_positions(num_pos: int, dim: int, base: int = 10000) -> torch.Tensor:
                 # adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L101 
-                
                 inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64) / dim))
-                
+
                 sinusoid_inp = torch.einsum(
                     "i , j -> i j", torch.arange(num_pos, dtype=torch.int64).float(), inv_freq
                 ).float()
