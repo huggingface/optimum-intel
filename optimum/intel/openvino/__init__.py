@@ -71,10 +71,10 @@ from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModel
 if is_diffusers_available():
     from .modeling_diffusion import (
         OVLatentConsistencyModelPipeline,
+        OVStableDiffusionControlNetPipeline,
         OVStableDiffusionImg2ImgPipeline,
         OVStableDiffusionInpaintPipeline,
         OVStableDiffusionPipeline,
         OVStableDiffusionXLImg2ImgPipeline,
         OVStableDiffusionXLPipeline,
-        OVStableDiffusionControlNetPipeline,
     )

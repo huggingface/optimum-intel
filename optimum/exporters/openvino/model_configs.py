@@ -612,11 +612,11 @@ class UNetControlNetOpenVINOConfig(UNetOnnxConfig):
             "sample": {0: "batch_size", 2: "height", 3: "width"},
             "timestep": {0: "steps"},
             "encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
-            "mid_block_additional_residual": {0: "batch_size", 2: "height", 3: "width"}, 
-        }   
+            "mid_block_additional_residual": {0: "batch_size", 2: "height", 3: "width"},
+        }
         for a in range(1, 25, 2):
             if a == 23:
-                common_inputs[f"down_block_additional_residual"] = {0: "batch_size", 2: "height", 3: "width"}
+                common_inputs["down_block_additional_residual"] = {0: "batch_size", 2: "height", 3: "width"}
                 break
             else:
                 common_inputs[f"down_block_additional_residual.{a}"] = {0: "batch_size", 2: "height", 3: "width"}
@@ -634,7 +634,7 @@ class UNetControlNetOpenVINOConfig(UNetOnnxConfig):
         return {
             "out_sample": {0: "batch_size", 2: "height", 3: "width"},
         }
-    
+
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
 
@@ -646,8 +646,9 @@ class UNetControlNetOpenVINOConfig(UNetOnnxConfig):
                         input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
                     )
                     break
-                
+
         import torch
+
         dummy_inputs["mid_block_additional_residual"] = torch.randn(2, 1280, 8, 8)
         dummy_inputs["down_block_additional_residual_1"] = torch.randn(2, 320, 64, 64)
         dummy_inputs["down_block_additional_residual_3"] = torch.randn(2, 320, 64, 64)
@@ -671,7 +672,8 @@ class UNetControlNetOpenVINOConfig(UNetOnnxConfig):
             }
 
         return dummy_inputs
-    
+
+
 @register_in_tasks_manager("vae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
     @property

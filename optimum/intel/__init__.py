@@ -235,22 +235,22 @@ if TYPE_CHECKING:
     except OptionalDependencyNotAvailable:
         from .utils.dummy_openvino_and_diffusers_objects import (
             OVLatentConsistencyModelPipeline,
+            OVStableDiffusionControlNetPipeline,
             OVStableDiffusionImg2ImgPipeline,
             OVStableDiffusionInpaintPipeline,
             OVStableDiffusionPipeline,
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLPipeline,
-            OVStableDiffusionControlNetPipeline,
         )
     else:
         from .openvino import (
             OVLatentConsistencyModelPipeline,
+            OVStableDiffusionControlNetPipeline,
             OVStableDiffusionImg2ImgPipeline,
             OVStableDiffusionInpaintPipeline,
             OVStableDiffusionPipeline,
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLPipeline,
-            OVStableDiffusionControlNetPipeline,
         )
 
     try:

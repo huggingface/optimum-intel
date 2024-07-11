@@ -20,29 +20,31 @@ import warnings
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
+import openvino.runtime
 import PIL
+import torch
 from diffusers import (
     ConfigMixin,
     ControlNetModel,
-    StableDiffusionControlNetPipeline,
     DDIMScheduler,
     LMSDiscreteScheduler,
     PNDMScheduler,
+    StableDiffusionControlNetPipeline,
     StableDiffusionPipeline,
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
 )
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
-from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available
+from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available, numpy_to_pil
 from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
-import openvino.runtime
+from tqdm.auto import tqdm
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
 
 from optimum.pipelines.diffusers.pipeline_latent_consistency import LatentConsistencyPipelineMixin
@@ -71,10 +73,6 @@ from .utils import (
     _print_compiled_model_properties,
 )
 
-import torch
-from typing import Union, List, Optional, Tuple
-from tqdm.auto import tqdm
-from diffusers.utils import numpy_to_pil
 
 core = Core()
 
@@ -385,7 +383,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             ov_config = None
         else:
             ov_config = OVConfig(dtype="fp32")
-        
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -1109,6 +1107,7 @@ def _raise_invalid_batch_size(
             "or reshape it again accordingly using the `.reshape()` method by setting `batch_size` to -1. " + msg
         )
 
+
 class OVModelControlNet(OVModelPart):
     def __init__(
         self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
@@ -1143,7 +1142,8 @@ class OVModelControlNet(OVModelPart):
 
         outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
-    
+
+
 class OVModelUnetControlNet(OVModelPart):
     def __init__(
         self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
@@ -1171,7 +1171,7 @@ class OVModelUnetControlNet(OVModelPart):
         a = 1
         for block in down_and_mid_block_samples:
             if a == 23:
-                inputs[f"down_block_additional_residual"] = block
+                inputs["down_block_additional_residual"] = block
                 break
             else:
                 inputs[f"down_block_additional_residual.{a}"] = block
@@ -1188,46 +1188,14 @@ class OVModelUnetControlNet(OVModelPart):
         return list(outputs.values())
 
 
-# class OVControlNetModel(OVBaseModel):
-#         export_feature = "stable-diffusion-controlnet"
-
-#         @classmethod
-#         def _from_transformers(        
-#             cls,
-#             model_id: str,
-#             config: Dict[str, Any],
-#             token: Optional[Union[bool, str]] = None,
-#             revision: Optional[str] = None,
-#             force_download: bool = False,
-#             cache_dir: str = HUGGINGFACE_HUB_CACHE,
-#             local_files_only: bool = False,
-#             **kwargs,
-#         ):
-#             ov_config = OVConfig(dtype="fp32")
-#             save_dir = kwargs.get("save_dir")
-#             save_dir_path = Path(save_dir)
-#             main_export(
-#                 model_name_or_path=model_id,
-#                 output=save_dir_path,
-#                 task=cls.export_feature,
-#                 do_validation=False,
-#                 no_post_process=True,
-#                 revision=revision,
-#                 cache_dir=cache_dir,
-#                 token=token,
-#                 local_files_only=local_files_only,
-#                 force_download=force_download,
-#                 ov_config=ov_config,
-#             )
-
-
 class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
     """
     OpenVINO inference pipeline for Stable Diffusion with ControlNet guidence
     """
+
     auto_model_class = StableDiffusionControlNetPipeline
     export_feature = "stable-diffusion-controlnet"
-    
+
     def __init__(
         self,
         unet: openvino.runtime.Model,
@@ -1264,15 +1232,14 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
         self.unet = OVModelUnetControlNet(unet, self)
         self.controlnet = OVModelControlNet(controlnet, self)
         self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
-        
+
         self.vae_scale_factor = 8
 
         self.scheduler = scheduler
 
-
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
         self.tokenizer = tokenizer
-    
+
     def export_controlnet(
         model_id: str,
         save_dir_path: Optional[Union[str, Path]] = None,
@@ -1300,6 +1267,7 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
         CONTROLNET_OV_PATH = save_dir_path / "controlnet/openvino_model.xml"
         with torch.no_grad():
             from functools import partial
+
             controlnet.forward = partial(controlnet.forward, return_dict=False)
             ov_model = openvino.convert_model(controlnet, example_input=dummy_inputs, input=input_info)
             openvino.save_model(ov_model, CONTROLNET_OV_PATH)
@@ -1404,7 +1372,7 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
                     kwargs[name] = load_method(new_model_save_dir)
 
         unet_path = new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name
-        controlnet_path = new_model_save_dir / "controlnet" /controlnet_file_name
+        controlnet_path = new_model_save_dir / "controlnet" / controlnet_file_name
         components = {
             "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
             "vae_decoder": new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
@@ -1434,7 +1402,7 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
             **components,
             **kwargs,
         )
-    
+
     @classmethod
     def _from_transformers(
         cls,
@@ -1476,7 +1444,7 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
             raise ValueError("You must give controlnet id with controlnet_model_id=controlnet_model_id.")
         else:
             cls.export_controlnet(model_id=kwargs["controlnet_model_id"], save_dir_path=save_dir_path)
-                
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -1509,6 +1477,8 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
             quantization_config=quantization_config,
             **kwargs,
         )
+
+
 class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
     def _encode_prompt(
         self,
@@ -1638,7 +1608,7 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
         image = np.clip(image / 2 + 0.5, 0, 1)
         image = np.transpose(image, (0, 2, 3, 1))
         return image
-    
+
     def scale_fit_to_window(self, dst_width: int, dst_height: int, image_width: int, image_height: int):
         """
         Preprocessing helper function for calculating image size for resize with peserving original aspect ratio
@@ -1680,7 +1650,8 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
         image = image.transpose(0, 3, 1, 2)
         return image, pad
 
-    def randn_tensor(self,
+    def randn_tensor(
+        self,
         shape: Union[Tuple, List],
         dtype: Optional[np.dtype] = np.float32,
     ):
@@ -1696,7 +1667,7 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
         latents = np.random.randn(*shape).astype(dtype)
 
         return latents
-    
+
     def progress_bar(self, iterable=None, total=None):
         if not hasattr(self, "_progress_bar_config"):
             self._progress_bar_config = {}
@@ -1714,7 +1685,7 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
 
     def set_progress_bar_config(self, **kwargs):
         self._progress_bar_config = kwargs
-        
+
     def __call__(
         self,
         prompt: Union[str, List[str]],
@@ -1796,12 +1767,19 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
                 latent_model_input = np.concatenate([latents] * 2) if do_classifier_free_guidance else latents
                 latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
-                result = self.controlnet(sample=latent_model_input, timestep=t, encoder_hidden_states=text_embeddings, controlnet_cond=image)
-                
+                result = self.controlnet(
+                    sample=latent_model_input, timestep=t, encoder_hidden_states=text_embeddings, controlnet_cond=image
+                )
+
                 down_and_mid_block_samples = [sample * controlnet_conditioning_scale for sample in result]
                 down_and_mid_block_samples = tuple(down_and_mid_block_samples)
                 # predict the noise residual
-                noise_pred = self.unet(sample=latent_model_input, timestep=t, encoder_hidden_states=text_embeddings, down_and_mid_block_samples=down_and_mid_block_samples)[0]
+                noise_pred = self.unet(
+                    sample=latent_model_input,
+                    timestep=t,
+                    encoder_hidden_states=text_embeddings,
+                    down_and_mid_block_samples=down_and_mid_block_samples,
+                )[0]
 
                 # perform guidance
                 if do_classifier_free_guidance:
@@ -1809,7 +1787,9 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
                     noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(torch.from_numpy(noise_pred), t, torch.from_numpy(latents)).prev_sample.numpy()
+                latents = self.scheduler.step(
+                    torch.from_numpy(noise_pred), t, torch.from_numpy(latents)
+                ).prev_sample.numpy()
 
                 # update progress
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
@@ -1823,8 +1803,11 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
         image = [img.resize((orig_width, orig_height), PIL.Image.Resampling.LANCZOS) for img in image]
 
         return image
-    
-class OVStableDiffusionControlNetPipeline(OVStableDiffusionControlNetPipelineBase, StableDiffusionContrlNetPipelineMixin):
+
+
+class OVStableDiffusionControlNetPipeline(
+    OVStableDiffusionControlNetPipelineBase, StableDiffusionContrlNetPipelineMixin
+):
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
@@ -1872,16 +1855,12 @@ class OVStableDiffusionControlNetPipeline(OVStableDiffusionControlNetPipelineBas
 
         return StableDiffusionContrlNetPipelineMixin.__call__(
             self,
-            prompt = prompt,
-            image = image,
-            num_inference_steps = num_inference_steps,
-            negative_prompt = negative_prompt,
-            guidance_scale = guidance_scale,
-            controlnet_conditioning_scale = controlnet_conditioning_scale,
-            eta = eta,
-            latents = latents,
+            prompt=prompt,
+            image=image,
+            num_inference_steps=num_inference_steps,
+            negative_prompt=negative_prompt,
+            guidance_scale=guidance_scale,
+            controlnet_conditioning_scale=controlnet_conditioning_scale,
+            eta=eta,
+            latents=latents,
         )
-    
-
-    
-
