@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import gc
 import logging
 import warnings
 from pathlib import Path
@@ -27,6 +28,8 @@ from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTE
 from optimum.exporters.openvino.convert import export_from_model
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
 from optimum.utils.save_utils import maybe_load_preprocessors
+
+from .utils import clear_class_registry
 
 
 if TYPE_CHECKING:
@@ -366,6 +369,10 @@ def main_export(
 
     if convert_tokenizer:
         maybe_convert_tokenizers(library_name, output, model, preprocessors)
+
+    clear_class_registry()
+    del model
+    gc.collect()
 
     # Unpatch modules after GPTQ export
     if do_gptq_patching:

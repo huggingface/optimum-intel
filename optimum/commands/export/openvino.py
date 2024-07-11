@@ -102,7 +102,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
         default=None,
         help=(
             "A parameter used when applying 4-bit quantization to control the ratio between 4-bit and 8-bit quantization. If set to 0.8, 80%% of the layers will be quantized to int4 "
-            "while 20%% will be quantized to int8. This helps to achieve better accuracy at the sacrifice of the model size and inference latency. Default value is 0.8."
+            "while 20%% will be quantized to int8. This helps to achieve better accuracy at the sacrifice of the model size and inference latency. Default value is 1.0."
         ),
     )
     optional_group.add_argument(
@@ -221,7 +221,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
     def run(self):
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
-        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, OVConfig
+        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, _DEFAULT_4BIT_CONFIGS, OVConfig
 
         def _get_default_int4_config(model_id_or_path, library_name):
             if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
@@ -233,13 +233,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 if original_model_name in _DEFAULT_4BIT_CONFIGS:
                     return _DEFAULT_4BIT_CONFIGS[original_model_name]
 
-            return {
-                "bits": 4,
-                "ratio": 0.8,
-                "sym": False,
-                "group_size": None,
-                "all_layers": None,
-            }
+            return _DEFAULT_4BIT_CONFIG
 
         library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
         if library_name == "sentence_transformers" and self.args.library is None:
@@ -283,7 +277,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             else:
                 quantization_config = {
                     "bits": 8 if is_int8 else 4,
-                    "ratio": 1 if is_int8 else (self.args.ratio or 0.8),
+                    "ratio": 1 if is_int8 else (self.args.ratio or _DEFAULT_4BIT_CONFIG["ratio"]),
                     "sym": self.args.sym or False,
                     "group_size": -1 if is_int8 else self.args.group_size,
                     "all_layers": None if is_int8 else self.args.all_layers,

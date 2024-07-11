@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 class OVBaseModel(OptimizedModel):
     auto_model_class = None
     export_feature = None
+    _supports_cache_class = False
 
     def __init__(
         self,

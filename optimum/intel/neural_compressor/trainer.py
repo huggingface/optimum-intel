@@ -33,7 +33,6 @@ import torch
 import torch.distributed as dist
 from neural_compressor import training
 from neural_compressor.compression import DistillationCallbacks
-from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
 from packaging import version
 from torch import nn
 from torch.utils.data import Dataset, RandomSampler
@@ -97,6 +96,12 @@ if is_sagemaker_mp_enabled():
 
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
+
+
+if is_neural_compressor_version("<", "2.6"):
+    from neural_compressor.conf.pythonic_config import _BaseQuantizationConfig
+else:
+    from neural_compressor.config import _BaseQuantizationConfig
 
 
 __version__ = "4.22.2"
@@ -659,7 +664,7 @@ class INCTrainer(Trainer):
 
         return TrainOutput(self.state.global_step, train_loss, metrics)
 
-    def save_model(self, output_dir: Optional[str] = None):
+    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
         """
         Will save the model, so you can reload it using `from_pretrained()`.
         Will only save from the main process.
@@ -669,6 +674,8 @@ class INCTrainer(Trainer):
 
         if self.args.should_save:
             self._save(output_dir=output_dir)
+
+        # TODO: push to hub if self.args.push_to_hub and not _internal_call
 
     def _save(self, output_dir=None, state_dict=None):
         # If we are executing this function, we are the process zero, so we don't check for that.
