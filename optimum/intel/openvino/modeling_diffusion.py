@@ -1278,6 +1278,7 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
             torch.jit._state._clear_class_state()
         print("ControlNet successfully converted to IR")
 
+    @classmethod
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
