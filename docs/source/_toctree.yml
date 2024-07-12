@@ -22,6 +22,13 @@
       title: Supported Models
     - local: openvino/reference
       title: Reference
+    - sections:
+      - local: openvino/tutorials/notebooks
+        title: Notebooks
+      - local: openvino/tutorials/diffusers
+        title: Generate images with Diffusion models
+      title: Tutorials
+      isExpanded: false
     title: OpenVINO
   title: Optimum Intel
   isExpanded: false

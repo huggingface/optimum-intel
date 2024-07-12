@@ -17,14 +17,18 @@ concurrency:
 
 jobs:
   build:
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.8, 3.9]
-        transformers-version: [4.39.0, 4.41.2]
-        os: [ubuntu-latest]
+        python-version: [3.9]
+        transformers-version: [4.39.0, 4.42.3]
+        ipex-version: [2.2.0, 2.3.*]
+        include:
+          - python-version: 3.8
+            transformers-version: 4.39.0
+            ipex-version: 2.2.0
 
-    runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v2
     - name: Setup Python ${{ matrix.python-version }}
@@ -34,9 +38,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install torch torchaudio torchvision --extra-index-url https://download.pytorch.org/whl/cpu
-        pip install .[ipex,tests]
-        pip install transformers==${{ matrix.transformers-version }}
+        pip install torch==${{ matrix.ipex-version }} --extra-index-url https://download.pytorch.org/whl/cpu
+        pip install intel_extension_for_pytorch==${{ matrix.ipex-version }}
+        pip install Pillow parameterized
+        pip install transformers[testing]==${{ matrix.transformers-version }}
+        pip install .[ipex]
     - name: Test with Pytest
       run: |
         pytest tests/ipex/
