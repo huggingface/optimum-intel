@@ -60,6 +60,7 @@ from optimum.utils import (
     DIFFUSION_MODEL_UNET_SUBFOLDER,
     DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
     DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
+    DIFFUSION_MODEL_CONTROLNET_SUBFOLDER,
 )
 
 from ...exporters.openvino import main_export
@@ -1277,6 +1278,46 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
             torch.jit._state._clear_class_state()
         print("ControlNet successfully converted to IR")
 
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        """
+        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
+        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
+
+        Arguments:
+            save_directory (`str` or `Path`):
+                The directory where to save the model files
+        """
+        save_directory = Path(save_directory)
+
+        sub_models_to_save = {
+            self.controlnet: DIFFUSION_MODEL_CONTROLNET_SUBFOLDER,
+            self.unet: DIFFUSION_MODEL_UNET_SUBFOLDER,
+            self.vae_decoder: DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
+            self.vae_encoder: DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
+            self.text_encoder: DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
+            self.text_encoder_2: DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
+        }
+
+        for ov_model, dst_path in sub_models_to_save.items():
+            if ov_model is not None:
+                dst_path = save_directory / dst_path / OV_XML_FILE_NAME
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                openvino.save_model(ov_model.model, dst_path, compress_to_fp16=False)
+                model_dir = ov_model.config.get("_name_or_path", None) or ov_model._model_dir / ov_model._model_name
+                config_path = Path(model_dir) / ov_model.CONFIG_NAME
+                if config_path.is_file():
+                    shutil.copyfile(config_path, dst_path.parent / ov_model.CONFIG_NAME)
+
+        self.scheduler.save_pretrained(save_directory / "scheduler")
+        if self.feature_extractor is not None:
+            self.feature_extractor.save_pretrained(save_directory / "feature_extractor")
+        if self.tokenizer is not None:
+            self.tokenizer.save_pretrained(save_directory / "tokenizer")
+        if self.tokenizer_2 is not None:
+            self.tokenizer_2.save_pretrained(save_directory / "tokenizer_2")
+
+        self._save_openvino_config(save_directory)
+
     @classmethod
     def _from_pretrained(
         cls,
@@ -1372,7 +1413,7 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
                     kwargs[name] = load_method(new_model_save_dir)
 
         unet_path = new_model_save_dir / DIFFUSION_MODEL_UNET_SUBFOLDER / unet_file_name
-        controlnet_path = new_model_save_dir / "controlnet" / controlnet_file_name
+        controlnet_path = new_model_save_dir / DIFFUSION_MODEL_CONTROLNET_SUBFOLDER / controlnet_file_name
         components = {
             "vae_encoder": new_model_save_dir / DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER / vae_encoder_file_name,
             "vae_decoder": new_model_save_dir / DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER / vae_decoder_file_name,
