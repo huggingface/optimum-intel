@@ -1203,8 +1203,12 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
         controlnet: openvino.runtime.Model,
         scheduler: Union[None, "DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"],
         text_encoder: Optional[openvino.runtime.Model] = None,
+        text_encoder_2: Optional[openvino.runtime.Model] = None,
         vae_decoder: Optional[openvino.runtime.Model] = None,
+        vae_encoder: Optional[openvino.runtime.Model] = None,
         tokenizer: Optional["CLIPTokenizer"] = None,
+        tokenizer_2: Optional["CLIPTokenizer"] = None,
+        feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         device: str = "CPU",
         dynamic_shapes: bool = False,
         compile: bool = True,
@@ -1217,7 +1221,7 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
         self._device = device.upper()
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.is_dynamic = dynamic_shapes
-
+        self.preprocessors = []
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
         self._model_save_dir_tempdirectory_instance = None
@@ -1233,13 +1237,19 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
         self.unet = OVModelUnetControlNet(unet, self)
         self.controlnet = OVModelControlNet(controlnet, self)
         self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
-
+        self.vae_encoder = OVModelVaeEncoder(vae_encoder, self) if vae_encoder is not None else None
         self.vae_scale_factor = 8
-
+        self.text_encoder_2 = (
+            OVModelTextEncoder(text_encoder_2, self, model_name=DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER)
+            if text_encoder_2 is not None
+            else None
+        )
+        self.tokenizer_2 = tokenizer_2 
         self.scheduler = scheduler
-
+        self.feature_extractor = feature_extractor
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
         self.tokenizer = tokenizer
+        self._openvino_config = None
 
     def export_controlnet(
         model_id: str,
@@ -1278,7 +1288,6 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
             torch.jit._state._clear_class_state()
         print("ControlNet successfully converted to IR")
 
-    @classmethod
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
         Saves the model to the OpenVINO IR format so that it can be re-loaded using the
