@@ -735,5 +735,4 @@ def _ipex_crop_past_key_values(model, past_key_values, max_length):
             new_past_key_values.append(tuple(pkv))
         new_past_key_values = tuple(new_past_key_values)
         return new_past_key_values
-    else:
-        _crop_past_key_values(model, past_key_values, max_length)
+    return _crop_past_key_values(model, past_key_values, max_length)
