@@ -189,14 +189,6 @@ def parse_args_openvino(parser: "ArgumentParser"):
         action="store_true",
         help="Do not add converted tokenizer and detokenizer OpenVINO models.",
     )
-    # TODO : deprecated
-    optional_group.add_argument("--fp16", action="store_true", help="Compress weights to fp16")
-    optional_group.add_argument("--int8", action="store_true", help="Compress weights to int8")
-    optional_group.add_argument(
-        "--convert-tokenizer",
-        action="store_true",
-        help="[Deprecated] Add converted tokenizer and detokenizer with OpenVINO Tokenizers.",
-    )
 
 
 class OVExportCommand(BaseOptimumCLICommand):
@@ -243,17 +235,6 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             library_name = "transformers"
 
-        if self.args.fp16:
-            logger.warning(
-                "`--fp16` option is deprecated and will be removed in a future version. Use `--weight-format` instead."
-            )
-            self.args.weight_format = "fp16"
-        if self.args.int8:
-            logger.warning(
-                "`--int8` option is deprecated and will be removed in a future version. Use `--weight-format` instead."
-            )
-            self.args.weight_format = "int8"
-
         if self.args.weight_format is None:
             ov_config = None
         elif self.args.weight_format in {"fp16", "fp32"}:
@@ -295,9 +276,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                 quantization_config["sym"] = "asym" not in self.args.weight_format
                 quantization_config["group_size"] = 128 if "128" in self.args.weight_format else 64
             ov_config = OVConfig(quantization_config=quantization_config)
-
-        if self.args.convert_tokenizer:
-            logger.warning("`--convert-tokenizer` option is deprecated. Tokenizer will be converted by default.")
 
         quantization_config = ov_config.quantization_config if ov_config else None
         quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None
