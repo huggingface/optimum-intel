@@ -61,7 +61,13 @@ from optimum.intel import (
     OVWeightQuantizationConfig,
     OVDynamicQuantizationConfig,
 )
-from optimum.intel.openvino.configuration import OVQuantizationMethod, OVQuantizationConfigBase, _DEFAULT_4BIT_CONFIGS
+from optimum.intel.openvino.configuration import (
+    OVQuantizationMethod,
+    OVQuantizationConfigBase,
+    _DEFAULT_4BIT_CONFIGS,
+    _DEFAULT_4BIT_CONFIG,
+)
+from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
@@ -820,6 +826,13 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(bits=8, fast_bias_correction=True, weight_only=False), OVQuantizationConfig, None),
     )
 
+    def get_default_configurations() -> dict:
+        default_configurations = deepcopy(_DEFAULT_4BIT_CONFIGS)
+        default_configurations.update({"default": _DEFAULT_4BIT_CONFIG})
+        return default_configurations
+
+    DEFAULT_CONFIGURATIONS = get_default_configurations()
+
     @parameterized.expand(QUANTIZATION_CONFIGS)
     def test_config_serialization(self, quantization_config: OVQuantizationConfigBase):
         ov_config = OVConfig(quantization_config=quantization_config)
@@ -849,9 +862,9 @@ class OVQuantizationConfigTest(unittest.TestCase):
             if hasattr(ov_config.quantization_config, k):
                 self.assertEqual(getattr(ov_config.quantization_config, k), v)
 
-    @parameterized.expand(_DEFAULT_4BIT_CONFIGS)
-    def test_named_default_configurations(self, model_id: str):
-        custom_configuration = _DEFAULT_4BIT_CONFIGS[model_id]
+    @parameterized.expand(DEFAULT_CONFIGURATIONS)
+    def test_named_default_configurations(self, config_id: str):
+        custom_configuration = self.DEFAULT_CONFIGURATIONS[config_id]
         prepared_config = OVModelForCausalLM._prepare_weight_quantization_config(custom_configuration)
         for field_name, reference_value in custom_configuration.items():
             value = prepared_config.__getattribute__(field_name)
