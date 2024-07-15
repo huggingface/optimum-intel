@@ -281,7 +281,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     # High optimized model llama is not supported assisted decoding for now.
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_assisted_decoding(self, model_arch):
-        if model_arch == "llama2":
+        if model_arch == "llama2" and is_ipex_version("<", "2.5.0"):
             return
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
