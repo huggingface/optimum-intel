@@ -347,7 +347,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, compile=False)
+        model = OVModelForSequenceClassification.from_pretrained(model_id, compile=False)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
@@ -430,7 +430,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
+        model = OVModelForQuestionAnswering.from_pretrained(model_id)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
@@ -506,7 +506,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForTokenClassification.from_pretrained(model_id, export=True)
+        model = OVModelForTokenClassification.from_pretrained(model_id)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
@@ -583,7 +583,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForFeatureExtraction.from_pretrained(model_id, export=True)
+        model = OVModelForFeatureExtraction.from_pretrained(model_id)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
@@ -772,9 +772,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "qwen":
             tokenizer._convert_tokens_to_ids = lambda x: 0
 
-        model = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=False, compile=False, **model_kwargs
-        )
+        model = OVModelForCausalLM.from_pretrained(model_id, use_cache=False, compile=False, **model_kwargs)
         model.eval()
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
@@ -1058,7 +1056,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = OVModelForMaskedLM.from_pretrained(model_id, export=True)
+        model = OVModelForMaskedLM.from_pretrained(model_id)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
@@ -1127,7 +1125,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForImageClassification.from_pretrained(model_id, export=True)
+        model = OVModelForImageClassification.from_pretrained(model_id)
         model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
@@ -1234,7 +1232,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a test"
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, compile=False)
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, compile=False)
         model.eval()
         model.half()
         model.to("cpu")
@@ -1375,7 +1373,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForAudioClassification.from_pretrained(model_id, export=True)
+        model = OVModelForAudioClassification.from_pretrained(model_id)
         model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
@@ -1695,7 +1693,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
+        model = OVModelForSpeechSeq2Seq.from_pretrained(model_id)
         model.eval()
         processor = get_preprocessor(model_id)
         pipe = pipeline(
@@ -1803,7 +1801,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch: str):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True, compile=False)
+        ov_model = OVModelForVision2Seq.from_pretrained(model_id, compile=False)
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
         ov_model.reshape(1, -1)
         ov_model.compile()
