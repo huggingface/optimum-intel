@@ -673,7 +673,22 @@ class UNetControlNetOpenVINOConfig(UNetOnnxConfig):
 
         return dummy_inputs
 
+    def rename_ambiguous_inputs(self, inputs) -> Dict[str, Dict[int, str]]:
+        """
+        Updates the input names of the model to export.
+        Override the function when the model input names are ambiguous or too generic.
 
+        Returns:
+            `Dict[str, Dict[int, str]]`: Updated inputs.
+        """
+        new_inputs = {}
+        for name, v in inputs.items():
+            if name.startswith("down_block_additional_residual"):
+                new_inputs[name.replace(".", "_")] = v
+            else:
+                new_inputs[name] = v
+        return new_inputs
+    
 @register_in_tasks_manager("vae-encoder", *["semantic-segmentation"], library_name="diffusers")
 class VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
     @property
