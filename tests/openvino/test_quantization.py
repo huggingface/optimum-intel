@@ -61,7 +61,7 @@ from optimum.intel import (
     OVWeightQuantizationConfig,
     OVDynamicQuantizationConfig,
 )
-from optimum.intel.openvino.configuration import OVQuantizationMethod, OVQuantizationConfigBase
+from optimum.intel.openvino.configuration import OVQuantizationMethod, OVQuantizationConfigBase, _DEFAULT_4BIT_CONFIGS
 
 from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
@@ -848,6 +848,14 @@ class OVQuantizationConfigTest(unittest.TestCase):
         for k, v in quantization_config.items():
             if hasattr(ov_config.quantization_config, k):
                 self.assertEqual(getattr(ov_config.quantization_config, k), v)
+
+    @parameterized.expand(_DEFAULT_4BIT_CONFIGS)
+    def test_named_default_configurations(self, model_id: str):
+        custom_configuration = _DEFAULT_4BIT_CONFIGS[model_id]
+        prepared_config = OVModelForCausalLM._prepare_weight_quantization_config(custom_configuration)
+        for field_name, reference_value in custom_configuration.items():
+            value = prepared_config.__getattribute__(field_name)
+            self.assertEqual(value, reference_value)
 
 
 class InferRequestWrapperTest(unittest.TestCase):
