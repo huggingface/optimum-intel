@@ -932,14 +932,17 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             do_sample=False,
             eos_token_id=None,
         )
+
         beam_sample_gen_config = GenerationConfig(
             max_new_tokens=10,
             min_new_tokens=10,
             num_beams=4,
             do_sample=True,
             eos_token_id=None,
-            top_k=1,
         )
+
+        if model_arch == "minicpm":
+            beam_sample_gen_config.top_k = 1
 
         group_beam_search_gen_config = GenerationConfig(
             max_new_tokens=10,

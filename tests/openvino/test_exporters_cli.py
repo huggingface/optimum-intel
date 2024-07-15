@@ -41,7 +41,7 @@ from optimum.intel import (  # noqa
 )
 from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
-from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
+from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
 
 
 class OVCLIExportTestCase(unittest.TestCase):
@@ -90,20 +90,26 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "opt125m", "int4_asym_g128", 4, 144),
         ("text-generation-with-past", "opt125m", "int4_sym_g64", 4, 144),
         ("text-generation-with-past", "opt125m", "int4_asym_g64", 4, 144),
-        ("text-generation-with-past", "llama_awq", "int4 --ratio 1.0 --sym --group-size 16 --all-layers", 0, 32),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
+            0,
+            32 if is_transformers_version("<", "4.39.0") else 34,
+        ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
-            4,
+            6 if is_transformers_version(">=", "4.39") else 4,
             28,
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --scale-estimation --dataset wikitext2 --num-samples 100 ",
-            4,
+            6 if is_transformers_version(">=", "4.39") else 4,
             28,
         ),
     ]

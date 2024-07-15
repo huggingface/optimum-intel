@@ -497,11 +497,24 @@ else:
     _llama_gemma_update_causal_mask = _llama_gemma_update_causal_mask_legacy
 
 
-class GemmaModelPatcher(DecoderModelPatcher):
+def llama_gemma_rotary_emb_forward(self, x, position_ids, seq_len=None):
+    # adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/gemma/modeling_gemma.py#L104
+    _seq_len = torch.max(position_ids) + 1 if seq_len is None else seq_len
+    if _seq_len > self.embed_positions.shape[0]:
+        if seq_len is None:
+            return self._orig_forward(x, position_ids)
+        else:
+            return self._orig_forward(x, position_ids, seq_len)
+    sincos = self.embed_positions[position_ids]
+    sin, cos = torch.split(sincos, sincos.shape[-1] // 2, dim=-1)
+    return cos, sin
+
+
+class LlamaModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        # gemma has some accuracy issues with bf16 with transformers >= 4.39
+        # llama/gemma has some accuracy issues with bf16 with transformers >= 4.39
         # fill causal mask in slightly different way for avoid overflow on some platforms
         if is_transformers_version(">=", "4.39.0"):
             self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
@@ -509,13 +522,30 @@ class GemmaModelPatcher(DecoderModelPatcher):
                 _llama_gemma_update_causal_mask, self._model.model
             )
 
-        # init inv_freq for torchscript tracing
-        # https://github.com/huggingface/transformers/blob/ed74d97871468f3a4695ede50abdc0b55717a84d/src/transformers/models/gemma/modeling_gemma.py#L108
-        for layer in self._model.model.layers:
-            if layer.self_attn.rotary_emb.inv_freq is None:
-                rotary_emb = layer.self_attn.rotary_emb
-                layer.self_attn.rotary_emb.inv_freq = 1.0 / (
-                    rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
+            max_positions = self._model.config.max_position_embeddings
+
+            # cos/sin for rotary position embeddings also having issues with bf16 and efficiency due to calculation on each step
+            # use precomputed
+            def create_sinusoidal_positions(num_pos: int, dim: int, base: int = 10000) -> torch.Tensor:
+                # adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L101
+                inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64) / dim))
+
+                sinusoid_inp = torch.einsum(
+                    "i , j -> i j", torch.arange(num_pos, dtype=torch.int64).float(), inv_freq
+                ).float()
+                emb = torch.cat((sinusoid_inp, sinusoid_inp), dim=-1)
+                return torch.cat((torch.sin(emb), torch.cos(emb)), dim=1)
+
+            base = self._model.model.layers[0].self_attn.rotary_emb.base
+            dim = self._model.model.layers[0].self_attn.rotary_emb.dim
+            embed_positions = create_sinusoidal_positions(max_positions, dim, base)
+
+            for layer in self._model.model.layers:
+                layer.self_attn.rotary_emb.register_buffer("embed_positions", embed_positions)
+                layer.self_attn.rotary_emb._orig_forward = layer.self_attn.rotary_emb.forward
+
+                layer.self_attn.rotary_emb.forward = types.MethodType(
+                    llama_gemma_rotary_emb_forward, layer.self_attn.rotary_emb
                 )
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -523,23 +553,8 @@ class GemmaModelPatcher(DecoderModelPatcher):
         if hasattr(self._model.model, "_orig_update_causal_mask"):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
 
-
-class LlamaModelPatcher(DecoderModelPatcher):
-    def __enter__(self):
-        super().__enter__()
-
-        # llama has some accuracy issues with bf16 with transformers >= 4.39
-        # fill causal mask in slightly different way for avoid overflow on some platforms
-        if is_transformers_version(">=", "4.39.0"):
-            self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
-            self._model.model._update_causal_mask = types.MethodType(
-                _llama_gemma_update_causal_mask, self._model.model
-            )
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        super().__exit__(exc_type, exc_value, traceback)
-        if hasattr(self._model.model, "_orig_update_causal_mask"):
-            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+            for layer in self._model.model.layers:
+                layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
 
 
 SUPPORT_SDPA = is_torch_version(">", "2.1.0")
