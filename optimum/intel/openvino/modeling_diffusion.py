@@ -1113,7 +1113,7 @@ class OVModelControlNet(OVModelPart):
     def __init__(
         self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
     ):
-        super().__init__(model, parent_model, ov_config, "unet")
+        super().__init__(model, parent_model, ov_config, "controlnet")
 
     def __call__(
         self,
@@ -1175,7 +1175,7 @@ class OVModelUnetControlNet(OVModelPart):
                 inputs["down_block_additional_residual"] = block
                 break
             else:
-                inputs[f"down_block_additional_residual.{a}"] = block
+                inputs[f"down_block_additional_residual_{a}"] = block
             a += 2
 
         if text_embeds is not None:
