@@ -17,6 +17,7 @@ import os
 import tempfile
 import time
 import unittest
+from pathlib import Path
 from typing import Dict
 
 import numpy as np
@@ -249,15 +250,30 @@ class OVModelIntegrationTest(unittest.TestCase):
         del pipeline
         gc.collect()
 
+    @pytest.mark.run_slow
+    @slow
     def test_load_model_from_hub_private_with_token(self):
+        model_id = "optimum-internal-testing/tiny-random-phi-private"
         token = os.environ.get("HF_HUB_READ_TOKEN", None)
         if token is None:
             self.skipTest("Test requires a token `HF_HUB_READ_TOKEN` in the environment variable")
 
-        model = OVModelForCausalLM.from_pretrained(
-            "optimum-internal-testing/tiny-random-phi-private", use_auth_token=token, revision="openvino"
-        )
+        model = OVModelForCausalLM.from_pretrained(model_id, use_auth_token=token, revision="openvino")
         self.assertIsInstance(model.config, PretrainedConfig)
+        self.assertTrue(model.stateful)
+
+    def test_infer_export_when_loading(self):
+        model_id = MODEL_NAMES["phi"]
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            model.save_pretrained(Path(tmpdirname) / "original")
+            # Load original model and convert
+            model = OVModelForCausalLM.from_pretrained(Path(tmpdirname) / "original")
+            model.save_pretrained(Path(tmpdirname) / "openvino")
+            # Load openvino model
+            model = OVModelForCausalLM.from_pretrained(Path(tmpdirname) / "openvino")
+        del model
+        gc.collect()
 
 
 class PipelineTest(unittest.TestCase):
