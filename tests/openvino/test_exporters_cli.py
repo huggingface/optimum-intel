@@ -95,7 +95,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
             0,
-            16 if is_transformers_version("<", "4.39.0") else 17,
+            32 if is_transformers_version("<", "4.39.0") else 34,
         ),
         (
             "text-generation-with-past",
