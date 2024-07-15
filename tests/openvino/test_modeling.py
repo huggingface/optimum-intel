@@ -27,6 +27,7 @@ import timm
 import torch
 from datasets import load_dataset
 from evaluate import evaluator
+from huggingface_hub import HfApi
 from parameterized import parameterized
 from PIL import Image
 from transformers import (
@@ -84,6 +85,7 @@ from optimum.intel.openvino.modeling_timm import TimmImageProcessor
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
@@ -274,6 +276,48 @@ class OVModelIntegrationTest(unittest.TestCase):
             model = OVModelForCausalLM.from_pretrained(Path(tmpdirname) / "openvino")
         del model
         gc.collect()
+
+    def test_find_files_matching_pattern(self):
+        model_id = "echarlaix/tiny-random-PhiForCausalLM"
+        pattern = r"(.*)?openvino(.*)?\_model.xml"
+
+        # hub model
+        for revision in ("ov", ""):
+            ov_files = _find_files_matching_pattern(model_id, pattern=pattern, revision=revision)
+            self.assertTrue(len(ov_files) == 0 if revision == "" else len(ov_files) > 0)
+
+        ov_files = _find_files_matching_pattern(model_id, pattern=pattern, subfolder="openvino")
+        self.assertTrue(len(ov_files) > 0)
+
+        # local model
+        api = HfApi()
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            for revision in ("ov", ""):
+                local_dir = Path(tmpdirname) / revision
+                api.snapshot_download(repo_id=model_id, local_dir=local_dir, revision=revision)
+
+                ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, revision=revision)
+                self.assertTrue(len(ov_files) == 0 if revision == "" else len(ov_files) > 0)
+
+                if revision == "":
+                    ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder="openvino")
+                    self.assertTrue(len(ov_files) > 0)
+
+    @parameterized.expand(("stable-diffusion", "stable-diffusion-openvino"))
+    def test_find_files_matching_pattern_sd(self, model_arch):
+        pattern = r"(.*)?openvino(.*)?\_model.xml"
+        model_id = MODEL_NAMES[model_arch]
+        # hub model
+        ov_files = _find_files_matching_pattern(model_id, pattern=pattern)
+        self.assertTrue(len(ov_files) > 0 if "openvino" in model_id else len(ov_files) == 0)
+
+        # local model
+        api = HfApi()
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            local_dir = Path(tmpdirname) / "model"
+            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            ov_files = _find_files_matching_pattern(local_dir, pattern=pattern)
+            self.assertTrue(len(ov_files) > 0 if "openvino" in model_id else len(ov_files) == 0)
 
 
 class PipelineTest(unittest.TestCase):

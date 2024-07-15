@@ -94,7 +94,7 @@ class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_num_images_per_prompt(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False)
+        pipeline = self.MODEL_CLASS.from_pretrained(model_id, compile=False)
         pipeline.to("cpu")
         pipeline.compile()
         self.assertEqual(pipeline.vae_scale_factor, 2)
