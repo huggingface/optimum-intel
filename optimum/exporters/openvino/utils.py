@@ -13,11 +13,16 @@
 #  limitations under the License.
 
 from typing import Any, Dict, List, Tuple, Union
-
+import inspect
 from transformers.utils import is_torch_available
 
-from openvino.runtime import PartialShape
+from openvino.runtime import Dimension, PartialShape, Symbol
+from openvino.runtime.utils.types import get_element_type
 from optimum.utils import is_diffusers_available
+from optimum.exporters.onnx.base import OnnxConfig
+from collections import namedtuple
+
+InputInfo = namedtuple('InputInfo', ['name', 'shape', 'type', 'example'])
 
 
 if is_torch_available():
@@ -69,6 +74,39 @@ def flattenize_inputs(inputs: List[Any]):
     return flatten_inputs
 
 
+def get_input_info(model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]) -> List[InputInfo]:
+    sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
+    inputs = config.ordered_inputs(model)
+    ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
+    if not ordered_dummy_inputs:
+        ordered_dummy_inputs = dummy_inputs
+    ordered_input_names = list(inputs)
+    flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
+    input_info = list()
+
+    name_to_symbol = dict()
+
+    for i in range(len(ordered_input_names)):
+        name = ordered_input_names[i]
+        example = flatten_inputs[i]
+        type = get_element_type(example.cpu().numpy().dtype)
+        shape = PartialShape(example.shape)
+        if name in inputs:
+            named_dims = inputs[name]
+            for idx, dim_name in named_dims.items():
+                if dim_name in name_to_symbol:
+                    symbol = name_to_symbol[dim_name]
+                else:
+                    symbol = Symbol()
+                    name_to_symbol[name] = symbol
+                dim = Dimension(-1)
+                dim.set_symbol(symbol)
+                shape[idx] = dim
+        info = InputInfo(name=name, shape=shape, type=type, example=example)
+        input_info.append(info)
+    return input_info
+
+
 def remove_none_from_dummy_inputs(dummy_inputs: Dict[str, Any]):
     """
     Removes None values from the dictionary.
@@ -107,31 +145,6 @@ def remove_none_from_dummy_inputs(dummy_inputs: Dict[str, Any]):
             continue
         upd_dummy[k] = v
     return upd_dummy, dict_dummy
-
-
-def get_input_shapes(dummy_inputs: Dict[str, Any], inputs: Dict[str, Any]):
-    """
-    Resolves input shapes based on dynamic axes from input config and dummy input shapes
-
-    Args:
-        dummy_inputs (Dict[str, Any]): A dictionary of dummy inputs.
-        inputs (Dict[str, Any]): A dictionary of input tensors.
-
-    Returns:
-       input_info: List of input info for conversion
-
-    """
-    input_info = []
-    for input_name, data in dummy_inputs.items():
-        if isinstance(data, (tuple, list, dict)):
-            return None
-        static_shape = PartialShape(data.shape)
-        if input_name in inputs:
-            dynamic_dims = inputs[input_name]
-            for dim in dynamic_dims:
-                static_shape[dim] = -1
-        input_info.append((input_name, static_shape))
-    return input_info
 
 
 def clear_class_registry():

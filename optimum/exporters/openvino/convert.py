@@ -25,7 +25,6 @@ from transformers.utils import is_tf_available, is_torch_available
 
 from openvino.runtime import Model, PartialShape, save_model
 from openvino.runtime.exceptions import OVTypeError
-from openvino.runtime.utils.types import get_element_type
 from openvino.tools.ovc import convert_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
@@ -51,8 +50,7 @@ from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
     OV_XML_FILE_NAME,
     clear_class_registry,
-    flattenize_inputs,
-    get_input_shapes,
+    get_input_info,
     remove_none_from_dummy_inputs,
 )
 
@@ -358,13 +356,10 @@ def export_pytorch(
 
             with patcher:
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
-                sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
-                inputs = config.ordered_inputs(model)
-                input_names = list(inputs.keys())
-                output_names = list(config.outputs.keys())
-                input_info = get_input_shapes(dummy_inputs, inputs)
-
-                ov_model = convert_model(model, example_input=dummy_inputs, input=input_info)
+                input_info = get_input_info(model, config, dummy_inputs)
+                ov_model = convert_model(model,
+                                         example_input=dummy_inputs,
+                                         input=list(map(lambda item: (item.shape, item.type), input_info)))
 
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
@@ -388,27 +383,17 @@ def export_pytorch(
                 ov_config=ov_config,
             )
 
-        ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}
-        if not ordered_dummy_inputs:
-            ordered_dummy_inputs = dummy_inputs
-        ordered_input_names = list(inputs)
-        flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
-        ov_model.validate_nodes_and_infer_types()
+        ov_model.validate_nodes_and_infer_types()  # TODO: remove as unnecessary validation?
+
+        output_names = list(config.outputs.keys())
         for idx, out_tensor in enumerate(ov_model.outputs):
             if idx < len(output_names):
                 out_tensor.get_tensor().set_names({output_names[idx]})
 
+        input_names = list(map(lambda item: item.name, input_info))
         for idx, inp_tensor in enumerate(ov_model.inputs):
-            input_name = ordered_input_names[idx]
+            input_name = input_names[idx]
             inp_tensor.get_tensor().set_names({input_name})
-            inp_data = flatten_inputs[idx]
-            static_shape = PartialShape(inp_data.shape)
-            dims = inputs.get(input_name, [])
-            for dim in dims:
-                static_shape[dim] = -1
-            inp_tensor.get_node().set_partial_shape(static_shape)
-            inp_tensor.get_node().set_element_type(get_element_type(inp_data.cpu().numpy().dtype))
-        ov_model.validate_nodes_and_infer_types()
 
         if stateful:
             patch_stateful(model.config, ov_model)
