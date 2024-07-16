@@ -280,26 +280,22 @@ class OVModelIntegrationTest(unittest.TestCase):
     def test_find_files_matching_pattern(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
         pattern = r"(.*)?openvino(.*)?\_model.xml"
-
         # hub model
-        for revision in ("ov", ""):
+        for revision in ("main", "ov"):
             ov_files = _find_files_matching_pattern(model_id, pattern=pattern, revision=revision)
-            self.assertTrue(len(ov_files) == 0 if revision == "" else len(ov_files) > 0)
-
+            self.assertTrue(len(ov_files) == 0 if revision == "main" else len(ov_files) > 0)
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern, subfolder="openvino")
         self.assertTrue(len(ov_files) > 0)
 
         # local model
         api = HfApi()
         with tempfile.TemporaryDirectory() as tmpdirname:
-            for revision in ("ov", ""):
+            for revision in ("main", "ov"):
                 local_dir = Path(tmpdirname) / revision
                 api.snapshot_download(repo_id=model_id, local_dir=local_dir, revision=revision)
-
                 ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, revision=revision)
-                self.assertTrue(len(ov_files) == 0 if revision == "" else len(ov_files) > 0)
-
-                if revision == "":
+                self.assertTrue(len(ov_files) == 0 if revision == "main" else len(ov_files) > 0)
+                if revision == "main":
                     ov_files = _find_files_matching_pattern(local_dir, pattern=pattern, subfolder="openvino")
                     self.assertTrue(len(ov_files) > 0)
 
