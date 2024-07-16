@@ -57,7 +57,9 @@ from ...exporters.ipex.model_patcher import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _patch_model,
 )
-from ..generation.modeling import prepare_jit_inputs
+from ...exporters.ipex.model_config import ipex_onnx_config
+from ..generation.modeling import get_float_type
+from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, recursive_to_device
 
@@ -87,37 +89,23 @@ def _is_patched_with_ipex(model, task):
 
 
 def _prepare_inputs_for_ipex_model(model, task, use_cache):
-    sample_inputs = prepare_jit_inputs(model, task, use_cache)
-    if (
-        task in _IPEX_EXPORTED_GENERATION_TASKS
-        and _is_patched_with_ipex(model, task)
-        and "past_key_values" in sample_inputs
-    ):
-        # Only consider llama for now
-        assert len(sample_inputs["past_key_values"][0][0].shape) == 4
-        max_position = model.config.max_position_embeddings
-        batch_size = sample_inputs["input_ids"].shape[0]
-        past_length = sample_inputs["past_key_values"][0][0].shape[2]
-        num_attn = sample_inputs["past_key_values"][0][0].shape[1]
-        d_k = sample_inputs["past_key_values"][0][0].shape[-1]
-        dtype = sample_inputs["past_key_values"][0][0].dtype
-
-        num_layers = len(sample_inputs["past_key_values"])
-        beam_idx_tmp = torch.zeros((max_position, batch_size), dtype=torch.long).contiguous()
-        past_key_values = tuple(
-            [
-                (
-                    torch.zeros(1, past_length, past_length, 1, dtype=torch.long).contiguous(),
-                    torch.zeros(max_position, batch_size, num_attn, d_k, dtype=dtype).contiguous(),
-                    torch.zeros(max_position, batch_size, num_attn, d_k, dtype=dtype).contiguous(),
-                    beam_idx_tmp,
-                )
-                for i in range(num_layers)
-            ]
+    task = _TASK_ALIASES.get(task, task)
+    signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.__call__)
+    if _is_patched_with_ipex(model, task) and model.config.model_type in ipex_onnx_config:
+        onnx_config_class = ipex_onnx_config[model.config.model_type]
+    else:
+        onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
+    float_dtype = get_float_type(model.dtype)
+    if "text-generation" in task:
+        onnx_config = onnx_config_class(
+            model.config, use_past=use_cache, use_past_in_inputs=use_cache, float_dtype=float_dtype
         )
-        sample_inputs["past_key_values"] = past_key_values
+    else:
+        onnx_config = onnx_config_class(model.config)
 
-    return sample_inputs
+    dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+
+    return {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
 
 
 def ipex_jit_trace(model, task, use_cache):
@@ -364,7 +352,7 @@ class IPEXModel(OptimizedModel):
         # TODO : add warmup for IPEX exported model
         if not self._is_ipex_exported:
             use_cache = "past_key_values" in self.input_names
-            dummy_inputs = prepare_jit_inputs(self, self.export_feature, use_cache)
+            dummy_inputs = _prepare_inputs_for_ipex_model(self, self.export_feature, use_cache)
             if self._device.type != "cpu":
                 dummy_inputs = recursive_to_device(value=dummy_inputs, device=self._device)
             for _ in range(2):
