@@ -133,7 +133,7 @@ def ipex_jit_trace(model, task, use_cache):
     model.config.return_dict = False
     model.config.use_cache = use_cache
     if "past_key_values" in sample_inputs and not use_cache:
-            sample_inputs.pop("past_key_values")
+        sample_inputs.pop("past_key_values")
 
     # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
     # Only ipex >= 2.3.0 supports tpp.
