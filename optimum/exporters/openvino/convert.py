@@ -139,7 +139,7 @@ def export(
         )
 
     if "diffusers" in str(model.__class__) and not is_diffusers_available():
-        raise ImportError("The pip package `diffusers` is required to export stable diffusion models to ONNX.")
+        raise ImportError("The package `diffusers` is required to export diffusion models to ONNX.")
 
     if stateful:
         # This will be checked anyway after the model conversion, but checking it earlier will save time for a user if not suitable version is used
