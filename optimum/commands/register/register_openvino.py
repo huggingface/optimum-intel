@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from ..export import ExportCommand
-from ..export.ipex import IPEXExportCommand
+from ..export.openvino import OVExportCommand
 
 
-REGISTER_COMMANDS = [(IPEXExportCommand, ExportCommand)]
+REGISTER_COMMANDS = [(OVExportCommand, ExportCommand)]
