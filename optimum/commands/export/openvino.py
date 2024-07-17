@@ -227,7 +227,11 @@ class OVExportCommand(BaseOptimumCLICommand):
 
             return _DEFAULT_4BIT_CONFIG
 
-        library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
+        # TODO: add revision, subfolder and token to args
+        library_name = TasksManager._infer_library_from_model_name_or_path(
+            model_name_or_path=self.args.model, cache_dir=self.args.cache_dir
+        )
+
         if library_name == "sentence_transformers" and self.args.library is None:
             logger.warning(
                 "Library name is not specified. There are multiple possible variants: `sentence_transformers`, `transformers`."
