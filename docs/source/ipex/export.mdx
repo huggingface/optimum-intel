@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 ## Using the CLI
 
-To export your model to the IPEX format with the CLI :
+To export your model to the IPEX optimized (patching + weight repack + jit trace) model with the CLI :
 
 ```bash
 optimum-cli export ipex -m gpt2 --torch_dtype bfloat16 ipex-gpt2
