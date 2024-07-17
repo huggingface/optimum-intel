@@ -14,8 +14,12 @@
 
 
 _HEAD_TO_AUTOMODELS = {
+    "feature-extraction": "IPEXModel",
     "text-generation": "IPEXModelForCausalLM",
     "text-classification": "IPEXModelForSequenceClassification",
     "token-classification": "IPEXModelForTokenClassification",
     "question-answering": "IPEXModelForQuestionAnswering",
+    "fill-mask": "IPEXModelForMaskedLM",
+    "image-classification": "IPEXModelForImageClassification",
+    "audio-classification": "IPEXModelForAudioClassification",
 }
