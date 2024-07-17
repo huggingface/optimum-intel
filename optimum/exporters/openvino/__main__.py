@@ -47,11 +47,17 @@ _COMPRESSION_OPTIONS = {
 logger = logging.getLogger(__name__)
 
 
-def infer_task(task, model_name_or_path, **kwargs):
+def infer_task(task, model_name_or_path, subfolder, revision, cache_dir, token):
     task = TasksManager.map_from_synonym(task)
     if task == "auto":
         try:
-            task = TasksManager._infer_task_from_model_name_or_path(model_name_or_path=model_name_or_path, **kwargs)
+            task = TasksManager._infer_task_from_model_name_or_path(
+                model_name_or_path=model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+            )
         except KeyError as e:
             raise KeyError(
                 f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
