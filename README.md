@@ -217,6 +217,7 @@ optimum-cli export ipex -m gpt2 --torch_dtype bfloat16 ipex-gpt2
 
 To load your IPEX model, you can just replace your `AutoModelForXxx` class with the corresponding `IPEXModelForXxx` class. You can set `export=True` to load a PyTorch checkpoint, export your model via TorchScript and apply IPEX optimizations : both operators optimization (replaced with customized IPEX operators) and graph-level optimization (like operators fusion) will be applied on your model.
 ```diff
+  import torch
   from transformers import AutoTokenizer, pipeline
 - from transformers import AutoModelForCausalLM
 + from optimum.intel import IPEXModelForCausalLM
@@ -230,7 +231,7 @@ To load your IPEX model, you can just replace your `AutoModelForXxx` class with 
   results = pipe("He's a dreadful magician and")
 
 + # You can also use the model exported by Optimum command-line interface
-+ exported_model = IPEXModelForCausalLM.from_pretrained(ipex-gpt2)
++ exported_model = IPEXModelForCausalLM.from_pretrained("ipex-gpt2")
 + pipe.model = exported_model
 + results = pipe("He's a dreadful magician and")
 ```
