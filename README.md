@@ -229,6 +229,10 @@ To load your IPEX model, you can just replace your `AutoModelForXxx` class with 
   pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
   results = pipe("He's a dreadful magician and")
 
++ # You can also use the model exported by Optimum command-line interface
++ exported_model = IPEXModelForCausalLM.from_pretrained(ipex-gpt2)
++ pipe.model = exported_model
++ results = pipe("He's a dreadful magician and")
 ```
 
 For more details, please refer to the [documentation](https://intel.github.io/intel-extension-for-pytorch/#introduction).
