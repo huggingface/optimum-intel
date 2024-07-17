@@ -64,7 +64,7 @@ if is_torch_available():
     from transformers.modeling_utils import PreTrainedModel
 
 if is_diffusers_available():
-    from diffusers import ModelMixin
+    from diffusers import DiffusionPipeline, ModelMixin
 
 if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
@@ -90,13 +90,13 @@ def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
 
         compress_to_fp16 = ov_config.dtype == "fp16"
 
-    library_name = TasksManager.infer_library_from_model(Path(path).parent)
+    library_name = TasksManager._infer_library_from_model_name_or_path(model_name_or_path=Path(path).parent)
     model = _add_version_info_to_model(model, library_name)
     save_model(model, path, compress_to_fp16)
 
 
 def export(
-    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"],
+    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     config: OnnxConfig,
     output: Path,
     opset: Optional[int] = None,
@@ -422,7 +422,7 @@ def export_pytorch(
 
 def export_models(
     models_and_export_configs: Dict[
-        str, Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"], "OnnxConfig"]
+        str, Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"]
     ],
     output_dir: Path,
     opset: Optional[int] = None,
@@ -491,7 +491,7 @@ def export_models(
 
 
 def export_from_model(
-    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     output: Union[str, Path],
     task: Optional[str] = None,
     ov_config: Optional["OVConfig"] = None,
@@ -505,14 +505,15 @@ def export_from_model(
     trust_remote_code: bool = False,
     **kwargs_shapes,
 ):
+    model_kwargs = model_kwargs or {}
+
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
         raise ImportError(
             f"Compression of the weights to {ov_config.quantization_config} requires nncf, please install it with `pip install nncf`"
         )
 
-    model_kwargs = model_kwargs or {}
-    library_name = TasksManager._infer_library_from_model(model)
-    TasksManager.standardize_model_attributes(model, library_name)
+    library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+    TasksManager.standardize_model_attributes(model)
 
     if hasattr(model.config, "export_model_type"):
         model_type = model.config.export_model_type.replace("_", "-")
@@ -521,7 +522,7 @@ def export_from_model(
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
-    if task is not None:
+    if task is not None and task != "auto":
         task = TasksManager.map_from_synonym(task)
     else:
         try:

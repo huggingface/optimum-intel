@@ -47,11 +47,11 @@ _COMPRESSION_OPTIONS = {
 logger = logging.getLogger(__name__)
 
 
-def infer_task(task, model_name_or_path):
+def infer_task(task, model_name_or_path, **kwargs):
     task = TasksManager.map_from_synonym(task)
     if task == "auto":
         try:
-            task = TasksManager.infer_task_from_model(model_name_or_path)
+            task = TasksManager._infer_task_from_model_name_or_path(model_name_or_path=model_name_or_path, **kwargs)
         except KeyError as e:
             raise KeyError(
                 f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
@@ -193,14 +193,17 @@ def main_export(
             ov_config = OVConfig(quantization_config=q_config)
 
     original_task = task
-    task = infer_task(task, model_name_or_path)
-    framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
-    library_name_is_not_provided = library_name is None
-    library_name = TasksManager.infer_library_from_model(
-        model_name_or_path, subfolder=subfolder, library_name=library_name
+    task = infer_task(
+        task, model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
     )
-
-    if library_name == "sentence_transformers" and library_name_is_not_provided:
+    framework = TasksManager.determine_framework(
+        model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
+    )
+    original_library_name = library_name
+    library_name = TasksManager._infer_library_from_model_name_or_path(
+        model_name_or_path=model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
+    )
+    if library_name == "sentence_transformers" and original_library_name is None:
         logger.warning(
             "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
             "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
