@@ -35,8 +35,6 @@
       title: Export
     - local: ipex/inference
       title: Inference
-    - local: ipex/optimization
-      title: Optimization
     - local: ipex/models
       title: Supported Models
     - local: ipex/reference
