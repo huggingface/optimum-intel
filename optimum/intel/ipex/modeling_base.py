@@ -627,11 +627,15 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             raise ValueError(
                 f"Assisted decoding is not supported for patched models if ipex < 2.5, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
-        if self._is_ipex_exported:
+        patch_functions = False
+        # Patch functions for assisted decoding
+        if self._is_ipex_exported and kwargs.get("assistant_model", None):
             transformers.generation.candidate_generator._crop_past_key_values = _ipex_crop_past_key_values
             transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
+            patch_functions = True
         result = super().generate(*args, **kwargs)
-        if self._is_ipex_exported:
+        # Un-patch functions
+        if patch_functions:
             transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
             transformers.generation.utils._crop_past_key_values = _crop_past_key_values
         return result
