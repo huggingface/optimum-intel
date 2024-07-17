@@ -55,14 +55,47 @@ def parse_args_ipex(parser: "ArgumentParser"):
             "you have read the code, as it will execute on your local machine arbitrary code present in the model repository."
         ),
     )
-    optional_group.add_argument("--revision", default=None, help="model kwargs")
-    optional_group.add_argument("--token", default=None, help="model kwargs")
-    optional_group.add_argument("--cache_dir", type=str, default=HUGGINGFACE_HUB_CACHE, help="model kwargs")
-    optional_group.add_argument("--subfolder", type=str, default="", help="model kwargs")
-    optional_group.add_argument("--local_files_only", type=bool, default=False, help="model kwargs")
-    optional_group.add_argument("--force_download", type=bool, default=False, help="model kwargs")
-    optional_group.add_argument("--commit_hash", default=None, help="model kwargs")
-    optional_group.add_argument("--torch_dtype", type=str, default="float32", help="model kwargs")
+    optional_group.add_argument(
+        "--revision",
+        default=None,
+        help="The specific model version to use. It can be a branch name, a tag name, or a commit id, since we use a git-based system for storing models and other artifacts on huggingface.co, so `revision` can be any identifier allowed by git.",
+    )
+    optional_group.add_argument(
+        "--token",
+        default=None,
+        help="The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated when running `huggingface-cli login` (stored in `huggingface_hub.constants.HF_TOKEN_PATH`).",
+    )
+    optional_group.add_argument(
+        "--cache_dir",
+        type=str,
+        default=HUGGINGFACE_HUB_CACHE,
+        help="Path to a directory in which a downloaded pretrained model configuration should be cached if the standard cache should not be used.",
+    )
+    optional_group.add_argument(
+        "--subfolder",
+        type=str,
+        default="",
+        help="In case the relevant files are located inside a subfolder of the model repo either locally or on huggingface.co, you can specify the folder name here.",
+    )
+    optional_group.add_argument(
+        "--local_files_only",
+        type=bool,
+        default=False,
+        help="Whether or not to only look at local files (i.e., do not try to download the model).",
+    )
+    optional_group.add_argument(
+        "--force_download",
+        type=bool,
+        default=False,
+        help="Whether or not to force the (re-)download of the model weights and configuration files, overriding the cached versions if they exist.",
+    )
+    optional_group.add_argument("--commit_hash", default=None, help="The commit_hash related to the file.")
+    optional_group.add_argument(
+        "--torch_dtype",
+        type=str,
+        default="float32",
+        help="float16 or bfloat16 or float32: load in a specified dtype, ignoring the model’s config.torch_dtype if one exists. If not specified, the model will get loaded in float32.",
+    )
 
 
 class IPEXExportCommand(BaseOptimumCLICommand):
