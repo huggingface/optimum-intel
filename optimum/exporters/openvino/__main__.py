@@ -47,7 +47,14 @@ _COMPRESSION_OPTIONS = {
 logger = logging.getLogger(__name__)
 
 
-def infer_task(task, model_name_or_path, subfolder, revision, cache_dir, token):
+def infer_task(
+    task,
+    model_name_or_path,
+    subfolder: str = "",
+    revision: Optional[str] = None,
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
+    token: Optional[Union[bool, str]] = None,
+):
     task = TasksManager.map_from_synonym(task)
     if task == "auto":
         try:
