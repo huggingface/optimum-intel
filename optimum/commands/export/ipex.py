@@ -44,8 +44,7 @@ def parse_args_ipex(parser: "ArgumentParser"):
         "--task",
         default="auto",
         help=(
-            "The task to export the model for. If not specified, the task will be auto-inferred based on the model. Available tasks depend on the model, but are among:"
-            f" {str(TasksManager.get_all_tasks())}. For decoder models, use `xxx-with-past` to export the model using past key values in the decoder."
+            "The task to export the model for. If not specified, the task will be auto-inferred based on the model. Available tasks depend on the model."
         ),
     )
     optional_group.add_argument(
@@ -55,13 +54,6 @@ def parse_args_ipex(parser: "ArgumentParser"):
             "Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories you trust and in which "
             "you have read the code, as it will execute on your local machine arbitrary code present in the model repository."
         ),
-    )
-    optional_group.add_argument(
-        "--library",
-        type=str,
-        choices=["transformers", "diffusers", "timm", "sentence_transformers"],
-        default=None,
-        help="The library used to load the model before export. If not provided, will attempt to infer the local checkpoint's library",
     )
     optional_group.add_argument("--revision", default=None, help="model kwargs")
     optional_group.add_argument("--token", default=None, help="model kwargs")
