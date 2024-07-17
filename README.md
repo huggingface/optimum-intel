@@ -231,7 +231,7 @@ To load your IPEX model, you can just replace your `AutoModelForXxx` class with 
 
 + # You can also use the model exported by Optimum command-line interface
 + exported_model = IPEXModelForCausalLM.from_pretrained("ipex-gpt2")
-+ pipe.model = exported_model
++ pipe = pipeline("text-generation", model=exported_model, tokenizer=tokenizer)
 + results = pipe("He's a dreadful magician and")
 ```
 
