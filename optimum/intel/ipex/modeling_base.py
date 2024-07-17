@@ -52,12 +52,12 @@ from optimum.exporters import TasksManager
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
+from ...exporters.ipex.model_config import ipex_onnx_config
 from ...exporters.ipex.model_patcher import (
     _IPEX_EXPORTED_GENERATION_TASKS,
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _patch_model,
 )
-from ...exporters.ipex.model_config import ipex_onnx_config
 from ..generation.modeling import get_float_type
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
@@ -486,8 +486,6 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
 
         if self._is_ipex_exported:
             self._reorder_cache = _ipex_reorder_cache
-            transformers.generation.candidate_generator._crop_past_key_values = _ipex_crop_past_key_values
-            transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
         else:
             # Check if _reorder_cache is a static method
             if isinstance(self.model_cls.__dict__["_reorder_cache"], staticmethod):
@@ -629,7 +627,14 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             raise ValueError(
                 f"Assisted decoding is not supported for patched models if ipex < 2.5, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
-        return super().generate(*args, **kwargs)
+        if self._is_ipex_exported:
+            transformers.generation.candidate_generator._crop_past_key_values = _ipex_crop_past_key_values
+            transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
+        result = super().generate(*args, **kwargs)
+        if self._is_ipex_exported:
+            transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
+            transformers.generation.utils._crop_past_key_values = _crop_past_key_values
+        return result
 
 
 def _ipex_prepare_inputs_for_generation(
