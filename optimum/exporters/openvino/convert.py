@@ -74,7 +74,7 @@ if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
 
 
-def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
+def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None, library_name: Optional[str] = None):
     compress_to_fp16 = False
 
     if ov_config is not None:
@@ -90,7 +90,6 @@ def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
 
         compress_to_fp16 = ov_config.dtype == "fp16"
 
-    library_name = TasksManager._infer_library_from_model_name_or_path(model_name_or_path=Path(path).parent)
     model = _add_version_info_to_model(model, library_name)
     save_model(model, path, compress_to_fp16)
 
@@ -198,7 +197,19 @@ def export_tensorflow(
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
-    _save_model(ov_model, output.parent / output, ov_config=ov_config)
+
+    if model.__class__.__module__.startswith("optimum"):
+        # for wrapped models
+        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
+    else:
+        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+
+    _save_model(
+        ov_model,
+        output.parent / output,
+        ov_config=ov_config,
+        library_name=library_name,
+    )
     return input_names, output_names, True
 
 
@@ -251,7 +262,19 @@ def export_pytorch_via_onnx(
     )
     torch.onnx.export = orig_torch_onnx_export
     ov_model = convert_model(str(onnx_output))
-    _save_model(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output, ov_config=ov_config)
+
+    if model.__class__.__module__.startswith("optimum"):
+        # for wrapped models
+        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
+    else:
+        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+
+    _save_model(
+        ov_model,
+        output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
+        ov_config=ov_config,
+        library_name=library_name,
+    )
     return input_names, output_names, True
 
 
@@ -413,7 +436,18 @@ def export_pytorch(
         if stateful:
             patch_stateful(model.config, ov_model)
 
-        _save_model(ov_model, output, ov_config=ov_config)
+        if model.__module__.startswith("optimum"):
+            # for wrapped models like timm in optimum.intel.openvino.modeling_timm
+            library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
+        else:
+            library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+
+        _save_model(
+            ov_model,
+            output,
+            ov_config=ov_config,
+            library_name=library_name,
+        )
         clear_class_registry()
         del model
         gc.collect()
