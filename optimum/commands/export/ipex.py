@@ -136,7 +136,6 @@ class IPEXExportCommand(BaseOptimumCLICommand):
             "subfolder": self.args.subfolder,
             "local_files_only": self.args.local_files_only,
             "force_download": self.args.force_download,
-            "commit_hash": self.args.commit_hash,
             "torch_dtype": torch_dtype,
             "trust_remote_code": self.args.trust_remote_code,
         }
