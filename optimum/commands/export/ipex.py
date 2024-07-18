@@ -89,7 +89,6 @@ def parse_args_ipex(parser: "ArgumentParser"):
         default=False,
         help="Whether or not to force the (re-)download of the model weights and configuration files, overriding the cached versions if they exist.",
     )
-    optional_group.add_argument("--commit_hash", default=None, help="The commit_hash related to the file.")
     optional_group.add_argument(
         "--torch_dtype",
         type=str,
