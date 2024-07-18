@@ -212,16 +212,21 @@ def main_export(
     framework = TasksManager.determine_framework(
         model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
     )
-    original_library_name = library_name
-    library_name = TasksManager._infer_library_from_model_name_or_path(
-        model_name_or_path=model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
-    )
-    if library_name == "sentence_transformers" and original_library_name is None:
-        logger.warning(
-            "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
-            "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+
+    if library_name is None:
+        library_name = TasksManager._infer_library_from_model_name_or_path(
+            model_name_or_path=model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
         )
-        library_name = "transformers"
+        if library_name == "sentence_transformers":
+            logger.warning(
+                "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
+                "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+            )
+            library_name = "transformers"
 
     do_gptq_patching = False
     custom_architecture = False
