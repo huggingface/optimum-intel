@@ -180,7 +180,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+            eval(
+                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
+                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            ).from_pretrained(tmpdir, **model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_int8(self, task: str, model_type: str):
@@ -191,7 +195,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+            model = eval(
+                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
+                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            ).from_pretrained(tmpdir, **model_kwargs)
 
             if task.startswith("text2text-generation"):
                 models = [model.encoder, model.decoder]
@@ -216,7 +224,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 shell=True,
                 check=True,
             )
-            model = eval(_HEAD_TO_AUTOMODELS[model_type]).from_pretrained(tmpdir)
+            model = eval(_HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]).from_pretrained(tmpdir)
             num_fq, num_int8, _ = get_num_quantized_nodes(model.unet)
             self.assertEqual(exp_num_int8, num_int8)
             self.assertEqual(exp_num_fq, num_fq)
@@ -231,7 +239,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+            model = eval(
+                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
+                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            ).from_pretrained(tmpdir, **model_kwargs)
 
             _, num_int8, num_int4 = get_num_quantized_nodes(model)
             self.assertEqual(expected_int8, num_int8)
