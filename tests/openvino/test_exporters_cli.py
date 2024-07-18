@@ -61,9 +61,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("audio-classification", "wav2vec2"),
         ("fill-mask", "bert"),
         ("feature-extraction", "blenderbot"),
-        ("stable-diffusion", "stable-diffusion"),
-        ("stable-diffusion-xl", "stable-diffusion-xl"),
-        ("stable-diffusion-xl", "stable-diffusion-xl-refiner"),
+        ("text-to-image", "stable-diffusion"),
+        ("text-to-image", "stable-diffusion-xl"),
+        ("image-to-image", "stable-diffusion-xl-refiner"),
     )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
@@ -139,7 +139,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+            eval(
+                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
+                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            ).from_pretrained(tmpdir, **model_kwargs)
 
     @parameterized.expand(
         arch
@@ -193,9 +197,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 models = [model.encoder, model.decoder]
                 if task.endswith("with-past"):
                     models.append(model.decoder_with_past)
-            elif task.startswith("stable-diffusion"):
+            elif model_type.startswith("stable-diffusion"):
                 models = [model.unet, model.vae_encoder, model.vae_decoder]
-                models.append(model.text_encoder if task == "stable-diffusion" else model.text_encoder_2)
+                models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
             else:
                 models = [model]
 
