@@ -105,6 +105,7 @@ def patch_update_causal_mask(model, transformers_version):
     if is_transformers_version(">=", transformers_version):
         model.model._update_causal_mask = types.MethodType(_llama_gemma_update_causal_mask, model.model)
 
+
 # initialization of sin/cos cached in bf16/fp16 leads to accuracy loss
 # reinitialize them to save in float32 before export
 def _reinitialize_cos_sin_cached_fp32(rotary_emb):

@@ -385,6 +385,7 @@ def export_pytorch(
             with patcher:
                 if patch_16bit_model:
                     from openvino.frontend.pytorch.patch_model import __make_16bit_traceable
+
                     __make_16bit_traceable(model)
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
                 sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)

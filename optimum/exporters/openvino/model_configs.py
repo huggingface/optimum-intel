@@ -66,8 +66,8 @@ from .model_patcher import (
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     QwenModelPatcher,
-    UpdateCausalMaskModelPatcher,
     RotaryEmbPatcher,
+    UpdateCausalMaskModelPatcher,
     XverseModelPatcher,
 )
 
@@ -540,24 +540,6 @@ class MPTOpenVINOConfig(MPTOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return MPTModelPatcher(self, model, model_kwargs=model_kwargs)
-
-
-@register_in_tasks_manager(
-    "phi",
-    *[
-        "feature-extraction",
-        "feature-extraction-with-past",
-        "text-generation",
-        "text-generation-with-past",
-        "text-classification",
-    ],
-    library_name="transformers",
-)
-class PhiOpenVINOConfig(PhiOnnxConfig):
-    def patch_model_for_export(
-        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-    ) -> "ModelPatcher":
-        return RotaryEmbPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(

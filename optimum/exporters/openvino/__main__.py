@@ -301,9 +301,11 @@ def main_export(
         and task.startswith("text-generation")
         and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
     ):
-        if is_openvino_version(">=", "2024.2") and config.torch_dtype == torch.float16:
+        if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
+            dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
+        elif is_openvino_version(">=", "2024.2") and config.torch_dtype == torch.float16:
             dtype = torch.float16
-        if is_openvino_version(">=", "2024.3") and config.torch_dtype == torch.bfloat16:
+        elif is_openvino_version(">=", "2024.3") and config.torch_dtype == torch.bfloat16:
             dtype = torch.bfloat16
 
     if dtype is not None:
