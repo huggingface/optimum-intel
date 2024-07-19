@@ -311,7 +311,8 @@ class OVBaseDecoderModel(OVModel):
             stateful=None,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
-            trust_remote_code=trust_remote_code**kwargs,
+            trust_remote_code=trust_remote_code,
+            **kwargs,
         )
 
     def _reshape(
