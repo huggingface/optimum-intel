@@ -311,7 +311,7 @@ class OVBaseDecoderModel(OVModel):
             stateful=None,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
-            **kwargs,
+            trust_remote_code=trust_remote_code**kwargs,
         )
 
     def _reshape(
@@ -782,6 +782,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
             quantization_config = _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, _DEFAULT_4BIT_CONFIG)
+            if quantization_config.get("dataset") is not None:
+                quantization_config["trust_remote_code"] = kwargs.get("trust_remote_code", False)
+
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         enable_compilation = kwargs.pop("compile", True) and not quantization_config
