@@ -189,14 +189,6 @@ def parse_args_openvino(parser: "ArgumentParser"):
         action="store_true",
         help="Do not add converted tokenizer and detokenizer OpenVINO models.",
     )
-    # TODO : deprecated
-    optional_group.add_argument("--fp16", action="store_true", help="Compress weights to fp16")
-    optional_group.add_argument("--int8", action="store_true", help="Compress weights to int8")
-    optional_group.add_argument(
-        "--convert-tokenizer",
-        action="store_true",
-        help="[Deprecated] Add converted tokenizer and detokenizer with OpenVINO Tokenizers.",
-    )
 
 
 class OVExportCommand(BaseOptimumCLICommand):
@@ -235,24 +227,19 @@ class OVExportCommand(BaseOptimumCLICommand):
 
             return _DEFAULT_4BIT_CONFIG
 
-        library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
-        if library_name == "sentence_transformers" and self.args.library is None:
-            logger.warning(
-                "Library name is not specified. There are multiple possible variants: `sentence_transformers`, `transformers`."
-                "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+        if self.args.library is None:
+            # TODO: add revision, subfolder and token to args
+            library_name = TasksManager._infer_library_from_model_name_or_path(
+                model_name_or_path=self.args.model, cache_dir=self.args.cache_dir
             )
-            library_name = "transformers"
-
-        if self.args.fp16:
-            logger.warning(
-                "`--fp16` option is deprecated and will be removed in a future version. Use `--weight-format` instead."
-            )
-            self.args.weight_format = "fp16"
-        if self.args.int8:
-            logger.warning(
-                "`--int8` option is deprecated and will be removed in a future version. Use `--weight-format` instead."
-            )
-            self.args.weight_format = "int8"
+            if library_name == "sentence_transformers":
+                logger.warning(
+                    "Library name is not specified. There are multiple possible variants: `sentence_transformers`, `transformers`."
+                    "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+                )
+                library_name = "transformers"
+        else:
+            library_name = self.args.library
 
         if self.args.weight_format is None:
             ov_config = None
@@ -295,9 +282,6 @@ class OVExportCommand(BaseOptimumCLICommand):
                 quantization_config["sym"] = "asym" not in self.args.weight_format
                 quantization_config["group_size"] = 128 if "128" in self.args.weight_format else 64
             ov_config = OVConfig(quantization_config=quantization_config)
-
-        if self.args.convert_tokenizer:
-            logger.warning("`--convert-tokenizer` option is deprecated. Tokenizer will be converted by default.")
 
         quantization_config = ov_config.quantization_config if ov_config else None
         quantize_with_dataset = quantization_config and getattr(quantization_config, "dataset", None) is not None

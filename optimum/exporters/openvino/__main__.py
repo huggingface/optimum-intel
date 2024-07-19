@@ -47,11 +47,24 @@ _COMPRESSION_OPTIONS = {
 logger = logging.getLogger(__name__)
 
 
-def infer_task(task, model_name_or_path):
+def infer_task(
+    task,
+    model_name_or_path,
+    subfolder: str = "",
+    revision: Optional[str] = None,
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
+    token: Optional[Union[bool, str]] = None,
+):
     task = TasksManager.map_from_synonym(task)
     if task == "auto":
         try:
-            task = TasksManager.infer_task_from_model(model_name_or_path)
+            task = TasksManager._infer_task_from_model_name_or_path(
+                model_name_or_path=model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+            )
         except KeyError as e:
             raise KeyError(
                 f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
@@ -193,19 +206,27 @@ def main_export(
             ov_config = OVConfig(quantization_config=q_config)
 
     original_task = task
-    task = infer_task(task, model_name_or_path)
-    framework = TasksManager.determine_framework(model_name_or_path, subfolder=subfolder, framework=framework)
-    library_name_is_not_provided = library_name is None
-    library_name = TasksManager.infer_library_from_model(
-        model_name_or_path, subfolder=subfolder, library_name=library_name
+    task = infer_task(
+        task, model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
+    )
+    framework = TasksManager.determine_framework(
+        model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
     )
 
-    if library_name == "sentence_transformers" and library_name_is_not_provided:
-        logger.warning(
-            "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
-            "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+    if library_name is None:
+        library_name = TasksManager._infer_library_from_model_name_or_path(
+            model_name_or_path=model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
         )
-        library_name = "transformers"
+        if library_name == "sentence_transformers":
+            logger.warning(
+                "Library name is not specified. There are multiple possible variants: `sentence_tenasformers`, `transformers`."
+                "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+            )
+            library_name = "transformers"
 
     do_gptq_patching = False
     custom_architecture = False
@@ -317,9 +338,7 @@ def main_export(
                 )
             model.config.pad_token_id = pad_token_id
 
-    if "stable-diffusion" in task:
-        model_type = "stable-diffusion"
-    elif hasattr(model.config, "export_model_type"):
+    if hasattr(model.config, "export_model_type"):
         model_type = model.config.export_model_type.replace("_", "-")
     else:
         model_type = model.config.model_type.replace("_", "-")

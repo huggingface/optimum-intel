@@ -61,7 +61,13 @@ from optimum.intel import (
     OVWeightQuantizationConfig,
     OVDynamicQuantizationConfig,
 )
-from optimum.intel.openvino.configuration import OVQuantizationMethod, OVQuantizationConfigBase
+from optimum.intel.openvino.configuration import (
+    OVQuantizationMethod,
+    OVQuantizationConfigBase,
+    _DEFAULT_4BIT_CONFIGS,
+    _DEFAULT_4BIT_CONFIG,
+)
+from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
@@ -230,7 +236,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            16,
+            18 if is_transformers_version(">=", "4.39") else 16,
         ),
         (
             OVModelForCausalLM,
@@ -244,7 +250,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            16,
+            18 if is_transformers_version(">=", "4.39") else 16,
         ),
     )
 
@@ -519,7 +525,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                         MODEL_NAMES["llama"], export=True, compile=False, use_cache=False
                     )
                     save_model_patch.assert_called_with(
-                        unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(quantization_config={"bits": 8})
+                        unittest.mock.ANY,
+                        unittest.mock.ANY,
+                        ov_config=OVConfig(quantization_config={"bits": 8}),
+                        library_name="transformers",
                     )
 
     def test_ovmodel_load_large_model_with_uncompressed_weights(self):
@@ -534,7 +543,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                         MODEL_NAMES["llama"], export=True, load_in_8bit=False, compile=False, use_cache=False
                     )
                     save_model_patch.assert_called_with(
-                        unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(dtype="fp32")
+                        unittest.mock.ANY,
+                        unittest.mock.ANY,
+                        ov_config=OVConfig(dtype="fp32"),
+                        library_name="transformers",
                     )
 
     def test_ovmodel_load_large_model_with_additional_quantization_config(self):
@@ -554,7 +566,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                         )
                         # quantization will be performed later, using load_model
                         save_model_patch.assert_called_with(
-                            unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(dtype="fp32")
+                            unittest.mock.ANY,
+                            unittest.mock.ANY,
+                            ov_config=OVConfig(dtype="fp32"),
+                            library_name="transformers",
                         )
                         compression_params = {
                             "mode": nncf.CompressWeightsMode.INT4_SYM,
@@ -820,6 +835,13 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(bits=8, fast_bias_correction=True, weight_only=False), OVQuantizationConfig, None),
     )
 
+    def get_default_configurations() -> dict:
+        default_configurations = deepcopy(_DEFAULT_4BIT_CONFIGS)
+        default_configurations.update({"default": _DEFAULT_4BIT_CONFIG})
+        return default_configurations
+
+    DEFAULT_CONFIGURATIONS = get_default_configurations()
+
     @parameterized.expand(QUANTIZATION_CONFIGS)
     def test_config_serialization(self, quantization_config: OVQuantizationConfigBase):
         ov_config = OVConfig(quantization_config=quantization_config)
@@ -848,6 +870,14 @@ class OVQuantizationConfigTest(unittest.TestCase):
         for k, v in quantization_config.items():
             if hasattr(ov_config.quantization_config, k):
                 self.assertEqual(getattr(ov_config.quantization_config, k), v)
+
+    @parameterized.expand(DEFAULT_CONFIGURATIONS)
+    def test_named_default_configurations(self, config_id: str):
+        custom_configuration = self.DEFAULT_CONFIGURATIONS[config_id]
+        prepared_config = OVModelForCausalLM._prepare_weight_quantization_config(custom_configuration)
+        for field_name, reference_value in custom_configuration.items():
+            value = prepared_config.__getattribute__(field_name)
+            self.assertEqual(value, reference_value)
 
 
 class InferRequestWrapperTest(unittest.TestCase):
