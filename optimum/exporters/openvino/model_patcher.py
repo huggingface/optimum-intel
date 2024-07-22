@@ -510,6 +510,34 @@ def llama_gemma_rotary_emb_forward(self, x, position_ids, seq_len=None):
     return cos, sin
 
 
+def create_sinusoidal_positions(num_pos: int, dim: int, base: int = 10000) -> torch.Tensor:
+    # adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L101
+    inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64) / dim))
+
+    sinusoid_inp = torch.einsum("i , j -> i j", torch.arange(num_pos, dtype=torch.int64).float(), inv_freq).float()
+    emb = torch.cat((sinusoid_inp, sinusoid_inp), dim=-1)
+    return torch.cat((torch.sin(emb), torch.cos(emb)), dim=1)
+
+
+def register_sin_cos_buffer(model):
+    max_positions = model.config.max_position_embeddings
+
+    # cos/sin for rotary position embeddings also having issues with bf16 and efficiency due to calculation on each step
+    # use precomputed
+
+    base = model.model.layers[0].self_attn.rotary_emb.base
+    dim = model.model.layers[0].self_attn.rotary_emb.dim
+    embed_positions = create_sinusoidal_positions(max_positions, dim, base)
+
+    for layer in model.model.layers:
+        layer.self_attn.rotary_emb.register_buffer("embed_positions", embed_positions)
+        layer.self_attn.rotary_emb._orig_forward = layer.self_attn.rotary_emb.forward
+
+        layer.self_attn.rotary_emb.forward = types.MethodType(
+            llama_gemma_rotary_emb_forward, layer.self_attn.rotary_emb
+        )
+
+
 class LlamaModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -521,32 +549,7 @@ class LlamaModelPatcher(DecoderModelPatcher):
             self._model.model._update_causal_mask = types.MethodType(
                 _llama_gemma_update_causal_mask, self._model.model
             )
-
-            max_positions = self._model.config.max_position_embeddings
-
-            # cos/sin for rotary position embeddings also having issues with bf16 and efficiency due to calculation on each step
-            # use precomputed
-            def create_sinusoidal_positions(num_pos: int, dim: int, base: int = 10000) -> torch.Tensor:
-                # adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L101
-                inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64) / dim))
-
-                sinusoid_inp = torch.einsum(
-                    "i , j -> i j", torch.arange(num_pos, dtype=torch.int64).float(), inv_freq
-                ).float()
-                emb = torch.cat((sinusoid_inp, sinusoid_inp), dim=-1)
-                return torch.cat((torch.sin(emb), torch.cos(emb)), dim=1)
-
-            base = self._model.model.layers[0].self_attn.rotary_emb.base
-            dim = self._model.model.layers[0].self_attn.rotary_emb.dim
-            embed_positions = create_sinusoidal_positions(max_positions, dim, base)
-
-            for layer in self._model.model.layers:
-                layer.self_attn.rotary_emb.register_buffer("embed_positions", embed_positions)
-                layer.self_attn.rotary_emb._orig_forward = layer.self_attn.rotary_emb.forward
-
-                layer.self_attn.rotary_emb.forward = types.MethodType(
-                    llama_gemma_rotary_emb_forward, layer.self_attn.rotary_emb
-                )
+            register_sin_cos_buffer(self._model)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -554,6 +557,21 @@ class LlamaModelPatcher(DecoderModelPatcher):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
 
             for layer in self._model.model.layers:
+                layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
+
+
+class MistralModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+
+        # mistral has some accuracy issues with bf16 with transformers >= 4.42
+        # prefill rotary emb sin/cos for avoid this issue
+        if is_transformers_version(">=", "4.42.0"):
+            register_sin_cos_buffer(self._model)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        for layer in self._model.model.layers:
+            if hasattr(layer.self_attn.rotary_emb, "_orig_forward"):
                 layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
 
 
@@ -1283,11 +1301,15 @@ class Phi3ModelPatcher(DecoderModelPatcher):
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
                 )
 
+        # phi3 has issue with bf16 inference, precollect sin/cos for rotary_position_embedding for avoid accuracy issues
+        register_sin_cos_buffer(self._model)
+
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         for layer in self._model.model.layers:
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
+            layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
 
 
 def _aquila_self_attn_sdpa_forward(
@@ -1807,6 +1829,15 @@ class DBRXModelPatcher(DecoderModelPatcher):
             _dbrx_update_causal_mask, self._model.transformer
         )
 
+        # starting from transformers 4.41 issue also observable for calculation sin/cos for rotary_emb
+        patch_rope_sin_cos = is_transformers_version(">=", "4.41.")
+
+        dim = self._model.transformer.blocks[0].dim
+        base = self._model.transformer.blocks[0].base
+        max_positions = self._model.config.max_seq_len
+        if patch_rope_sin_cos:
+            embed_positions = create_sinusoidal_positions(max_positions, dim, base)
+
         for block in self._model.transformer.blocks:
             rotary_emb = block.norm_attn_norm.attn.rotary_emb
             # initialize inv_freq for torchscript tracing
@@ -1815,6 +1846,12 @@ class DBRXModelPatcher(DecoderModelPatcher):
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
                 )
                 rotary_emb.inv_freq = inv_freq
+
+            if patch_rope_sin_cos:
+                rotary_emb.register_buffer("embed_positions", embed_positions)
+                rotary_emb._orig_forward = rotary_emb.forward
+                rotary_emb.forward = types.MethodType(llama_gemma_rotary_emb_forward, rotary_emb)
+
             # remove continue-operator from iteration loop over experts
             block.ffn.experts._orig_forward = block.ffn.experts.forward
             block.ffn.experts.forward = types.MethodType(_dbrx_experts_forward, block.ffn.experts)
@@ -1824,6 +1861,9 @@ class DBRXModelPatcher(DecoderModelPatcher):
         self._model.transformer._update_causal_mask = self._model.transformer._orig_update_causal_mask
         for block in self._model.transformer.blocks:
             block.ffn.experts.forward = block.ffn.experts._orig_forward
+
+            if hasattr(block.norm_attn_norm.attn.rotary_emb, "_orig_forward"):
+                block.norm_attn_norm.attn.rotary_emb.forward = block.norm_attn_norm.attn.rotary_emb._orig_forward
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/v4.41.0/src/transformers/models/persimmon/modeling_persimmon.py#L264
