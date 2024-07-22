@@ -874,6 +874,12 @@ class OVQuantizationConfigTest(unittest.TestCase):
     @parameterized.expand(DEFAULT_CONFIGURATIONS)
     def test_named_default_configurations(self, config_id: str):
         custom_configuration = self.DEFAULT_CONFIGURATIONS[config_id]
+        scale_estimation = custom_configuration.get("scale_estimation", False)
+        quant_method = custom_configuration.get("quant_method", OVQuantizationMethod.DEFAULT)
+        if scale_estimation or quant_method != OVQuantizationMethod.DEFAULT:
+            self.assertTrue(
+                custom_configuration.get("dataset", None) is not None, "Missed dataset in custom configuration!"
+            )
         prepared_config = OVModelForCausalLM._prepare_weight_quantization_config(custom_configuration)
         for field_name, reference_value in custom_configuration.items():
             value = prepared_config.__getattribute__(field_name)

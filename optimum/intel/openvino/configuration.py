@@ -40,7 +40,13 @@ class OVQuantizationMethod(str, Enum):
 
 
 _DEFAULT_4BIT_CONFIGS = {
-    "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 128, "scale_estimation": True},
+    "databricks/dolly-v2-3b": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
     "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
     "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
     "togethercomputer/RedPajama-INCITE-7B-Instruct": {"bits": 4, "sym": False, "group_size": 128},
@@ -100,6 +106,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "bits": 4,
         "sym": False,
         "group_size": 128,
+        "dataset": "wikitext2",
         "scale_estimation": True,
     },
     "lmsys/vicuna-7b-v1.5": {"bits": 4, "sym": False, "group_size": 128, "ratio": 1.0},
@@ -113,7 +120,14 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
-    "openai-community/gpt2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.5, "scale_estimation": True},
+    "openai-community/gpt2": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 0.5,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
     "lmsys/longchat-7b-16k": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
     "bigcode/starcoder2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
     "TinyLlama/TinyLlama-1.1B-Chat-v1.0": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
@@ -122,6 +136,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "sym": False,
         "group_size": 128,
         "ratio": 0.6,
+        "dataset": "wikitext2",
         "scale_estimation": True,
     },
     "microsoft/phi-2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
