@@ -30,9 +30,7 @@
       title: Tutorials
       isExpanded: false
     title: OpenVINO
-    - sections:
-    - local: ipex/export
-      title: Export
+  - sections:
     - local: ipex/inference
       title: Inference
     - local: ipex/models
