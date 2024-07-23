@@ -6,7 +6,6 @@ on:
       - 'Dockerfile.intel'
     branches:
       - main
-  workflow_dispatch:
 
 jobs:
   build_and_run:
