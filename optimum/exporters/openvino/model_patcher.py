@@ -510,7 +510,7 @@ def llama_gemma_rotary_emb_forward(self, x, position_ids, seq_len=None):
     return cos, sin
 
 
-def create_sinusoidal_positions(num_pos: int, dim: int, base: int = 10000, inv_freq=Non) -> torch.Tensor:
+def create_sinusoidal_positions(num_pos: int, dim: int, base: int = 10000, inv_freq=None) -> torch.Tensor:
     # adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L101
     if inv_freq is None:
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64) / dim))
@@ -1833,7 +1833,7 @@ class DBRXModelPatcher(DecoderModelPatcher):
         )
 
         # starting from transformers 4.41 issue also observable for calculation sin/cos for rotary_emb
-        patch_rope_sin_cos = is_transformers_version(">=", "4.41.")
+        patch_rope_sin_cos = is_transformers_version(">=", "4.41.0")
 
         dim = self._model.transformer.blocks[0].dim
         base = self._model.transformer.blocks[0].base
