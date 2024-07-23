@@ -632,9 +632,9 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             _patch_crop_past_key_values()
         try:
             result = super().generate(*args, **kwargs)
-        except Exception as error:
+        except Exception as e:
             _unpatch_crop_past_key_values()
-            assert False, f"IPEXModelForCausalLM generation failed due to {error}"
+            raise e
         _unpatch_crop_past_key_values()
         return result
 
