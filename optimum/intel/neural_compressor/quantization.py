@@ -51,7 +51,7 @@ from ..utils.import_utils import (
     is_neural_compressor_version,
     is_torch_version,
 )
-from .configuration import INCConfig
+from .configuration import INCConfig, INCQuantizationMethod, INCWeightQuantizationConfig
 from .modeling_base import (  # noqa
     INCModel,
     INCModelForMaskedLM,
@@ -81,12 +81,6 @@ if is_itrex_available():
 
     from intel_extension_for_transformers.transformers.llm.quantization.utils import convert_to_quantized_model
     from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
-    from intel_extension_for_transformers.transformers.utils.config import (
-        AwqConfig,
-        GPTQConfig,
-        ITREXQuantizationConfigMixin,
-        RtnConfig,
-    )
 
 
 logger = logging.getLogger(__name__)
@@ -153,7 +147,7 @@ class INCQuantizer(OptimumQuantizer):
 
     def quantize(
         self,
-        quantization_config: Union["PostTrainingQuantConfig", "ITREXQuantizationConfigMixin"],
+        quantization_config: Union[PostTrainingQuantConfig, INCWeightQuantizationConfig],
         save_directory: Union[str, Path],
         calibration_dataset: Dataset = None,
         batch_size: int = 8,
@@ -229,20 +223,25 @@ class INCQuantizer(OptimumQuantizer):
                     f"but only version {ITREX_MINIMUM_TORCH_VERSION} or higher is supported."
                 )
 
-            if not isinstance(quantization_config, ITREXQuantizationConfigMixin):
+            if not isinstance(quantization_config, INCWeightQuantizationConfig):
                 raise TypeError(
                     "`quantization_config` should either be an instance of `neural_compressor.config.PostTrainingQuantConfig` or "
-                    f"`intel_extension_for_transformers.transformers.utils.config.ITREXQuantizationConfigMixin` but got: {type(quantization_config)} instead."
+                    f"`INCWeightQuantizationConfig` but got: {type(quantization_config)} instead."
                 )
 
-            if not isinstance(quantization_config, (GPTQConfig, RtnConfig)):
+            if not isinstance(
+                quantization_config.quant_method,
+                (INCQuantizationMethod.RTN, INCQuantizationMethod.GPTQ, INCQuantizationMethod.AutoRound),
+            ):
                 raise ValueError(
-                    f"Weight-only quantization is only support RTN and GPTQ algorithm now! But got {quantization_config}"
+                    f"Weight-only quantization is only support RTN, GPTQ and AutoRound algorithm now! But got {quantization_config.quant_method.value}"
                 )
 
-            if calibration_dataset is None and isinstance(quantization_config, (GPTQConfig, AwqConfig)):
+            if calibration_dataset is None and isinstance(
+                quantization_config.quant_method, (INCQuantizationMethod.GPTQ, INCQuantizationMethod.AutoRound)
+            ):
                 raise ValueError(
-                    "Weight-only quantization needs a calibration dataset for both GPTQ and AWQ methodologies."
+                    "Weight-only quantization needs a calibration dataset for both GPTQ and AutoRound methodologies."
                 )
 
             if calibration_dataset is not None:
@@ -251,7 +250,9 @@ class INCQuantizer(OptimumQuantizer):
                     batch_size=batch_size,
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
-                    use_label=not isinstance(quantization_config, (GPTQConfig)),
+                    use_label=not isinstance(
+                        quantization_config.quant_method, (INCQuantizationMethod.GPTQ, INCQuantizationMethod.AutoRound)
+                    ),
                 )
             quantization_config.calib_dataloader = calibration_dataloader
 
