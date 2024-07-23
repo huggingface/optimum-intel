@@ -13,10 +13,11 @@
 #  limitations under the License.
 
 from typing import Optional, Tuple
+
 from optimum.exporters.onnx.model_configs import LlamaOnnxConfig
+from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator
 from optimum.utils.normalized_config import NormalizedTextConfig
-from optimum.utils import DEFAULT_DUMMY_SHAPES
 
 
 class IPEXDummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):

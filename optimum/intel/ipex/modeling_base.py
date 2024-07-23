@@ -627,18 +627,26 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             raise ValueError(
                 f"Assisted decoding is not supported for patched models if ipex < 2.5, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
-        patch_functions = False
-        # Patch functions for assisted decoding
-        if self._is_ipex_exported and kwargs.get("assistant_model", None):
-            transformers.generation.candidate_generator._crop_past_key_values = _ipex_crop_past_key_values
-            transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
-            patch_functions = True
-        result = super().generate(*args, **kwargs)
-        # Un-patch functions
-        if patch_functions:
-            transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
-            transformers.generation.utils._crop_past_key_values = _crop_past_key_values
+        # Patch functions to support IAKV cache
+        if self._is_ipex_exported:
+            _patch_crop_past_key_values()
+        try:
+            result = super().generate(*args, **kwargs)
+        except Exception as error:
+            _unpatch_crop_past_key_values()
+            assert False, f"IPEXModelForCausalLM generation failed due to {error}"
+        _unpatch_crop_past_key_values()
         return result
+
+
+def _patch_crop_past_key_values():
+    transformers.generation.candidate_generator._crop_past_key_values = _ipex_crop_past_key_values
+    transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
+
+
+def _unpatch_crop_past_key_values():
+    transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
+    transformers.generation.utils._crop_past_key_values = _crop_past_key_values
 
 
 def _ipex_prepare_inputs_for_generation(
