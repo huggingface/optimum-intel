@@ -510,9 +510,10 @@ def llama_gemma_rotary_emb_forward(self, x, position_ids, seq_len=None):
     return cos, sin
 
 
-def create_sinusoidal_positions(num_pos: int, dim: int, base: int = 10000) -> torch.Tensor:
+def create_sinusoidal_positions(num_pos: int, dim: int, base: int = 10000, inv_freq=Non) -> torch.Tensor:
     # adopted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L101
-    inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64) / dim))
+    if inv_freq is None:
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.int64) / dim))
 
     sinusoid_inp = torch.einsum("i , j -> i j", torch.arange(num_pos, dtype=torch.int64).float(), inv_freq).float()
     emb = torch.cat((sinusoid_inp, sinusoid_inp), dim=-1)
@@ -525,9 +526,11 @@ def register_sin_cos_buffer(model):
     # cos/sin for rotary position embeddings also having issues with bf16 and efficiency due to calculation on each step
     # use precomputed
 
-    base = model.model.layers[0].self_attn.rotary_emb.base
-    dim = model.model.layers[0].self_attn.rotary_emb.dim
-    embed_positions = create_sinusoidal_positions(max_positions, dim, base)
+    rotary_emb  = model.model.layers[0].self_attn.rotary_emb
+    base = rotary_emb.base
+    dim = rotary_emb.dim
+    inv_freq = getattr(rotary_emb, "inv_freq", None)
+    embed_positions = create_sinusoidal_positions(max_positions, dim, base, inv_freq)
 
     for layer in model.model.layers:
         layer.self_attn.rotary_emb.register_buffer("embed_positions", embed_positions)
