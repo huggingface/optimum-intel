@@ -649,7 +649,6 @@ class UNetControlNetOpenVINOConfig(UNetOnnxConfig):
 
         import torch
 
-        dummy_inputs["mid_block_additional_residual"] = torch.randn(2, 1280, 8, 8)
         dummy_inputs["down_block_additional_residual_1"] = torch.randn(2, 320, 64, 64)
         dummy_inputs["down_block_additional_residual_3"] = torch.randn(2, 320, 64, 64)
         dummy_inputs["down_block_additional_residual_5"] = torch.randn(2, 320, 64, 64)
@@ -662,7 +661,7 @@ class UNetControlNetOpenVINOConfig(UNetOnnxConfig):
         dummy_inputs["down_block_additional_residual_19"] = torch.randn(2, 1280, 8, 8)
         dummy_inputs["down_block_additional_residual_21"] = torch.randn(2, 1280, 8, 8)
         dummy_inputs["down_block_additional_residual"] = torch.randn(2, 1280, 8, 8)
-
+        dummy_inputs["mid_block_additional_residual"] = torch.randn(2, 1280, 8, 8)
         dummy_inputs["encoder_hidden_states"] = dummy_inputs["encoder_hidden_states"][0]
 
         if getattr(self._normalized_config, "addition_embed_type", None) == "text_time":
