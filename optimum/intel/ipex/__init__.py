@@ -22,5 +22,3 @@ from optimum.intel.ipex.modeling_base import (
     IPEXModelForSequenceClassification,
     IPEXModelForTokenClassification,
 )
-
-from .inference import inference_mode

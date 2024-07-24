@@ -15,13 +15,6 @@
 from .import_utils import DummyObject, requires_backends
 
 
-class inference_mode(metaclass=DummyObject):
-    _backends = ["ipex"]
-
-    def __init__(self, *args, **kwargs):
-        requires_backends(self, ["ipex"])
-
-
 class IPEXModel(metaclass=DummyObject):
     _backends = ["ipex"]
 
