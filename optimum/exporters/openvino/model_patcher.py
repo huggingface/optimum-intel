@@ -526,10 +526,12 @@ def register_sin_cos_buffer(model):
     # cos/sin for rotary position embeddings also having issues with bf16 and efficiency due to calculation on each step
     # use precomputed
 
-    rotary_emb  = model.model.layers[0].self_attn.rotary_emb
-    base = rotary_emb.base
-    dim = rotary_emb.dim
+    rotary_emb = model.model.layers[0].self_attn.rotary_emb
+    dim, base = None, None
     inv_freq = getattr(rotary_emb, "inv_freq", None)
+    if inv_freq is None:
+        base = rotary_emb.base
+        dim = rotary_emb.dim
     embed_positions = create_sinusoidal_positions(max_positions, dim, base, inv_freq)
 
     for layer in model.model.layers:
