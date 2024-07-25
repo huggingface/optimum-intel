@@ -1196,11 +1196,13 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
 
     auto_model_class = StableDiffusionControlNetPipeline
     export_feature = "stable-diffusion-controlnet"
+    config_name = "model_index.json"
 
     def __init__(
         self,
         unet: openvino.runtime.Model,
         controlnet: openvino.runtime.Model,
+        config: Dict[str, Any],
         scheduler: Union[None, "DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"],
         text_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder_2: Optional[openvino.runtime.Model] = None,
@@ -1219,6 +1221,7 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
     ):
         # super().__init__()
         self._device = device.upper()
+        self._internal_dict = config
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.is_dynamic = dynamic_shapes
         self.preprocessors = []
@@ -1250,6 +1253,24 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
         self.tokenizer = tokenizer
         self._openvino_config = None
+
+        sub_models = {
+            DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER: self.text_encoder,
+            DIFFUSION_MODEL_UNET_SUBFOLDER: self.unet,
+            DIFFUSION_MODEL_CONTROLNET_SUBFOLDER: self.controlnet,
+            DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER: self.vae_decoder,
+            DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER: self.vae_encoder,
+            DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER: self.text_encoder_2,
+        }
+        for name in sub_models.keys():
+            self._internal_dict[name] = (
+                ("optimum", sub_models[name].__class__.__name__) if sub_models[name] is not None else (None, None)
+            )
+
+        self._internal_dict.pop("vae", None)
+
+        if compile:
+            self.compile()
 
     def export_controlnet(
         model_id: str,
@@ -1328,6 +1349,9 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
 
         self._save_openvino_config(save_directory)
 
+    def _save_config(self, save_directory):
+        self.save_config(save_directory)
+
     @classmethod
     def _from_pretrained(
         cls,
@@ -1368,7 +1392,7 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
         vae_encoder_file_name = vae_encoder_file_name or default_file_name
         model_id = str(model_id)
         patterns = set(config.keys())
-        sub_models_names = patterns.intersection({"feature_extractor", "tokenizer", "tokenizer_2", "scheduler"})
+        sub_models_names = patterns.intersection({"tokenizer", "tokenizer_2", "scheduler"})
 
         if not os.path.isdir(model_id):
             patterns.update({"vae_encoder", "vae_decoder"})
