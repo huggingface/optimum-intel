@@ -24,6 +24,7 @@ from optimum.exporters.onnx.model_configs import (
     FalconOnnxConfig,
     GemmaOnnxConfig,
     LlamaOnnxConfig,
+    MistralOnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
     UNetOnnxConfig,
@@ -53,6 +54,7 @@ from .model_patcher import (
     InternLMModelPatcher,
     JaisModelPatcher,
     LlamaModelPatcher,
+    MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
     PersimmonModelPatcher,
@@ -839,3 +841,21 @@ class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
             )
 
         return ArcticModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "mistral",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class MistralOpenVINOConfig(MistralOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return MistralModelPatcher(self, model, model_kwargs=model_kwargs)
