@@ -72,8 +72,6 @@ Below are examples of how to use OpenVINO and its [NNCF](https://docs.openvino.a
 
 #### Export:
 
-To export a [model](https://huggingface.co/docs/optimum/main/en/intel/openvino/models) hosted on the [Hub](https://huggingface.co/models) you can use our [space](https://huggingface.co/spaces/echarlaix/openvino-export). After conversion, a repository will be pushed under your namespace, this repository can be either public or private.
-
 It is also possible to export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
 
 ```plain
