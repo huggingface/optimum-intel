@@ -1267,6 +1267,9 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
                 ("optimum", sub_models[name].__class__.__name__) if sub_models[name] is not None else (None, None)
             )
 
+        if self.is_dynamic:
+            self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
+
         self._internal_dict.pop("vae", None)
 
         if compile:
@@ -1553,6 +1556,194 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
             **kwargs,
         )
 
+    def _reshape_unet_controlnet(
+        self,
+        model: openvino.runtime.Model,
+        batch_size: int = -1,
+        height: int = -1,
+        width: int = -1,
+        num_images_per_prompt: int = -1,
+        tokenizer_max_length: int = -1,
+    ):
+        if batch_size == -1 or num_images_per_prompt == -1:
+            batch_size = -1
+        else:
+            batch_size *= num_images_per_prompt
+            # The factor of 2 comes from the guidance scale > 1
+            if "timestep_cond" not in {inputs.get_any_name() for inputs in model.inputs}:
+                batch_size *= 2
+
+        height = height // self.vae_scale_factor if height > 0 else height
+        width = width // self.vae_scale_factor if width > 0 else width
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            if inputs.get_any_name() == "timestep":
+                shapes[inputs][0] = 1
+            elif inputs.get_any_name() == "sample":
+                in_channels = self.unet.config.get("in_channels", None)
+                if in_channels is None:
+                    in_channels = shapes[inputs][1]
+                    if in_channels.is_dynamic:
+                        logger.warning(
+                            "Could not identify `in_channels` from the unet configuration, to statically reshape the unet please provide a configuration."
+                        )
+                        self.is_dynamic = True
+
+                shapes[inputs] = [batch_size, in_channels, height, width]
+            elif inputs.get_any_name() == "text_embeds":
+                shapes[inputs] = [batch_size, self.text_encoder_2.config["projection_dim"]]
+            elif inputs.get_any_name() == "time_ids":
+                shapes[inputs] = [batch_size, inputs.get_partial_shape()[1]]
+            elif inputs.get_any_name() == "timestep_cond":
+                shapes[inputs] = [batch_size, self.unet.config["time_cond_proj_dim"]]
+            elif inputs.get_any_name() == "encoder_hidden_states":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][1] = tokenizer_max_length
+            elif inputs.get_any_name() == "down_block_additional_residual_1":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height 
+                shapes[inputs][3] = width    
+            elif inputs.get_any_name() == "down_block_additional_residual_3":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height  
+                shapes[inputs][3] = width      
+            elif inputs.get_any_name() == "down_block_additional_residual_5":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height   
+                shapes[inputs][3] = width     
+            elif inputs.get_any_name() == "down_block_additional_residual_7":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height // 2 
+                shapes[inputs][3] = width // 2  
+            elif inputs.get_any_name() == "down_block_additional_residual_9":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height // 2 
+                shapes[inputs][3] = width // 2      
+            elif inputs.get_any_name() == "down_block_additional_residual_11":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height // 2 
+                shapes[inputs][3] = width // 2    
+            elif inputs.get_any_name() == "down_block_additional_residual_13":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height // 4 
+                shapes[inputs][3] = width // 4    
+            elif inputs.get_any_name() == "down_block_additional_residual_15":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height // 4 
+                shapes[inputs][3] = width // 4    
+            elif inputs.get_any_name() == "down_block_additional_residual_17":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height // 4 
+                shapes[inputs][3] = width // 4    
+            elif inputs.get_any_name() == "down_block_additional_residual_19":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height // 8 
+                shapes[inputs][3] = width // 8   
+            elif inputs.get_any_name() == "down_block_additional_residual_21":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height // 8 
+                shapes[inputs][3] = width // 8   
+            elif inputs.get_any_name() == "down_block_additional_residual":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height // 8 
+                shapes[inputs][3] = width // 8   
+            elif inputs.get_any_name() == "mid_block_additional_residual":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height // 8 
+                shapes[inputs][3] = width // 8   
+
+        model.reshape(shapes)
+        return model
+    
+    def _reshape_controlnet(
+        self,
+        model: openvino.runtime.Model,
+        batch_size: int = -1,
+        height: int = -1,
+        width: int = -1,
+        num_images_per_prompt: int = -1,
+        tokenizer_max_length: int = -1,
+    ):
+        if batch_size == -1 or num_images_per_prompt == -1:
+            batch_size = -1
+        else:
+            batch_size *= num_images_per_prompt
+            # The factor of 2 comes from the guidance scale > 1
+            if "timestep_cond" not in {inputs.get_any_name() for inputs in model.inputs}:
+                batch_size *= 2
+
+        height_ = height // self.vae_scale_factor if height > 0 else height
+        width_ = width // self.vae_scale_factor if width > 0 else width
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            if inputs.get_any_name() == "timestep":
+                shapes[inputs] = shapes[inputs]
+            elif inputs.get_any_name() == "sample":
+                in_channels = self.unet.config.get("in_channels", None)
+                if in_channels is None:
+                    in_channels = shapes[inputs][1]
+                    if in_channels.is_dynamic:
+                        logger.warning(
+                            "Could not identify `in_channels` from the unet configuration, to statically reshape the unet please provide a configuration."
+                        )
+                        self.is_dynamic = True
+
+                shapes[inputs] = [batch_size, in_channels, height_, width_]
+            elif inputs.get_any_name() == "controlnet_cond":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][2] = height 
+                shapes[inputs][3] = width  
+            elif inputs.get_any_name() == "time_ids":
+                shapes[inputs] = [batch_size, inputs.get_partial_shape()[1]]
+            elif inputs.get_any_name() == "timestep_cond":
+                shapes[inputs] = [batch_size, self.unet.config["time_cond_proj_dim"]]
+            elif inputs.get_any_name() == "encoder_hidden_states":
+                shapes[inputs][0] = batch_size
+                shapes[inputs][1] = tokenizer_max_length
+        model.reshape(shapes)
+        return model
+
+    def reshape(
+        self,
+        batch_size: int,
+        height: int,
+        width: int,
+        num_images_per_prompt: int = -1,
+    ):
+        self.is_dynamic = -1 in {batch_size, height, width, num_images_per_prompt}
+        self.vae_decoder.model = self._reshape_vae_decoder(self.vae_decoder.model, height, width)
+        if self.tokenizer is None and self.tokenizer_2 is None:
+            tokenizer_max_len = -1
+        else:
+            tokenizer_max_len = (
+                self.tokenizer.model_max_length if self.tokenizer is not None else self.tokenizer_2.model_max_length
+            )
+        self.unet.model = self._reshape_unet_controlnet(
+            self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
+        )
+
+        self.controlnet.model = self._reshape_controlnet(
+            self.controlnet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
+        )
+
+        if self.text_encoder is not None:
+            self.text_encoder.model = self._reshape_text_encoder(
+                self.text_encoder.model, batch_size, self.tokenizer.model_max_length
+            )
+
+        if self.text_encoder_2 is not None:
+            self.text_encoder_2.model = self._reshape_text_encoder(
+                self.text_encoder_2.model, batch_size, self.tokenizer_2.model_max_length
+            )
+
+        if self.vae_encoder is not None:
+            self.vae_encoder.model = self._reshape_vae_encoder(self.vae_encoder.model, batch_size, height, width)
+
+        self.clear_requests()
+        return self
+    
 
 class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
     def _encode_prompt(
@@ -1715,10 +1906,10 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
         pad (Tuple[int]): pading size for each dimension for restoring image size in postprocessing
         """
         src_width, src_height = image.size
-        dst_width, dst_height = self.scale_fit_to_window(512, 512, src_width, src_height)
+        dst_width, dst_height = self.scale_fit_to_window(self.width, self.height, src_width, src_height)
         image = np.array(image.resize((dst_width, dst_height), resample=PIL.Image.Resampling.LANCZOS))[None, :]
-        pad_width = 512 - dst_width
-        pad_height = 512 - dst_height
+        pad_width = self.width - dst_width
+        pad_height = self.height - dst_height
         pad = ((0, 0), (0, pad_height), (0, pad_width), (0, 0))
         image = np.pad(image, pad, mode="constant")
         image = image.astype(np.float32) / 255.0
@@ -1845,7 +2036,7 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
                 result = self.controlnet(
                     sample=latent_model_input, timestep=t, encoder_hidden_states=text_embeddings, controlnet_cond=image
                 )
-
+                
                 down_and_mid_block_samples = [sample * controlnet_conditioning_scale for sample in result]
                 down_and_mid_block_samples = tuple(down_and_mid_block_samples)
                 # predict the noise residual
@@ -1903,7 +2094,7 @@ class OVStableDiffusionControlNetPipeline(
         _height = self.height
         _width = self.width
         expected_batch_size = self._batch_size
-
+        
         if _height != -1 and height != _height:
             logger.warning(
                 f"`height` was set to {height} but the static model will output images of height {_height}."
