@@ -32,6 +32,13 @@ if is_nncf_available():
 
 logger = logging.getLogger(__name__)
 
+
+class OVQuantizationMethod(str, Enum):
+    DEFAULT = "default"
+    HYBRID = "hybrid"
+    AWQ = "awq"
+
+
 _DEFAULT_4BIT_CONFIGS = {
     "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
@@ -44,7 +51,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 128,
         "ratio": 0.8,
         "dataset": "wikitext2",
-        "awq": True,
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "meta-llama/Llama-2-7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
     "meta-llama/Llama-2-7b-chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
@@ -55,7 +62,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 64,
         "ratio": 0.8,
         "dataset": "wikitext2",
-        "awq": True,
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "stabilityai/stablelm-zephyr-3b": {
         "bits": 4,
@@ -63,7 +70,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 128,
         "ratio": 1.0,
         "dataset": "wikitext2",
-        "awq": True,
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "stabilityai/stable-code-3b": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
@@ -78,7 +85,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 64,
         "all_layers": True,
         "dataset": "wikitext2",
-        "awq": True,
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "bigscience/bloomz-560m": {
         "bits": 4,
@@ -86,7 +93,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 64,
         "ratio": 0.8,
         "dataset": "wikitext2",
-        "awq": True,
+        "quant_method": OVQuantizationMethod.AWQ,
     },
     "mistralai/Mixtral-8x7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "facebook/opt-2.7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.7},
@@ -100,8 +107,11 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 128,
         "ratio": 0.8,
         "dataset": "wikitext2",
-        "awq": True,
+        "quant_method": OVQuantizationMethod.AWQ,
     },
+    "lmsys/longchat-7b-16k": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
+    "bigcode/starcoder2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
+    "microsoft/phi-2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
 }
 
 _DEFAULT_4BIT_CONFIG = {
