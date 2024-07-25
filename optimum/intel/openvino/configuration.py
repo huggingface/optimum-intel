@@ -13,13 +13,14 @@
 #  limitations under the License.
 import copy
 import inspect
+import json
 import logging
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import torch
-from transformers import PretrainedConfig
 from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
@@ -134,6 +135,32 @@ _DEFAULT_4BIT_CONFIG = {
     "group_size": 128,
     "all_layers": None,
 }
+
+
+def _check_default_4bit_configs(model_id_or_path: str):
+    if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
+        return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
+
+    config_path = Path(model_id_or_path) / "config.json"
+    if config_path.exists():
+        with config_path.open("r") as config_f:
+            config = json.load(config_f)
+            original_model_name = config.get("_name_or_path", "")
+        if original_model_name in _DEFAULT_4BIT_CONFIGS:
+            return _DEFAULT_4BIT_CONFIGS[original_model_name]
+
+    return None
+
+
+def get_default_int4_config(model_id_or_path: str):
+    """
+    Args:
+        model_id_or_path (`str`):
+            id of the model or path to it.
+    Returns:
+        Default int4 config for the given model or generic default int4 config.
+    """
+    return _check_default_4bit_configs(model_id_or_path) or _DEFAULT_4BIT_CONFIG
 
 
 @dataclass
@@ -376,10 +403,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
 
         if self.bits != 8:
             raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
-
-
-def _check_default_4bit_configs(config: PretrainedConfig):
-    return _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
 
 
 class OVConfig(BaseConfig):
