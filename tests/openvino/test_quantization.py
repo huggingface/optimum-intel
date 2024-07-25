@@ -236,7 +236,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            16,
+            18 if is_transformers_version(">=", "4.39") else 16,
         ),
         (
             OVModelForCausalLM,
@@ -250,7 +250,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            16,
+            18 if is_transformers_version(">=", "4.39") else 16,
         ),
     )
 
@@ -525,7 +525,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                         MODEL_NAMES["llama"], export=True, compile=False, use_cache=False
                     )
                     save_model_patch.assert_called_with(
-                        unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(quantization_config={"bits": 8})
+                        unittest.mock.ANY,
+                        unittest.mock.ANY,
+                        ov_config=OVConfig(quantization_config={"bits": 8}),
+                        library_name="transformers",
                     )
 
     def test_ovmodel_load_large_model_with_uncompressed_weights(self):
@@ -540,7 +543,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                         MODEL_NAMES["llama"], export=True, load_in_8bit=False, compile=False, use_cache=False
                     )
                     save_model_patch.assert_called_with(
-                        unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(dtype="fp32")
+                        unittest.mock.ANY,
+                        unittest.mock.ANY,
+                        ov_config=OVConfig(dtype="fp32"),
+                        library_name="transformers",
                     )
 
     def test_ovmodel_load_large_model_with_additional_quantization_config(self):
@@ -560,7 +566,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                         )
                         # quantization will be performed later, using load_model
                         save_model_patch.assert_called_with(
-                            unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(dtype="fp32")
+                            unittest.mock.ANY,
+                            unittest.mock.ANY,
+                            ov_config=OVConfig(dtype="fp32"),
+                            library_name="transformers",
                         )
                         compression_params = {
                             "mode": nncf.CompressWeightsMode.INT4_SYM,
