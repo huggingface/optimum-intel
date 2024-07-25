@@ -13,7 +13,7 @@
 #  limitations under the License.
 
 from ..utils.import_utils import is_diffusers_available
-from .configuration import INCConfig
+from .configuration import INCConfig, INCQuantizationMethod, INCWeightQuantizationConfig
 from .modeling_base import (
     INCModel,
     INCModelForCausalLM,

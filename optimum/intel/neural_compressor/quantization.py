@@ -69,6 +69,7 @@ from .utils import (
     NEURAL_COMPRESSOR_MINIMUM_VERSION,
     NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION,
     INCDataLoader,
+    convert_to_weight_only_quantized_model,
 )
 
 
@@ -79,7 +80,6 @@ if is_itrex_available():
             f"but only version {ITREX_MINIMUM_VERSION} or higher is supported."
         )
 
-    from intel_extension_for_transformers.transformers.llm.quantization.utils import convert_to_quantized_model
     from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
 
 
@@ -229,10 +229,11 @@ class INCQuantizer(OptimumQuantizer):
                     f"`INCWeightQuantizationConfig` but got: {type(quantization_config)} instead."
                 )
 
-            if not isinstance(
-                quantization_config.quant_method,
-                (INCQuantizationMethod.RTN, INCQuantizationMethod.GPTQ, INCQuantizationMethod.AutoRound),
-            ):
+            if quantization_config.quant_method not in [
+                INCQuantizationMethod.RTN,
+                INCQuantizationMethod.GPTQ,
+                INCQuantizationMethod.AutoRound,
+            ]:
                 raise ValueError(
                     f"Weight-only quantization is only support RTN, GPTQ and AutoRound algorithm now! But got {quantization_config.quant_method.value}"
                 )
@@ -250,9 +251,8 @@ class INCQuantizer(OptimumQuantizer):
                     batch_size=batch_size,
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
-                    use_label=not isinstance(
-                        quantization_config.quant_method, (INCQuantizationMethod.GPTQ, INCQuantizationMethod.AutoRound)
-                    ),
+                    use_label=quantization_config.quant_method
+                    not in [INCQuantizationMethod.GPTQ, INCQuantizationMethod.AutoRound],
                 )
             quantization_config.calib_dataloader = calibration_dataloader
 
@@ -281,7 +281,7 @@ class INCQuantizer(OptimumQuantizer):
                 quantization_config.device = "xpu"
                 quantization_config.post_init_xpu()
 
-            self._quantized_model = convert_to_quantized_model(
+            self._quantized_model = convert_to_weight_only_quantized_model(
                 self._original_model, quantization_config, device=quantization_config.device
             )
 
