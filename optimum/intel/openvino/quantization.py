@@ -193,11 +193,6 @@ class OVQuantizer(OptimumQuantizer):
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
 
-    @property
-    def input_names(self):
-        logger.warning("The`input_names` attribute is deprecated and will be removed in v1.18.0")
-        return None
-
     @classmethod
     def from_pretrained(cls, model: PreTrainedModel, **kwargs):
         # TODO : Create model
@@ -212,7 +207,6 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
-        weights_only: bool = None,
         **kwargs,
     ):
         """
@@ -235,10 +229,6 @@ class OVQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether to remove the columns unused by the model forward method.
-            weights_only (`bool`, *optional*):
-                Being deprecated.
-                Compress weights to integer precision (8-bit by default) while keeping activations
-                floating-point. Fits best for LLM footprint reduction and performance acceleration.
 
         Examples:
         ```python
@@ -263,32 +253,20 @@ class OVQuantizer(OptimumQuantizer):
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
         """
-        # TODO: deprecate weights_only argument
-        if weights_only is not None:
-            logger.warning(
-                "`weights_only` argument is deprecated and will be removed in v1.18.0. In the future please provide `ov_config.quantization_config` "
-                "as an instance of `OVWeightQuantizationConfig` for weight-only compression or as an instance of `OVQuantizationConfig` for full model quantization."
-            )
-
         if ov_config is None:
             ov_config = OVConfig()
         if not isinstance(ov_config, OVConfig):
             raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
         quantization_config = ov_config.quantization_config
         if quantization_config is None:
-            if (weights_only is None or weights_only is True) and calibration_dataset is None:
-                if weights_only is None:
-                    logger.info(
-                        "`quantization_config` was not provided, 8-bit asymmetric weight quantization will be applied."
-                    )
-                ov_config.quantization_config = OVWeightQuantizationConfig(bits=8)
-            else:
-                logger.warning(
-                    "`quantization_config` was not provided, but calibration dataset was provided, assuming full "
-                    "model quantization is intended. In the future, please provide `quantization_config` as an "
-                    "instance of OVQuantizationConfig."
-                )
-                ov_config.quantization_config = OVQuantizationConfig()
+            logger.warning(
+                "`quantization_config` was not provided. In the future, please provide `quantization_config`"
+            )
+            ov_config.quantization_config = (
+                OVWeightQuantizationConfig(bits=8)
+                if calibration_dataset is None
+                else OVWeightQuantizationConfig(bits=8)
+            )
 
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
