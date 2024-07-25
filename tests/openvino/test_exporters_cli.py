@@ -171,6 +171,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             if number_of_tokenizers == 1:
                 self.assertTrue("Detokenizer is not supported, convert tokenizer only." in output, output)
 
+            if task.startswith("text-generation"):
+                self.assertTrue("Set padding side to left" in output, output)
+
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:

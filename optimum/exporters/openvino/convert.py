@@ -706,6 +706,7 @@ def export_tokenizer(
     tokenizer,
     output: Union[str, Path],
     suffix: Optional[str] = "",
+    task: Optional[str] = None,
 ):
     # avoid circular imports
     from optimum.intel.openvino import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME
@@ -721,6 +722,11 @@ def export_tokenizer(
 
     if output.exists():
         tokenizer = maybe_convert_tokenizer_to_fast(tokenizer, output)
+
+    if task is not None and task.startswith("text-generation"):
+        logger.info(f"Set padding side to left for `{task}` task.")
+        tokenizer.padding_side = "left"
+        tokenizer.truncation_side = "left"
 
     try:
         converted = convert_tokenizer(tokenizer, with_detokenizer=True)
