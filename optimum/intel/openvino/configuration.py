@@ -32,17 +32,11 @@ if is_nncf_available():
 
 logger = logging.getLogger(__name__)
 
-
-class OVQuantizationMethod(str, Enum):
-    DEFAULT = "default"
-    HYBRID = "hybrid"
-    AWQ = "awq"
-
-
 _DEFAULT_4BIT_CONFIGS = {
-    "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 128, "scale_estimation": True},
+    "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
     "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
+    "bigscience/bloomz-7b1": {"bits": 4, "sym": False, "group_size": 32, "ratio": 0.6},
     "togethercomputer/RedPajama-INCITE-7B-Instruct": {"bits": 4, "sym": False, "group_size": 128},
     "HuggingFaceH4/zephyr-7b-beta": {
         "bits": 4,
@@ -50,7 +44,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 128,
         "ratio": 0.8,
         "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
+        "awq": True,
     },
     "meta-llama/Llama-2-7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
     "meta-llama/Llama-2-7b-chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
@@ -61,7 +55,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 64,
         "ratio": 0.8,
         "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
+        "awq": True,
     },
     "stabilityai/stablelm-zephyr-3b": {
         "bits": 4,
@@ -69,13 +63,13 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 128,
         "ratio": 1.0,
         "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
+        "awq": True,
     },
     "stabilityai/stable-code-3b": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
     "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
-    "openlm-research/open_llama_3b": {"bits": 4, "sym": False, "group_size": 64, "all_layers": True},
+    "openlm-research/open_llama_3b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
     "openlm-research/open_llama_3b_v2": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
     "tiiuae/falcon-7b-instruct": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
     "psmathur/orca_mini_3b": {
@@ -84,7 +78,7 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 64,
         "all_layers": True,
         "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
+        "awq": True,
     },
     "bigscience/bloomz-560m": {
         "bits": 4,
@@ -92,16 +86,11 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 64,
         "ratio": 0.8,
         "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
+        "awq": True,
     },
     "mistralai/Mixtral-8x7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "facebook/opt-2.7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.7},
-    "togethercomputer/RedPajama-INCITE-Chat-3B-v1": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 128,
-        "scale_estimation": True,
-    },
+    "togethercomputer/RedPajama-INCITE-Chat-3B-v1": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "lmsys/vicuna-7b-v1.5": {"bits": 4, "sym": False, "group_size": 128, "ratio": 1.0},
     "stabilityai/stablelm-tuned-alpha-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "mistralai/Mistral-7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.9},
@@ -111,20 +100,8 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 128,
         "ratio": 0.8,
         "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
+        "awq": True,
     },
-    "openai-community/gpt2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.5, "scale_estimation": True},
-    "lmsys/longchat-7b-16k": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
-    "bigcode/starcoder2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
-    "TinyLlama/TinyLlama-1.1B-Chat-v1.0": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
-    "stabilityai/stablelm-tuned-alpha-7b": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 128,
-        "ratio": 0.6,
-        "scale_estimation": True,
-    },
-    "microsoft/phi-2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
 }
 
 _DEFAULT_4BIT_CONFIG = {
@@ -134,6 +111,12 @@ _DEFAULT_4BIT_CONFIG = {
     "group_size": 128,
     "all_layers": None,
 }
+
+
+class OVQuantizationMethod(str, Enum):
+    DEFAULT = "default"
+    HYBRID = "hybrid"
+    AWQ = "awq"
 
 
 @dataclass
