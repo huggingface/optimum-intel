@@ -354,11 +354,6 @@ class _IPEXLlamaMLP(nn.Module):
         del self.__dict__["_modules"]["up_proj"]
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor = None, **kwargs):
-        """
-        Args:
-            hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
-            residual (`torch.Tensor`): residual tensor to the layer of shape (batch, seq_len, embed_dim)`
-        """
         if hasattr(self, "linear_silu_mul"):
             mlp_gate = self.linear_silu_mul(hidden_states)
             if hasattr(self, "mlp_linear_add"):
@@ -392,12 +387,6 @@ class _IPEXFalconMLP(nn.Module):
         residual: torch.Tensor = None,
         **kwargs,
     ):
-        """
-        Args:
-            hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
-            attention_output (`torch.Tensor`): attention output tensor to the layer of shape (batch, seq_len, embed_dim)`
-            residual (`torch.Tensor`): residual tensor to the layer of shape (batch, seq_len, embed_dim)`
-        """
         mlp_hidden_states = self.linear_gelu(hidden_states)
         if hasattr(self, "linear_add_add"):
             output = self.linear_add_add(mlp_hidden_states, attention_output, residual)
