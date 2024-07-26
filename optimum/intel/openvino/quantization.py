@@ -262,11 +262,12 @@ class OVQuantizer(OptimumQuantizer):
             logger.warning(
                 "`quantization_config` was not provided. In the future, please provide `quantization_config`"
             )
-            ov_config.quantization_config = (
-                OVWeightQuantizationConfig(bits=8)
-                if calibration_dataset is None
-                else OVWeightQuantizationConfig(bits=8)
-            )
+            if calibration_dataset is None:
+                logger.warning("Calibration dataset was not provided, assuming weight only quantization.")
+                ov_config.quantization_config = OVWeightQuantizationConfig(bits=8)
+            else:
+                logger.warning("Calibration dataset was provided, assuming static quantization.")
+                ov_config.quantization_config = OVQuantizationConfig()
 
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
