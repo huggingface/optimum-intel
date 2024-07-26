@@ -916,7 +916,6 @@ class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiff
 
 class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
     auto_model_class = StableDiffusionXLPipeline
-    export_feature = "stable-diffusion-xl"
 
     def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
         super().__init__(*args, **kwargs)
