@@ -2,10 +2,16 @@ name: Build and Test Docker Image
 
 on:
   push:
-    paths:
-      - 'Dockerfile.intel'
     branches:
       - main
+    paths:
+      - 'Dockerfile.intel'
+ 
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Dockerfile.intel'
 
 jobs:
   build_and_run:
