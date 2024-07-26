@@ -60,8 +60,8 @@ QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
     "neural-compressor": ["neural-compressor>=2.2.0", "accelerate"],
-    "openvino": ["openvino==2024.2.0", "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v2120", "openvino-tokenizers[transformers]"],
-    "nncf": ["nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v2120"],
+    "openvino": ["openvino==2024.2.0", "nncf==2.11.0", "openvino-tokenizers[transformers]"],
+    "nncf": ["nncf==2.11.0"],
     "ipex": ["intel-extension-for-pytorch", "transformers>=4.39.0,<=4.42.3"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
