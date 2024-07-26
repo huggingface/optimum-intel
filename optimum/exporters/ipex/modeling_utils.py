@@ -297,16 +297,12 @@ class _IPEXLlamaAttention(_IPEXAttention):
 
 
 class _IPEXFalconAttention(_IPEXAttention):
-
-    # last:
-    # output_tensor = self.dense(attn_output)
-
     def qkv_gemm(self, hidden_states):
         return self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
 
     def rope(self, fused_qkv, seq_len, use_cache, past_len):
         if use_cache:
-            query, key, value = self._IPEXROPE(
+            query, key, value = self.ipex_rope(
                 fused_qkv,
                 torch.tensor(past_len),
                 self.num_heads,
@@ -383,24 +379,24 @@ class _IPEXFalconMLP(nn.Module):
         _setattr_from_module(self, module)
         self.config = config
         # LinearAllreduce and LinearLayer cannot use fused op LinearAdd
-        self.linear_gelu = LinearGelu(module.mlp.dense_h_to_4h)
-        del self.__dict__["_modules"]["mlp"].dense_h_to_4h
-        if module.o_proj.__class__.__name__ not in ["LinearAllreduce"]:
-            self.linear_add_add = LinearAddAdd(self.mlp.dense_4h_to_h)
-            del self.__dict__["_modules"]["mlp"].dense_4h_to_h
+        self.linear_gelu = LinearGelu(module.dense_h_to_4h)
+        del self.__dict__["_modules"]["dense_h_to_4h"]
+        if module.dense_4h_to_h.__class__.__name__ not in ["LinearAllreduce"]:
+            self.linear_add_add = LinearAddAdd(module.dense_4h_to_h)
+            del self.__dict__["_modules"]["dense_4h_to_h"]
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        residual: torch.Tensor = None,
         attention_output: torch.Tensor = None,
+        residual: torch.Tensor = None,
         **kwargs,
     ):
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
+            attention_output (`torch.Tensor`): attention output tensor to the layer of shape (batch, seq_len, embed_dim)`
             residual (`torch.Tensor`): residual tensor to the layer of shape (batch, seq_len, embed_dim)`
-            attention_output (`torch.Tensor`): residual tensor to the layer of shape (batch, seq_len, embed_dim)`
         """
         mlp_hidden_states = self.linear_gelu(hidden_states)
         if hasattr(self, "linear_add_add"):
@@ -472,7 +468,7 @@ class _IPEXFalconDecoderLayer(nn.Module):
     def __init__(self, module, config):
         super().__init__()
         _setattr_from_module(self, module)
-        self.self_attn = _IPEXFalconAttention(module.self_attn, config)
+        self.self_attention = _IPEXFalconAttention(module.self_attention, config)
         self.mlp = _IPEXFalconMLP(module.mlp, config)
 
     def forward(
@@ -480,7 +476,7 @@ class _IPEXFalconDecoderLayer(nn.Module):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        layer_past: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         **kwargs,
@@ -490,18 +486,18 @@ class _IPEXFalconDecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        self_attn_output, self_attn_weights, present_key_value = self.self_attention(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            past_key_value=past_key_value,
+            past_key_value=layer_past,
             output_attentions=output_attentions,
             use_cache=use_cache,
             cache_position=None,
             **kwargs,
         )
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.mlp(hidden_states, residual)
+        self_attn_output = self.self_attention.dense(self_attn_output)
+        hidden_states = self.mlp(hidden_states, self_attn_output, residual)
 
         outputs = (hidden_states,)
 

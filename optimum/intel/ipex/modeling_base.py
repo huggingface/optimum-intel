@@ -64,7 +64,7 @@ from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, recursive_to_device
 logger = logging.getLogger(__name__)
 
 
-_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit")
+_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
@@ -479,7 +479,13 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             else:
                 self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
 
-        if is_transformers_version(">=", "4.38.0") and model_type in {"llama", "phi", "persimmon", "mistral"}:
+        if is_transformers_version(">=", "4.38.0") and model_type in {
+            "llama",
+            "phi",
+            "persimmon",
+            "mistral",
+            "falcon",
+        }:
             self.prepare_inputs_for_generation = _ipex_prepare_inputs_for_generation
         else:
             self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)

@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 from transformers.models.bert.modeling_bert import BertIntermediate
+from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconForCausalLM
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaForCausalLM,
@@ -22,10 +23,12 @@ from transformers.models.llama.modeling_llama import (
 from transformers.models.vit.modeling_vit import ViTIntermediate
 
 from optimum.intel.utils.import_utils import is_ipex_version, is_transformers_version
+from optimum.intel.utils.modeling_utils import replace_customized_linear_with_linear
 
 from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _ipex_rms_layer_norm_forward,
+    _IPEXFalconDecoderLayer,
     _IPEXIntermediate,
     _IPEXLlamaDecoderLayer,
     _llama_model_forward,
@@ -73,6 +76,13 @@ def _patch_llama_model(model):
     return model
 
 
+def _patch_falcon_model(model):
+    replace_customized_linear_with_linear(model)
+    model.transformer._use_sdpa = False
+    convert_class(model, FalconDecoderLayer, _IPEXFalconDecoderLayer, model.config)
+    return model
+
+
 def _patch_bert_model(model):
     convert_class(model, BertIntermediate, _IPEXIntermediate)
     return model
@@ -94,6 +104,8 @@ def _patch_model(model):
         )
     if isinstance(model, LlamaForCausalLM):
         model = _patch_llama_model(model)
+    elif isinstance(model, FalconForCausalLM):
+        model = _patch_falcon_model(model)
     elif model.config.model_type == "bert":
         model = _patch_bert_model(model)
     elif model.config.model_type == "vit":
