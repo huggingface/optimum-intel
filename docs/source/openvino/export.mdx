@@ -1,0 +1,161 @@
+<!--Copyright 2024 The HuggingFace Team. All rights reserved.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+-->
+
+# Export your model
+
+## Using the CLI
+
+To export your model to the [OpenVINO IR](https://docs.openvino.ai/2024/documentation/openvino-ir-format.html) format with the CLI :
+
+```bash
+optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B ov_model/
+```
+
+The model argument can either be the model ID of a model hosted on the [Hub](https://huggingface.co/models) or a path to a model hosted locally. For local models, you need to specify the task for which the model should be loaded before export, among the list of the [supported tasks](https://huggingface.co/docs/optimum/main/en/exporters/task_manager).
+
+```bash
+optimum-cli export openvino --model local_llama --task text-generation-with-past ov_model/
+```
+
+Check out the help for more options:
+
+```bash
+optimum-cli export openvino --help
+
+usage: optimum-cli export openvino [-h] -m MODEL [--task TASK] [--framework {pt,tf}] [--trust-remote-code] [--weight-format {fp32,fp16,int8,int4}]
+                                   [--library {transformers,diffusers,timm,sentence_transformers}] [--cache_dir CACHE_DIR] [--pad-token-id PAD_TOKEN_ID] [--ratio RATIO] [--sym]
+                                   [--group-size GROUP_SIZE] [--dataset DATASET] [--all-layers] [--awq] [--scale-estimation] [--sensitivity-metric SENSITIVITY_METRIC] [--num-samples NUM_SAMPLES]
+                                   [--disable-stateful] [--disable-convert-tokenizer]
+                                   output
+
+optional arguments:
+  -h, --help            show this help message and exit
+
+Required arguments:
+  --model MODEL         Model ID on huggingface.co or path on disk to load model from.
+
+  output                Path indicating the directory where to store the generated OV model.
+
+Optional arguments:
+  --task TASK           The task to export the model for. If not specified, the task will be auto-inferred based on the model. Available tasks depend on the model, but are among: ['image-segmentation',
+                        'feature-extraction', 'mask-generation', 'audio-classification', 'conversational', 'stable-diffusion-xl', 'question-answering', 'sentence-similarity', 'text2text-generation',
+                        'masked-im', 'automatic-speech-recognition', 'fill-mask', 'image-to-text', 'text-generation', 'zero-shot-object-detection', 'multiple-choice', 'object-detection', 'stable-
+                        diffusion', 'audio-xvector', 'text-to-audio', 'zero-shot-image-classification', 'token-classification', 'image-classification', 'depth-estimation', 'image-to-image', 'audio-
+                        frame-classification', 'semantic-segmentation', 'text-classification']. For decoder models, use `xxx-with-past` to export the model using past key values in the decoder.
+  --framework {pt,tf}   The framework to use for the export. If not provided, will attempt to use the local checkpoints original framework or what is available in the environment.
+  --trust-remote-code   Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories you trust and in which you have read the code, as it
+                        will execute on your local machine arbitrary code present in the model repository.
+  --weight-format {fp32,fp16,int8,int4}
+                        The weight format of the exported model.
+  --library {transformers,diffusers,timm,sentence_transformers}
+                        The library used to load the model before export. If not provided, will attempt to infer the local checkpoints library.
+  --cache_dir CACHE_DIR
+                        The path to a directory in which the downloaded model should be cached if the standard cache should not be used.
+  --pad-token-id PAD_TOKEN_ID
+                        This is needed by some models, for some tasks. If not provided, will attempt to use the tokenizer to guess it.
+  --ratio RATIO         A parameter used when applying 4-bit quantization to control the ratio between 4-bit and 8-bit quantization. If set to 0.8, 80% of the layers will be quantized to int4 while
+                        20% will be quantized to int8. This helps to achieve better accuracy at the sacrifice of the model size and inference latency. Default value is 1.0.
+  --sym                 Whether to apply symmetric quantization
+  --group-size GROUP_SIZE
+                        The group size to use for int4 quantization. Recommended value is 128 and -1 will results in per-column quantization.
+  --dataset DATASET     The dataset used for data-aware compression or quantization with NNCF. You can use the one from the list ['wikitext2','c4','c4-new'] for language models or
+                        ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models.
+  --all-layers          Whether embeddings and last MatMul layers should be compressed to INT4. If not provided an weight compression is applied, they are compressed to INT8.
+  --awq                 Whether to apply AWQ algorithm. AWQ improves generation quality of INT4-compressed LLMs, but requires additional time for tuning weights on a calibration dataset. To run AWQ,
+                        please also provide a dataset argument. Note: it is possible that there will be no matching patterns in the model to apply AWQ, in such case it will be skipped.
+  --scale-estimation    Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and compressed layers. Providing a dataset is required to run scale
+                        estimation. Please note, that applying scale estimation takes additional memory and time.
+  --sensitivity-metric SENSITIVITY_METRIC
+                        The sensitivity metric for assigning quantization precision to layers. Can be one of the following: ['weight_quantization_error', 'hessian_input_activation',
+                        'mean_activation_variance', 'max_activation_variance', 'mean_activation_magnitude'].
+  --num-samples NUM_SAMPLES
+                        The maximum number of samples to take from the dataset for quantization.
+  --disable-stateful    Disable stateful converted models, stateless models will be generated instead. Stateful models are produced by default when this key is not used. In stateful models all kv-cache
+                        inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. If --disable-stateful option is used, it may result in sub-optimal inference
+                        performance. Use it when you intentionally want to use a stateless model, for example, to be compatible with existing OpenVINO native inference code that expects kv-cache inputs
+                        and outputs in the model.
+  --disable-convert-tokenizer
+                        Do not add converted tokenizer and detokenizer OpenVINO models.
+```
+
+You can also apply fp16, 8-bit or 4-bit weight-only quantization on the Linear, Convolutional and Embedding layers when exporting your model by setting `--weight-format` to respectively `fp16`, `int8` or `int4`:
+
+```bash
+optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B --weight-format int8 ov_model/
+```
+
+For more information on the quantization parameters checkout the [documentation](inference#weight-only-quantization)
+
+
+<Tip warning={true}>
+
+Models larger than 1 billion parameters are exported to the OpenVINO format with 8-bit weights by default. You can disable it with `--weight-format fp32`.
+
+</Tip>
+
+
+### Decoder models
+
+For models with a decoder, we enable the re-use of past keys and values by default. This allows to avoid recomputing the same intermediate activations at each generation step. To export the model without, you will need to remove the `-with-past` suffix when specifying the task.
+
+| With K-V cache                           | Without K-V cache                    |
+|------------------------------------------|--------------------------------------|
+| `text-generation-with-past`              | `text-generation`                    |
+| `text2text-generation-with-past`         | `text2text-generation`               |
+| `automatic-speech-recognition-with-past` | `automatic-speech-recognition`       |
+
+
+### Diffusion models
+
+When Stable Diffusion models are exported to the OpenVINO format, they are decomposed into different components that are later combined during inference:
+
+* Text encoder(s)
+* U-Net
+* VAE encoder
+* VAE decoder
+
+To export your Stable Diffusion XL model to the OpenVINO IR format with the CLI you can do as follows:
+
+```bash
+optimum-cli export openvino --model stabilityai/stable-diffusion-xl-base-1.0 ov_sdxl/
+```
+
+## When loading your model
+
+You can also load your PyTorch checkpoint and convert it to the OpenVINO format on-the-fly, by setting `export=True` when loading your model.
+
+To easily save the resulting model, you can use the `save_pretrained()` method, which will save both the BIN and XML files describing the graph. It is useful to save the tokenizer to the same directory, to enable easy loading of the tokenizer for the model.
+
+
+```diff
+- from transformers import AutoModelForCausalLM
++ from optimum.intel import OVModelForCausalLM
+  from transformers import AutoTokenizer
+
+  model_id = "meta-llama/Meta-Llama-3-8B"
+- model = AutoModelForCausalLM.from_pretrained(model_id)
++ model = OVModelForCausalLM.from_pretrained(model_id, export=True)
+  tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+  save_directory = "ov_model"
+  model.save_pretrained(save_directory)
+  tokenizer.save_pretrained(save_directory)
+```
+
+## After loading your model
+
+```python
+from transformers import AutoModelForCausalLM
+from optimum.exporters.openvino import export_from_model
+
+model = AutoModelForCausalLM.from_pretrained("meta-llama/Meta-Llama-3-8B")
+export_from_model(model, output="ov_model", task="text-generation-with-past")
+```
+
+Once the model is exported, you can now [load your OpenVINO model](inference) by replacing the `AutoModelForXxx` class with the corresponding `OVModelForXxx` class.

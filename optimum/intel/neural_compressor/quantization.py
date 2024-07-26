@@ -18,15 +18,12 @@ import logging
 import types
 import warnings
 from enum import Enum
-from itertools import chain
 from pathlib import Path
 from typing import Callable, Optional, Union
 
 import torch
 from datasets import Dataset, load_dataset
 from neural_compressor.config import PostTrainingQuantConfig
-from neural_compressor.experimental.export import torch_to_int8_onnx
-from neural_compressor.model.onnx_model import ONNXModel
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
 from packaging.version import parse
@@ -39,14 +36,9 @@ from transformers import (
 )
 
 from optimum.exporters import TasksManager
-from optimum.exporters.onnx import OnnxConfig
-from optimum.onnxruntime import ORTModel
-from optimum.onnxruntime.modeling_decoder import ORTModelForCausalLM
-from optimum.onnxruntime.modeling_seq2seq import ORTModelForConditionalGeneration
-from optimum.onnxruntime.utils import ONNX_DECODER_NAME
 from optimum.quantization_base import OptimumQuantizer
 
-from ..utils.constant import _TASK_ALIASES, MIN_QDQ_ONNX_OPSET, ONNX_WEIGHTS_NAME, WEIGHTS_NAME
+from ..utils.constant import _TASK_ALIASES, WEIGHTS_NAME
 from ..utils.import_utils import (
     ITREX_IMPORT_ERROR,
     _ipex_version,
@@ -124,7 +116,7 @@ class INCQuantizer(OptimumQuantizer):
 
     def __init__(
         self,
-        model: torch.nn.Module,
+        model: Union[PreTrainedModel, torch.nn.Module],
         eval_fn: Optional[Callable[[PreTrainedModel], int]] = None,
         calibration_fn: Optional[Callable[[PreTrainedModel], int]] = None,
         task: Optional[str] = None,
@@ -138,7 +130,7 @@ class INCQuantizer(OptimumQuantizer):
                 The evaluation function to use for the accuracy driven strategy of the quantization process.
                 The accuracy driven strategy will be enabled only if `eval_fn` is provided.
             task (`str`, defaults to None):
-                The task defining the model topology used for the ONNX export.
+                The task defining the model topology. Will try to infer it from model if not provided.
             seed (`int`, defaults to 42):
                 The random seed to use when shuffling the calibration dataset.
         """
@@ -189,17 +181,11 @@ class INCQuantizer(OptimumQuantizer):
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
-        save_onnx_model = kwargs.pop("save_onnx_model", False)
         device = kwargs.pop("device", "cpu")
         use_cpu = device == torch.device("cpu") or device == "cpu"
         use_xpu = device == torch.device("xpu") or device == "xpu"
         calibration_dataloader = None
-
-        if save_onnx_model and isinstance(self._original_model, ORTModel):
-            save_onnx_model = False
-            logger.warning("Model provided is an ONNX model, `save_onnx_model` is set to False")
-
-        default_name = WEIGHTS_NAME if not isinstance(self._original_model, ORTModel) else ONNX_WEIGHTS_NAME
+        default_name = WEIGHTS_NAME
         self._set_task()
 
         if kwargs.pop("weight_only", None) is not None:
@@ -217,14 +203,6 @@ class INCQuantizer(OptimumQuantizer):
                 f"Found an incompatible version of intel-extension-for-pytorch. Found version {_ipex_version}, "
                 f"but only version {IPEX_MINIMUM_VERSION} or higher is supported."
             )
-
-        if save_onnx_model:
-            if (
-                not isinstance(quantization_config, PostTrainingQuantConfig)
-                or INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.DYNAMIC
-            ):
-                logger.warning("ONNX export for dynamic and weight only quantized model is not supported.")
-                save_onnx_model = False
 
         # ITREX Weight Only Quantization
         if not isinstance(quantization_config, PostTrainingQuantConfig):
@@ -291,10 +269,6 @@ class INCQuantizer(OptimumQuantizer):
                     remove_unused_columns=remove_unused_columns,
                     data_collator=data_collator,
                 )
-            op_type_dict = getattr(quantization_config, "op_type_dict", None)
-            if op_type_dict is None or "Embedding" not in op_type_dict:
-                logger.warning("ONNX export is no supported for model with quantized embeddings")
-                save_onnx_model = False
 
         if not isinstance(quantization_config, PostTrainingQuantConfig):
             if use_cpu:
@@ -318,26 +292,8 @@ class INCQuantizer(OptimumQuantizer):
             if isinstance(self._original_model.config, PretrainedConfig):
                 self._original_model.config.backend = quantization_config.backend
 
-            if isinstance(self._original_model, ORTModel):
-                # TODO : enable seq2seq models
-                if isinstance(self._original_model, ORTModelForConditionalGeneration):
-                    raise RuntimeError("ORTModelForConditionalGeneration not supported for quantization")
-
-                if isinstance(self._original_model, ORTModelForCausalLM):
-                    model_or_path = self._original_model.onnx_paths
-                    if len(model_or_path) > 1:
-                        raise RuntimeError(
-                            f"Too many ONNX model files were found in {self._original_model.onnx_paths}, only `use_cache=False` is supported"
-                        )
-                    model_or_path = str(model_or_path[0])
-                    default_name = ONNX_DECODER_NAME
-                else:
-                    model_or_path = str(self._original_model.model_path)
-            else:
-                model_or_path = self._original_model
-
             compressed_model = fit(
-                model_or_path,
+                self._original_model,
                 conf=quantization_config,
                 calib_dataloader=calibration_dataloader,
                 eval_func=self.eval_fn,
@@ -355,40 +311,20 @@ class INCQuantizer(OptimumQuantizer):
                 if isinstance(compressed_model, IPEXModel):
                     model_config.torchscript = True
                     model_config.backend = "ipex"
-                elif not isinstance(compressed_model, ONNXModel):
-                    compressed_model._model.config = model_config
                 model_config.save_pretrained(save_directory)
 
             self._quantized_model = compressed_model._model
 
-            if save_onnx_model:
-                model_type = self._original_model.config.model_type.replace("_", "-")
-                model_name = getattr(self._original_model, "name", None)
-                onnx_config_class = TasksManager.get_exporter_config_constructor(
-                    exporter="onnx",
-                    model=self._original_model,
-                    task=self.task,
-                    model_type=model_type,
-                    model_name=model_name,
-                )
-                onnx_config = onnx_config_class(self._original_model.config)
-                compressed_model.eval()
-                output_onnx_path = save_directory.joinpath(ONNX_WEIGHTS_NAME)
-                # Export the compressed model to the ONNX format
-                self._onnx_export(compressed_model, onnx_config, output_onnx_path)
-
             output_path = save_directory.joinpath(file_name or default_name)
             # Save the quantized model
             self._save_pretrained(compressed_model, output_path)
-            quantization_config = INCConfig(quantization=quantization_config, save_onnx_model=save_onnx_model)
+            quantization_config = INCConfig(quantization=quantization_config)
             quantization_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: Union[PyTorchModel, IPEXModel], output_path: str):
         if isinstance(model, IPEXModel):
             model._model.save(output_path)
-        elif isinstance(model, ONNXModel):
-            model.save(output_path)
         else:
             state_dict = model._model.state_dict()
             if hasattr(model, "q_config"):
@@ -397,46 +333,12 @@ class INCQuantizer(OptimumQuantizer):
 
         logger.info(f"Model weights saved to {output_path}")
 
-    def _onnx_export(
-        self,
-        model: PyTorchModel,
-        config: OnnxConfig,
-        output_path: Union[str, Path],
-    ):
-        opset = max(config.DEFAULT_ONNX_OPSET, MIN_QDQ_ONNX_OPSET)
-        dynamic_axes = dict(chain(config.inputs.items(), config.outputs.items()))
-        inputs = config.generate_dummy_inputs(framework="pt")
-        device = model.model.device
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-
-        if is_neural_compressor_version(">", "2.2.1"):
-            torch_to_int8_onnx(
-                self._original_model,
-                model.model,
-                q_config=model.q_config,
-                save_path=str(output_path),
-                example_inputs=inputs,
-                opset_version=opset,
-                dynamic_axes=dynamic_axes,
-                input_names=list(config.inputs.keys()),
-                output_names=list(config.outputs.keys()),
-            )
-        else:
-            torch_to_int8_onnx(
-                model.model,
-                q_config=model.q_config,
-                save_path=str(output_path),
-                example_inputs=inputs,
-                opset_version=opset,
-                dynamic_axes=dynamic_axes,
-                input_names=list(config.inputs.keys()),
-                output_names=list(config.outputs.keys()),
-            )
-
     def _set_task(self):
         if self.task is None:
             try:
-                self.task = TasksManager.infer_task_from_model(self._original_model.config._name_or_path)
+                # using the actual model has better chances of success
+                # since using the model path does not work with local models
+                self.task = TasksManager.infer_task_from_model(self._original_model)
             except Exception as e:
                 self.task = "default"
                 logger.warning(

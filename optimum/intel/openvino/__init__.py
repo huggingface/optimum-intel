@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import logging
+import warnings
 
 from ..utils.import_utils import is_accelerate_available, is_diffusers_available, is_nncf_available
 from .utils import (
@@ -25,8 +26,14 @@ from .utils import (
 )
 
 
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+
 if is_nncf_available():
+    logging.disable(logging.INFO)
     import nncf
+
+    logging.disable(logging.NOTSET)
 
     # Suppress version mismatch logging
     nncf.set_log_level(logging.ERROR)

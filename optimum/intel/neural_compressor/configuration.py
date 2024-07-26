@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import logging
 from typing import Dict, Optional, Union
 
 from neural_compressor.config import DistillationConfig, WeightPruningConfig, _BaseQuantizationConfig
@@ -28,6 +29,8 @@ _quantization_model = {
     "post_training_weight_only": "weight_only",
 }
 
+logger = logging.getLogger(__name__)
+
 
 class INCConfig(BaseConfig):
     CONFIG_NAME = "inc_config.json"
@@ -38,7 +41,6 @@ class INCConfig(BaseConfig):
         quantization: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
         pruning: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
         distillation: Optional[Union[Dict, _BaseQuantizationConfig]] = None,
-        save_onnx_model: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -47,7 +49,6 @@ class INCConfig(BaseConfig):
         self.quantization = self._create_quantization_config(quantization) or {}
         self.pruning = self._create_pruning_config(pruning) or {}
         self.distillation = self._create_distillation_config(distillation) or {}
-        self.save_onnx_model = save_onnx_model
 
     @staticmethod
     def _create_quantization_config(config: Union[Dict, _BaseQuantizationConfig]):

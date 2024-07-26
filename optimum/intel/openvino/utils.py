@@ -18,11 +18,12 @@ import logging
 import os
 from glob import glob
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Tuple, Type, Union
 
 import numpy as np
 from huggingface_hub import model_info
-from openvino.runtime import Core, Type, properties
+from openvino.runtime import Core, properties
+from openvino.runtime import Type as OVType
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
@@ -70,19 +71,19 @@ OV_TO_NP_TYPE = {
 
 
 STR_TO_OV_TYPE = {
-    "boolean": Type.boolean,
-    "f16": Type.f16,
-    "f32": Type.f32,
-    "f64": Type.f64,
-    "i8": Type.i8,
-    "i16": Type.i16,
-    "i32": Type.i32,
-    "i64": Type.i64,
-    "u8": Type.u8,
-    "u16": Type.u16,
-    "u32": Type.u32,
-    "u64": Type.u64,
-    "bf16": Type.bf16,
+    "boolean": OVType.boolean,
+    "f16": OVType.f16,
+    "f32": OVType.f32,
+    "f64": OVType.f64,
+    "i8": OVType.i8,
+    "i16": OVType.i16,
+    "i32": OVType.i32,
+    "i64": OVType.i64,
+    "u8": OVType.u8,
+    "u16": OVType.u16,
+    "u32": OVType.u32,
+    "u64": OVType.u64,
+    "bf16": OVType.bf16,
 }
 
 
@@ -110,7 +111,7 @@ PREDEFINED_SD_DATASETS = {
 }
 
 
-NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[type(PreTrainedTokenizer)] = (CLIPTokenizer,)
+NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[Type[PreTrainedTokenizer]] = (CLIPTokenizer,)
 
 
 def maybe_convert_tokenizer_to_fast(

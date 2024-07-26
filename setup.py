@@ -28,17 +28,18 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "transformers>=4.36.0,<4.41.0",
-    "optimum~=1.19",
+    "transformers>=4.36.0,<4.43.0",
+    "optimum@git+https://github.com/huggingface/optimum.git",
     "datasets>=1.4.0",
     "sentencepiece",
+    "setuptools",
     "scipy",
     "onnx",
 ]
 
 TESTS_REQUIRE = [
     "accelerate",
-    "pytest<8.2",
+    "pytest>=7.2.0,<8.0.0",
     "parameterized",
     "Pillow",
     "evaluate",
@@ -49,20 +50,19 @@ TESTS_REQUIRE = [
     "rjieba",
     "timm",
     "invisible-watermark>=0.2.0",
-    "auto-gptq",
     "transformers_stream_generator",
     "einops",
     "tiktoken",
-    "sentence_transformers",
+    "sentence-transformers",
 ]
 
-QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
+QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
-    "neural-compressor": ["neural-compressor>=2.2.0", "onnxruntime<1.15.0", "accelerate"],
+    "neural-compressor": ["neural-compressor>=2.2.0", "accelerate"],
     "openvino": ["openvino==2024.2.0", "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v2120", "openvino-tokenizers[transformers]"],
     "nncf": ["nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v2120"],
-    "ipex": ["intel-extension-for-pytorch", "transformers>=4.36.0,<4.39.0"],
+    "ipex": ["intel-extension-for-pytorch", "transformers>=4.39.0,<=4.42.3"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,

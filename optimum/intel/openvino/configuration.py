@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import torch
 from transformers import PretrainedConfig
-from transformers.utils.quantization_config import QuantizationConfigMixin, QuantizationMethod
+from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
 
@@ -32,32 +32,108 @@ if is_nncf_available():
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_4BIT_CONFIGS = {
-    "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 32, "ratio": 0.5},
-    "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
-    "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
-    "bigscience/bloomz-7b1": {"bits": 4, "sym": False, "group_size": 32, "ratio": 0.6},
-    "togethercomputer/RedPajama-INCITE-7B-Instruct": {"bits": 4, "sym": False, "group_size": 128},
-    "HuggingFaceH4/zephyr-7b-beta": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.6},
-    "meta-llama/Llama-2-7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
-    "meta-llama/Llama-2-7b-chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
-    "meta-llama/Llama-2-13b-chat": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
-    "stabilityai/stablelm-3b-4e1t": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
-    "stablelm-epoch-3b-preview": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
-    "stable-zephyr-3b-dpo": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
-    "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
-    "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
-    "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
-    "openlm-research/open_llama_3b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
-    "tiiuae/falcon-7b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
-    "psmathur/orca_mini_3b": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
-    "mistralai/Mixtral-8x7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
-}
-
 
 class OVQuantizationMethod(str, Enum):
     DEFAULT = "default"
     HYBRID = "hybrid"
+    AWQ = "awq"
+
+
+_DEFAULT_4BIT_CONFIGS = {
+    "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 128, "scale_estimation": True},
+    "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
+    "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
+    "togethercomputer/RedPajama-INCITE-7B-Instruct": {"bits": 4, "sym": False, "group_size": 128},
+    "HuggingFaceH4/zephyr-7b-beta": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 0.8,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
+    "meta-llama/Llama-2-7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
+    "meta-llama/Llama-2-7b-chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
+    "meta-llama/Llama-2-13b-chat": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
+    "stabilityai/stablelm-3b-4e1t": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 64,
+        "ratio": 0.8,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
+    "stabilityai/stablelm-zephyr-3b": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
+    "stabilityai/stable-code-3b": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
+    "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
+    "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
+    "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
+    "openlm-research/open_llama_3b": {"bits": 4, "sym": False, "group_size": 64, "all_layers": True},
+    "openlm-research/open_llama_3b_v2": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
+    "tiiuae/falcon-7b-instruct": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
+    "psmathur/orca_mini_3b": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 64,
+        "all_layers": True,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
+    "bigscience/bloomz-560m": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 64,
+        "ratio": 0.8,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
+    "mistralai/Mixtral-8x7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
+    "facebook/opt-2.7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.7},
+    "togethercomputer/RedPajama-INCITE-Chat-3B-v1": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "scale_estimation": True,
+    },
+    "lmsys/vicuna-7b-v1.5": {"bits": 4, "sym": False, "group_size": 128, "ratio": 1.0},
+    "stabilityai/stablelm-tuned-alpha-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
+    "mistralai/Mistral-7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.9},
+    "baichuan-inc/Baichuan2-7B-Chat": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 0.8,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
+    "openai-community/gpt2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.5, "scale_estimation": True},
+    "lmsys/longchat-7b-16k": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
+    "bigcode/starcoder2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
+    "TinyLlama/TinyLlama-1.1B-Chat-v1.0": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
+    "stabilityai/stablelm-tuned-alpha-7b": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 0.6,
+        "scale_estimation": True,
+    },
+    "microsoft/phi-2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
+}
+
+_DEFAULT_4BIT_CONFIG = {
+    "bits": 4,
+    "ratio": 1.0,
+    "sym": False,
+    "group_size": 128,
+    "all_layers": None,
+}
 
 
 @dataclass
@@ -134,7 +210,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
             The dataset used for data-aware compression or quantization with NNCF. You can provide your own dataset
-            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new','ptb','ptb-new'] for LLLMs
+            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new'] for language models
             or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models.
             Alternatively, you can provide data objects via `calibration_dataset` argument
             of `OVQuantizer.quantize()` method.
@@ -151,8 +227,20 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
         num_samples (`int`, *optional*):
             The maximum number of samples composing the calibration dataset.
-        quant_method (`str`, defaults of OVQuantizationMethod.DEFAULT):
-            Weight compression method to apply.
+        quant_method (`str or OVQuantizationMethod`, defaults of OVQuantizationMethod.DEFAULT):
+            Weight compression method to apply. Possible options:
+                - "default": default weight quantization will be applied.
+                - "awq": compressed weights will be computed according to the Activation-Aware-Quantization (AWQ)
+                  method. AWQ improves generation quality of INT4-compressed LLMs, but requires
+                  additional time for tuning weights on a calibration dataset. To run AWQ, providing a dataset is
+                  required. Note: it's possible that there will be no matching patterns in the model to apply AWQ, in
+                  such case it will be skipped.
+                - "hybrid": The hybrid mode involves the quantization of weights in MatMul and Embedding layers, and
+                  activations of other layers, facilitating accuracy preservation post-optimization while reducing
+                  the model size. Hybrid mode performs well when applied to a UNet model in diffusion pipelines.
+        scale_estimation (`bool`, *optional*):
+            Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
+            compressed layers. Providing a dataset is required to run scale estimation.
     """
 
     def __init__(
@@ -167,7 +255,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sensitivity_metric: Optional[str] = None,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
-        quant_method: Union[QuantizationMethod, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
+        quant_method: Union[str, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
+        scale_estimation: bool = None,
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
@@ -177,7 +266,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.ratio = ratio
         self.all_layers = all_layers
         self.sensitivity_metric = sensitivity_metric
-        self.quant_method = quant_method
+        self.quant_method = OVQuantizationMethod(quant_method) if isinstance(quant_method, str) else quant_method
+        self.scale_estimation = scale_estimation
         self.post_init()
 
     def post_init(self):
@@ -195,7 +285,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 f"If you wish to provide a custom dataset, please use the `OVQuantizer` instead."
             )
         if self.dataset is not None and isinstance(self.dataset, str):
-            llm_datasets = ["wikitext2", "c4", "c4-new", "ptb", "ptb-new"]
+            llm_datasets = ["wikitext2", "c4", "c4-new"]
             stable_diffusion_datasets = [
                 "conceptual_captions",
                 "laion/220k-GPT4Vision-captions-from-LIVIS",

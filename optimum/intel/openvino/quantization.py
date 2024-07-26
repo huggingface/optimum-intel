@@ -38,7 +38,6 @@ from torch.utils.data import DataLoader, RandomSampler
 from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
-from transformers.utils.quantization_config import QuantizationMethod
 
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.tasks import TasksManager
@@ -48,7 +47,12 @@ from ...exporters.openvino import export, export_pytorch_via_onnx
 from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
 from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import DATASETS_IMPORT_ERROR, is_datasets_available, is_diffusers_available
+from ..utils.import_utils import (
+    DATASETS_IMPORT_ERROR,
+    is_datasets_available,
+    is_datasets_version,
+    is_diffusers_available,
+)
 from ..utils.modeling_utils import get_model_device
 from .configuration import OVConfig, OVQuantizationConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
@@ -189,11 +193,6 @@ class OVQuantizer(OptimumQuantizer):
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
 
-    @property
-    def input_names(self):
-        logger.warning("The`input_names` attribute is deprecated and will be removed in v1.18.0")
-        return None
-
     @classmethod
     def from_pretrained(cls, model: PreTrainedModel, **kwargs):
         # TODO : Create model
@@ -208,7 +207,6 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
-        weights_only: bool = None,
         **kwargs,
     ):
         """
@@ -231,10 +229,6 @@ class OVQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether to remove the columns unused by the model forward method.
-            weights_only (`bool`, *optional*):
-                Being deprecated.
-                Compress weights to integer precision (8-bit by default) while keeping activations
-                floating-point. Fits best for LLM footprint reduction and performance acceleration.
 
         Examples:
         ```python
@@ -259,32 +253,20 @@ class OVQuantizer(OptimumQuantizer):
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
         """
-        # TODO: deprecate weights_only argument
-        if weights_only is not None:
-            logger.warning(
-                "`weights_only` argument is deprecated and will be removed in v1.18.0. In the future please provide `ov_config.quantization_config` "
-                "as an instance of `OVWeightQuantizationConfig` for weight-only compression or as an instance of `OVQuantizationConfig` for full model quantization."
-            )
-
         if ov_config is None:
             ov_config = OVConfig()
         if not isinstance(ov_config, OVConfig):
             raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
         quantization_config = ov_config.quantization_config
         if quantization_config is None:
-            if (weights_only is None or weights_only is True) and calibration_dataset is None:
-                if weights_only is None:
-                    logger.info(
-                        "`quantization_config` was not provided, 8-bit asymmetric weight quantization will be applied."
-                    )
-                ov_config.quantization_config = OVWeightQuantizationConfig(bits=8)
-            else:
-                logger.warning(
-                    "`quantization_config` was not provided, but calibration dataset was provided, assuming full "
-                    "model quantization is intended. In the future, please provide `quantization_config` as an "
-                    "instance of OVQuantizationConfig."
-                )
-                ov_config.quantization_config = OVQuantizationConfig()
+            logger.warning(
+                "`quantization_config` was not provided. In the future, please provide `quantization_config`"
+            )
+            ov_config.quantization_config = (
+                OVWeightQuantizationConfig(bits=8)
+                if calibration_dataset is None
+                else OVWeightQuantizationConfig(bits=8)
+            )
 
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
@@ -595,6 +577,7 @@ class OVQuantizer(OptimumQuantizer):
         use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        trust_remote_code: bool = False,
     ) -> "Dataset":
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -620,6 +603,10 @@ class OVQuantizer(OptimumQuantizer):
                 when running `huggingface-cli login` (stored in `~/.huggingface`).
             cache_dir (`str`, *optional*):
                 Caching directory for a calibration dataset.
+            trust_remote_code (`bool`, defaults to `False`):
+                Whether or not to allow for custom models defined on the Hub in their own modeling files. This option
+                should only be set to `True` for repositories you trust and in which you have read the code, as it will
+                execute code present on the Hub on your local machine.
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
@@ -634,15 +621,14 @@ class OVQuantizer(OptimumQuantizer):
 
         if not is_datasets_available():
             raise ValueError(DATASETS_IMPORT_ERROR.format("OVQuantizer.get_calibration_dataset"))
+
         from datasets import load_dataset
 
-        calibration_dataset = load_dataset(
-            dataset_name,
-            name=dataset_config_name,
-            split=dataset_split,
-            token=token,
-            cache_dir=cache_dir,
-        )
+        datasets_kwargs = {"name": dataset_config_name, "split": dataset_split, "token": token, "cache_dir": cache_dir}
+        if is_datasets_version(">=", "2.20.0"):
+            datasets_kwargs["trust_remote_code"] = trust_remote_code
+
+        calibration_dataset = load_dataset(dataset_name, **datasets_kwargs)
 
         if num_samples is not None:
             num_samples = min(num_samples, len(calibration_dataset))
@@ -747,9 +733,9 @@ class OVQuantizer(OptimumQuantizer):
             from datasets import load_dataset
 
             dataset_metadata = PREDEFINED_SD_DATASETS[dataset_name]
-            dataset = load_dataset(dataset_name, split=dataset_metadata["split"], streaming=True).shuffle(
-                seed=self.seed
-            )
+            datasets_kwargs = {"split": dataset_metadata["split"], "streaming": True}
+            dataset = load_dataset(dataset_name, **datasets_kwargs).shuffle(seed=self.seed)
+
             input_names = dataset_metadata["inputs"]
             dataset = dataset.select_columns(list(input_names.values()))
 
@@ -819,10 +805,11 @@ def _weight_only_quantization(
         group_size=config.group_size,
         all_layers=config.all_layers,
         sensitivity_metric=sensitivity_metric,
-        awq=config.quant_method == QuantizationMethod.AWQ or None,
+        awq=getattr(config.quant_method, "name", "") == "AWQ" or None,
         ignored_scope=config.get_ignored_scope_instance(),
         dataset=dataset,
         subset_size=config.num_samples if config.num_samples else 128,
+        scale_estimation=config.scale_estimation,
     )
 
 

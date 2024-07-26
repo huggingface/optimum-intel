@@ -51,4 +51,4 @@ jobs:
     - name: Check style with ruff
       run: |
         source venv/bin/activate
-        ruff .
+        ruff check .

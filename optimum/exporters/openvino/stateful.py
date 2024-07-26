@@ -213,7 +213,7 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
 
     # By default, batch is the 0-th but chatglm uses 1-st dimension as batch
     # TODO: Deduce from a model via ordinal reshape (?) and topology
-    batch_dim = 1 if config.model_type == "chatglm" else 0
+    batch_dim = 1 if config.model_type == "chatglm" and not hasattr(config, "rope_ratio") else 0
 
     fuse_cache_reorder(ov_model, not_kv_inputs, key_value_input_names, batch_dim)
     num_attention_heads = config.num_attention_heads if config.model_type == "bloom" else 1

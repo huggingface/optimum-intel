@@ -64,7 +64,7 @@ if is_torch_available():
     from transformers.modeling_utils import PreTrainedModel
 
 if is_diffusers_available():
-    from diffusers import ModelMixin
+    from diffusers import DiffusionPipeline, ModelMixin
 
 if is_tf_available():
     from transformers.modeling_tf_utils import TFPreTrainedModel
@@ -74,7 +74,7 @@ if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
 
 
-def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
+def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None, library_name: Optional[str] = None):
     compress_to_fp16 = False
 
     if ov_config is not None:
@@ -90,13 +90,12 @@ def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None):
 
         compress_to_fp16 = ov_config.dtype == "fp16"
 
-    library_name = TasksManager.infer_library_from_model(Path(path).parent)
     model = _add_version_info_to_model(model, library_name)
     save_model(model, path, compress_to_fp16)
 
 
 def export(
-    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"],
+    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     config: OnnxConfig,
     output: Path,
     opset: Optional[int] = None,
@@ -139,7 +138,7 @@ def export(
         )
 
     if "diffusers" in str(model.__class__) and not is_diffusers_available():
-        raise ImportError("The pip package `diffusers` is required to export stable diffusion models to ONNX.")
+        raise ImportError("The package `diffusers` is required to export diffusion models to OpenVINO.")
 
     if stateful:
         # This will be checked anyway after the model conversion, but checking it earlier will save time for a user if not suitable version is used
@@ -198,7 +197,19 @@ def export_tensorflow(
     onnx_path = Path(output).with_suffix(".onnx")
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
-    _save_model(ov_model, output.parent / output, ov_config=ov_config)
+
+    if model.__class__.__module__.startswith("optimum"):
+        # for wrapped models
+        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
+    else:
+        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+
+    _save_model(
+        ov_model,
+        output.parent / output,
+        ov_config=ov_config,
+        library_name=library_name,
+    )
     return input_names, output_names, True
 
 
@@ -251,7 +262,19 @@ def export_pytorch_via_onnx(
     )
     torch.onnx.export = orig_torch_onnx_export
     ov_model = convert_model(str(onnx_output))
-    _save_model(ov_model, output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output, ov_config=ov_config)
+
+    if model.__class__.__module__.startswith("optimum"):
+        # for wrapped models
+        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
+    else:
+        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+
+    _save_model(
+        ov_model,
+        output.parent / OV_XML_FILE_NAME if output.suffix != ".xml" else output,
+        ov_config=ov_config,
+        library_name=library_name,
+    )
     return input_names, output_names, True
 
 
@@ -413,7 +436,18 @@ def export_pytorch(
         if stateful:
             patch_stateful(model.config, ov_model)
 
-        _save_model(ov_model, output, ov_config=ov_config)
+        if model.__module__.startswith("optimum"):
+            # for wrapped models like timm in optimum.intel.openvino.modeling_timm
+            library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
+        else:
+            library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+
+        _save_model(
+            ov_model,
+            output,
+            ov_config=ov_config,
+            library_name=library_name,
+        )
         clear_class_registry()
         del model
         gc.collect()
@@ -422,7 +456,7 @@ def export_pytorch(
 
 def export_models(
     models_and_export_configs: Dict[
-        str, Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin"], "OnnxConfig"]
+        str, Tuple[Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"], "OnnxConfig"]
     ],
     output_dir: Path,
     opset: Optional[int] = None,
@@ -491,7 +525,7 @@ def export_models(
 
 
 def export_from_model(
-    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     output: Union[str, Path],
     task: Optional[str] = None,
     ov_config: Optional["OVConfig"] = None,
@@ -505,14 +539,15 @@ def export_from_model(
     trust_remote_code: bool = False,
     **kwargs_shapes,
 ):
+    model_kwargs = model_kwargs or {}
+
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
         raise ImportError(
             f"Compression of the weights to {ov_config.quantization_config} requires nncf, please install it with `pip install nncf`"
         )
 
-    model_kwargs = model_kwargs or {}
-    library_name = TasksManager._infer_library_from_model(model)
-    TasksManager.standardize_model_attributes(model, library_name)
+    library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+    TasksManager.standardize_model_attributes(model)
 
     if hasattr(model.config, "export_model_type"):
         model_type = model.config.export_model_type.replace("_", "-")
@@ -521,7 +556,7 @@ def export_from_model(
 
     custom_architecture = library_name == "transformers" and model_type not in TasksManager._SUPPORTED_MODEL_TYPE
 
-    if task is not None:
+    if task is not None and task != "auto":
         task = TasksManager.map_from_synonym(task)
     else:
         try:
