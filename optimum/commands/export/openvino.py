@@ -13,7 +13,6 @@
 # limitations under the License.
 """Defines the command line for the export with OpenVINO."""
 
-import json
 import logging
 import sys
 from pathlib import Path
@@ -213,7 +212,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
     def run(self):
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
-        from ...intel.openvino.configuration import get_default_int4_config, _DEFAULT_4BIT_CONFIG, OVConfig
+        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, get_default_int4_config, OVConfig
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args
