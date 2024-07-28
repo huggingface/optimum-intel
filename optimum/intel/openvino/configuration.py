@@ -39,10 +39,20 @@ class OVQuantizationMethod(str, Enum):
     AWQ = "awq"
 
 
+_DEFAULT_4BIT_CONFIG = {
+    "bits": 4,
+    "ratio": 1.0,
+    "sym": False,
+    "group_size": 128,
+    "all_layers": None,
+}
+
+
 _DEFAULT_4BIT_CONFIGS = {
     "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
     "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
+    "bigscience/bloomz-7b1": dict(_DEFAULT_4BIT_CONFIG, **{"group_size": 32}),
     "togethercomputer/RedPajama-INCITE-7B-Instruct": {"bits": 4, "sym": False, "group_size": 128},
     "HuggingFaceH4/zephyr-7b-beta": {
         "bits": 4,
@@ -112,14 +122,6 @@ _DEFAULT_4BIT_CONFIGS = {
     "bigcode/starcoder2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
     "TinyLlama/TinyLlama-1.1B-Chat-v1.0": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "microsoft/phi-2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
-}
-
-_DEFAULT_4BIT_CONFIG = {
-    "bits": 4,
-    "ratio": 1.0,
-    "sym": False,
-    "group_size": 128,
-    "all_layers": None,
 }
 
 
