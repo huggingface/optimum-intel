@@ -144,6 +144,11 @@ def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
 class MixtralModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
+        if is_transformers_version(">=", "4.42.0"):
+            self._model.model._update_causal_mask = types.MethodType(
+                _llama_gemma_update_causal_mask, self._model.model
+            )
+
         for layer in self._model.model.layers:
             layer.block_sparse_moe._unpatched_forward = layer.block_sparse_moe.forward
             layer.block_sparse_moe.forward = types.MethodType(
@@ -152,6 +157,9 @@ class MixtralModelPatcher(DecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model.model, "_orig_update_causal_mask"):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+
         for layer in self._model.model.layers:
             layer.block_sparse_moe.forward = layer.block_sparse_moe._unpatched_forward
 
@@ -620,7 +628,7 @@ def _mistral_update_causal_mask(
             return None
 
     dtype, device = input_tensor.dtype, input_tensor.device
-    min_dtype = torch.finfo(dtype).min
+    min_dtype = torch.finfo(torch.float16).min
     sequence_length = input_tensor.shape[1]
     # SlidingWindowCache
     if using_sliding_window_cache:
@@ -1411,6 +1419,12 @@ def _phi3_self_attn_sdpa_forward(
 class Phi3ModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
+
+        if is_transformers_version(">=", "4.42.0"):
+            self._model.model._update_causal_mask = types.MethodType(
+                _llama_gemma_update_causal_mask, self._model.model
+            )
+
         # https://github.com/huggingface/transformers/blob/30ee508c6c92a1c0aa0281d193c7c0fb815b8d2f/src/transformers/models/phi3/modeling_phi3.py#L113
         # init inv_freq for torchscript tracing
         for layer in self._model.model.layers:
@@ -1430,6 +1444,8 @@ class Phi3ModelPatcher(DecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model.model, "_orig_update_causal_mask"):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
         for layer in self._model.model.layers:
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
@@ -2089,6 +2105,11 @@ def _persimmon_self_attn_sdpa_forward(
 class PersimmonModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
+        if is_transformers_version(">=", "4.42.0"):
+            self._model.model._update_causal_mask = types.MethodType(
+                _llama_gemma_update_causal_mask, self._model.model
+            )
+
         for layer in self._model.model.layers:
             if is_torch_version(">=", "2.1.0"):
                 orig_self_attn_fwd = layer.self_attn.forward
