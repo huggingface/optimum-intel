@@ -721,10 +721,10 @@ class OVModelVaeDecoder(OVModelPart):
         outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
 
-    def _compile(self):
-        if "GPU" in self.device:
-            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-        super()._compile()
+    # def _compile(self):
+    #     if "GPU" in self.device:
+    #         self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
+    #     super()._compile()
 
 
 class OVModelVaeEncoder(OVModelPart):
@@ -742,10 +742,10 @@ class OVModelVaeEncoder(OVModelPart):
         outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
 
-    def _compile(self):
-        if "GPU" in self.device:
-            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-        super()._compile()
+    # def _compile(self):
+    #     if "GPU" in self.device:
+    #         self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
+    #     super()._compile()
 
 
 class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPipelineMixin):
@@ -1274,6 +1274,14 @@ class OVStableDiffusionControlNetPipelineBase(OVStableDiffusionPipelineBase):
 
         if compile:
             self.compile()
+    
+    def compile(self):
+        self.vae_decoder._compile()
+        self.unet._compile()
+        self.controlnet._compile()
+        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
+            if component is not None:
+                component._compile()
 
     def export_controlnet(
         model_id: str,
