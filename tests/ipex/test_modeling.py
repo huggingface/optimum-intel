@@ -220,10 +220,11 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "llama",
         "llama2",
         # "phi",
+        "distilgpt2",
         "mpt",
         "opt",
     )
-    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2",)
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "distilgpt2")
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
@@ -263,8 +264,9 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
 
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
-        self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
-        self.assertTrue(torch.equal(outputs.logits, init_model_outputs.logits))
+        # To avoid float pointing error
+        self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
+        self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -281,7 +283,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     # High optimized model llama is not supported assisted decoding for now.
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_assisted_decoding(self, model_arch):
-        if model_arch == "llama2":
+        if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             return
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)

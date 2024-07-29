@@ -14,6 +14,7 @@
 
 from transformers.models.bert.modeling_bert import BertIntermediate
 from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconForCausalLM
+from transformers.models.gpt2.modeling_gpt2 import GPT2Block, GPT2LMHeadModel
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaForCausalLM,
@@ -29,6 +30,7 @@ from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
     _ipex_rms_layer_norm_forward,
     _IPEXFalconDecoderLayer,
+    _IPEXGPT2Block,
     _IPEXIntermediate,
     _IPEXLlamaDecoderLayer,
     _llama_model_forward,
@@ -77,9 +79,15 @@ def _patch_llama_model(model):
 
 
 def _patch_falcon_model(model):
-    replace_customized_linear_with_linear(model)
     model.transformer._use_sdpa = False
+    replace_customized_linear_with_linear(model)
     convert_class(model, FalconDecoderLayer, _IPEXFalconDecoderLayer, model.config)
+    return model
+
+
+def _patch_gpt2_model(model):
+    model.transformer._attn_implementation = "eager"
+    convert_class(model, GPT2Block, _IPEXGPT2Block, model.config)
     return model
 
 
@@ -106,6 +114,8 @@ def _patch_model(model):
         model = _patch_llama_model(model)
     elif isinstance(model, FalconForCausalLM):
         model = _patch_falcon_model(model)
+    elif isinstance(model, GPT2LMHeadModel):
+        model = _patch_gpt2_model(model)
     elif model.config.model_type == "bert":
         model = _patch_bert_model(model)
     elif model.config.model_type == "vit":

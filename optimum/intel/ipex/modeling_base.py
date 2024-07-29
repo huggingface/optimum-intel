@@ -64,7 +64,7 @@ from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, recursive_to_device
 logger = logging.getLogger(__name__)
 
 
-_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon")
+_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
@@ -485,6 +485,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             "persimmon",
             "mistral",
             "falcon",
+            "gpt2",
         }:
             self.prepare_inputs_for_generation = _ipex_prepare_inputs_for_generation
         else:

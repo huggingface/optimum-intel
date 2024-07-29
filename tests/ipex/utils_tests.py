@@ -25,6 +25,7 @@ MODEL_NAMES = {
     "codegen": "hf-internal-testing/tiny-random-CodeGenForCausalLM",
     "convnext": "hf-internal-testing/tiny-random-convnext",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
+    "distilgpt2": "Jiqing/tiny_random_distilgpt2",
     "electra": "hf-internal-testing/tiny-random-electra",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",

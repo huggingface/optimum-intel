@@ -164,12 +164,13 @@ class _IPEXAttention(nn.Module):
         self.ipex_scale_dot_product = IndirectAccessKVCacheAttention(
             text_max_length=module.config.max_position_embeddings
         )
-        self.ipex_rope = RotaryEmbedding(
-            module.config.max_position_embeddings,
-            module.config.hidden_size // module.config.num_attention_heads,
-            module.config.rope_theta,
-            module.config.architectures[0],
-        )
+        if hasattr(module.config, "rope_theta"):
+            self.ipex_rope = RotaryEmbedding(
+                module.config.max_position_embeddings,
+                module.config.hidden_size // module.config.num_attention_heads,
+                module.config.rope_theta,
+                module.config.architectures[0],
+            )
 
     def qkv_gemm(self, hidden_states):
         raise NotImplementedError("Need to implement in specific model class")
@@ -262,16 +263,9 @@ class _IPEXLlamaAttention(_IPEXAttention):
 
     def rope(self, query, key, kv_seq_len, use_cache, position_ids):
         if use_cache:
-            args = (
-                position_ids,
-                self.num_key_value_heads,
-                self.head_dim,
-                self.head_dim // 2,
-                self.head_dim,
-                kv_seq_len,
-            )
-            key = self.ipex_rope(key, *args)
-            query = self.ipex_rope(query, *args)
+            args = (self.head_dim, self.head_dim // 2, self.head_dim, kv_seq_len)
+            key = self.ipex_rope(key, position_ids, self.num_key_value_heads, *args)
+            query = self.ipex_rope(query, position_ids, self.num_heads, *args)
         return query, key
 
     # Adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L341
@@ -336,7 +330,35 @@ class _IPEXFalconAttention(_IPEXAttention):
         attn_output = attn_output.view(bs, self.num_heads, q_len, self.head_dim).transpose(1, 2)
         attn_output = attn_output.reshape(bs, q_len, self.num_heads * self.head_dim)
 
-        return attn_output, past_key_value
+        return attn_output, past_key_value, None
+
+
+class _IPEXGPT2Attention(_IPEXAttention):
+    def __init__(self, module, config) -> None:
+        super().__init__(module, config)
+        self.hidden_size = self.embed_dim
+        self._attn = module._attn
+        self._merge_heads = module._merge_heads
+
+    def _split_heads(self, tensor, num_heads, attn_head_size):
+        new_shape = tensor.size()[:-1] + (num_heads, attn_head_size)
+        return tensor.view(new_shape)  # (batch, seq_length, head, head_features)
+
+    def qkv_gemm(self, hidden_states):
+        query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
+        query = self._split_heads(query, self.num_heads, self.head_dim)
+        key = self._split_heads(key, self.num_heads, self.head_dim)
+        value = self._split_heads(value, self.num_heads, self.head_dim)
+        return query, key, value
+
+    def rope(self, query, key, *args, **kwargs):
+        return query, key
+
+    def sdpa_without_cache(self, query, key, value, past_key_value, attention_mask, **kwargs):
+        query, key, value = query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2)
+        attn_output = F.scaled_dot_product_attention(query, key, value, attention_mask, 0.0, is_causal=True)
+
+        return attn_output, None, None
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L186
@@ -489,10 +511,58 @@ class _IPEXFalconDecoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states, self_attn_output, residual)
 
         outputs = (hidden_states,)
-
         if output_attentions:
             outputs += (self_attn_weights,)
+        if use_cache:
+            outputs += (present_key_value,)
 
+        return outputs
+
+
+class _IPEXGPT2Block(nn.Module):
+    def __init__(self, module, config):
+        super().__init__()
+        _setattr_from_module(self, module)
+        self.attn = _IPEXGPT2Attention(module.attn, config)
+
+    def forward(
+        self,
+        hidden_states: Optional[Tuple[torch.FloatTensor]],
+        layer_past: Optional[Tuple[torch.Tensor]] = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        head_mask: Optional[torch.FloatTensor] = None,
+        use_cache: Optional[bool] = False,
+        output_attentions: Optional[bool] = False,
+        **kwargs,
+    ) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
+        bsz, seq_len, _ = hidden_states.size()
+        past_len = layer_past[0].size(-2) if layer_past is not None else 0
+        attention_mask = (1 - attention_mask / torch.finfo(attention_mask.dtype).min).squeeze(1, 2)
+        attention_mask = _prepare_4d_causal_attention_mask(attention_mask, (bsz, seq_len), hidden_states, past_len)
+        residual = hidden_states
+        hidden_states = self.ln_1(hidden_states)
+        attn_output, attn_weights, present_key_value = self.attn(
+            hidden_states,
+            past_key_value=layer_past,
+            attention_mask=attention_mask,
+            head_mask=head_mask,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+        )
+        attn_output = self.attn.c_proj(attn_output)
+        attn_output = self.attn.resid_dropout(attn_output)
+        # residual connection
+        hidden_states = attn_output + residual
+
+        residual = hidden_states
+        hidden_states = self.ln_2(hidden_states)
+        feed_forward_hidden_states = self.mlp(hidden_states)
+        # residual connection
+        hidden_states = residual + feed_forward_hidden_states
+
+        outputs = (hidden_states,)
+        if output_attentions:
+            outputs += (attn_weights,)
         if use_cache:
             outputs += (present_key_value,)
 
