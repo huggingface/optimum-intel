@@ -1892,7 +1892,7 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
         im_scale = min(dst_height / image_height, dst_width / image_width)
         return int(im_scale * image_width), int(im_scale * image_height)
 
-    def preprocess(self, image: PIL.Image.Image):
+    def preprocess(self, image: PIL.Image.Image, height, width):
         """
         Image preprocessing function. Takes image in PIL.Image format, resizes it to keep aspect ration and fits to model input window 512x512,
         then converts it to np.ndarray and adds padding with zeros on right or bottom side of image (depends from aspect ratio), after that
@@ -1906,10 +1906,10 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
         pad (Tuple[int]): pading size for each dimension for restoring image size in postprocessing
         """
         src_width, src_height = image.size
-        dst_width, dst_height = self.scale_fit_to_window(self.width, self.height, src_width, src_height)
+        dst_width, dst_height = self.scale_fit_to_window(width, height, src_width, src_height)
         image = np.array(image.resize((dst_width, dst_height), resample=PIL.Image.Resampling.LANCZOS))[None, :]
-        pad_width = self.width - dst_width
-        pad_height = self.height - dst_height
+        pad_width = width - dst_width
+        pad_height = height - dst_height
         pad = ((0, 0), (0, pad_height), (0, pad_width), (0, 0))
         image = np.pad(image, pad, mode="constant")
         image = image.astype(np.float32) / 255.0
@@ -1962,6 +1962,8 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
         controlnet_conditioning_scale: float = 1.0,
         eta: float = 0.0,
         latents: Optional[np.array] = None,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
     ):
         """
         Function invoked when calling the pipeline for generation.
@@ -2002,7 +2004,7 @@ class StableDiffusionContrlNetPipelineMixin(ConfigMixin):
 
         # 3. Preprocess image
         orig_width, orig_height = image.size
-        image, pad = self.preprocess(image)
+        image, pad = self.preprocess(image, height=height, width=width)
         height, width = image.shape[-2:]
         if do_classifier_free_guidance:
             image = np.concatenate(([image] * 2))
@@ -2129,4 +2131,6 @@ class OVStableDiffusionControlNetPipeline(
             controlnet_conditioning_scale=controlnet_conditioning_scale,
             eta=eta,
             latents=latents,
+            height=height,
+            width=width,
         )
