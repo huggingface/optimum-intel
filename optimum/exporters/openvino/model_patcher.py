@@ -101,6 +101,11 @@ def patch_model_with_bettertransformer(model):
     return model
 
 
+def patch_update_causal_mask(model, transformers_version):
+    if is_transformers_version(">=", transformers_version):
+        model.model._update_causal_mask = types.MethodType(_llama_gemma_update_causal_mask, model.model)
+
+
 def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
     """ """
     batch_size, sequence_length, hidden_dim = hidden_states.shape
@@ -144,10 +149,7 @@ def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torc
 class MixtralModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.42.0"):
-            self._model.model._update_causal_mask = types.MethodType(
-                _llama_gemma_update_causal_mask, self._model.model
-            )
+        patch_update_causal_mask(self._model, "4.42.0")
 
         for layer in self._model.model.layers:
             layer.block_sparse_moe._unpatched_forward = layer.block_sparse_moe.forward
@@ -557,11 +559,9 @@ class LlamaModelPatcher(DecoderModelPatcher):
 
         # llama/gemma has some accuracy issues with bf16 with transformers >= 4.39
         # fill causal mask in slightly different way for avoid overflow on some platforms
+        patch_update_causal_mask(self._model, "4.39.0")
+
         if is_transformers_version(">=", "4.39.0"):
-            self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
-            self._model.model._update_causal_mask = types.MethodType(
-                _llama_gemma_update_causal_mask, self._model.model
-            )
             register_sin_cos_buffer(self._model)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -1420,10 +1420,7 @@ class Phi3ModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        if is_transformers_version(">=", "4.42.0"):
-            self._model.model._update_causal_mask = types.MethodType(
-                _llama_gemma_update_causal_mask, self._model.model
-            )
+        patch_update_causal_mask(self._model, "4.42.0")
 
         # https://github.com/huggingface/transformers/blob/30ee508c6c92a1c0aa0281d193c7c0fb815b8d2f/src/transformers/models/phi3/modeling_phi3.py#L113
         # init inv_freq for torchscript tracing
@@ -2105,10 +2102,7 @@ def _persimmon_self_attn_sdpa_forward(
 class PersimmonModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        if is_transformers_version(">=", "4.42.0"):
-            self._model.model._update_causal_mask = types.MethodType(
-                _llama_gemma_update_causal_mask, self._model.model
-            )
+        patch_update_causal_mask(self._model, "4.42.0")
 
         for layer in self._model.model.layers:
             if is_torch_version(">=", "2.1.0"):
@@ -2118,6 +2112,8 @@ class PersimmonModelPatcher(DecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model.model, "_orig_update_causal_mask"):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
         for layer in self._model.model.layers:
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
@@ -2242,3 +2238,14 @@ class JaisModelPatcher(DecoderModelPatcher):
             if hasattr(layer.attn, "_orig_attn"):
                 layer.attn._attn = layer.attn._orig_attn
                 layer.attn.forward = layer.attn._orig_forward
+
+
+class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        patch_update_causal_mask(self._model, "4.42.0")
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model.model, "_orig_update_causal_mask"):
+            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
