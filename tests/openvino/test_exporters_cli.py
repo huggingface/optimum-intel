@@ -39,7 +39,7 @@ from optimum.intel import (  # noqa
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
-from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, _DEFAULT_4BIT_CONFIG
+from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
 

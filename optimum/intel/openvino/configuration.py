@@ -114,7 +114,6 @@ _DEFAULT_4BIT_CONFIGS = {
     "microsoft/phi-2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
 }
 
-
 _DEFAULT_4BIT_CONFIG = {
     "bits": 4,
     "ratio": 1.0,
