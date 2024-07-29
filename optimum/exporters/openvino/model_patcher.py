@@ -1436,9 +1436,6 @@ class Phi3ModelPatcher(DecoderModelPatcher):
                     rotary_emb.base ** (torch.arange(0, rotary_emb.dim, 2, dtype=torch.int64).float() / rotary_emb.dim)
                 )
 
-        # phi3 has issue with bf16 inference, precollect sin/cos for rotary_position_embedding for avoid accuracy issues
-        register_sin_cos_buffer(self._model)
-
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         if hasattr(self._model.model, "_orig_update_causal_mask"):
