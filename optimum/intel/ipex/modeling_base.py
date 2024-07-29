@@ -60,7 +60,6 @@ from ..generation.modeling import prepare_jit_inputs
 from ..utils.import_utils import is_ipex_version, is_torch_version, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, recursive_to_device
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -129,6 +128,21 @@ def ipex_jit_trace(model, task, use_cache):
 
     return trace_model
 
+def get_int_from_env(env_keys, default):
+    """Returns the first positive env value found in the `env_keys` list or the default."""
+    for e in env_keys:
+        val = int(os.environ.get(e, -1))
+        if val >= 0:
+            return val
+    return default
+
+def get_number_of_sockets():
+    sockets = set()
+    with open('/proc/cpuinfo') as f:
+        for line in f:
+            if line.startswith('physical id'):
+                sockets.add(line.strip().split()[-1])
+    return len(sockets)
 
 class IPEXModel(OptimizedModel):
     auto_model_class = AutoModel
@@ -152,6 +166,18 @@ class IPEXModel(OptimizedModel):
             self._device = torch.device("cuda:0")
         else:
             self._device = torch.device("cpu")
+
+            import numa
+            import psutil
+            n_sockets=get_number_of_sockets()
+            num_cpu_threads_per_process = int(psutil.cpu_count(logical=False) / n_sockets)
+            os.environ["OMP_NUM_THREADS"]=str(num_cpu_threads_per_process)
+            torch.set_num_threads(num_cpu_threads_per_process)
+            numa.set_affinity(0,range(num_cpu_threads_per_process))
+            numa.set_membind([0])
+            print("affinity", numa.get_affinity(0))
+            print("membind", numa.get_membind())
+
 
         # CPU only support jit model for now.
         if export:
