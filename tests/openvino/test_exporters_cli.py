@@ -39,7 +39,7 @@ from optimum.intel import (  # noqa
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
-from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS
+from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS, _DEFAULT_4BIT_CONFIG
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
 
@@ -253,9 +253,9 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
-            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["bloom"])
+            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["falcon-40b"])
             # overload for matching with default configuration
-            pt_model.config._name_or_path = "bigscience/bloomz-7b1"
+            pt_model.config._name_or_path = "tiiuae/falcon-7b-instruct"
             pt_model.save_pretrained(tmpdir)
             subprocess.run(
                 f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",
@@ -267,7 +267,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             rt_info = model.model.get_rt_info()
             self.assertTrue("nncf" in rt_info)
             self.assertTrue("weight_compression" in rt_info["nncf"])
-            default_config = _DEFAULT_4BIT_CONFIGS["bigscience/bloomz-7b1"]
+            default_config = _DEFAULT_4BIT_CONFIGS["tiiuae/falcon-7b-instruct"]
             model_weight_compression_config = rt_info["nncf"]["weight_compression"]
             sym = default_config.pop("sym", False)
             bits = default_config.pop("bits", None)
