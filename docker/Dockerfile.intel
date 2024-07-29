@@ -10,8 +10,6 @@
 
 ARG BASE_IMAGE=ubuntu:22.04
 FROM ${BASE_IMAGE}
-ENV http_proxy=http://proxy-chain.intel.com:912
-ENV https_proxy=http://proxy-chain.intel.com:912
 
 RUN --mount=type=cache,id=apt-dev,target=/var/cache/apt \
     sh -c "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
