@@ -17,7 +17,7 @@ Optimum Intel can be used to load models from the [Hub](https://huggingface.co/m
 ### Transformers models
 
 You can load models from HuggingFace Model Hub, it will be optimized by ipex (including patching, weight prepack and graph mode) during loading.
-For now, the IPEX optimization only supports for CPU model, and it will export the original model to torchscript model. The export format will be changed to torch compile in the future.
+For now, the IPEX optimization is only supported for CPUs, the original model will be exported via TorchScript. In the future `torch.compile` will be used and model exported via TorchScript will get deprecated.
 
 ```diff
   import torch
