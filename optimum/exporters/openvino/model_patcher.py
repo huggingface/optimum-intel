@@ -1443,7 +1443,6 @@ class Phi3ModelPatcher(DecoderModelPatcher):
         for layer in self._model.model.layers:
             if hasattr(layer.self_attn, "_orig_forward"):
                 layer.self_attn.forward = layer.self_attn._orig_forward
-            layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
 
 
 def _aquila_self_attn_sdpa_forward(
