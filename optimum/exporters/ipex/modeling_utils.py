@@ -21,6 +21,7 @@ from torch import nn
 from torch.nn import functional as F
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
+from transformers.models.gpt2.modeling_gpt2 import GPT2Block
 from transformers.models.llama.modeling_llama import apply_rotary_pos_emb as llama_apply_rotary_pos_emb
 from transformers.models.llama.modeling_llama import repeat_kv as llama_repeat_kv
 
@@ -156,6 +157,19 @@ def _llama_model_forward(
     )
 
 
+def _gpt2_block_forward(self, hidden_states, *args, **kwargs):
+    attention_mask = kwargs.get("attention_mask", None)
+    if attention_mask is not None:
+        bsz, seq_len, _ = hidden_states.size()
+        layer_past = kwargs.get("layer_past", None)
+        past_len = layer_past[0].size(-2) if layer_past is not None else 0
+        attention_mask = (1 - attention_mask / torch.finfo(attention_mask.dtype).min).squeeze(1, 2)
+        attention_mask = _prepare_4d_causal_attention_mask(attention_mask, (bsz, seq_len), hidden_states, past_len)
+        kwargs["attention_mask"] = attention_mask
+
+    return GPT2Block.forward(self, hidden_states, *args, **kwargs)
+
+
 class _IPEXAttention(nn.Module):
     def __init__(self, module, config) -> None:
         super().__init__()
@@ -199,6 +213,10 @@ class _IPEXAttention(nn.Module):
     def prepare_attention_mask_float(self, attention_mask, *args):
         return attention_mask
 
+    def postprocess_attention_output(self, attn_output, bsz, seq_len):
+        attn_output = attn_output.transpose(1, 2).reshape(bsz, seq_len, self.hidden_size)
+        return attn_output
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -210,6 +228,8 @@ class _IPEXAttention(nn.Module):
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         # Please see the original model's forward to check the parameter
+        if past_key_value is None and kwargs.get("layer_past", None) is not None:
+            past_key_value = kwargs.pop("layer_past", None)
         bsz, seq_len, _ = hidden_states.size()
         past_len = past_key_value[0].size(-2) if past_key_value is not None else 0
         kv_seq_len = seq_len + past_len
@@ -233,12 +253,12 @@ class _IPEXAttention(nn.Module):
             head_mask=kwargs.get("head_mask", None),
             alibi=kwargs.get("alibi", None),
         )
-        attn_output = attn_output.transpose(1, 2).reshape(bsz, seq_len, self.hidden_size)
+        attn_output = self.postprocess_attention_output(attn_output, bsz, seq_len)
 
         if not output_attentions:
             attn_weights = None
 
-        return attn_output, attn_weights, past_key_value
+        return attn_output, past_key_value, attn_weights
 
 
 class _IPEXLlamaAttention(_IPEXAttention):
@@ -270,24 +290,21 @@ class _IPEXLlamaAttention(_IPEXAttention):
 
     # Adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L341
     def sdpa_without_cache(self, query, key, value, past_key_value, attention_mask, position_ids, **kwargs):
-        value_states = value.transpose(1, 2)
-        query_states = query.transpose(1, 2)
-        key_states = key.transpose(1, 2)
-        cos, sin = self.rotary_emb(value_states, position_ids)
-        query_states, key_states = llama_apply_rotary_pos_emb(query_states, key_states, cos, sin)
-        past_key_value = None
+        query, key, value = query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2)
+        cos, sin = self.rotary_emb(value, position_ids)
+        query, key = llama_apply_rotary_pos_emb(query, key, cos, sin)
         # repeat k/v heads if n_kv_heads < n_heads
-        key_states = llama_repeat_kv(key_states, self.num_key_value_groups)
-        value_states = llama_repeat_kv(value_states, self.num_key_value_groups)
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        key = llama_repeat_kv(key, self.num_key_value_groups)
+        value = llama_repeat_kv(value, self.num_key_value_groups)
+        attn_weights = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(self.head_dim)
         if attention_mask is not None:
             attn_weights = torch.tensor(attn_weights) + torch.tensor(attention_mask)
             attn_weights = torch.max(attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min))
         # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_output = torch.matmul(attn_weights, value_states)
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+        attn_output = torch.matmul(attn_weights, value)
 
-        return attn_output, past_key_value, attn_weights
+        return attn_output, None, attn_weights
 
 
 class _IPEXFalconAttention(_IPEXAttention):
@@ -318,27 +335,16 @@ class _IPEXFalconAttention(_IPEXAttention):
 
     def sdpa_without_cache(self, query, key, value, past_key_value, attention_mask, **kwargs):
         bs, q_len = query.shape[0], query.shape[1]
-        query = query.transpose(1, 2).reshape(bs * self.num_heads, q_len, self.head_dim)
-        key = key.transpose(1, 2).reshape(bs * self.num_kv_heads, q_len, self.head_dim)
-        value = value.transpose(1, 2).reshape(bs * self.num_kv_heads, q_len, self.head_dim)
-        attention_mask_float = (attention_mask * 1.0).masked_fill(attention_mask, float("-1e9")).to(query.dtype)
-        query = query.reshape(bs, self.num_heads, -1, self.head_dim)
-        key = key.reshape(bs, self.num_kv_heads, -1, self.head_dim)
-        value = value.reshape(bs, self.num_kv_heads, -1, self.head_dim)
-        past_key_value = None
-        attn_output = F.scaled_dot_product_attention(query, key, value, attention_mask_float, 0.0, is_causal=False)
-        attn_output = attn_output.view(bs, self.num_heads, q_len, self.head_dim).transpose(1, 2)
-        attn_output = attn_output.reshape(bs, q_len, self.num_heads * self.head_dim)
+        query, key, value = query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2)
+        attn_output = F.scaled_dot_product_attention(query, key, value, attention_mask, 0.0, is_causal=False)
+        attn_output = attn_output.view(bs, self.num_heads, q_len, self.head_dim)
 
-        return attn_output, past_key_value, None
+        return attn_output, None, None
 
 
 class _IPEXGPT2Attention(_IPEXAttention):
     def __init__(self, module, config) -> None:
         super().__init__(module, config)
-        self.hidden_size = self.embed_dim
-        self._attn = module._attn
-        self._merge_heads = module._merge_heads
 
     def _split_heads(self, tensor, num_heads, attn_head_size):
         new_shape = tensor.size()[:-1] + (num_heads, attn_head_size)
@@ -359,6 +365,12 @@ class _IPEXGPT2Attention(_IPEXAttention):
         attn_output = F.scaled_dot_product_attention(query, key, value, attention_mask, 0.0, is_causal=True)
 
         return attn_output, None, None
+
+    def postprocess_attention_output(self, attn_output, bsz, seq_len):
+        attn_output = attn_output.transpose(1, 2).reshape(bsz, seq_len, self.embed_dim)
+        attn_output = self.c_proj(attn_output)
+        attn_output = self.resid_dropout(attn_output)
+        return attn_output
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/llama/modeling_llama.py#L186
@@ -442,7 +454,7 @@ class _IPEXLlamaDecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        hidden_states, present_key_value, self_attn_weights = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -497,7 +509,7 @@ class _IPEXFalconDecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        self_attn_output, self_attn_weights, present_key_value = self.self_attention(
+        self_attn_output, present_key_value, self_attn_weights = self.self_attention(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -513,56 +525,6 @@ class _IPEXFalconDecoderLayer(nn.Module):
         outputs = (hidden_states,)
         if output_attentions:
             outputs += (self_attn_weights,)
-        if use_cache:
-            outputs += (present_key_value,)
-
-        return outputs
-
-
-class _IPEXGPT2Block(nn.Module):
-    def __init__(self, module, config):
-        super().__init__()
-        _setattr_from_module(self, module)
-        self.attn = _IPEXGPT2Attention(module.attn, config)
-
-    def forward(
-        self,
-        hidden_states: Optional[Tuple[torch.FloatTensor]],
-        layer_past: Optional[Tuple[torch.Tensor]] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        use_cache: Optional[bool] = False,
-        output_attentions: Optional[bool] = False,
-        **kwargs,
-    ) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
-        bsz, seq_len, _ = hidden_states.size()
-        past_len = layer_past[0].size(-2) if layer_past is not None else 0
-        attention_mask = (1 - attention_mask / torch.finfo(attention_mask.dtype).min).squeeze(1, 2)
-        attention_mask = _prepare_4d_causal_attention_mask(attention_mask, (bsz, seq_len), hidden_states, past_len)
-        residual = hidden_states
-        hidden_states = self.ln_1(hidden_states)
-        attn_output, attn_weights, present_key_value = self.attn(
-            hidden_states,
-            past_key_value=layer_past,
-            attention_mask=attention_mask,
-            head_mask=head_mask,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-        )
-        attn_output = self.attn.c_proj(attn_output)
-        attn_output = self.attn.resid_dropout(attn_output)
-        # residual connection
-        hidden_states = attn_output + residual
-
-        residual = hidden_states
-        hidden_states = self.ln_2(hidden_states)
-        feed_forward_hidden_states = self.mlp(hidden_states)
-        # residual connection
-        hidden_states = residual + feed_forward_hidden_states
-
-        outputs = (hidden_states,)
-        if output_attentions:
-            outputs += (attn_weights,)
         if use_cache:
             outputs += (present_key_value,)
 

@@ -14,7 +14,7 @@
 
 from transformers.models.bert.modeling_bert import BertIntermediate
 from transformers.models.falcon.modeling_falcon import FalconDecoderLayer, FalconForCausalLM
-from transformers.models.gpt2.modeling_gpt2 import GPT2Block, GPT2LMHeadModel
+from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block, GPT2LMHeadModel
 from transformers.models.llama.modeling_llama import (
     LlamaDecoderLayer,
     LlamaForCausalLM,
@@ -28,9 +28,10 @@ from optimum.intel.utils.modeling_utils import replace_customized_linear_with_li
 
 from .modeling_utils import (
     _IPEX_MINIMUM_VERSION_FOR_PATCHING,
+    _gpt2_block_forward,
     _ipex_rms_layer_norm_forward,
     _IPEXFalconDecoderLayer,
-    _IPEXGPT2Block,
+    _IPEXGPT2Attention,
     _IPEXIntermediate,
     _IPEXLlamaDecoderLayer,
     _llama_model_forward,
@@ -87,7 +88,8 @@ def _patch_falcon_model(model):
 
 def _patch_gpt2_model(model):
     model.transformer._attn_implementation = "eager"
-    convert_class(model, GPT2Block, _IPEXGPT2Block, model.config)
+    convert_class(model, GPT2Attention, _IPEXGPT2Attention, model.config)
+    convert_functions(model, GPT2Block, "forward", _gpt2_block_forward)
     return model
 
 

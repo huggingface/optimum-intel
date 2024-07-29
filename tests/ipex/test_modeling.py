@@ -213,6 +213,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "blenderbot-small",
         "bloom",
         "codegen",
+        "falcon",
         "gpt2",
         "gpt_neo",
         "gpt_neox",
@@ -224,7 +225,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "mpt",
         "opt",
     )
-    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "distilgpt2")
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "distilgpt2", "falcon")
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 

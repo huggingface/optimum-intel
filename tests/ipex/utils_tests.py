@@ -28,6 +28,7 @@ MODEL_NAMES = {
     "distilgpt2": "Jiqing/tiny_random_distilgpt2",
     "electra": "hf-internal-testing/tiny-random-electra",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
+    "falcon": "Jiqing/tiny_random_falcon",
     "gpt_bigcode": "hf-internal-testing/tiny-random-GPTBigCodeModel",
     "gpt2": "hf-internal-testing/tiny-random-gpt2",
     "gpt_neo": "hf-internal-testing/tiny-random-GPTNeoModel",
