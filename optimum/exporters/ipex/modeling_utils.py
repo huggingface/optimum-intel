@@ -22,8 +22,7 @@ from torch.nn import functional as F
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.models.gpt2.modeling_gpt2 import GPT2Block
-from transformers.models.llama.modeling_llama import apply_rotary_pos_emb as llama_apply_rotary_pos_emb
-from transformers.models.llama.modeling_llama import repeat_kv as llama_repeat_kv
+from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repeat_kv
 
 from optimum.intel.utils.import_utils import is_ipex_version
 from optimum.intel.utils.modeling_utils import _setattr_from_module
@@ -287,10 +286,10 @@ class _IPEXLlamaAttention(_IPEXAttention):
     def sdpa_without_cache(self, query, key, value, past_key_value, attention_mask, position_ids, **kwargs):
         query, key, value = query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2)
         cos, sin = self.rotary_emb(value, position_ids)
-        query, key = llama_apply_rotary_pos_emb(query, key, cos, sin)
+        query, key = apply_rotary_pos_emb(query, key, cos, sin)
         # repeat k/v heads if n_kv_heads < n_heads
-        key = llama_repeat_kv(key, self.num_key_value_groups)
-        value = llama_repeat_kv(value, self.num_key_value_groups)
+        key = repeat_kv(key, self.num_key_value_groups)
+        value = repeat_kv(value, self.num_key_value_groups)
         attn_weights = torch.matmul(query, key.transpose(2, 3)) / math.sqrt(self.head_dim)
         if attention_mask is not None:
             attn_weights = torch.tensor(attn_weights) + torch.tensor(attention_mask)
