@@ -64,7 +64,7 @@ model = OVModelForCausalLM.from_pretrained(model_id, quantization_config=quantiz
 You can tune quantization parameters to achieve a better performance accuracy trade-off as follows:
 
 ```python
-quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, dataset="ptb")
+quantization_config = OVWeightQuantizationConfig(bits=4, sym=False, ratio=0.8, dataset="wikitext2")
 ```
 
 By default the quantization scheme will be [asymmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/usage/training_time_compression/other_algorithms/LegacyQuantization.md#asymmetric-quantization), to make it [symmetric](https://github.com/openvinotoolkit/nncf/blob/develop/docs/usage/training_time_compression/other_algorithms/LegacyQuantization.md#symmetric-quantization) you can add `sym=True`.

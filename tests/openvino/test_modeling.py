@@ -249,13 +249,15 @@ class OVModelIntegrationTest(unittest.TestCase):
         del pipeline
         gc.collect()
 
+    @pytest.mark.run_slow
+    @slow
     def test_load_model_from_hub_private_with_token(self):
         token = os.environ.get("HF_HUB_READ_TOKEN", None)
         if token is None:
             self.skipTest("Test requires a token `HF_HUB_READ_TOKEN` in the environment variable")
 
         model = OVModelForCausalLM.from_pretrained(
-            "optimum-internal-testing/tiny-random-phi-private", use_auth_token=token, revision="openvino"
+            "optimum-internal-testing/tiny-random-phi-private", token=token, revision="openvino"
         )
         self.assertIsInstance(model.config, PretrainedConfig)
 

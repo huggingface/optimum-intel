@@ -40,8 +40,8 @@ jobs:
         # ffmpeg, torchaudio and pillow are required for image classification and audio classification pipelines
         sudo apt-get install ffmpeg
         pip install torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
-        pip install ".[tests, openvino]" nbval
         pip install -r notebooks/openvino/requirements.txt
+        pip install .[tests,openvino] nbval
 
     - run: free -h
     - run: lscpu
