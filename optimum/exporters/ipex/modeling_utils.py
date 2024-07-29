@@ -270,14 +270,9 @@ class _IPEXLlamaAttention(_IPEXAttention):
 
     def qkv_gemm(self, hidden_states):
         bsz, seq_len, _ = hidden_states.size()
-
-        query = self.q_proj(hidden_states)
-        key = self.k_proj(hidden_states)
-        value = self.v_proj(hidden_states)
-
-        query = query.view(bsz, seq_len, self.num_heads, self.head_dim)
-        key = key.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
-        value = value.view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        query = self.q_proj(hidden_states).view(bsz, seq_len, self.num_heads, self.head_dim)
+        key = self.k_proj(hidden_states).view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        value = self.v_proj(hidden_states).view(bsz, seq_len, self.num_key_value_heads, self.head_dim)
 
         return query, key, value
 
@@ -439,50 +434,28 @@ class _IPEXLlamaDecoderLayer(nn.Module):
         self.self_attn = _IPEXLlamaAttention(module.self_attn, config)
         self.mlp = _IPEXLlamaMLP(module.mlp, config)
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-        **kwargs,
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    def forward(self, hidden_states: torch.Tensor, **kwargs):
         # Please see the original model's forward to check the parameter
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-
         # Self Attention
-        hidden_states, present_key_value, self_attn_weights = self.self_attn(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-            cache_position=None,
-            **kwargs,
-        )
+        hidden_states, present, attn_weights = self.self_attn(hidden_states=hidden_states, **kwargs)
 
         if hasattr(self.self_attn, "mha_linear_add"):
             hidden_states = self.self_attn.mha_linear_add(hidden_states, residual)
         else:
             hidden_states = self.self_attn.o_proj(hidden_states)
             hidden_states = residual + hidden_states
-
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states, residual, **kwargs)
 
         outputs = (hidden_states,)
-
-        if output_attentions:
-            outputs += (self_attn_weights,)
-
-        if use_cache:
-            outputs += (present_key_value,)
+        if kwargs.get("output_attentions", False):
+            outputs += (attn_weights,)
+        if kwargs.get("use_cache", False):
+            outputs += (present,)
 
         return outputs
 
@@ -494,39 +467,21 @@ class _IPEXFalconDecoderLayer(nn.Module):
         self.self_attention = _IPEXFalconAttention(module.self_attention, config)
         self.mlp = _IPEXFalconMLP(module.mlp, config)
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        layer_past: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-        **kwargs,
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    def forward(self, hidden_states: torch.Tensor, **kwargs):
         # Please see the original model's forward to check the parameter
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
         # Self Attention
-        self_attn_output, present_key_value, self_attn_weights = self.self_attention(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=layer_past,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-            cache_position=None,
-            **kwargs,
-        )
-        self_attn_output = self.self_attention.dense(self_attn_output)
-        hidden_states = self.mlp(hidden_states, self_attn_output, residual)
+        attn_output, present, attn_weights = self.self_attention(hidden_states, **kwargs)
+        attn_output = self.self_attention.dense(attn_output)
+        hidden_states = self.mlp(hidden_states, attn_output, residual)
 
         outputs = (hidden_states,)
-        if output_attentions:
-            outputs += (self_attn_weights,)
-        if use_cache:
-            outputs += (present_key_value,)
+        if kwargs.get("output_attentions", False):
+            outputs += (attn_weights,)
+        if kwargs.get("use_cache", False):
+            outputs += (present,)
 
         return outputs
 
