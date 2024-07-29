@@ -5,13 +5,13 @@ on:
     branches:
       - main
     paths:
-      - 'Dockerfile.intel'
+      - 'docker/Dockerfile.intel'
  
   pull_request:
     branches:
       - main
     paths:
-      - 'Dockerfile.intel'
+      - 'docker/Dockerfile.intel'
 
 jobs:
   build_and_run:
