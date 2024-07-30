@@ -174,15 +174,13 @@ class _IPEXAttention(nn.Module):
         super().__init__()
         _setattr_from_module(self, module)
         self.config = config
-        self.ipex_scale_dot_product = IndirectAccessKVCacheAttention(
-            text_max_length=module.config.max_position_embeddings
-        )
-        if hasattr(module.config, "rope_theta"):
+        self.ipex_scale_dot_product = IndirectAccessKVCacheAttention(text_max_length=config.max_position_embeddings)
+        if hasattr(config, "rope_theta"):
             self.ipex_rope = RotaryEmbedding(
-                module.config.max_position_embeddings,
-                module.config.hidden_size // module.config.num_attention_heads,
-                module.config.rope_theta,
-                module.config.architectures[0],
+                config.max_position_embeddings,
+                config.hidden_size // config.num_attention_heads,
+                config.rope_theta,
+                config.architectures[0],
             )
 
     def qkv_gemm(self, hidden_states):
@@ -340,15 +338,15 @@ class _IPEXGPT2Attention(_IPEXAttention):
     def __init__(self, module, config) -> None:
         super().__init__(module, config)
 
-    def _split_heads(self, tensor, num_heads, attn_head_size):
+    def _split_heads_ipex(self, tensor, num_heads, attn_head_size):
         new_shape = tensor.size()[:-1] + (num_heads, attn_head_size)
         return tensor.view(new_shape)  # (batch, seq_length, head, head_features)
 
     def qkv_gemm(self, hidden_states):
         query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
-        query = self._split_heads(query, self.num_heads, self.head_dim)
-        key = self._split_heads(key, self.num_heads, self.head_dim)
-        value = self._split_heads(value, self.num_heads, self.head_dim)
+        query = self._split_heads_ipex(query, self.num_heads, self.head_dim)
+        key = self._split_heads_ipex(key, self.num_heads, self.head_dim)
+        value = self._split_heads_ipex(value, self.num_heads, self.head_dim)
         return query, key, value
 
     def rope(self, query, key, *args, **kwargs):
