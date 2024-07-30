@@ -104,7 +104,7 @@ def _find_files_matching_pattern(
         token = use_auth_token
 
     library_name = TasksManager.infer_library_from_model(
-        model_name_or_path, subfolder=subfolder, revision=revision, token=token
+        str(model_name_or_path), subfolder=subfolder, revision=revision, token=token
     )
     if library_name == "diffusers":
         subfolder = os.path.join(subfolder, "unet")
