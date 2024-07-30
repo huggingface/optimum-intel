@@ -76,7 +76,7 @@ logger = logging.getLogger(__name__)
 class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
     auto_model_class = StableDiffusionPipeline
     config_name = "model_index.json"
-    export_feature = "stable-diffusion"
+    export_feature = "text-to-image"
 
     def __init__(
         self,
@@ -778,6 +778,8 @@ class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPi
 
 
 class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiffusionImg2ImgPipelineMixin):
+    export_feature = "image-to-image"
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
@@ -820,6 +822,8 @@ class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiff
 
 
 class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiffusionInpaintPipelineMixin):
+    export_feature = "inpainting"
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]],
@@ -891,7 +895,6 @@ class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiff
 
 class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
     auto_model_class = StableDiffusionXLPipeline
-    export_feature = "stable-diffusion-xl"
 
     def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -967,6 +970,7 @@ class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusi
 
 class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLImg2ImgPipelineMixin):
     auto_model_class = StableDiffusionXLImg2ImgPipeline
+    export_feature = "image-to-image"
 
     def __call__(
         self,
