@@ -1,0 +1,44 @@
+name: Build and Test Docker Image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docker/Dockerfile.intel'
+ 
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'docker/Dockerfile.intel'
+
+jobs:
+  build_and_run:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and Run Docker Image
+      run: |
+        IMAGE_NAME="intel_image:latest"
+        docker build -f docker/Dockerfile.intel -t $IMAGE_NAME .
+        if [ $? -ne 0 ]; then
+          echo "Docker image build failed."
+          exit 1
+        fi
+        CONTAINER_ID=$(docker run -d $IMAGE_NAME tail -f /dev/null)
+        if docker inspect -f '{{.State.Running}}' $CONTAINER_ID 2>/dev/null | grep -q 'true'; then
+          echo "Container is running."
+        else
+          echo "Container failed to start."
+          docker logs $CONTAINER_ID 2>/dev/null || echo "No container ID found."
+          exit 1
+        fi
+        docker stop $CONTAINER_ID
+        docker rm $CONTAINER_ID
