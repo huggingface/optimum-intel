@@ -236,7 +236,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            18 if is_transformers_version(">=", "4.39") else 16,
+            16,
         ),
         (
             OVModelForCausalLM,
@@ -250,7 +250,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            18 if is_transformers_version(">=", "4.39") else 16,
+            16,
         ),
     )
 
