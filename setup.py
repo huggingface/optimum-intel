@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 
 from setuptools import find_namespace_packages, setup
 
@@ -27,7 +28,7 @@ except Exception as error:
     assert False, "Error: Could not open '%s' due %s\n" % (filepath, error)
 
 INSTALL_REQUIRE = [
-    "torch>=1.11",
+    "torch>=1.11,<2.4" if sys.platform.startswith("win") else "torch>=1.11",
     "transformers>=4.36.0,<4.43.0",
     "optimum@git+https://github.com/huggingface/optimum.git",
     "datasets>=1.4.0",
