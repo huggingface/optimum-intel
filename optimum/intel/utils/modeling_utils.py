@@ -113,6 +113,9 @@ def _find_files_matching_pattern(
 
 
 def replace_customized_linear_with_linear(model):
+    """
+    Replace custom linear to torch linear so ipex could recognize and replace them to ipex linear.
+    """
     if isinstance(model, torch.jit.ScriptModule):
         return
     if not model.training:
