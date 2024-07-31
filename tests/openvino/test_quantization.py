@@ -236,7 +236,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            18 if is_transformers_version(">=", "4.39") else 16,
+            16,
         ),
         (
             OVModelForCausalLM,
@@ -250,7 +250,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            18 if is_transformers_version(">=", "4.39") else 16,
+            16,
         ),
     )
 
@@ -395,9 +395,9 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
-        elif model.export_feature.startswith("stable-diffusion"):
+        elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
         else:
             models = [model]
 
@@ -500,12 +500,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=False)
-
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
-        elif model.export_feature.startswith("stable-diffusion"):
+        elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
         else:
             models = [model]
 

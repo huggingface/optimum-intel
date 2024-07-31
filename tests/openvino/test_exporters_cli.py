@@ -99,21 +99,21 @@ class OVCLIExportTestCase(unittest.TestCase):
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
             0,
-            32 if is_transformers_version("<", "4.39.0") else 34,
+            32,
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
-            6 if is_transformers_version(">=", "4.39") else 4,
+            4,
             28,
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --scale-estimation --dataset wikitext2 --num-samples 100 ",
-            6 if is_transformers_version(">=", "4.39") else 4,
+            4,
             28,
         ),
     ]
