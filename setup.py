@@ -28,7 +28,7 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "transformers>=4.37.0,<=4.43.0",
+    "transformers>=4.37.0,<4.44.0",
     "optimum@git+https://github.com/huggingface/optimum.git@support-transformers-4.43",
     "datasets>=1.4.0",
     "sentencepiece",
@@ -62,7 +62,7 @@ EXTRAS_REQUIRE = {
     "neural-compressor": ["neural-compressor>=2.2.0", "accelerate"],
     "openvino": ["openvino>=2023.3", "nncf>=2.11.0", "openvino-tokenizers[transformers]"],
     "nncf": ["nncf>=2.11.0"],
-    "ipex": ["intel-extension-for-pytorch", "transformers>=4.39.0,<=4.42.3"],
+    "ipex": ["intel-extension-for-pytorch", "transformers>=4.39.0,<4.44.0"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
