@@ -41,7 +41,7 @@ from optimum.intel import (  # noqa
 )
 from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
-from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
+from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
 
 
 class OVCLIExportTestCase(unittest.TestCase):
