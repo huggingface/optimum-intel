@@ -350,6 +350,8 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             shapes[inputs][0] = batch_size if not is_decoder else -1
             if inputs.get_any_name().startswith("past_key_values"):
                 shapes[inputs][2] = -1
+            elif inputs.get_any_name().startswith("cache_position"):
+                shapes[inputs][0] = sequence_length
             elif is_decoder and not inputs.get_any_name().startswith("encoder"):
                 shapes[inputs][1] = -1
             else:
