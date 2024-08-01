@@ -13,7 +13,6 @@
 # limitations under the License.
 """Defines the command line for the export with OpenVINO."""
 
-import json
 import logging
 import sys
 from pathlib import Path
@@ -213,27 +212,21 @@ class OVExportCommand(BaseOptimumCLICommand):
 
     def run(self):
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
-        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, _DEFAULT_4BIT_CONFIGS, OVConfig
+        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, OVConfig, get_default_int4_config
 
-        def _get_default_int4_config(model_id_or_path, library_name):
-            if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
-                return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
-            if "transformers" in library_name and (Path(model_id_or_path) / "config.json").exists():
-                with (Path(model_id_or_path) / "config.json").open("r") as config_f:
-                    config = json.load(config_f)
-                    original_model_name = config.get("_name_or_path", "")
-                if original_model_name in _DEFAULT_4BIT_CONFIGS:
-                    return _DEFAULT_4BIT_CONFIGS[original_model_name]
-
-            return _DEFAULT_4BIT_CONFIG
-
-        library_name = TasksManager.infer_library_from_model(self.args.model, library_name=self.args.library)
-        if library_name == "sentence_transformers" and self.args.library is None:
-            logger.warning(
-                "Library name is not specified. There are multiple possible variants: `sentence_transformers`, `transformers`."
-                "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+        if self.args.library is None:
+            # TODO: add revision, subfolder and token to args
+            library_name = TasksManager._infer_library_from_model_name_or_path(
+                model_name_or_path=self.args.model, cache_dir=self.args.cache_dir
             )
-            library_name = "transformers"
+            if library_name == "sentence_transformers":
+                logger.warning(
+                    "Library name is not specified. There are multiple possible variants: `sentence_transformers`, `transformers`."
+                    "`transformers` will be selected. If you want to load your model with the `sentence-transformers` library instead, please set --library sentence_transformers"
+                )
+                library_name = "transformers"
+        else:
+            library_name = self.args.library
 
         if self.args.weight_format is None:
             ov_config = None
@@ -254,7 +247,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 and self.args.awq is None
                 and self.args.sensitivity_metric is None
             ):
-                quantization_config = _get_default_int4_config(self.args.model, library_name)
+                quantization_config = get_default_int4_config(self.args.model)
             else:
                 quantization_config = {
                     "bits": 8 if is_int8 else 4,
