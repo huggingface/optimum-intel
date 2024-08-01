@@ -86,16 +86,16 @@ class OVCLIExportTestCase(unittest.TestCase):
     )
 
     TEST_4BIT_CONFIGURATONS = [
-        ("text-generation-with-past", "opt125m", "int4_sym_g128", 4, 144),
+        ("text-generation-with-past", "opt125m", "int4_sym_g128", 4, 72),
         ("text-generation-with-past", "opt125m", "int4_asym_g128", 4, 144),
-        ("text-generation-with-past", "opt125m", "int4_sym_g64", 4, 144),
+        ("text-generation-with-past", "opt125m", "int4_sym_g64", 4, 72),
         ("text-generation-with-past", "opt125m", "int4_asym_g64", 4, 144),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
             0,
-            32,
+            16,
         ),
         (
             "text-generation-with-past",
@@ -103,14 +103,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
             4,
-            28,
+            14,
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --scale-estimation --dataset wikitext2 --num-samples 100 ",
             4,
-            28,
+            14,
         ),
     ]
 
