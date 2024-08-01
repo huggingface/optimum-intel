@@ -208,7 +208,9 @@ class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
             self.assertFalse(ovmodel.model.is_dynamic())
 
     def override_movement_sparsifier_initialization(self, trainer: OVTrainer, sparsity=0.95):
-        movement_controller = trainer._get_compression_controller_by_cls(MovementSparsityController)  # pylint: disable=protected-access
+        movement_controller = trainer._get_compression_controller_by_cls(
+            MovementSparsityController
+        )  # pylint: disable=protected-access
         if movement_controller is not None:
             # make sure the binary masks will have many zeros
             initialize_movement_sparsifier_parameters_by_sparsity(movement_controller, sparsity=sparsity)
