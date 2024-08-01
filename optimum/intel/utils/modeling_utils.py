@@ -110,3 +110,61 @@ def _find_files_matching_pattern(
         files = [Path(p) for p in repo_files if re.match(pattern, str(p)) and str(p.parent) == subfolder]
 
     return files
+
+def get_number_of_sockets():
+    """linux only"""
+    try:
+        sockets = set()
+        with open('/proc/cpuinfo') as f:
+            for line in f:
+                if line.startswith('physical id'):
+                    sockets.add(line.strip().split()[-1])
+        return len(sockets)
+    except Exception as e:
+        print(f"Error retrieving number of sockets: {e}")
+
+def bind_cores_for_best_perf():
+    """
+    In a multi-socker system binds CPU cores to single socket and numa node for better OOB performance.
+    
+    System configuration is equivalent than running the following command when launching the script:
+    numactl -C '0-'${PHYSICAL_CORES_PER_SOCKET} --membind 0 python script.py
+
+    Returns:
+        None
+    """
+    
+    import importlib.util
+    import platform
+    system = platform.system()
+    if system == "Linux":
+        if importlib.util.find_spec("numa") is not None:
+            import numa
+            import psutil
+            import os
+
+            nodes = numa.get_max_node() + 1
+            n_sockets = get_number_of_sockets()
+            if n_sockets != nodes:
+                print(f'Warning: number of sockets {n_sockets} does not match number of NUMA nodes {nodes}.')
+                print('Newer CPUs enable sub-numa cluster (SNC) but LLMs may show improved performance with SNC disabled in BIOS.')
+            if os.getenv("OMP_NUM_THREADS") is None:
+                # set OMP_NUM_THREADS to number of physical cores per socket
+                num_cpu_threads_per_process = int(psutil.cpu_count(logical=True) / n_sockets)
+                os.environ['OMP_NUM_THREADS'] = str(num_cpu_threads_per_process)
+                print(f"OMP_NUM_THREADS/MKL_NUM_THREADS unset, we set it at {num_cpu_threads_per_process} to improve oob performance.")
+            else:
+                #do not override if OMP_NUM_THREADS already set
+                num_cpu_threads_per_process = int(os.getenv("OMP_NUM_THREADS"))
+            torch.set_num_threads(num_cpu_threads_per_process)
+
+            # Bind the current process to the specified range of CPU cores
+            numa.set_affinity(0, range(num_cpu_threads_per_process))
+            # Check if the current memory binding policy includes all NUMA nodes
+            if len(numa.get_membind()) == nodes:
+                # Bind the process's memory allocation to the first NUMA node
+                numa.set_membind([0])
+        else:
+            print("numa module not found, skipping binding cores")
+    else:
+        print("OS not supported, skipping binding cores")
