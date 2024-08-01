@@ -22,7 +22,7 @@ from optimum.utils import is_diffusers_available
 from optimum.exporters.onnx.base import OnnxConfig
 from collections import namedtuple
 
-InputInfo = namedtuple('InputInfo', ['name', 'shape', 'type', 'example'])
+InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
 
 
 if is_torch_available():
@@ -74,7 +74,9 @@ def flattenize_inputs(inputs: List[Any]):
     return flatten_inputs
 
 
-def get_input_info(model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]) -> List[InputInfo]:
+def get_input_info(
+    model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]
+) -> List[InputInfo]:
     sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)
     inputs = config.ordered_inputs(model)
     ordered_dummy_inputs = {param: dummy_inputs[param] for param in sig.parameters if param in dummy_inputs}

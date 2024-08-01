@@ -380,9 +380,11 @@ def export_pytorch(
             with patcher:
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
                 input_info = get_input_info(model, config, dummy_inputs)
-                ov_model = convert_model(model,
-                                         example_input=dummy_inputs,
-                                         input=list(map(lambda item: (item.shape, item.type), input_info)))
+                ov_model = convert_model(
+                    model,
+                    example_input=dummy_inputs,
+                    input=list(map(lambda item: (item.shape, item.type), input_info)),
+                )
 
         except Exception as ex:
             logger.warning(f"Export model to OpenVINO directly failed with: \n{ex}.\nModel will be exported to ONNX")
