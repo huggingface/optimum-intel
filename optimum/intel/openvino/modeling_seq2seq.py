@@ -371,6 +371,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         decoder_attention_mask: Optional[torch.LongTensor] = None,
         encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Seq2SeqLMOutput:
         # Encode if needed : first prediction pass
@@ -392,6 +393,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
                 encoder_attention_mask=attention_mask,
                 decoder_attention_mask=decoder_attention_mask,
+                cache_position=cache_position,
             )
 
         return Seq2SeqLMOutput(logits=decoder_outputs.logits, past_key_values=decoder_outputs.past_key_values)
@@ -570,6 +572,7 @@ class OVDecoder:
         encoder_attention_mask: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         decoder_attention_mask: Optional[torch.LongTensor] = None,
+        cache_position: Optional[torch.LongTensor] = None,
     ) -> Seq2SeqLMOutput:
         self._compile()
         # Model inputs
@@ -596,6 +599,10 @@ class OVDecoder:
 
         if "decoder_attention_mask" in self.input_names and decoder_attention_mask is not None:
             inputs["decoder_attention_mask"] = decoder_attention_mask
+
+        if "cache_position" in self.input_names and cache_position is not None:
+            inputs["cache_position"] = cache_position
+
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
@@ -865,8 +872,10 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
             decoder_input_ids = decoder_input_ids[:, remove_prefix_length:]
 
-            if decoder_position_ids is not None and decoder_position_ids.shape[1] > decoder_input_ids.shape[1]:
+            if decoder_position_ids is not None:
                 decoder_position_ids = decoder_position_ids[:, remove_prefix_length:]
+                # This `clone` call is needed to avoid recapturing cuda graphs with `torch.compile`'s  `mode="reduce-overhead`, as otherwise the input `position_ids` would have various stride during the decoding. Here, simply using `.contiguous()` is not sufficient as in the batch size = 1 case, `position_ids` is already contiguous but with varying stride which retriggers a capture.
+                decoder_position_ids = decoder_position_ids.clone(memory_format=torch.contiguous_format)
 
         if cache_position is None:
             cache_position = torch.arange(
@@ -901,6 +910,7 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         decoder_attention_mask: Optional[torch.BoolTensor] = None,
         encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Seq2SeqLMOutput:
         return super().forward(
@@ -910,6 +920,7 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             decoder_attention_mask=decoder_attention_mask,
             encoder_outputs=encoder_outputs,
             past_key_values=past_key_values,
+            cache_position=cache_position,
             **kwargs,
         )
 
