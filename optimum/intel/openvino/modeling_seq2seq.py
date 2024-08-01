@@ -706,6 +706,26 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
             checkpoint="microsoft/trocr-small-handwritten",
         )
     )
+    def forward(
+        self,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        decoder_input_ids: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.BoolTensor] = None,
+        encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        **kwargs,
+    ) -> Seq2SeqLMOutput:
+        return super().forward(
+            input_ids=pixel_values,
+            attention_mask=attention_mask,
+            decoder_input_ids=decoder_input_ids,
+            decoder_attention_mask=decoder_attention_mask,
+            encoder_outputs=encoder_outputs,
+            past_key_values=past_key_values,
+            **kwargs,
+        )
+
     def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
         shapes = {}
         for inputs in model.inputs:
