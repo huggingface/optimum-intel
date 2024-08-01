@@ -153,6 +153,7 @@ DEFAULT_QUANTIZATION_CONFIG = {
         "{re}.*Embedding.*",
         "{re}.*add___.*",
         "{re}.*layer_norm_.*",
+        "{re}.*scaled_dot_product_attention_0",
     ],
 }
 
