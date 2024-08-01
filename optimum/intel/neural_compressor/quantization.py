@@ -26,6 +26,7 @@ from datasets import Dataset, load_dataset
 from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
+from neural_compressor.torch.algorithm.weight_only import convert_to_weight_only_quantized_model
 from packaging.version import parse
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import (
@@ -69,7 +70,6 @@ from .utils import (
     NEURAL_COMPRESSOR_MINIMUM_VERSION,
     NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION,
     INCDataLoader,
-    convert_to_weight_only_quantized_model,
 )
 
 

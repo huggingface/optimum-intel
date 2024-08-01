@@ -14,7 +14,6 @@
 
 import logging
 from dataclasses import dataclass
-from enum import Enum
 from typing import Dict, Optional, Union
 
 from neural_compressor.config import DistillationConfig, WeightPruningConfig, _BaseQuantizationConfig
@@ -95,23 +94,17 @@ class INCConfig(BaseConfig):
         return config
 
 
-class INCQuantizationMethod(str, Enum):
-    RTN = "rtn"
-    GPTQ = "gptq"
-    AutoRound = "autoround"
-
-
 @dataclass
 class INCQuantizationConfigBase(QuantizationConfigMixin):
     """
     Base configuration class for quantization parameters
     """
 
-    quant_method = INCQuantizationMethod.RTN
+    quant_method = "rtn"
 
     def __init__(
         self,
-        bits: int = 4,
+        bits: int = 8,
         sym: bool = False,
         num_samples: Optional[int] = None,
         batch_size: Optional[int] = None,
@@ -139,7 +132,7 @@ class INCQuantizationConfigBase(QuantizationConfigMixin):
 
 
 @dataclass
-class INCWeightQuantizationConfig(INCQuantizationConfigBase):
+class GPTQConfig(INCQuantizationConfigBase):
     """
     This is a wrapper class about all possible attributes and features that you can play with a model that has been
     loaded using `optimum-intel` api for weight-only quantization with neural compressor.
@@ -183,7 +176,7 @@ class INCWeightQuantizationConfig(INCQuantizationConfigBase):
 
     def __init__(
         self,
-        bits: int = 4,
+        bits: int = 8,
         sym: bool = False,
         num_samples: Optional[int] = None,
         batch_size: Optional[int] = None,
@@ -194,57 +187,34 @@ class INCWeightQuantizationConfig(INCQuantizationConfigBase):
         scale_dtype: Optional[str] = None,
         compute_dtype: Optional[str] = None,
         use_layer_wise: Optional[bool] = False,
-        quant_method: Union[str, INCQuantizationMethod] = INCQuantizationMethod.RTN,
+        desc_act: Optional[bool] = False,
+        damp_percent: Optional[float] = 0.01,
+        block_size: Optional[int] = 128,
+        static_groups: Optional[bool] = False,
+        true_sequential: Optional[bool] = False,
+        quant_method: Union[str] = "gptq",
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, num_samples=num_samples, batch_size=batch_size, seq_len=seq_len)
         self.tokenizer = tokenizer
         self.dataset = dataset
-        self.quant_method = INCQuantizationMethod(quant_method) if isinstance(quant_method, str) else quant_method
+        self.quant_method = quant_method
         self.group_size = group_size or (-1 if bits == 8 else 128)
         self.scale_dtype = scale_dtype
         self.compute_dtype = compute_dtype
         self.use_layer_wise = use_layer_wise
 
-        # GPTQ parameters
-        if self.quant_method == INCQuantizationMethod.GPTQ:
-            self.desc_act = kwargs.get("desc_act", False)
-            self.damp_percent = kwargs.get("damp_percent", 0.01)
-            self.block_size = kwargs.get("block_size ", 128)
-            self.static_groups = kwargs.get("static_groups", False)
-            self.true_sequential = kwargs.get("true_sequential", False)
-        # AutoRound parameters
-        if self.quant_method == INCQuantizationMethod.AutoRound:
-            self.lr_scheduler = kwargs.get("lr_scheduler", None)
-            self.lr = kwargs.get("lr", 0)
-            self.minmax_lr = kwargs.get("minmax_lr", None)
-            self.enable_quanted_input = kwargs.get("enable_quanted_input", True)
-            self.enable_minmax_tuning = kwargs.get("enable_minmax_tuning", True)
-            self.quant_lm_head = kwargs.get("quant_lm_head", True)
-        # Layerwise
+        self.desc_act = desc_act
+        self.damp_percent = damp_percent
+        self.block_size = block_size
+        self.static_groups = static_groups
+        self.true_sequential = true_sequential
+
         if self.use_layer_wise:
             self.model_name_or_path = kwargs.get("model_name_or_path", None)
             if self.model_name_or_path is None:
                 raise ValueError("model_name_or_path is necessary for layer wise quantization.")
-        self.post_init()
-
-    def post_init(self):
-        r"""
-        Safety checker that arguments are correct
-        """
-        if self.bits is not None and self.bits not in [4, 8]:
-            raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
-        elif self.bits is None:
-            self.bits = 4
-
-        if self.quant_method != INCQuantizationMethod.RTN:
-            self.batch_size = 8 if self.batch_size is None else self.batch_size
-            self.num_samples = 200 if self.num_samples is None else self.num_samples
-            self.seq_len = 1024 if self.seq_len is None else self.seq_len
-            self.dataset = "NeelNanda/pile-10k" if self.dataset is None else self.dataset
-
-        if self.quant_method == INCQuantizationMethod.GPTQ:
-            self.post_init_gptq()
+        self.post_init_gptq()
 
     def post_init_cpu(self):
         if self.compute_dtype is not None and self.compute_dtype not in [

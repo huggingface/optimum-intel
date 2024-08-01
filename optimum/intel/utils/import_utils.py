@@ -61,14 +61,6 @@ if _neural_compressor_available:
     except importlib_metadata.PackageNotFoundError:
         _neural_compressor_available = False
 
-_autoround_available = importlib.util.find_spec("auto_round") is not None
-_autoround_version = "N/A"
-if _autoround_available:
-    try:
-        _autoround_version = importlib_metadata.version("auto_round")
-    except importlib_metadata.PackageNotFoundError:
-        _autoround_available = False
-
 _itrex_available = importlib.util.find_spec("intel_extension_for_transformers") is not None
 _itrex_version = "N/A"
 if _itrex_available:
