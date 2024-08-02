@@ -12,9 +12,12 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+
 import inspect
 from collections import namedtuple
-from typing import Any, Dict, List, Tuple, Union
+
+from pathlib import Path
+from typing import Any, Dict, List, Tuple, Union, Optional
 
 from transformers.utils import is_torch_available
 
@@ -22,6 +25,11 @@ from openvino.runtime import Dimension, PartialShape, Symbol
 from openvino.runtime.utils.types import get_element_type
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.utils import is_diffusers_available
+
+from pathlib import Path
+
+from optimum.exporters import TasksManager
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 
 InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
@@ -158,3 +166,36 @@ def clear_class_registry():
     torch._C._jit_clear_class_registry()
     torch.jit._recursive.concrete_type_store = torch.jit._recursive.ConcreteTypeStore()
     torch.jit._state._clear_class_state()
+
+
+def ov_infer_library_from_model_name_or_path(model_name_or_path: Union[str, Path],
+                                             subfolder: str = "",
+                                             revision: Optional[str] = None,
+                                             cache_dir: str = HUGGINGFACE_HUB_CACHE,
+                                             token: Optional[Union[bool, str]] = None):
+    all_files, _ = TasksManager.get_model_files(model_name_or_path,
+                                                subfolder=subfolder,
+                                                cache_dir=cache_dir,
+                                                revision=revision,
+                                                token=token)
+    if "open_clip_config.json" in all_files:
+        library_name = "open_clip"
+    else:
+        library_name = TasksManager._infer_library_from_model_name_or_path(
+            model_name_or_path=model_name_or_path, cache_dir=cache_dir
+        )
+
+    return library_name
+
+def ov_infer_library_from_model_or_model_class(
+    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"]):
+
+    if model.__module__.startswith("open_clip"):
+        library_name = 'open_clip'
+    elif model.__module__.startswith("optimum"):
+        # for wrapped models like timm in optimum.intel.openvino.modeling_timm
+        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
+    else:
+        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+        
+    return library_name

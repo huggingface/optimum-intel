@@ -38,10 +38,12 @@ from optimum.intel.utils.import_utils import (
     _timm_version,
     _torch_version,
     _transformers_version,
-    compare_versions,
+    compare_versions
 )
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
+
+from .model_configs import OpenCLIPVisualOpenVINOConfig, OpenCLIPTextOpenVINOConfig
 
 from ...intel.utils.import_utils import is_nncf_available
 from .model_patcher import patch_model_with_bettertransformer
@@ -51,8 +53,10 @@ from .utils import (
     _get_input_info,
     clear_class_registry,
     remove_none_from_dummy_inputs,
+    ov_infer_library_from_model_or_model_class
 )
 
+from huggingface_hub import hf_hub_download
 
 logger = logging.getLogger(__name__)
 
@@ -183,11 +187,7 @@ def export_tensorflow(
     input_names, output_names = export_tensorflow_onnx(model, config, opset, onnx_path)
     ov_model = convert_model(str(onnx_path))
 
-    if model.__class__.__module__.startswith("optimum"):
-        # for wrapped models
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
-    else:
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+    library_name = ov_infer_library_from_model_or_model_class(model=model)
 
     _save_model(
         ov_model,
@@ -248,11 +248,7 @@ def export_pytorch_via_onnx(
     torch.onnx.export = orig_torch_onnx_export
     ov_model = convert_model(str(onnx_output))
 
-    if model.__class__.__module__.startswith("optimum"):
-        # for wrapped models
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
-    else:
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+    library_name = ov_infer_library_from_model_or_model_class(model=model)
 
     _save_model(
         ov_model,
@@ -422,11 +418,7 @@ def export_pytorch(
         if stateful:
             patch_stateful(model.config, ov_model)
 
-        if model.__module__.startswith("optimum"):
-            # for wrapped models like timm in optimum.intel.openvino.modeling_timm
-            library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
-        else:
-            library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
+        library_name = ov_infer_library_from_model_or_model_class(model=model)
 
         _save_model(
             ov_model,
@@ -535,8 +527,12 @@ def export_from_model(
             f"Compression of the weights to {ov_config.quantization_config} requires nncf, please install it with `pip install nncf`"
         )
 
-    library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
-    TasksManager.standardize_model_attributes(model)
+    library_name = None
+    if "zero-shot-image-classification" in task and 'clip' in getattr(model.config, 'model_type'):
+        library_name = 'open_clip'
+    else:
+        library_name = TasksManager._infer_library_from_model(model)
+        TasksManager.standardize_model_attributes(model)
 
     if hasattr(model.config, "export_model_type"):
         model_type = model.config.export_model_type.replace("_", "-")
@@ -614,7 +610,33 @@ def export_from_model(
     )
     logging.disable(logging.NOTSET)
 
-    if library_name != "diffusers":
+    if library_name == "open_clip":
+        models_and_export_configs = {}
+
+        visual_model = model.visual
+        setattr(visual_model, 'config', model.config.vision_config)
+        vision_cfg = OpenCLIPVisualOpenVINOConfig(model.config.vision_config, 'zero-shot-image-classification', preprocessors)
+        models_and_export_configs['vision'] = (visual_model, vision_cfg)
+
+        text_model = model.text
+        setattr(text_model, 'config', model.config.text_config)
+        text_cfg = OpenCLIPTextOpenVINOConfig(model.config.text_config, 'zero-shot-image-classification', preprocessors)
+        models_and_export_configs['text'] = (text_model, text_cfg)
+
+        if hasattr(model.config, "save_pretrained"):
+            model.config.save_pretrained(output)
+
+        try:
+            hf_hub_download(repo_id=model_name_or_path, filename="open_clip_config.json", cache_dir=output)
+        except:
+            pass
+
+        for preprocess in preprocessors:
+            if hasattr(preprocess, "save_pretrained"):
+                preprocess.save_pretrained(output)
+
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
+    elif library_name != "diffusers":
         # Saving the model config and preprocessor as this is needed sometimes.
         model.config.save_pretrained(output)
         generation_config = getattr(model, "generation_config", None)
