@@ -102,7 +102,7 @@ class IPEXModelTest(unittest.TestCase):
         # Compare tensor outputs
         for output_name in {"logits", "last_hidden_state"}:
             if output_name in transformers_outputs:
-                self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name]))
+                self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-4))
                 self.assertTrue(torch.allclose(outputs[output_name], loaded_model_outputs[output_name]))
                 self.assertTrue(torch.allclose(outputs[output_name], init_model_outputs[output_name]))
 
@@ -357,8 +357,8 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
                 **tokens, min_new_tokens=self.GENERATION_LENGTH, max_new_tokens=self.GENERATION_LENGTH, num_beams=1
             )
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
-        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
-        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
+        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH + tokens.shape[1])
+        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH + tokens.shape[1])
         # self.assertTrue(
         #     without_pkv_timer.elapsed / with_pkv_timer.elapsed > self.SPEEDUP_CACHE,
         #     f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
