@@ -45,9 +45,7 @@ if is_transformers_version(">=", "4.37.0"):
     # and it implements many new features including short and long form generation, and starts with 2 init tokens
     from transformers.models.whisper.generation_whisper import WhisperGenerationMixin
 else:
-
-    class WhisperGenerationMixin:
-        generate = WhisperForConditionalGeneration.generate
+    WhisperGenerationMixin = WhisperForConditionalGeneration
 
 
 if is_transformers_version(">=", "4.43.0"):

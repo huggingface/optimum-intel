@@ -1666,24 +1666,13 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-
-        if is_transformers_version(">=", "4.37"):
-            ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
-        else:
-            with self.assertRaises(Exception) as context:
-                _ = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
-            self.assertIn(
-                "Whisper is not available for this version of Transformers, please upgrade to 4.37.0 or later.",
-                str(context.exception),
-            )
-            return
-
-        self.assertIsInstance(ov_model.config, PretrainedConfig)
         transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_model.config, PretrainedConfig)
+
         processor = get_preprocessor(model_id)
         data = self._generate_random_audio_data()
         features = processor.feature_extractor(data, return_tensors="pt")
-
         decoder_start_token_id = transformers_model.config.decoder_start_token_id
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
 
@@ -1711,19 +1700,8 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
+        model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
 
-        if is_transformers_version(">=", "4.37"):
-            model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
-        else:
-            with self.assertRaises(Exception) as context:
-                _ = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
-            self.assertIn(
-                "Whisper is not available for this version of Transformers, please upgrade to 4.37.0 or later.",
-                str(context.exception),
-            )
-            return
-
-        model.eval()
         processor = get_preprocessor(model_id)
         pipe = pipeline(
             "automatic-speech-recognition",
