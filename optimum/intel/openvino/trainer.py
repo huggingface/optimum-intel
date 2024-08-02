@@ -152,8 +152,7 @@ DEFAULT_QUANTIZATION_CONFIG = {
     "ignored_scopes": [
         "{re}.*Embedding.*",
         "{re}.*add___.*",
-        "{re}.*layer_norm_.*",
-        "{re}.*scaled_dot_product_attention_0",
+        "{re}.*layer_norm_.*"
     ],
 }
 

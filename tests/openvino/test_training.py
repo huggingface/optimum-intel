@@ -280,8 +280,11 @@ class OVTrainerBaseTrainingTest(unittest.TestCase, ABC):
         shutil.rmtree(self.output_dir)
 
 
-CUSTOMIZED_QUANTIZATION_CONFIG = deepcopy(DEFAULT_QUANTIZATION_CONFIG)
-CUSTOMIZED_QUANTIZATION_CONFIG.update(
+QUANTIZATION_CONFIG_FOR_BERT = deepcopy(DEFAULT_QUANTIZATION_CONFIG)
+QUANTIZATION_CONFIG_FOR_BERT["ignored_scopes"].append("{re}.*scaled_dot_product_attention_0")
+
+CUSTOMIZED_QUANTIZATION_CONFIG_FOR_BERT = deepcopy(QUANTIZATION_CONFIG_FOR_BERT)
+CUSTOMIZED_QUANTIZATION_CONFIG_FOR_BERT.update(
     {
         "overflow_fix": "disable",
         "initializer": {
@@ -325,7 +328,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     ),
     "default_quantization": OVTrainerTestDescriptor(
         model_id=MODEL_NAMES["bert"],
-        nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
+        nncf_compression_config=QUANTIZATION_CONFIG_FOR_BERT,
         expected_fake_quantize=22,
         expected_int8=32,
         compression_metrics=["compression_loss"],
@@ -333,14 +336,14 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "distillation,default_quantization": OVTrainerTestDescriptor(
         model_id=MODEL_NAMES["bert"],
         teacher_model_id=MODEL_NAMES["bert"],
-        nncf_compression_config=DEFAULT_QUANTIZATION_CONFIG,
+        nncf_compression_config=QUANTIZATION_CONFIG_FOR_BERT,
         expected_fake_quantize=22,
         expected_int8=32,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
     ),
     "customized_quantization": OVTrainerTestDescriptor(
         model_id=MODEL_NAMES["bert"],
-        nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG,
+        nncf_compression_config=QUANTIZATION_CONFIG_FOR_BERT,
         expected_fake_quantize=22,
         expected_int8=32,
         compression_metrics=["compression_loss"],
@@ -348,7 +351,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "distillation,customized_quantization": OVTrainerTestDescriptor(
         model_id=MODEL_NAMES["bert"],
         teacher_model_id=MODEL_NAMES["bert"],
-        nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG,
+        nncf_compression_config=CUSTOMIZED_QUANTIZATION_CONFIG_FOR_BERT,
         expected_fake_quantize=22,
         expected_int8=32,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
@@ -368,7 +371,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     ),
     "default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
         model_id=MODEL_NAMES["bert"],
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        nncf_compression_config=[QUANTIZATION_CONFIG_FOR_BERT, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
         expected_fake_quantize=22,
         expected_int8=32,
         expected_binary_masks=60,
@@ -377,7 +380,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "customized_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
         model_id=MODEL_NAMES["bert"],
         nncf_compression_config=[
-            CUSTOMIZED_QUANTIZATION_CONFIG,
+            CUSTOMIZED_QUANTIZATION_CONFIG_FOR_BERT,
             STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
         ],
         expected_fake_quantize=22,
@@ -388,7 +391,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "distillation,default_quantization,structured_movement_sparsity": OVTrainerTestDescriptor(
         model_id=MODEL_NAMES["bert"],
         teacher_model_id=MODEL_NAMES["bert"],
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        nncf_compression_config=[QUANTIZATION_CONFIG_FOR_BERT, STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
         expected_fake_quantize=22,
         expected_int8=32,
         expected_binary_masks=60,
@@ -398,7 +401,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         model_id=MODEL_NAMES["bert"],
         teacher_model_id=MODEL_NAMES["bert"],
         nncf_compression_config=[
-            CUSTOMIZED_QUANTIZATION_CONFIG,
+            CUSTOMIZED_QUANTIZATION_CONFIG_FOR_BERT,
             STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
         ],
         expected_fake_quantize=22,
@@ -421,7 +424,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     ),
     "default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id=MODEL_NAMES["bert"],
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        nncf_compression_config=[QUANTIZATION_CONFIG_FOR_BERT, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
         expected_fake_quantize=22,
         expected_int8=32,
         expected_binary_masks=60,
@@ -430,7 +433,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "customized_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id=MODEL_NAMES["bert"],
         nncf_compression_config=[
-            CUSTOMIZED_QUANTIZATION_CONFIG,
+            CUSTOMIZED_QUANTIZATION_CONFIG_FOR_BERT,
             UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
         ],
         expected_fake_quantize=22,
@@ -441,7 +444,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
     "distillation,default_quantization,unstructured_movement_sparsity": OVTrainerTestDescriptor(
         model_id=MODEL_NAMES["bert"],
         teacher_model_id=MODEL_NAMES["bert"],
-        nncf_compression_config=[DEFAULT_QUANTIZATION_CONFIG, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
+        nncf_compression_config=[QUANTIZATION_CONFIG_FOR_BERT, UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT],
         expected_fake_quantize=22,
         expected_int8=32,
         expected_binary_masks=60,
@@ -451,7 +454,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
         model_id=MODEL_NAMES["bert"],
         teacher_model_id=MODEL_NAMES["bert"],
         nncf_compression_config=[
-            CUSTOMIZED_QUANTIZATION_CONFIG,
+            CUSTOMIZED_QUANTIZATION_CONFIG_FOR_BERT,
             UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
         ],
         expected_fake_quantize=22,
