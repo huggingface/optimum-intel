@@ -45,9 +45,7 @@ if is_transformers_version(">=", "4.37.0"):
 else:
 
     class WhisperGenerationMixin:
-        raise ImportError(
-            "Whisper is not available for this version of Transformers, please upgrade to 4.37.0 or later."
-        )
+        generate = WhisperForConditionalGeneration.generate
 
 
 if is_transformers_version(">=", "4.43.0"):
