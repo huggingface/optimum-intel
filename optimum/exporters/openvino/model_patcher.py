@@ -23,7 +23,7 @@ import torch.nn.functional as F
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
+from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, ModelPatcher
 from optimum.intel.utils.import_utils import (
     _openvino_version,
     _torch_version,
@@ -32,6 +32,9 @@ from optimum.intel.utils.import_utils import (
     is_torch_version,
     is_transformers_version,
 )
+
+import importlib.util
+from ...intel.utils.import_utils import is_open_clip_available
 
 
 if TYPE_CHECKING:
@@ -2361,3 +2364,41 @@ class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         if hasattr(self._model.model, "_orig_update_causal_mask"):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+
+
+if is_open_clip_available():
+    import open_clip
+
+def _text_global_pool_patched(x, text: Optional[torch.Tensor] = None, pool_type: str = 'argmax'):
+    if pool_type == 'first':
+        pooled, tokens = x[:, 0], x[:, 1:]
+    elif pool_type == 'last':
+        pooled, tokens = x[:, -1], x[:, :-1]
+    elif pool_type == 'argmax':
+        text = text.to(dtype=torch.int32)  # ONNX Runtime is unable to run argmax with int64 input, hence this cast.
+        # take features from the eot embedding (eot_token is the highest number in each sequence)
+        assert text is not None
+        pooled, tokens = x[torch.arange(x.shape[0]), text.argmax(dim=-1)], x
+    else:
+        pooled = tokens = x
+    return pooled, tokens
+
+
+class OpenCLIPModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        self.original_text_global_pool = open_clip.transformer.text_global_pool
+
+    def __enter__(self):
+        super().__enter__()
+        open_clip.transformer.text_global_pool.__code__ = _text_global_pool_patched.__code__
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        open_clip.transformer.text_global_pool.__code__ = self.original_text_global_pool.__code__
