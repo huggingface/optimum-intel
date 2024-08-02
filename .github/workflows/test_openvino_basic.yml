@@ -26,7 +26,7 @@ jobs:
         os: ["ubuntu-22.04", "windows-latest"]
         transformers-version: ["4.43.*"]
         include:
-          - transformers-version: "4.37.0"
+          - transformers-version: "4.36.0"
             python-version: "3.12"
             os: "ubuntu-22.04"
 
@@ -41,12 +41,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          # Install openvino manually to prevent dependency conflicts when .[openvino] pins
-          # optimum or transformers to a specific version
+          python -m pip install --upgrade pip
           # Install PyTorch CPU to prevent unnecessary downloading/installing of CUDA packages
           pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install transformers==${{ matrix.transformers-version }}
+          # Install openvino manually to prevent dependency conflicts when .[openvino] pins
+          # optimum or transformers to a specific version
           pip install .[tests] openvino
+          pip install transformers==${{ matrix.transformers-version }}
 
       - name: Pip freeze
         run: pip freeze

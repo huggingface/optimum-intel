@@ -34,11 +34,20 @@ from transformers import (
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
-from transformers.models.whisper.generation_whisper import WhisperGenerationMixin
 
 from ..utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 from .utils import _print_compiled_model_properties
+
+
+if is_transformers_version(">=", "4.37.0"):
+    from transformers.models.whisper.generation_whisper import WhisperGenerationMixin
+else:
+
+    class WhisperGenerationMixin:
+        raise ImportError(
+            "Whisper is not available for this version of Transformers, please upgrade to 4.37.0 or later."
+        )
 
 
 if is_transformers_version(">=", "4.43.0"):
