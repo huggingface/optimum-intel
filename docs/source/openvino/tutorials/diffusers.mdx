@@ -50,18 +50,14 @@ To further speed up inference, the model can be statically reshaped :
 
 ```python
 # Define the shapes related to the inputs and desired outputs
-batch_size = 1
-num_images_per_prompt = 1
-height = 512
-width = 512
-
+batch_size, num_images, height, width = 1, 1, 512, 512
 # Statically reshape the model
-pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images_per_prompt)
+pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
 # Compile the model before the first inference
 pipeline.compile()
 
 # Run inference
-images = pipeline(prompt, height=height, width=width, num_images_per_prompt=num_images_per_prompt).images
+images = pipeline(prompt, height=height, width=width, num_images_per_prompt=num_images).images
 ```
 
 In case you want to change any parameters such as the outputs height or width, you'll need to statically reshape your model once again.
