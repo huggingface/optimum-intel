@@ -20,6 +20,7 @@ from tempfile import TemporaryDirectory, gettempdir
 from typing import Dict, Optional, Union
 
 import openvino
+import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core, convert_model
@@ -102,6 +103,14 @@ class OVBaseModel(OptimizedModel):
 
         if enable_compilation:
             self.compile()
+
+    @property
+    def device(self) -> torch.device:
+        """
+        `torch.device`: The device on which the module is.
+        """
+        # TODO: should we store the _device as a torch.device like in ORTModel?
+        return torch.device(self._device.lower())
 
     @staticmethod
     def load_model(

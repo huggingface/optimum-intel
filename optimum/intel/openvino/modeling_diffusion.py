@@ -644,7 +644,7 @@ class OVModelPart:
 
     @property
     def device(self):
-        return self.parent_model._device
+        return self.parent_model.device
 
 
 class OVModelTextEncoder(OVModelPart):

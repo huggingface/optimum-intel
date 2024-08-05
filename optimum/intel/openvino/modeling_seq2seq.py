@@ -40,14 +40,6 @@ from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 from .utils import _print_compiled_model_properties
 
 
-if is_transformers_version(">=", "4.37.0"):
-    # starting from transformers v4.37.0, the whisper generation loop is implemented in the `WhisperGenerationMixin`
-    # and it implements many new features including short and long form generation, and starts with 2 init tokens
-    from transformers.models.whisper.generation_whisper import WhisperGenerationMixin
-else:
-    WhisperGenerationMixin = WhisperForConditionalGeneration
-
-
 if is_transformers_version(">=", "4.43.0"):
     from transformers.cache_utils import EncoderDecoderCache
 else:
@@ -331,7 +323,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         super().__init__(
             encoder=encoder, decoder=decoder, decoder_with_past=decoder_with_past, config=config, **kwargs
         )
-        self.device = torch.device("cpu")
+
         self.decoder_with_past = None
         enable_compilation = kwargs.get("compile", True)
         self.encoder = OVEncoder(self.encoder_model, parent_model=self)
@@ -918,13 +910,16 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             return super()._from_pretrained(model_id, config, **kwargs)
 
 
-class _OVModelForWhisper(WhisperGenerationMixin, OVModelForSpeechSeq2Seq):
+class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneration):
     """
     Whisper implements its own generate() method.
     """
 
     auto_model_class = WhisperForConditionalGeneration
+
+    # force the use of the WhisperForConditionalGeneration generate and prepare_inputs_for_generation methods
     prepare_inputs_for_generation = WhisperForConditionalGeneration.prepare_inputs_for_generation
+    generate = WhisperForConditionalGeneration.generate
 
     @classmethod
     def _from_pretrained(
