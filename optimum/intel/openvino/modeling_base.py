@@ -109,7 +109,7 @@ class OVBaseModel(OptimizedModel):
         """
         `torch.device`: The device on which the module is (for torch compatibility).
         """
-        return torch.device(self._device.lower())
+        return torch.device("cpu")
 
     @staticmethod
     def load_model(
