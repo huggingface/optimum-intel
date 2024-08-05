@@ -383,7 +383,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
             CUSTOMIZED_QUANTIZATION_CONFIG_FOR_BERT,
             STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
         ],
-        expected_fake_quantize=44,
+        expected_fake_quantize=22,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss"],
@@ -404,7 +404,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
             CUSTOMIZED_QUANTIZATION_CONFIG_FOR_BERT,
             STRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
         ],
-        expected_fake_quantize=44,
+        expected_fake_quantize=22,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
@@ -436,7 +436,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
             CUSTOMIZED_QUANTIZATION_CONFIG_FOR_BERT,
             UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
         ],
-        expected_fake_quantize=44,
+        expected_fake_quantize=22,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss"],
@@ -457,7 +457,7 @@ OVTRAINER_TEXT_CLASSIFICATION_TEST_DESCRIPTORS = {
             CUSTOMIZED_QUANTIZATION_CONFIG_FOR_BERT,
             UNSTRUCTURED_MOVEMENT_SPARSITY_CONFIG_FOR_BERT,
         ],
-        expected_fake_quantize=44,
+        expected_fake_quantize=22,
         expected_int8=32,
         expected_binary_masks=60,
         compression_metrics=["compression_loss", "distillation_loss", "task_loss"],
@@ -479,9 +479,7 @@ class OVTrainerTextClassificationTrainingTest(OVTrainerBaseTrainingTest):
         self.num_labels = len(self.dataset["train"].features["label"].names)
 
         self.tokenizer = AutoTokenizer.from_pretrained(desc.model_id)
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            desc.model_id, num_labels=self.num_labels, attn_implementation="eager"
-        )
+        self.model = AutoModelForSequenceClassification.from_pretrained(desc.model_id, num_labels=self.num_labels)
         self.teacher_model = None
         if desc.teacher_model_id:
             self.teacher_model = AutoModelForSequenceClassification.from_pretrained(
