@@ -107,9 +107,8 @@ class OVBaseModel(OptimizedModel):
     @property
     def device(self) -> torch.device:
         """
-        `torch.device`: The device on which the module is.
+        `torch.device`: The device on which the module is (for torch compatibility).
         """
-        # TODO: should we store the _device as a torch.device like in ORTModel?
         return torch.device(self._device.lower())
 
     @staticmethod

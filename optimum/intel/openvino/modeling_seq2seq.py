@@ -481,11 +481,17 @@ class OVEncoder:
     def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
         self.parent_model = parent_model
-        self._device = self.parent_model._device
-        self.device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.main_input_name = self.parent_model.main_input_name or "input_ids"
         self.request = None
+
+    @property
+    def device(self):
+        return self.parent_model.device
+
+    @property
+    def _device(self):
+        return self.parent_model._device
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
@@ -546,8 +552,6 @@ class OVDecoder:
     def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
         self.parent_model = parent_model
-        self._device = self.parent_model._device
-        self.device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
@@ -562,6 +566,14 @@ class OVDecoder:
             self.num_pkv = 4
 
         self.request = None
+
+    @property
+    def _device(self) -> str:
+        return self.parent_model._device
+
+    @property
+    def device(self) -> torch.device:
+        return self.parent_model.device
 
     @add_start_docstrings_to_model_forward(DECODER_INPUTS_DOCSTRING)
     def forward(
