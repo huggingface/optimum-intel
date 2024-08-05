@@ -20,7 +20,7 @@ import torch
 from huggingface_hub import HfApi, HfFolder
 
 
-MULTI_QUERY_ATTN_MODELS = {"falcon", "gpt_bigcode"}
+MULTI_QUERY_ATTN_MODELS = {"gpt_bigcode"}
 
 
 def get_model_device(model: torch.nn.Module) -> torch.device:
