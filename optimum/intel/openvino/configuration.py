@@ -90,8 +90,8 @@ _DEFAULT_4BIT_CONFIGS = {
     "bigscience/bloomz-560m": {
         "bits": 4,
         "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
+        "group_size": 64,
+        "ratio": 0.8,
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
