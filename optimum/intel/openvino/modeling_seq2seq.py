@@ -858,11 +858,15 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         cross_attn_head_mask=None,
         use_cache=None,
         encoder_outputs=None,
+        decoder_attention_mask=None,
         **kwargs,
     ):
         # cut decoder_input_ids if past is used
         if past_key_values is not None:
             decoder_input_ids = decoder_input_ids[:, -1:]
+
+        if decoder_attention_mask is None and decoder_input_ids is not None:
+            decoder_attention_mask = torch.ones_like(decoder_input_ids).to(decoder_input_ids.device)
 
         return {
             "encoder_outputs": encoder_outputs,
