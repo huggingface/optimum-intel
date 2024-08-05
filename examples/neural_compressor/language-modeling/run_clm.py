@@ -56,12 +56,18 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
-from optimum.intel.neural_compressor import INCModelForCausalLM, INCQuantizer, INCTrainer
+from optimum.intel.neural_compressor import (
+    INCModelForCausalLM,
+    INCQuantizationMethod,
+    INCQuantizer,
+    INCTrainer,
+    INCWeightQuantizationConfig,
+)
 from optimum.intel.utils.import_utils import ITREX_IMPORT_ERROR, is_itrex_available
 
 
 if is_itrex_available():
-    from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig
+    pass
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
@@ -206,10 +212,6 @@ class OptimizationArguments:
         default="4",
         metadata={"help": "Bits number of weight for weight only quantization. 1~8 bits."},
     )
-    weight_dtype: str = field(
-        default="int4_clip",
-        metadata={"help": "weight dtype for weight only quantization."},
-    )
     group_size: int = field(
         default=-1,
         metadata={
@@ -223,7 +225,6 @@ class OptimizationArguments:
         metadata={"help": "Scheme for weight only quantization. Choose from 'sym' and 'asym'."},
     )
     quantization_methodology: str = field(
-        choices=["rtn", "gptq"],
         default="rtn",
         metadata={"help": "Quantization methodology for weight only quantization. Choose from 'rtn' and 'gptq'."},
     )
@@ -248,6 +249,11 @@ class OptimizationArguments:
         default=2048,
         metadata={"help": "Calibration dataset sequence max length, this should align with your model config"},
     )
+
+    def __post_init__(self):
+        woq_algorithms = ["rtn", "gptq"]
+        if self.quantization_methodology not in woq_algorithms:
+            raise ValueError(f"Value must be one of {woq_algorithms}, got {self.quantization_methodology}")
 
 
 @dataclass
@@ -661,20 +667,23 @@ def main():
                     raise ValueError("Weight only quantization and pruning or distillation cannot be combined.")
 
                 algorithm_args = {
-                    "weight_dtype": optim_args.weight_dtype,
+                    "bits": optim_args.bits,
                     "sym": optim_args.weight_only_scheme == "sym",
                     "group_size": optim_args.group_size,
                 }
 
                 if optim_args.quantization_methodology == "gptq":
-                    quantization_config = GPTQConfig(
+                    quantization_config = INCWeightQuantizationConfig(
+                        quant_method=INCQuantizationMethod.GPTQ,
+                        dataset=data_args.dataset_name,
+                        tokenizer=tokenizer,
                         damp_percent=optim_args.damp_percent,
                         nsamples=optim_args.num_calibration_samples,
                         blocksize=optim_args.gptq_block_size,
                         **algorithm_args,
                     )
                 else:
-                    quantization_config = RtnConfig(**algorithm_args)
+                    quantization_config = INCWeightQuantizationConfig(**algorithm_args)
 
             else:
                 quantization_config = PostTrainingQuantConfig(

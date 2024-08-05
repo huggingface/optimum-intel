@@ -61,7 +61,6 @@ if _neural_compressor_available:
     except importlib_metadata.PackageNotFoundError:
         _neural_compressor_available = False
 
-
 _itrex_available = importlib.util.find_spec("intel_extension_for_transformers") is not None
 _itrex_version = "N/A"
 if _itrex_available:
