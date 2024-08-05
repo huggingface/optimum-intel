@@ -127,11 +127,28 @@ def bind_cores_for_best_perf():
     """
     In a multi-socker system binds CPU cores to single socket and numa node for better OOB performance.
     
-    System configuration is equivalent than running the following command when launching the script:
+    System configuration is equivalent to running the following command when launching the script:
     numactl -C '0-'${PHYSICAL_CORES_PER_SOCKET} --membind 0 python script.py
 
+    Example:
+    .. code-block:: python
+
+        from optimum.intel.ipex import IPEXModelForCausalLM
+        from optimum.intel.utils.modeling_utils import bind_cores_for_best_perf
+
+        bind_cores_for_best_perf()
+        model = IPEXModelForCausalLM.from_pretrained("gpt2", torch_dtype=torch.bfloat16, export=True)
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        input_sentence = ["tell me a story about a trip to the moon"]
+        model_inputs = tokenizer(input_sentence, return_tensors="pt")
+        generation_kwargs = dict(max_new_tokens=500)
+        generated_ids = model.generate(**model_inputs, **generation_kwargs)
+    
     Returns:
         None
+    
+    Note: 
+        For distributed and multi-rank applications rely on vLLM, Ray,... to set proper system configuration.
     """
     
     import importlib.util
@@ -142,7 +159,6 @@ def bind_cores_for_best_perf():
             import numa
             import psutil
             import os
-
             nodes = numa.get_max_node() + 1
             n_sockets = get_number_of_sockets()
             if n_sockets != nodes:
