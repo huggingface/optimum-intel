@@ -81,8 +81,8 @@ _TASK_TO_DATASET = {
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
-        (OVModelForSequenceClassification, "bert", 32 if is_transformers_version("<", "4.41.0") else 22, 35),
-        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 21, 3),
+        (OVModelForSequenceClassification, "bert", 32, 35),
+        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 31, 22),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
@@ -182,8 +182,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "gpt2", 44, 44),
     )
 
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 86),)
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 148),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 43),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 74),)
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
 
     LOAD_IN_4_BITS_SCOPE = (
