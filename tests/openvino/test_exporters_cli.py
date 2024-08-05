@@ -253,10 +253,9 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
-            model_id = "bigscience/bloomz-560m"
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-            pt_model = AutoModelForCausalLM.from_pretrained(model_id)
-            tokenizer.save_pretrained(tmpdir)
+            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["falcon-40b"])
+            # overload for matching with default configuration
+            pt_model.config._name_or_path = "tiiuae/falcon-7b-instruct"
             pt_model.save_pretrained(tmpdir)
 
             subprocess.run(
@@ -271,7 +270,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertTrue("weight_compression" in rt_info["nncf"])
             model_weight_compression_config = rt_info["nncf"]["weight_compression"]
 
-            default_config = _DEFAULT_4BIT_CONFIGS[model_id]
+            default_config = _DEFAULT_4BIT_CONFIGS["tiiuae/falcon-7b-instruct"]
             bits = default_config.pop("bits", None)
             self.assertEqual(bits, 4)
 
