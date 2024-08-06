@@ -74,10 +74,9 @@ def patch_op(m, target_m, new_op_name, new_op):
 
 def _patch_llama_model(model):
     """
-    Patch falcon model:
-        1. Disable SDPA so the attention mask will be compatible to ipex attention.
-        2. Use IAKV cache
-        3. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
+    Patch llama model:
+        1. Use IPEX Rope and IAKV cache
+        2. Linear fusion with (2 Linears + Silu + Mul) and (Linear + Add)
     """
     convert_functions(model, LlamaModel, "forward", _llama_model_forward)
     convert_functions(model, LlamaRMSNorm, "forward", _ipex_rms_layer_norm_forward)
@@ -89,7 +88,7 @@ def _patch_falcon_model(model):
     """
     Patch falcon model:
         1. Disable SDPA so the attention mask will be compatible to ipex attention.
-        2. Use IAKV cache
+        2. Use IPEX Rope and IAKV cache
         3. Linear fusion with (Linear + Gelu) and (Linear + Add + Add)
     """
     model.transformer._use_sdpa = False

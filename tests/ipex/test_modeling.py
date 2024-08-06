@@ -284,6 +284,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     # High optimized model llama is not supported assisted decoding for now.
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_assisted_decoding(self, model_arch):
+        # Patched models are not support assisted decoding for now.
         if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             return
         model_id = MODEL_NAMES[model_arch]
