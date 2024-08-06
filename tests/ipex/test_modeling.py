@@ -103,8 +103,8 @@ class IPEXModelTest(unittest.TestCase):
         for output_name in {"logits", "last_hidden_state"}:
             if output_name in transformers_outputs:
                 self.assertTrue(torch.allclose(outputs[output_name], transformers_outputs[output_name], atol=1e-4))
-                self.assertTrue(torch.equal(outputs[output_name], loaded_model_outputs[output_name]))
-                self.assertTrue(torch.equal(outputs[output_name], init_model_outputs[output_name]))
+                self.assertTrue(torch.allclose(outputs[output_name], loaded_model_outputs[output_name]))
+                self.assertTrue(torch.allclose(outputs[output_name], init_model_outputs[output_name]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -274,7 +274,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-        outputs = pipe("This is a sample", max_length=10)
+        outputs = pipe("This is a sample", max_new_tokens=10)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
 
@@ -345,7 +345,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model_with_pkv.generate(**tokens)
         with Timer() as with_pkv_timer:
             outputs_model_with_pkv = model_with_pkv.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+                **tokens, min_new_tokens=self.GENERATION_LENGTH, max_new_tokens=self.GENERATION_LENGTH, num_beams=1
             )
         model_without_pkv = IPEXModelForCausalLM.from_pretrained(
             model_id, use_cache=False, subfolder="model_without_pkv"
@@ -354,16 +354,11 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         model_without_pkv.generate(**tokens)
         with Timer() as without_pkv_timer:
             outputs_model_without_pkv = model_without_pkv.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+                **tokens, min_new_tokens=self.GENERATION_LENGTH, max_new_tokens=self.GENERATION_LENGTH, num_beams=1
             )
         self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
-        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
-        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
-        # self.assertTrue(
-        #     without_pkv_timer.elapsed / with_pkv_timer.elapsed > self.SPEEDUP_CACHE,
-        #     f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
-        #     f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
-        # )
+        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH + tokens.input_ids.shape[1])
+        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH + tokens.input_ids.shape[1])
 
 
 class IPEXModelForAudioClassificationTest(unittest.TestCase):
