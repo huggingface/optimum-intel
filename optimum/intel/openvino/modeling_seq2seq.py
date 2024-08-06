@@ -28,23 +28,19 @@ from transformers import (
     AutoConfig,
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
+    AutoModelForVision2Seq,
     Pix2StructForConditionalGeneration,
     WhisperForConditionalGeneration,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
+from transformers.generation import GenerationMixin
 from transformers.generation.logits_process import WhisperTimeStampLogitsProcessor
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from transformers.models.whisper.tokenization_whisper import TASK_IDS, TO_LANGUAGE_CODE
 
-from ..utils.import_utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
 from .utils import _print_compiled_model_properties
 
-
-if is_transformers_version("<", "4.25.0"):
-    from transformers.generation_utils import GenerationMixin
-else:
-    from transformers.generation import GenerationMixin
 
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
@@ -166,6 +162,23 @@ PIX2STRUCT_MODEL_DOCSTRING = r"""
             `(batch_size, num_heads, decoder_sequence_length, embed_size_per_head)` and 2 additional tensors of shape
             `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
 """
+
+VISION_ENCODER_DECODER_SEQ2SEQ_MODEL_DOCSTRING = r"""
+    Args:
+        pixel_values (`torch.FloatTensor`):
+            Features extracted from an Image. This tensor should be of shape
+            `(batch_size, num_channels, height, width)`.
+        decoder_input_ids (`torch.LongTensor`):
+            Indices of decoder input sequence tokens in the vocabulary of shape `(batch_size, decoder_sequence_length)`.
+        encoder_outputs (`torch.FloatTensor`):
+            The encoder `last_hidden_state` of shape `(batch_size, encoder_sequence_length, hidden_size)`.
+        past_key_values (`tuple(tuple(torch.FloatTensor), *optional*, defaults to `None`)`
+            Contains the precomputed key and value hidden states of the attention blocks used to speed up decoding.
+            The tuple is of length `config.n_layers` with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, decoder_sequence_length, embed_size_per_head)` and 2 additional tensors of shape
+            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+"""
+
 _PROCESSOR_FOR_DOC = "AutoProcessor"
 
 PIX2STRUCT_EXAMPLE = r"""
@@ -211,7 +224,7 @@ AUTOMATIC_SPEECH_RECOGNITION_EXAMPLE = r"""
 
     ```python
     >>> from transformers import {processor_class}
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
     >>> from datasets import load_dataset
 
     >>> processor = {processor_class}.from_pretrained("{checkpoint}")
@@ -228,7 +241,7 @@ AUTOMATIC_SPEECH_RECOGNITION_EXAMPLE = r"""
 
     ```python
     >>> from transformers import {processor_class}, pipeline
-    >>> from optimum.intel.openvino import {model_class}
+    >>> from optimum.intel import {model_class}
     >>> from datasets import load_dataset
 
     >>> processor = {processor_class}.from_pretrained("{checkpoint}")
@@ -237,6 +250,50 @@ AUTOMATIC_SPEECH_RECOGNITION_EXAMPLE = r"""
 
     >>> ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     >>> pred = speech_recognition(ds[0]["audio"]["array"])
+    ```
+"""
+
+IMAGE_TO_TEXT_EXAMPLE = r"""
+    Example of text generation:
+
+    ```python
+    >>> from transformers import {processor_class}, {tokenizer_class}
+    >>> from optimum.intel import {model_class}
+    >>> from PIL import Image
+    >>> import requests
+
+
+    >>> processor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> tokenizer = {tokenizer_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+
+    >>> url = "https://fki.tic.heia-fr.ch/static/img/a01-122-02-00.jpg"
+    >>> image = Image.open(requests.get(url, stream=True).raw)
+    >>> inputs = processor(image, return_tensors="pt")
+
+    >>> gen_tokens = model.generate(**inputs)
+    >>> outputs = tokenizer.batch_decode(gen_tokens, skip_special_tokens=True)
+
+    ```
+
+    Example using `transformers.pipeline`:
+
+    ```python
+    >>> from transformers import {processor_class}, {tokenizer_class}, pipeline
+    >>> from optimum.intel import {model_class}
+    >>> from PIL import Image
+    >>> import requests
+
+
+    >>> processor = {processor_class}.from_pretrained("{checkpoint}")
+    >>> tokenizer = {tokenizer_class}.from_pretrained("{checkpoint}")
+    >>> model = {model_class}.from_pretrained("{checkpoint}", export=True)
+
+    >>> url = "https://fki.tic.heia-fr.ch/static/img/a01-122-02-00.jpg"
+    >>> image = Image.open(requests.get(url, stream=True).raw)
+
+    >>> image_to_text = pipeline("image-to-text", model=model, tokenizer=tokenizer, feature_extractor=processor, image_processor=processor)
+    >>> pred = image_to_text(image)
     ```
 """
 
@@ -266,34 +323,11 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         self.device = torch.device("cpu")
         self.decoder_with_past = None
         enable_compilation = kwargs.get("compile", True)
-        encoder_cache_dir = Path(self.model_save_dir).joinpath("encoder_cache")
-        ov_encoder_config = {**self.ov_config}
-
-        if "CACHE_DIR" not in ov_encoder_config.keys() and not str(self.model_save_dir).startswith(gettempdir()):
-            ov_encoder_config["CACHE_DIR"] = str(encoder_cache_dir)
-
-        self.encoder = OVEncoder(
-            self.encoder_model, self._device, ov_encoder_config, main_input_name=self.main_input_name
-        )
-
-        decoder_cache_dir = Path(self.model_save_dir).joinpath("decoder_cache")
-        ov_decoder_config = {**self.ov_config}
-
-        if "CACHE_DIR" not in ov_decoder_config.keys() and not str(self.model_save_dir).startswith(gettempdir()):
-            ov_decoder_config["CACHE_DIR"] = str(decoder_cache_dir)
-
-        self.decoder = OVDecoder(self.decoder_model, self._device, ov_decoder_config)
+        self.encoder = OVEncoder(self.encoder_model, parent_model=self)
+        self.decoder = OVDecoder(self.decoder_model, parent_model=self)
 
         if self.use_cache:
-            decoder_past_cache_dir = Path(self.model_save_dir).joinpath("decoder_past_cache")
-            ov_decoder_past_config = {**self.ov_config}
-
-            if "CACHE_DIR" not in ov_decoder_past_config.keys() and not str(self.model_save_dir).startswith(
-                gettempdir()
-            ):
-                ov_decoder_past_config["CACHE_DIR"] = str(decoder_past_cache_dir)
-
-            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, self._device, ov_decoder_past_config)
+            self.decoder_with_past = OVDecoder(self.decoder_with_past_model, parent_model=self)
         if enable_compilation:
             self.compile()
 
@@ -305,12 +339,16 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             pass
 
     def to(self, device: str):
-        self._device = device.upper()
-        self.encoder._device = self._device
-        self.decoder._device = self._device
-        if self.use_cache:
-            self.decoder_with_past._device = self._device
-        self.clear_requests()
+        if isinstance(device, str):
+            self._device = device.upper()
+            self.encoder._device = self._device
+            self.decoder._device = self._device
+            if self.use_cache:
+                self.decoder_with_past._device = self._device
+            self.clear_requests()
+        else:
+            logger.debug(f"device must be of type {str} but got {type(device)} instead")
+
         return self
 
     @add_start_docstrings_to_model_forward(
@@ -435,13 +473,13 @@ class OVEncoder:
             The OpenVINO inference request associated to the encoder.
     """
 
-    def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict, main_input_name="input_ids"):
+    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
-        self._device = device
+        self.parent_model = parent_model
+        self._device = self.parent_model._device
         self.device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
-        self.main_input_name = main_input_name
-        self.ov_config = ov_config
+        self.main_input_name = self.parent_model.main_input_name or "input_ids"
         self.request = None
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
@@ -471,9 +509,18 @@ class OVEncoder:
         return self.forward(*args, **kwargs)
 
     def _compile(self):
+        ov_config = {**self.parent_model.ov_config}
+        if (
+            "CACHE_DIR" not in ov_config.keys()
+            and not str(self.parent_model.model_save_dir).startswith(gettempdir())
+            and "gpu" in self._device.lower()
+        ):
+            cache_dir = Path(self.parent_model.model_save_dir).joinpath("model_cache")
+            ov_config["CACHE_DIR"] = str(cache_dir)
+
         if self.request is None:
             logger.info(f"Compiling the encoder to {self._device} ...")
-            self.request = core.compile_model(self.model, self._device, self.ov_config)
+            self.request = core.compile_model(self.model, self._device, ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
@@ -491,9 +538,10 @@ class OVDecoder:
             The device type used by this process.
     """
 
-    def __init__(self, model: openvino.runtime.Model, device: str, ov_config: Dict):
+    def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
-        self._device = device
+        self.parent_model = parent_model
+        self._device = self.parent_model._device
         self.device = torch.device("cpu")
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
@@ -508,7 +556,6 @@ class OVDecoder:
             self.use_past = False
             self.num_pkv = 4
 
-        self.ov_config = ov_config
         self.request = None
 
     @add_start_docstrings_to_model_forward(DECODER_INPUTS_DOCSTRING)
@@ -574,14 +621,119 @@ class OVDecoder:
         return self.forward(*args, **kwargs)
 
     def _compile(self):
+        ov_config = {**self.parent_model.ov_config}
+        if (
+            "CACHE_DIR" not in ov_config.keys()
+            and not str(self.parent_model.model_save_dir).startswith(gettempdir())
+            and "gpu" in self._device.lower()
+        ):
+            cache_dir = Path(self.parent_model.model_save_dir).joinpath("model_cache")
+            ov_config["CACHE_DIR"] = str(cache_dir)
+
         if self.request is None:
             logger.info(f"Compiling the decoder to {self._device} ...")
-            compiled_model = core.compile_model(self.model, self._device, self.ov_config)
+            compiled_model = core.compile_model(self.model, self._device, ov_config)
             self.request = compiled_model.create_infer_request()
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
                 logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
                 _print_compiled_model_properties(compiled_model)
+
+
+@add_start_docstrings(
+    """
+    VisionEncoderDecoder Sequence-to-sequence model with a language modeling head for OpenVINO inference.
+    """,
+    INPUTS_DOCSTRING,
+)
+class OVModelForVision2Seq(OVModelForSeq2SeqLM):
+    auto_model_class = AutoModelForVision2Seq
+    main_input_name = "pixel_values"
+    export_feature = "image-to-text"
+
+    def __init__(
+        self,
+        encoder: openvino.runtime.Model,
+        decoder: openvino.runtime.Model,
+        decoder_with_past: openvino.runtime.Model = None,
+        config: transformers.PretrainedConfig = None,
+        **kwargs,
+    ):
+        if config.decoder.model_type == "gpt2":
+            self.no_cross_attention_cache = True
+        super().__init__(encoder, decoder, decoder_with_past, config, **kwargs)
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.BoolTensor] = None,
+        past_key_values=None,
+        head_mask=None,
+        decoder_head_mask=None,
+        cross_attn_head_mask=None,
+        use_cache=None,
+        encoder_outputs=None,
+        **kwargs,
+    ) -> Dict:
+        if decoder_attention_mask is None:
+            decoder_attention_mask = torch.ones_like(input_ids).to(input_ids.device)
+
+        return {
+            "pixel_values": pixel_values,
+            "decoder_input_ids": input_ids,
+            "past_key_values": past_key_values,
+            "encoder_outputs": encoder_outputs,
+            "attention_mask": attention_mask,
+            "decoder_attention_mask": decoder_attention_mask,
+            "head_mask": head_mask,
+            "decoder_head_mask": decoder_head_mask,
+            "cross_attn_head_mask": cross_attn_head_mask,
+            "use_cache": use_cache,
+        }
+
+    @add_start_docstrings_to_model_forward(
+        VISION_ENCODER_DECODER_SEQ2SEQ_MODEL_DOCSTRING
+        + IMAGE_TO_TEXT_EXAMPLE.format(
+            processor_class=_PROCESSOR_FOR_DOC,
+            tokenizer_class=_TOKENIZER_FOR_DOC,
+            model_class="OVModelForVision2Seq",
+            checkpoint="microsoft/trocr-small-handwritten",
+        )
+    )
+    def forward(
+        self,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[torch.LongTensor] = None,
+        decoder_input_ids: Optional[torch.LongTensor] = None,
+        decoder_attention_mask: Optional[torch.BoolTensor] = None,
+        encoder_outputs: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        **kwargs,
+    ) -> Seq2SeqLMOutput:
+        return super().forward(
+            input_ids=pixel_values,
+            attention_mask=attention_mask,
+            decoder_input_ids=decoder_input_ids,
+            decoder_attention_mask=decoder_attention_mask,
+            encoder_outputs=encoder_outputs,
+            past_key_values=past_key_values,
+            **kwargs,
+        )
+
+    def _reshape(self, model: openvino.runtime.Model, batch_size: int, sequence_length: int, is_decoder=True):
+        shapes = {}
+        for inputs in model.inputs:
+            shapes[inputs] = inputs.get_partial_shape()
+            shapes[inputs][0] = batch_size if not is_decoder else -1
+            if is_decoder:
+                if inputs.get_any_name().startswith("past_key_values"):
+                    shapes[inputs][2] = -1
+                elif not inputs.get_any_name().startswith("encoder"):
+                    shapes[inputs][1] = -1
+        model.reshape(shapes)
+        return model
 
 
 @add_start_docstrings(

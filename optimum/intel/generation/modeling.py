@@ -15,12 +15,14 @@
 import inspect
 import logging
 import os
+import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Optional, Tuple, Union
 
 import torch
 from huggingface_hub import hf_hub_download
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from transformers import AutoConfig, AutoModelForCausalLM, GenerationConfig, PretrainedConfig, PreTrainedModel
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
@@ -32,7 +34,7 @@ from optimum.utils import NormalizedConfigManager
 
 from ..utils.constant import _TASK_ALIASES
 from ..utils.import_utils import is_torch_version
-from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, patch_decoder_attention_mask
+from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 
 
 logger = logging.getLogger(__name__)
@@ -66,12 +68,11 @@ def prepare_jit_inputs(model: PreTrainedModel, task: str, use_cache: bool = Fals
 
 def jit_trace(model: PreTrainedModel, task: str, use_cache: bool = False):
     model_inputs = prepare_jit_inputs(model, task, use_cache)
+    model.config.return_dict = task not in {"text-generation", "audio-classification"}
     # check if the model_inputs is correct.
     model(**model_inputs)
 
     torch._C._jit_set_texpr_fuser_enabled(False)
-    if "past_key_values" in model_inputs.keys():
-        model.config.return_dict = False
     if is_torch_version(">=", "2.1.0"):
         traced_model = torch.jit.trace(model, example_kwarg_inputs=model_inputs, strict=False)
     else:
@@ -89,6 +90,7 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
     export_feature = "text-generation"
     main_input_name = "input_ids"
     base_model_prefix = "torch_script_model"
+    _supports_cache_class = False
 
     def __init__(
         self,
@@ -110,6 +112,9 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
             self.input_names = {
                 inputs.debugName().split(".")[0] for inputs in model.graph.inputs() if inputs.debugName() != "self"
             }
+            logger.warning(
+                f"The class `{self.__class__}` has been depreciated for TorchScript model, please use `IPEXModelForCausalLM` instead"
+            )
         else:
             self.input_names = set()
 
@@ -177,12 +182,21 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         """
         if self.config.model_type == "bloom":
             return self._reorder_cache_bloom(past_key_values, beam_idx)
+        elif self.config.model_type == "gpt_bigcode":
+            return self._reorder_cache_gpt_bigcode(past_key_values, beam_idx)
 
         # from transformers.models.gpt2.modeling_gpt2.GPT2LMHeadModel._reorder_cache
         return tuple(
             tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
             for layer_past in past_key_values
         )
+
+    # Copied from transformers.models.gpt_bigcode.modeling_gpt_bigcode.GPTBigCodeForCausalLM._reorder_cache
+    @staticmethod
+    def _reorder_cache_gpt_bigcode(
+        past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
+    ) -> Tuple[Tuple[torch.Tensor]]:
+        return tuple(layer_past.index_select(0, beam_idx.to(layer_past.device)) for layer_past in past_key_values)
 
     # Copied from transformers.models.bloom.modeling_bloom.BloomForCausalLM._reorder_cache
     def _reorder_cache_bloom(
@@ -255,6 +269,37 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         self.model.to(self._device)
         return self
 
+    def create_pkv_for_generation(self, input_ids):
+        model_type = self.config.model_type.replace("_", "-")
+        nb_pkv = 2
+        num_layers = self.normalized_config.num_layers
+        d_k = self.normalized_config.hidden_size // self.normalized_config.num_attention_heads
+        batch_size = input_ids.shape[0]
+
+        if model_type in {"mistral", "llama"}:
+            num_attention_heads = self.normalized_config.num_key_value_heads
+        else:
+            num_attention_heads = self.normalized_config.num_attention_heads
+
+        if model_type == "bloom":
+            shape_key = (batch_size * num_attention_heads, d_k, 0)
+            shape_value = (batch_size * num_attention_heads, 0, d_k)
+            key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)
+            value = torch.empty(size=shape_value, dtype=self.model_dtype, device=self._device)
+            past_key_values = tuple(
+                tuple(key if idx % 2 == 0 else value for idx in range(nb_pkv)) for _ in range(num_layers)
+            )
+        elif model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS:
+            shape = (batch_size, 0, d_k * 2)
+            pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
+            past_key_values = tuple(pkv for _ in range(num_layers))
+        else:
+            shape = (batch_size, num_attention_heads, 0, d_k)
+            pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
+            past_key_values = tuple(tuple(pkv for _ in range(nb_pkv)) for _ in range(num_layers))
+
+        return past_key_values
+
     def forward(
         self,
         input_ids: torch.LongTensor = None,
@@ -281,36 +326,9 @@ class BaseModelForCausalLM(OptimizedModel, GenerationMixin):
         if "position_ids" in self.input_names or not self.input_names:
             inputs["position_ids"] = position_ids
 
-        model_type = self.config.model_type.replace("_", "-")
-
         if self.use_cache:
             if past_key_values is None:
-                nb_pkv = 2
-                num_layers = self.normalized_config.num_layers
-                d_k = self.normalized_config.hidden_size // self.normalized_config.num_attention_heads
-                batch_size = input_ids.shape[0]
-
-                if model_type in {"mistral", "llama"}:
-                    num_attention_heads = self.normalized_config.num_key_value_heads
-                else:
-                    num_attention_heads = self.normalized_config.num_attention_heads
-
-                if model_type == "bloom":
-                    shape_key = (batch_size * num_attention_heads, d_k, 0)
-                    shape_value = (batch_size * num_attention_heads, 0, d_k)
-                    key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)
-                    value = torch.empty(size=shape_value, dtype=self.model_dtype, device=self._device)
-                    past_key_values = tuple(
-                        tuple(key if idx % 2 == 0 else value for idx in range(nb_pkv)) for _ in range(num_layers)
-                    )
-                elif model_type.replace("-", "_") in MULTI_QUERY_ATTN_MODELS:
-                    shape = (batch_size, 0, d_k * 2)
-                    pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
-                    past_key_values = tuple(pkv for _ in range(num_layers))
-                else:
-                    shape = (batch_size, num_attention_heads, 0, d_k)
-                    pkv = torch.empty(size=shape, dtype=self.model_dtype, device=self._device)
-                    past_key_values = tuple(tuple(pkv for _ in range(nb_pkv)) for _ in range(num_layers))
+                past_key_values = self.create_pkv_for_generation(input_ids)
 
             inputs["past_key_values"] = past_key_values
 
@@ -347,15 +365,25 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str, None]] = None,
-        revision: Optional[Union[str, None]] = None,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         file_name: Optional[str] = WEIGHTS_NAME,
         local_files_only: bool = False,
         use_cache: bool = True,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         if not getattr(config, "torchscript", False):
             raise ValueError("`torchscript` should be set to True to load TorchScript model")
 
@@ -369,7 +397,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
             model_cache_path = hf_hub_download(
                 repo_id=model_id,
                 filename=file_name,
-                use_auth_token=use_auth_token,
+                token=token,
                 revision=revision,
                 cache_dir=cache_dir,
                 force_download=force_download,
@@ -392,22 +420,32 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         model_id: str,
         config: PretrainedConfig,
         use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
         use_cache: bool = True,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         if is_torch_version("<", "2.1.0"):
             raise ImportError("`torch>=2.0.0` is needed to trace your model")
 
         task = cls.export_feature
         model_kwargs = {
             "revision": revision,
-            "use_auth_token": use_auth_token,
+            "token": token,
             "cache_dir": cache_dir,
             "subfolder": subfolder,
             "local_files_only": local_files_only,
@@ -417,7 +455,6 @@ class TSModelForCausalLM(BaseModelForCausalLM):
         }
 
         model = TasksManager.get_model_from_task(task, model_id, **model_kwargs)
-        model = patch_decoder_attention_mask(model)
 
         traced_model = jit_trace(model, task, use_cache)
         save_dir = TemporaryDirectory()
@@ -429,7 +466,7 @@ class TSModelForCausalLM(BaseModelForCausalLM):
             model_id=save_dir_path,
             config=config,
             use_cache=use_cache,
-            use_auth_token=use_auth_token,
+            token=token,
             revision=revision,
             force_download=force_download,
             cache_dir=cache_dir,

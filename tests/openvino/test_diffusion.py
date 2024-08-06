@@ -19,6 +19,7 @@ from typing import Dict
 
 import numpy as np
 import PIL
+import pytest
 import torch
 from diffusers import (
     StableDiffusionPipeline,
@@ -28,8 +29,8 @@ from diffusers import (
 from diffusers.utils import load_image
 from diffusers.utils.testing_utils import floats_tensor
 from openvino.runtime.ie_api import CompiledModel
-from packaging.version import Version, parse
 from parameterized import parameterized
+from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES, SEED
 
 from optimum.intel import (
@@ -46,13 +47,11 @@ from optimum.intel.openvino.modeling_diffusion import (
     OVModelVaeDecoder,
     OVModelVaeEncoder,
 )
-from optimum.onnxruntime import (
-    ORTStableDiffusionImg2ImgPipeline,
-    ORTStableDiffusionInpaintPipeline,
-    ORTStableDiffusionXLImg2ImgPipeline,
-    ORTStableDiffusionXLPipeline,
-)
-from optimum.utils.import_utils import _diffusers_version
+from optimum.intel.utils.import_utils import is_diffusers_version
+from optimum.utils.import_utils import is_onnxruntime_available
+
+
+F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
 
 
 def _generate_inputs(batch_size=1):
@@ -109,6 +108,8 @@ class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
                 self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_callback(self, model_arch: str):
         MODEL_NAMES[model_arch]
 
@@ -164,13 +165,12 @@ class OVStableDiffusionPipelineBaseTest(unittest.TestCase):
 class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionImg2ImgPipeline
-    ORT_MODEL_CLASS = ORTStableDiffusionImg2ImgPipeline
     TASK = "image-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_diffusers_pipeline(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True)
+        pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         height, width, batch_size = 128, 128, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
         inputs["prompt"] = "A painting of a squirrel eating a burger"
@@ -182,6 +182,8 @@ class OVStableDiffusionImg2ImgPipelineTest(OVStableDiffusionPipelineBaseTest):
         self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-1))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
@@ -208,7 +210,7 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_diffusers(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        ov_pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True)
+        ov_pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
         self.assertIsInstance(ov_pipeline.vae_encoder, OVModelVaeEncoder)
         self.assertIsInstance(ov_pipeline.vae_decoder, OVModelVaeDecoder)
@@ -264,6 +266,8 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
         self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False)
@@ -295,13 +299,15 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
 class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion",)
     MODEL_CLASS = OVStableDiffusionInpaintPipeline
-    ORT_MODEL_CLASS = ORTStableDiffusionInpaintPipeline
     TASK = "inpaint"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(not is_onnxruntime_available(), "this test requires onnxruntime")
     def test_compare_diffusers_pipeline(self, model_arch: str):
+        from optimum.onnxruntime import ORTStableDiffusionInpaintPipeline
+
         model_id = MODEL_NAMES[model_arch]
-        pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True)
+        pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         batch_size, num_images, height, width = 1, 1, 64, 64
         latents = pipeline.prepare_latents(
             batch_size * num_images,
@@ -326,7 +332,7 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
         outputs = pipeline(**inputs, latents=latents).images
         self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
 
-        ort_pipeline = self.ORT_MODEL_CLASS.from_pretrained(model_id, export=True)
+        ort_pipeline = ORTStableDiffusionInpaintPipeline.from_pretrained(model_id, export=True)
         ort_outputs = ort_pipeline(**inputs, latents=latents).images
         self.assertTrue(np.allclose(outputs, ort_outputs, atol=1e-1))
 
@@ -334,6 +340,8 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
         self.assertTrue(np.allclose(outputs[0, -3:, -3:, -1].flatten(), expected_slice, atol=1e-1))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
@@ -355,13 +363,12 @@ class OVStableDiffusionInpaintPipelineTest(OVStableDiffusionPipelineBaseTest):
 class OVtableDiffusionXLPipelineTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion-xl",)
     MODEL_CLASS = OVStableDiffusionXLPipeline
-    ORT_MODEL_CLASS = ORTStableDiffusionXLPipeline
     PT_MODEL_CLASS = StableDiffusionXLPipeline
     TASK = "text-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_diffusers(self, model_arch: str):
-        ov_pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True)
+        ov_pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
         self.assertIsInstance(ov_pipeline.text_encoder_2, OVModelTextEncoder)
         self.assertIsInstance(ov_pipeline.vae_encoder, OVModelVaeEncoder)
@@ -423,6 +430,8 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
         self.assertFalse(np.array_equal(ov_outputs_1.images[0], ov_outputs_3.images[0]))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False)
@@ -441,17 +450,16 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
 class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ("stable-diffusion-xl", "stable-diffusion-xl-refiner")
     MODEL_CLASS = OVStableDiffusionXLImg2ImgPipeline
-    ORT_MODEL_CLASS = ORTStableDiffusionXLImg2ImgPipeline
     PT_MODEL_CLASS = StableDiffusionXLImg2ImgPipeline
     TASK = "image-to-image"
 
     def test_inference(self):
         model_id = "hf-internal-testing/tiny-stable-diffusion-xl-pipe"
-        pipeline = self.MODEL_CLASS.from_pretrained(model_id)
+        pipeline = self.MODEL_CLASS.from_pretrained(model_id, ov_config=F32_CONFIG)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             pipeline.save_pretrained(tmp_dir)
-            pipeline = self.MODEL_CLASS.from_pretrained(tmp_dir)
+            pipeline = self.MODEL_CLASS.from_pretrained(tmp_dir, ov_config=F32_CONFIG)
 
         batch_size, height, width = 1, 128, 128
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
@@ -462,6 +470,8 @@ class OVStableDiffusionXLImg2ImgPipelineTest(unittest.TestCase):
         self.assertTrue(np.allclose(output.flatten(), expected_slice, atol=1e-3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
@@ -486,9 +496,9 @@ class OVLatentConsistencyModelPipelineTest(unittest.TestCase):
     TASK = "text-to-image"
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @unittest.skipIf(parse(_diffusers_version) <= Version("0.21.4"), "not supported with this diffusers version")
+    @unittest.skipIf(is_diffusers_version("<=", "0.21.4"), "not supported with this diffusers version")
     def test_compare_to_diffusers(self, model_arch: str):
-        ov_pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True)
+        ov_pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
         self.assertIsInstance(ov_pipeline.vae_encoder, OVModelVaeEncoder)
         self.assertIsInstance(ov_pipeline.vae_decoder, OVModelVaeDecoder)
@@ -529,7 +539,9 @@ class OVLatentConsistencyModelPipelineTest(unittest.TestCase):
         self.assertEqual(pipeline.device.type, ov_pipeline.device)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    @unittest.skipIf(parse(_diffusers_version) <= Version("0.21.4"), "not supported with this diffusers version")
+    @pytest.mark.run_slow
+    @slow
+    @unittest.skipIf(is_diffusers_version("<=", "0.21.4"), "not supported with this diffusers version")
     def test_num_images_per_prompt_static_model(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
         pipeline = self.MODEL_CLASS.from_pretrained(model_id, export=True, compile=False, dynamic_shapes=False)
@@ -543,3 +555,51 @@ class OVLatentConsistencyModelPipelineTest(unittest.TestCase):
             inputs = _generate_inputs(batch_size)
             outputs = pipeline(**inputs, num_images_per_prompt=num_images, height=_height, width=width).images
             self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(is_diffusers_version("<=", "0.21.4"), "not supported with this diffusers version")
+    def test_safety_checker(self, model_arch: str):
+        ov_pipeline = self.MODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], export=True, ov_config=F32_CONFIG)
+        self.assertIsInstance(ov_pipeline.text_encoder, OVModelTextEncoder)
+        self.assertIsInstance(ov_pipeline.vae_encoder, OVModelVaeEncoder)
+        self.assertIsInstance(ov_pipeline.vae_decoder, OVModelVaeDecoder)
+        self.assertIsInstance(ov_pipeline.unet, OVModelUnet)
+        self.assertIsInstance(ov_pipeline.config, Dict)
+
+        from diffusers import LatentConsistencyModelPipeline
+        from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
+
+        safety_checker = StableDiffusionSafetyChecker.from_pretrained("CompVis/stable-diffusion-safety-checker")
+        pipeline = LatentConsistencyModelPipeline.from_pretrained(
+            MODEL_NAMES[model_arch], safety_checker=safety_checker
+        )
+
+        batch_size, num_images_per_prompt, height, width = 2, 3, 64, 128
+        latents = ov_pipeline.prepare_latents(
+            batch_size * num_images_per_prompt,
+            ov_pipeline.unet.config["in_channels"],
+            height,
+            width,
+            dtype=np.float32,
+            generator=np.random.RandomState(0),
+        )
+
+        kwargs = {
+            "prompt": ["sailing ship in storm by Leonardo da Vinci"] * batch_size,
+            "num_inference_steps": 1,
+            "num_images_per_prompt": num_images_per_prompt,
+            "height": height,
+            "width": width,
+            "guidance_scale": 8.5,
+        }
+
+        for output_type in ["latent", "np"]:
+            ov_outputs = ov_pipeline(latents=latents, output_type=output_type, **kwargs).images
+            self.assertIsInstance(ov_outputs, np.ndarray)
+            with torch.no_grad():
+                outputs = pipeline(latents=torch.from_numpy(latents), output_type=output_type, **kwargs).images
+
+            # Compare model outputs
+            self.assertTrue(np.allclose(ov_outputs, outputs, atol=1e-4))
+        # Compare model devices
+        self.assertEqual(pipeline.device.type, ov_pipeline.device)

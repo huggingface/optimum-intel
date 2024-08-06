@@ -1,0 +1,181 @@
+<!--Copyright 2022 The HuggingFace Team. All rights reserved.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+-->
+
+# Inference
+
+Optimum Intel can be used to load optimized models from the [Hub](https://huggingface.co/models?library=openvino&sort=downloads) and create pipelines to run inference with OpenVINO Runtime on a variety of Intel processors ([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices)
+
+
+## Loading
+
+### Transformers models
+
+Once [your model was exported](export), you can load it by replacing the `AutoModelForXxx` class with the corresponding `OVModelForXxx`.
+
+```diff
+- from transformers import AutoModelForCausalLM
++ from optimum.intel import OVModelForCausalLM
+  from transformers import AutoTokenizer, pipeline
+
+  model_id = "helenai/gpt2-ov"
+- model = AutoModelForCausalLM.from_pretrained(model_id)
+  # here the model was already exported so no need to set export=True
++ model = OVModelForCausalLM.from_pretrained(model_id)
+  tokenizer = AutoTokenizer.from_pretrained(model_id)
+  pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+  results = pipe("He's a dreadful magician and")
+```
+
+As shown in the table below, each task is associated with a class enabling to automatically load your model.
+
+| Auto Class                           | Task                                 |
+|--------------------------------------|--------------------------------------|
+| `OVModelForSequenceClassification`   | `text-classification`                |
+| `OVModelForTokenClassification`      | `token-classification`               |
+| `OVModelForQuestionAnswering`        | `question-answering`                 |
+| `OVModelForAudioClassification`      | `audio-classification`               |
+| `OVModelForImageClassification`      | `image-classification`               |
+| `OVModelForFeatureExtraction`        | `feature-extraction`                 |
+| `OVModelForMaskedLM`                 | `fill-mask`                          |
+| `OVModelForImageClassification`      | `image-classification`               |
+| `OVModelForAudioClassification`      | `audio-classification`               |
+| `OVModelForCausalLM`                 | `text-generation-with-past`          |
+| `OVModelForSeq2SeqLM`                | `text2text-generation-with-past`     |
+| `OVModelForSpeechSeq2Seq`            | `automatic-speech-recognition`       |
+| `OVModelForVision2Seq`               | `image-to-text`                      |
+
+
+### Diffusers models
+
+Make sure you have 🤗 Diffusers installed. To install `diffusers`:
+
+```bash
+pip install optimum[diffusers]
+```
+
+```diff
+- from diffusers import StableDiffusionPipeline
++ from optimum.intel import OVStableDiffusionPipeline
+
+  model_id = "echarlaix/stable-diffusion-v1-5-openvino"
+- pipeline = StableDiffusionPipeline.from_pretrained(model_id)
++ pipeline = OVStableDiffusionPipeline.from_pretrained(model_id)
+  prompt = "sailing ship in storm by Rembrandt"
+  images = pipeline(prompt).images
+```
+
+
+As shown in the table below, each task is associated with a class enabling to automatically load your model.
+
+| Auto Class                           | Task                                 |
+|--------------------------------------|--------------------------------------|
+| `OVStableDiffusionPipeline`          | `text-to-image`                      |
+| `OVStableDiffusionImg2ImgPipeline`   | `image-to-image`                     |
+| `OVStableDiffusionInpaintPipeline`   | `inpaint`                            |
+| `OVStableDiffusionXLPipeline`        | `text-to-image`                      |
+| `OVStableDiffusionXLImg2ImgPipeline` | `image-to-image`                     |
+| `OVLatentConsistencyModelPipeline`   | `text-to-image`                      |
+
+
+See the [reference documentation](reference) for more information about parameters, and examples for different tasks.
+
+
+## Compilation
+
+By default the model will be compiled when instantiating an `OVModel`. In the case where the model is reshaped or placed to another device, the model will need to be recompiled again, which will happen by default before the first inference (thus inflating the latency of the first inference). To avoid an unnecessary compilation, you can disable the first compilation by setting `compile=False`.
+
+```python
+from optimum.intel import OVModelForQuestionAnswering
+
+model_id = "distilbert/distilbert-base-cased-distilled-squad"
+# Load the model and disable the model compilation
+model = OVModelForQuestionAnswering.from_pretrained(model_id, compile=False)
+```
+
+To run inference on Intel integrated or discrete GPU, use `.to("gpu")`. On GPU, models run in FP16 precision by default. (See [OpenVINO documentation](https://docs.openvino.ai/2024/get-started/configurations/configurations-intel-gpu.html) about installing drivers for GPU inference).
+
+```python
+model.to("gpu")
+```
+
+The model can be compiled:
+
+```python
+model.compile()
+```
+
+## Static shape
+
+By default, dynamic shapes are supported, enabling inference for inputs of every shape. To speed up inference, static shapes can be enabled by giving the desired input shapes with [.reshape()](reference#optimum.intel.OVBaseModel.reshape).
+
+```python
+# Fix the batch size to 1 and the sequence length to 40
+batch_size, seq_len = 1, 40
+model.reshape(batch_size, seq_len)
+```
+
+When fixing the shapes with the `reshape()` method, inference cannot be performed with an input of a different shape.
+
+```python
+
+from transformers import AutoTokenizer
+from optimum.intel import OVModelForQuestionAnswering
+
+model_id = "distilbert/distilbert-base-cased-distilled-squad"
+model = OVModelForQuestionAnswering.from_pretrained(model_id, compile=False)
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+batch_size, seq_len = 1, 40
+model.reshape(batch_size, seq_len)
+# Compile the model before the first inference
+model.compile()
+
+question = "Which name is also used to describe the Amazon rainforest ?"
+context = "The Amazon rainforest, also known as Amazonia or the Amazon Jungle"
+tokens = tokenizer(question, context, max_length=seq_len, padding="max_length", return_tensors="np")
+
+outputs = model(**tokens)
+```
+
+For models that handle images, you can also specify the `height` and `width` when reshaping your model:
+
+```python
+batch_size, num_images, height, width = 1, 1, 512, 512
+pipeline.reshape(batch_size=batch_size, height=height, width=width, num_images_per_prompt=num_images)
+images = pipeline(prompt, height=height, width=width, num_images_per_prompt=num_images).images
+```
+
+## Configuration
+
+The `ov_config` parameter allow to provide custom OpenVINO configuration values. This can be used for example to enable full precision inference on devices where FP16 or BF16 inference precision is used by default.
+
+```python
+ov_config = {"INFERENCE_PRECISION_HINT": "f32"}
+model = OVModelForSequenceClassification.from_pretrained(model_id, ov_config=ov_config)
+```
+
+Optimum Intel leverages OpenVINO's model caching to speed up model compiling on GPU. By default a `model_cache` directory is created in the model's directory in the [Hugging Face Hub cache](https://huggingface.co/docs/huggingface_hub/main/en/guides/manage-cache). To override this, use the ov_config parameter and set `CACHE_DIR` to a different value. To disable model caching on GPU, set `CACHE_DIR` to an empty string.
+
+```python
+ov_config = {"CACHE_DIR": ""}
+model = OVModelForSequenceClassification.from_pretrained(model_id, device="gpu", ov_config=ov_config)
+```
+
+## Weight quantization
+
+You can also apply fp16, 8-bit or 4-bit weight compression on the Linear, Convolutional and Embedding layers when loading your model to reduce the memory footprint and inference latency.
+
+For more information on the quantization parameters checkout the [documentation](optimziation#weight-only-quantization).
+
+<Tip warning={true}>
+
+If not specified, `load_in_8bit` will be set to `True` by default when models larger than 1 billion parameters are exported to the OpenVINO format (with `export=True`). You can disable it with `load_in_8bit=False`.
+
+</Tip>
+
+It's also possible to apply quantization on both weights and activations using the [`OVQuantizer`](optimization#static-quantization).

@@ -18,10 +18,14 @@ import logging
 import os
 from glob import glob
 import logging
+from pathlib import Path
+from typing import Tuple, Type, Union
 
 import numpy as np
 from huggingface_hub import model_info
-from openvino.runtime import Type, properties
+from openvino.runtime import Core, properties
+from openvino.runtime import Type as OVType
+from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
 
@@ -31,6 +35,9 @@ OV_XML_FILE_NAME = "openvino_model.xml"
 OV_ENCODER_NAME = "openvino_encoder_model.xml"
 OV_DECODER_NAME = "openvino_decoder_model.xml"
 OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
+
+OV_TOKENIZER_NAME = "openvino_tokenizer{}.xml"
+OV_DETOKENIZER_NAME = "openvino_detokenizer{}.xml"
 
 ONNX_WEIGHTS_NAME = "model.onnx"
 ONNX_ENCODER_NAME = "encoder_model.onnx"
@@ -65,19 +72,19 @@ OV_TO_NP_TYPE = {
 
 
 STR_TO_OV_TYPE = {
-    "boolean": Type.boolean,
-    "f16": Type.f16,
-    "f32": Type.f32,
-    "f64": Type.f64,
-    "i8": Type.i8,
-    "i16": Type.i16,
-    "i32": Type.i32,
-    "i64": Type.i64,
-    "u8": Type.u8,
-    "u16": Type.u16,
-    "u32": Type.u32,
-    "u64": Type.u64,
-    "bf16": Type.bf16,
+    "boolean": OVType.boolean,
+    "f16": OVType.f16,
+    "f32": OVType.f32,
+    "f64": OVType.f64,
+    "i8": OVType.i8,
+    "i16": OVType.i16,
+    "i32": OVType.i32,
+    "i64": OVType.i64,
+    "u8": OVType.u8,
+    "u16": OVType.u16,
+    "u32": OVType.u32,
+    "u64": OVType.u64,
+    "bf16": OVType.bf16,
 }
 
 
@@ -94,7 +101,33 @@ _HEAD_TO_AUTOMODELS = {
     "stable-diffusion": "OVStableDiffusionPipeline",
     "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
     "pix2struct": "OVModelForPix2Struct",
+    "latent-consistency": "OVLatentConsistencyModelPipeline",
 }
+
+
+PREDEFINED_SD_DATASETS = {
+    "conceptual_captions": {"split": "train", "inputs": {"prompt": "caption"}},
+    "laion/220k-GPT4Vision-captions-from-LIVIS": {"split": "train", "inputs": {"prompt": "caption"}},
+    "laion/filtered-wit": {"split": "train", "inputs": {"prompt": "caption"}},
+}
+
+
+NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[Type[PreTrainedTokenizer]] = (CLIPTokenizer,)
+
+
+def maybe_convert_tokenizer_to_fast(
+    hf_tokenizer: PreTrainedTokenizer, tokenizer_path: Path
+) -> Union[PreTrainedTokenizer, PreTrainedTokenizerFast]:
+    if isinstance(hf_tokenizer, PreTrainedTokenizerFast):
+        return hf_tokenizer
+
+    if isinstance(hf_tokenizer, NEED_CONVERT_TO_FAST_TOKENIZER):
+        try:
+            return AutoTokenizer.from_pretrained(tokenizer_path)
+        except Exception:
+            return hf_tokenizer
+
+    return hf_tokenizer
 
 
 def use_external_data_format(num_parameters: int) -> bool:
@@ -134,12 +167,21 @@ def _print_compiled_model_properties(compiled_model):
     skip_keys = {"SUPPORTED_METRICS", "SUPPORTED_CONFIG_KEYS", supported_properties}
     keys = set(compiled_model.get_property(supported_properties)) - skip_keys
     for k in keys:
-        value = compiled_model.get_property(k)
-        if k == properties.device.properties():
-            for device_key in value.keys():
-                logger.info(f"  {device_key}:")
-                for k2, value2 in value.get(device_key).items():
-                    if k2 not in skip_keys:
-                        logger.info(f"    {k2}: {value2}")
-        else:
-            logger.info(f"  {k}: {value}")
+        try:
+            value = compiled_model.get_property(k)
+            if k == properties.device.properties():
+                for device_key in value.keys():
+                    logger.info(f"  {device_key}:")
+                    for k2, value2 in value.get(device_key).items():
+                        if k2 not in skip_keys:
+                            logger.info(f"    {k2}: {value2}")
+            else:
+                logger.info(f"  {k}: {value}")
+        except Exception:
+            logger.error(f"[error] Get property of '{k}' failed")
+    try:
+        logger.info("EXECUTION_DEVICES:")
+        for device in compiled_model.get_property("EXECUTION_DEVICES"):
+            logger.info(f"  {device}: {Core().get_property(device, 'FULL_DEVICE_NAME')}")
+    except Exception:
+        logger.error("[error] Get FULL_DEVICE_NAME failed")

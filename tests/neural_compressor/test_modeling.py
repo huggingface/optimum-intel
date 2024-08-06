@@ -15,13 +15,13 @@
 
 import os
 import tempfile
-import time
 import unittest
+from pathlib import Path
 
 import torch
-from packaging.version import Version, parse
 from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline, set_seed
+from transformers.utils import SAFE_WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
 from optimum.intel import (  # noqa
@@ -39,8 +39,8 @@ from optimum.intel import (  # noqa
     INCStableDiffusionPipeline,
     INCTrainer,
 )
-from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS, WEIGHTS_NAME
-from optimum.version import __version__ as _optimum_version
+from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS, QUANTIZATION_CONFIG_NAME, WEIGHTS_NAME
+from optimum.intel.utils.import_utils import is_itrex_available
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -55,7 +55,7 @@ QUANTIZED_MODEL_NAMES_TO_TASK = (
 
 
 MODEL_NAMES_TO_TASK = (
-    ("hf-internal-testing/tiny-random-gpt2", "text-generation"),
+    ("hf-internal-testing/tiny-random-GPT2LMHeadModel", "text-generation"),
     ("hf-internal-testing/tiny-random-BertForMaskedLM", "fill-mask"),
     ("hf-internal-testing/tiny-random-DistilBertForSequenceClassification", "text-classification"),
     ("hf-internal-testing/tiny-random-DebertaV2Model", "feature-extraction"),
@@ -66,15 +66,6 @@ MODEL_NAMES_TO_TASK = (
 )
 
 DIFFUSERS_MODEL_NAMES_TO_TASK = (("echarlaix/stable-diffusion-v1-5-inc-int8-dynamic", "stable-diffusion"),)
-
-
-class Timer(object):
-    def __enter__(self):
-        self.elapsed = time.perf_counter()
-        return self
-
-    def __exit__(self, type, value, traceback):
-        self.elapsed = (time.perf_counter() - self.elapsed) * 1e3
 
 
 class INCModelingTest(unittest.TestCase):
@@ -98,7 +89,7 @@ class INCModelingTest(unittest.TestCase):
         outputs = inc_model(**model_inputs)
         with tempfile.TemporaryDirectory() as tmpdirname:
             inc_model.save_pretrained(tmpdirname)
-            loaded_model = model_class.from_pretrained(tmpdirname, file_name=WEIGHTS_NAME)
+            loaded_model = model_class.from_pretrained(tmpdirname)
             outputs_loaded = loaded_model(**model_inputs)
 
         if task == "feature-extraction":
@@ -135,33 +126,77 @@ class INCModelingTest(unittest.TestCase):
 
         pipe(*inputs)
 
-    @unittest.skipIf(parse(_optimum_version) < Version("1.14.0"), "not supported, needs optimum>=v1.14.0")
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokens = tokenizer("This is a sample input", return_tensors="pt")
 
         model_with_pkv = INCModelForCausalLM.from_pretrained(model_id, use_cache=True, subfolder="model_with_pkv")
-        # Warmup
-        model_with_pkv.generate(**tokens)
-        with Timer() as with_pkv_timer:
-            outputs_model_with_pkv = model_with_pkv.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
-            )
+
+        outputs_with_pkv = model_with_pkv.generate(
+            **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
+        )
         model_without_pkv = INCModelForCausalLM.from_pretrained(
             model_id, use_cache=False, subfolder="model_without_pkv"
         )
-        # Warmup
-        model_without_pkv.generate(**tokens)
-        with Timer() as without_pkv_timer:
-            outputs_model_without_pkv = model_without_pkv.generate(
-                **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
-            )
-        self.assertTrue(torch.equal(outputs_model_with_pkv, outputs_model_without_pkv))
-        self.assertEqual(outputs_model_with_pkv.shape[1], self.GENERATION_LENGTH)
-        self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
-        self.assertTrue(
-            without_pkv_timer.elapsed / with_pkv_timer.elapsed > self.SPEEDUP_CACHE,
-            f"With pkv latency: {with_pkv_timer.elapsed:.3f} ms, without pkv latency: {without_pkv_timer.elapsed:.3f} ms,"
-            f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
+
+        outputs_without_pkv = model_without_pkv.generate(
+            **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
         )
+        self.assertEqual(outputs_with_pkv.shape[1], self.GENERATION_LENGTH)
+        self.assertEqual(outputs_without_pkv.shape[1], self.GENERATION_LENGTH)
+        self.assertTrue(torch.equal(outputs_with_pkv, outputs_without_pkv))
+
+    @unittest.skipIf(not is_itrex_available(), reason="ITREX not available")
+    def test_saving_loading_woq_itrex_model(self):
+        model_name = "echarlaix/tiny-random-PhiForCausalLM"
+        subfolder = "itrex"
+        model = INCModelForCausalLM.from_pretrained(model_name, revision="itrex", subfolder=subfolder)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, revision="itrex")
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_save_dir = Path(tmp_dir) / subfolder
+            model.save_pretrained(model_save_dir)
+            folder_contents = os.listdir(model_save_dir)
+            self.assertIn(SAFE_WEIGHTS_NAME, folder_contents)
+            self.assertIn(QUANTIZATION_CONFIG_NAME, folder_contents)
+            loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir, subfolder=subfolder)
+
+        with torch.no_grad():
+            outputs = model(**tokens)
+            loaded_outputs = loaded_model(**tokens)
+
+        self.assertTrue("logits" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.logits, torch.Tensor)
+        self.assertTrue("past_key_values" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.past_key_values, tuple)
+        self.assertTrue(torch.allclose(outputs.logits, loaded_outputs.logits, atol=1e-5))
+
+    def test_saving_loading_inc_model(self):
+        model_name = "echarlaix/tiny-random-PhiForCausalLM"
+        subfolder = "inc"
+        model = INCModelForCausalLM.from_pretrained(model_name, revision="inc", subfolder=subfolder)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, revision="inc")
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            model_save_dir = Path(tmp_dir) / subfolder
+            model.save_pretrained(model_save_dir)
+            folder_contents = os.listdir(model_save_dir)
+            self.assertIn(WEIGHTS_NAME, folder_contents)
+            self.assertIn("inc_config.json", folder_contents)
+            loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir, subfolder=subfolder)
+            self.assertIsInstance(loaded_model.inc_config, INCConfig)
+
+        with torch.no_grad():
+            outputs = model(**tokens)
+            loaded_outputs = loaded_model(**tokens)
+
+        self.assertTrue("logits" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.logits, torch.Tensor)
+        self.assertTrue("past_key_values" in loaded_outputs)
+        self.assertIsInstance(loaded_outputs.past_key_values, tuple)
+        self.assertTrue(torch.allclose(outputs.logits, loaded_outputs.logits, atol=1e-5))

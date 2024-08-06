@@ -1,4 +1,4 @@
-optimum-intel[openvino, nncf]
+optimum-intel[openvino]
 datasets
 evaluate[evaluator]
 ipywidgets

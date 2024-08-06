@@ -1,5 +1,0 @@
-accelerate
-diffusers
-torch~=1.13
-nncf @ git+https://github.com/openvinotoolkit/nncf.git
-tomesd @ git+https://github.com/AlexKoff88/tomesd/tree/openvino

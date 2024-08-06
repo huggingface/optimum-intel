@@ -4,20 +4,31 @@
   - local: installation
     title: Installation
   - sections:
-    - local: optimization_inc
+    - local: neural_compressor/optimization
       title: Optimization
-    - local: distributed_training
+    - local: neural_compressor/distributed_training
       title: Distributed Training
-    - local: reference_inc
+    - local: neural_compressor/reference
       title: Reference
     title: Neural Compressor
   - sections:
-    - local: inference
-      title: Models for inference
-    - local: optimization_ov
+    - local: openvino/export
+      title: Export
+    - local: openvino/inference
+      title: Inference
+    - local: openvino/optimization
       title: Optimization
-    - local: reference_ov
+    - local: openvino/models
+      title: Supported Models
+    - local: openvino/reference
       title: Reference
+    - sections:
+      - local: openvino/tutorials/notebooks
+        title: Notebooks
+      - local: openvino/tutorials/diffusers
+        title: Generate images with Diffusion models
+      title: Tutorials
+      isExpanded: false
     title: OpenVINO
   title: Optimum Intel
   isExpanded: false

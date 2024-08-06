@@ -11,14 +11,29 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import logging
 
-from ..utils.import_utils import is_diffusers_available, is_nncf_available
-from .utils import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
+import logging
+import warnings
+
+from ..utils.import_utils import is_accelerate_available, is_diffusers_available, is_nncf_available
+from .utils import (
+    OV_DECODER_NAME,
+    OV_DECODER_WITH_PAST_NAME,
+    OV_DETOKENIZER_NAME,
+    OV_ENCODER_NAME,
+    OV_TOKENIZER_NAME,
+    OV_XML_FILE_NAME,
+)
+
+
+warnings.simplefilter(action="ignore", category=FutureWarning)
 
 
 if is_nncf_available():
+    logging.disable(logging.INFO)
     import nncf
+
+    logging.disable(logging.NOTSET)
 
     # Suppress version mismatch logging
     nncf.set_log_level(logging.ERROR)
@@ -28,16 +43,20 @@ if is_nncf_available():
 
     patch_torch_operators()
 
-    from .configuration import OVConfig
     from .quantization import OVQuantizer
-    from .trainer import OVTrainer
     from .training_args import OVTrainingArguments
 
+    if is_accelerate_available():
+        from .trainer import OVTrainer
+
+
+from .configuration import OVConfig, OVDynamicQuantizationConfig, OVQuantizationConfig, OVWeightQuantizationConfig
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
     OVModelForAudioXVector,
     OVModelForCTC,
+    OVModelForCustomTasks,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
@@ -46,7 +65,7 @@ from .modeling import (
     OVModelForTokenClassification,
 )
 from .modeling_decoder import OVModelForCausalLM
-from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModelForSpeechSeq2Seq
+from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModelForSpeechSeq2Seq, OVModelForVision2Seq
 
 
 if is_diffusers_available():
