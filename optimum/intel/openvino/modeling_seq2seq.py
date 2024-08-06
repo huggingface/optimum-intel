@@ -37,7 +37,7 @@ from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 
 from ..utils import is_transformers_version
 from .modeling_base_seq2seq import OVBaseModelForSeq2SeqLM
-from .utils import _print_compiled_model_properties
+from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties
 
 
 if is_transformers_version(">=", "4.43.0"):
@@ -350,6 +350,10 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
 
         return self
 
+    @property
+    def dtype(self) -> Optional[torch.dtype]:
+        return self.encoder.dtype or self.decoder.dtype
+
     @add_start_docstrings_to_model_forward(
         SEQ2SEQ_MODEL_DOCSTRING.format("batch_size, sequence_length")
         + TRANSLATION_EXAMPLE.format(
@@ -478,16 +482,32 @@ class OVEncoder:
         self.model = model
         self.parent_model = parent_model
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
+        self.input_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.inputs}
+        self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.main_input_name = self.parent_model.main_input_name or "input_ids"
         self.request = None
+
+    @property
+    def _device(self):
+        return self.parent_model._device
 
     @property
     def device(self):
         return self.parent_model.device
 
     @property
-    def _device(self):
-        return self.parent_model._device
+    def dtype(self) -> Optional[torch.dtype]:
+        for dtype in self.input_dtypes.values():
+            torch_dtype = OV_TO_PT_TYPE.get(dtype)
+            if torch_dtype.is_floating_point:
+                return torch_dtype
+
+        for dtype in self.output_dtypes.values():
+            torch_dtype = OV_TO_PT_TYPE.get(dtype)
+            if torch_dtype.is_floating_point:
+                return torch_dtype
+
+        return None
 
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
@@ -549,8 +569,10 @@ class OVDecoder:
         self.model = model
         self.parent_model = parent_model
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
+        self.input_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.inputs}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
+        self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.key_value_output_names = [key for key in self.output_names if "key_values" in key or "present" in key]
         is_legacy = any("past_key_values" in key.get_any_name() for key in self.model.outputs)
 
@@ -570,6 +592,20 @@ class OVDecoder:
     @property
     def device(self) -> torch.device:
         return self.parent_model.device
+
+    @property
+    def dtype(self) -> Optional[torch.dtype]:
+        for dtype in self.input_dtypes.values():
+            torch_dtype = OV_TO_PT_TYPE.get(dtype)
+            if torch_dtype.is_floating_point:
+                return torch_dtype
+
+        for dtype in self.output_dtypes.values():
+            torch_dtype = OV_TO_PT_TYPE.get(dtype)
+            if torch_dtype.is_floating_point:
+                return torch_dtype
+
+        return None
 
     @add_start_docstrings_to_model_forward(DECODER_INPUTS_DOCSTRING)
     def forward(

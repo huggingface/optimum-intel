@@ -124,10 +124,6 @@ class OVBaseModel(OptimizedModel):
 
     @property
     def dtype(self) -> Optional[torch.dtype]:
-        """
-        `torch.dtype`: The dtype of the model.
-        """
-
         for dtype in self.input_dtypes.values():
             torch_dtype = OV_TO_PT_TYPE.get(dtype)
             if torch_dtype.is_floating_point:
