@@ -368,6 +368,24 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         #     f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
         # )
 
+    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    @parameterized.expand(IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
+    def test_patched_model(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        patched_model_id = MODEL_NAMES["patched_" + model_arch]
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
+        exported_model = IPEXModelForCausalLM.from_pretrained(patched_model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer(
+            "This is a sample",
+            return_tensors="pt",
+            return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
+        )
+        inputs = ipex_model.prepare_inputs_for_generation(**tokens)
+        ipex_outputs = ipex_model(**inputs)
+        exported_outputs = exported_model(**inputs)
+        self.assertTrue(torch.allclose(ipex_outputs.logits, exported_outputs.logits, atol=1e-7))
+
 
 class IPEXModelForAudioClassificationTest(unittest.TestCase):
     IPEX_MODEL_CLASS = IPEXModelForAudioClassification

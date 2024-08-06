@@ -506,11 +506,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         batch_size = input_ids.shape[0]
 
         if model_type in {"mistral", "llama", "falcon"}:
-            num_attention_heads = (
-                self.normalized_config.num_key_value_heads
-                if hasattr(self.normalized_config, "num_key_value_heads")
-                else 1
-            )
+            num_attention_heads = getattr(self.normalized_config, "num_key_value_heads", 1)
         else:
             num_attention_heads = self.normalized_config.num_attention_heads
 
