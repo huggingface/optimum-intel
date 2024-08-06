@@ -35,8 +35,6 @@
       title: Inference
     - local: ipex/models
       title: Supported Models
-    - local: ipex/reference
-      title: Reference
     - sections:
       - local: ipex/tutorials/notebooks
         title: Notebooks
