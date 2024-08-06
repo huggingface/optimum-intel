@@ -943,7 +943,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             eos_token_id=None,
         )
 
-        if model_arch == "minicpm":
+        if model_arch in ["minicpm", "internlm2"]:
             beam_sample_gen_config.top_k = 1
 
         group_beam_search_gen_config = GenerationConfig(
@@ -996,7 +996,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         transformers_model.config.eos_token_id = None
 
         for gen_config in gen_configs:
-            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo", "internlm2"]:
+            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
             set_seed(SEED)
             transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
