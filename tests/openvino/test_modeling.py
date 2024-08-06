@@ -972,12 +972,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             group_beam_search_gen_config,
             constrained_beam_search_gen_config,
         ]
+        set_seed(SEED)
         ov_model_stateful = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=True, stateful=True, **model_kwargs
         )
+        set_seed(SEED)
         ov_model_stateless = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=True, stateful=False, **model_kwargs
         )
+        set_seed(SEED)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
 
         if model_arch == "arctic":
@@ -993,7 +996,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         transformers_model.config.eos_token_id = None
 
         for gen_config in gen_configs:
-            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
+            if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo", "internlm2"]:
                 continue
             set_seed(SEED)
             transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)

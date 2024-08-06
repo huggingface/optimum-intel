@@ -26,9 +26,9 @@ jobs:
         os: ["ubuntu-22.04", "windows-latest"]
         transformers-version: ["4.43.*"]
         include:
-          - transformers-version: "4.36.0"
-            python-version: "3.12"
+          - python-version: "3.12"
             os: "ubuntu-22.04"
+            transformers-version: "4.36.0"
 
     runs-on: ${{ matrix.os }}
 
