@@ -470,9 +470,11 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             self._reorder_cache = _ipex_reorder_cache
         else:
             # Check if _reorder_cache is a static method
-            if isinstance(self.model_cls.__dict__["_reorder_cache"], staticmethod):
+            if "_reorder_cache" in self.model_cls.__dict__ and isinstance(
+                self.model_cls.__dict__["_reorder_cache"], staticmethod
+            ):
                 self._reorder_cache = self.model_cls._reorder_cache
-            else:
+            elif "_reorder_cache" in self.model_cls.__dict__:
                 self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
 
         if is_transformers_version(">=", "4.38.0") and model_type in {"llama", "phi", "persimmon"}:

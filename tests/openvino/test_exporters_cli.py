@@ -241,6 +241,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             # overload for matching with default configuration
             pt_model.config._name_or_path = "tiiuae/falcon-7b-instruct"
             pt_model.save_pretrained(tmpdir)
+
             subprocess.run(
                 f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",
                 shell=True,
@@ -251,16 +252,23 @@ class OVCLIExportTestCase(unittest.TestCase):
             rt_info = model.model.get_rt_info()
             self.assertTrue("nncf" in rt_info)
             self.assertTrue("weight_compression" in rt_info["nncf"])
-            default_config = _DEFAULT_4BIT_CONFIGS["tiiuae/falcon-7b-instruct"]
             model_weight_compression_config = rt_info["nncf"]["weight_compression"]
-            sym = default_config.pop("sym", False)
+
+            default_config = _DEFAULT_4BIT_CONFIGS["tiiuae/falcon-7b-instruct"]
             bits = default_config.pop("bits", None)
             self.assertEqual(bits, 4)
 
-            mode = f'int{bits}_{"sym" if sym else "asym"}'
-            default_config["mode"] = mode
+            sym = default_config.pop("sym", False)
+            default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
+
+            quant_method = default_config.pop("quant_method", None)
+            default_config["awq"] = quant_method == "awq"
+            default_config["gptq"] = quant_method == "gptq"
+
+            default_config.pop("dataset", None)
+
             for key, value in default_config.items():
-                self.assertTrue(key in model_weight_compression_config)
+                self.assertIn(key, model_weight_compression_config)
                 self.assertEqual(
                     model_weight_compression_config[key].value,
                     str(value),

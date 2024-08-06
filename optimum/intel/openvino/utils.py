@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Tuple, Union
 
 import numpy as np
+import torch
 from huggingface_hub import model_info
 from openvino.runtime import Core, Type, properties
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
@@ -52,7 +53,6 @@ TEXTUAL_INVERSION_NAME = "learned_embeds.bin"
 TEXTUAL_INVERSION_NAME_SAFE = "learned_embeds.safetensors"
 TEXTUAL_INVERSION_EMBEDDING_KEY = "text_model.embeddings.token_embedding.weight"
 
-
 OV_TO_NP_TYPE = {
     "boolean": np.bool_,
     "i8": np.int8,
@@ -66,6 +66,21 @@ OV_TO_NP_TYPE = {
     "f16": np.float16,
     "f32": np.float32,
     "f64": np.float64,
+}
+
+OV_TO_PT_TYPE = {
+    "boolean": torch.bool,
+    "i8": torch.int8,
+    "u8": torch.uint8,
+    "i16": torch.int16,
+    "u16": torch.uint16,
+    "i32": torch.int32,
+    "u32": torch.uint32,
+    "i64": torch.int64,
+    "u64": torch.uint64,
+    "f16": torch.float16,
+    "f32": torch.float32,
+    "f64": torch.float64,
 }
 
 

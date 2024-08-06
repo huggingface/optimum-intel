@@ -897,12 +897,16 @@ class InferRequestWrapperTest(unittest.TestCase):
         )
         for _ in range(2):
             input_features = self._generate_random_audio_data(processor)
-            ov_model.generate(input_features)
+            ov_model.generate(input_features, max_new_tokens=10, min_new_tokens=10)
 
         data_hashes_per_key = defaultdict(list)
         data_id_per_key = defaultdict(set)
+
         for inputs_dict in calibration_data:
             for k, v in inputs_dict.items():
+                if k == "input_ids":
+                    continue
+
                 x = (v.numpy() if isinstance(v, torch.Tensor) else v).copy()
                 data_hashes_per_key[k].append(hash(x.tobytes()))
                 data_id_per_key[k].add(id(v))
@@ -911,7 +915,7 @@ class InferRequestWrapperTest(unittest.TestCase):
             self.assertTrue(any(data_hashes[0] != it for it in data_hashes))
         if apply_caching:
             # With caching, encoder hidden states tensors should be cached, resulting in only 2 tensors stored
-            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) == 2)
+            self.assertEqual(len(data_id_per_key["encoder_hidden_states"]), 2)
         else:
             # Without caching, encoder hidden states tensors will be unique for each collected input
-            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) > 2)
+            self.assertGreater(len(data_id_per_key["encoder_hidden_states"]), 2)

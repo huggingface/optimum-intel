@@ -248,7 +248,7 @@ class OVStableDiffusionPipelineTest(unittest.TestCase):
             self.assertTrue(np.allclose(ov_outputs, outputs, atol=1e-4))
 
         # Compare model devices
-        self.assertEqual(pipeline.device.type, ov_pipeline.device)
+        self.assertEqual(pipeline.device, ov_pipeline.device)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_image_reproducibility(self, model_arch: str):
@@ -406,7 +406,7 @@ class OVtableDiffusionXLPipelineTest(unittest.TestCase):
             # Compare model outputs
             self.assertTrue(np.allclose(ov_outputs, outputs, atol=1e-4))
         # Compare model devices
-        self.assertEqual(pipeline.device.type, ov_pipeline.device)
+        self.assertEqual(pipeline.device, ov_pipeline.device)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_image_reproducibility(self, model_arch: str):
@@ -536,7 +536,7 @@ class OVLatentConsistencyModelPipelineTest(unittest.TestCase):
             # Compare model outputs
             self.assertTrue(np.allclose(ov_outputs, outputs, atol=1e-4))
         # Compare model devices
-        self.assertEqual(pipeline.device.type, ov_pipeline.device)
+        self.assertEqual(pipeline.device, ov_pipeline.device)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.run_slow
