@@ -26,7 +26,11 @@ from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.openvino.convert import export_from_model
-from optimum.intel.utils.import_utils import is_openvino_tokenizers_available, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    is_openvino_tokenizers_available,
+    is_openvino_version,
+    is_transformers_version,
+)
 from optimum.utils.save_utils import maybe_load_preprocessors
 
 from .utils import clear_class_registry
@@ -100,6 +104,7 @@ def main_export(
     stateful: bool = True,
     convert_tokenizer: bool = False,
     library_name: Optional[str] = None,
+    model_loading_kwargs: Optional[Dict[str, Any]] = None,
     **kwargs_shapes,
 ):
     """
@@ -213,6 +218,9 @@ def main_export(
         model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
     )
 
+    if framework == "pt":
+        import torch
+
     if library_name is None:
         library_name = TasksManager._infer_library_from_model_name_or_path(
             model_name_or_path=model_name_or_path,
@@ -230,7 +238,8 @@ def main_export(
 
     do_gptq_patching = False
     custom_architecture = False
-    loading_kwargs = {}
+    patch_16bit = False
+    loading_kwargs = model_loading_kwargs or {}
     if library_name == "transformers":
         config = AutoConfig.from_pretrained(
             model_name_or_path,
@@ -281,7 +290,30 @@ def main_export(
                 "Please provide custom export config if you want load model with remote code."
             )
             trust_remote_code = False
+    dtype = loading_kwargs.get("torch_dtype")
+    if isinstance(dtype, str):
+        dtype = config.torch_dtype if dtype == "auto" else getattr(torch, dtype)
 
+    if (
+        dtype is None
+        and framework == "pt"
+        and not do_gptq_patching
+        and task.startswith("text-generation")
+        and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
+    ):
+        if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
+            dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
+        elif is_openvino_version(">=", "2024.2") and config.torch_dtype == torch.float16:
+            dtype = torch.float16
+        elif is_openvino_version(">=", "2024.3") and config.torch_dtype == torch.bfloat16:
+            dtype = torch.bfloat16
+
+    if dtype is not None:
+        if dtype in [torch.float16, torch.bfloat16]:
+            patch_16bit = True
+        loading_kwargs["torch_dtype"] = dtype
+
+    logger.warning(loading_kwargs)
     # Patch the modules to export of GPTQ models w/o GPU
     if do_gptq_patching:
         import torch
@@ -383,6 +415,7 @@ def main_export(
         preprocessors=preprocessors,
         device=device,
         trust_remote_code=trust_remote_code,
+        patch_16bit_model=patch_16bit,
         **kwargs_shapes,
     )
 
