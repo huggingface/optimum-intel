@@ -18,6 +18,7 @@ from typing import List, Optional, Union
 
 import torch
 from huggingface_hub import HfApi, HfFolder
+import os
 
 
 MULTI_QUERY_ATTN_MODELS = {"falcon", "gpt_bigcode"}
@@ -111,24 +112,18 @@ def _find_files_matching_pattern(
 
     return files
 
-def get_number_of_sockets():
-    """linux only"""
-    try:
-        sockets = set()
-        with open('/proc/cpuinfo') as f:
-            for line in f:
-                if line.startswith('physical id'):
-                    sockets.add(line.strip().split()[-1])
-        return len(sockets)
-    except Exception as e:
-        print(f"Error retrieving number of sockets: {e}")
+def get_int_from_env(env_keys, default):
+    """Returns the first positive env value found in the `env_keys` list or the default."""
+    for e in env_keys:
+        val = int(os.environ.get(e, -1))
+        if val >= 0:
+            return val
+    return default
 
 def bind_cores_for_best_perf():
-    """
-    In a multi-socker system binds CPU cores to single socket and numa node for better OOB performance.
-    
-    System configuration is equivalent to running the following command when launching the script:
-    numactl -C '0-'${PHYSICAL_CORES_PER_SOCKET} --membind 0 python script.py
+    """    
+    Set number of threads per rank, numa cpu affinity and numa memory binding if not already set for better OOB performance.
+    Works for wold_size >= 1 and rank >= 1
 
     Example:
     .. code-block:: python
@@ -147,8 +142,6 @@ def bind_cores_for_best_perf():
     Returns:
         None
     
-    Note: 
-        For distributed and multi-rank applications rely on vLLM, Ray,... to set proper system configuration.
     """
     
     import importlib.util
@@ -158,28 +151,43 @@ def bind_cores_for_best_perf():
         if importlib.util.find_spec("numa") is not None:
             import numa
             import psutil
-            import os
-            nodes = numa.get_max_node() + 1
-            n_sockets = get_number_of_sockets()
-            if n_sockets != nodes:
-                print(f'Warning: number of sockets {n_sockets} does not match number of NUMA nodes {nodes}.')
-                print('Newer CPUs enable sub-numa cluster (SNC) but LLMs may show improved performance with SNC disabled in BIOS.')
-            if os.getenv("OMP_NUM_THREADS") is None:
-                # set OMP_NUM_THREADS to number of physical cores per socket
-                num_cpu_threads_per_process = int(psutil.cpu_count(logical=True) / n_sockets)
-                os.environ['OMP_NUM_THREADS'] = str(num_cpu_threads_per_process)
-                print(f"OMP_NUM_THREADS/MKL_NUM_THREADS unset, we set it at {num_cpu_threads_per_process} to improve oob performance.")
-            else:
-                #do not override if OMP_NUM_THREADS already set
-                num_cpu_threads_per_process = int(os.getenv("OMP_NUM_THREADS"))
-            torch.set_num_threads(num_cpu_threads_per_process)
+            import math 
 
-            # Bind the current process to the specified range of CPU cores
-            numa.set_affinity(0, range(num_cpu_threads_per_process))
-            # Check if the current memory binding policy includes all NUMA nodes
+            world_size= get_int_from_env(
+                    ["WORLD_SIZE", "PMI_SIZE", "OMPI_COMM_WORLD_SIZE", "MV2_COMM_WORLD_SIZE"], 1
+                )
+            rank_id= get_int_from_env(
+                    ["LOCAL_RANK", "MPI_LOCALRANKID", "OMPI_COMM_WORLD_LOCAL_RANK", "MV2_COMM_WORLD_LOCAL_RANK"], 0
+                )
+            nodes = numa.get_max_node() + 1
+            rank_per_node = math.ceil(world_size / nodes)
+            num_cpus_per_nodes = int(psutil.cpu_count(logical=False) / nodes)
+            node_id = int(rank_id / rank_per_node)
+            rank_offset_per_node = rank_id % rank_per_node
+            if os.getenv("OMP_NUM_THREADS") is None:
+                # set OMP_NUM_THREADS to num of physical cores per socket
+                num_cpus_per_rank = max(int(num_cpus_per_nodes / rank_per_node), 1)
+                print("setting OMP_NUM_THREADS to", num_cpus_per_rank)
+            else:
+                num_cpus_per_rank = int(os.getenv("OMP_NUM_THREADS"))
+                print("OMP_NUM_THREADS already set to ", num_cpus_per_rank)
             if len(numa.get_membind()) == nodes:
-                # Bind the process's memory allocation to the first NUMA node
-                numa.set_membind([0])
+                # if numa memory binding is not set, set it to the node where the rank is running
+                numa.set_membind([node_id])
+        
+            torch.set_num_threads(num_cpus_per_rank)
+
+
+            if len(numa.get_affinity(0)) == psutil.cpu_count(logical=True):
+                #if numa affinity is unset (default value is set to all logical cores) set it to the physical cores assigned to the rank
+                cpu_start = num_cpus_per_rank * rank_offset_per_node
+                numa.set_affinity(
+                    0,
+                    list(numa.node_to_cpus(node_id))[
+                        cpu_start : cpu_start + num_cpus_per_rank
+                    ],
+                )
+            print(f"affinity={numa.get_affinity(0)}, membind = {numa.get_membind()}")
         else:
             print("numa module not found, skipping binding cores")
     else:
