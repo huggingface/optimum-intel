@@ -86,16 +86,16 @@ class OVCLIExportTestCase(unittest.TestCase):
     )
 
     TEST_4BIT_CONFIGURATONS = [
-        ("text-generation-with-past", "opt125m", "int4_sym_g128", 4, 144),
+        ("text-generation-with-past", "opt125m", "int4_sym_g128", 4, 72),
         ("text-generation-with-past", "opt125m", "int4_asym_g128", 4, 144),
-        ("text-generation-with-past", "opt125m", "int4_sym_g64", 4, 144),
+        ("text-generation-with-past", "opt125m", "int4_sym_g64", 4, 72),
         ("text-generation-with-past", "opt125m", "int4_asym_g64", 4, 144),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
             0,
-            32,
+            16,
         ),
         (
             "text-generation-with-past",
@@ -103,14 +103,14 @@ class OVCLIExportTestCase(unittest.TestCase):
             "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
             4,
-            28,
+            14,
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --scale-estimation --dataset wikitext2 --num-samples 100 ",
             4,
-            28,
+            14,
         ),
     ]
 
@@ -253,10 +253,11 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
-            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["bloom"])
+            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["falcon-40b"])
             # overload for matching with default configuration
-            pt_model.config._name_or_path = "bigscience/bloomz-7b1"
+            pt_model.config._name_or_path = "tiiuae/falcon-7b-instruct"
             pt_model.save_pretrained(tmpdir)
+
             subprocess.run(
                 f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",
                 shell=True,
@@ -267,16 +268,23 @@ class OVCLIExportTestCase(unittest.TestCase):
             rt_info = model.model.get_rt_info()
             self.assertTrue("nncf" in rt_info)
             self.assertTrue("weight_compression" in rt_info["nncf"])
-            default_config = _DEFAULT_4BIT_CONFIGS["bigscience/bloomz-7b1"]
             model_weight_compression_config = rt_info["nncf"]["weight_compression"]
-            sym = default_config.pop("sym", False)
+
+            default_config = _DEFAULT_4BIT_CONFIGS["tiiuae/falcon-7b-instruct"]
             bits = default_config.pop("bits", None)
             self.assertEqual(bits, 4)
 
-            mode = f'int{bits}_{"sym" if sym else "asym"}'
-            default_config["mode"] = mode
+            sym = default_config.pop("sym", False)
+            default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
+
+            quant_method = default_config.pop("quant_method", None)
+            default_config["awq"] = quant_method == "awq"
+            default_config["gptq"] = quant_method == "gptq"
+
+            default_config.pop("dataset", None)
+
             for key, value in default_config.items():
-                self.assertTrue(key in model_weight_compression_config)
+                self.assertIn(key, model_weight_compression_config)
                 self.assertEqual(
                     model_weight_compression_config[key].value,
                     str(value),
