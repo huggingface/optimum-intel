@@ -98,8 +98,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
-        vae_decoder_ov_config: Optional[Dict[str, str]] = None,
-        vae_encoder_ov_config: Optional[Dict[str, str]] = None,
         **kwargs,
     ):
         self._internal_dict = config
@@ -118,11 +116,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         else:
             self._model_save_dir = model_save_dir
 
-        default_vae_ov_config = deepcopy(self.ov_config)
-        if "GPU" in self._device:
-            default_vae_ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-
-        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self, vae_decoder_ov_config or default_vae_ov_config)
+        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
         self.unet = OVModelUnet(unet, self)
         self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
         self.text_encoder_2 = (
@@ -130,11 +124,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             if text_encoder_2 is not None
             else None
         )
-        self.vae_encoder = (
-            OVModelVaeEncoder(vae_encoder, self, vae_encoder_ov_config or default_vae_ov_config)
-            if vae_encoder is not None
-            else None
-        )
+        self.vae_encoder = OVModelVaeEncoder(vae_encoder, self) if vae_encoder is not None else None
 
         if "block_out_channels" in self.vae_decoder.config:
             self.vae_scale_factor = 2 ** (len(self.vae_decoder.config["block_out_channels"]) - 1)
@@ -726,6 +716,11 @@ class OVModelVaeDecoder(OVModelPart):
         outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
 
+    def _compile(self):
+        if "GPU" in self.device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
+            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
+        super()._compile()
+
 
 class OVModelVaeEncoder(OVModelPart):
     def __init__(
@@ -741,6 +736,11 @@ class OVModelVaeEncoder(OVModelPart):
         }
         outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
+
+    def _compile(self):
+        if "GPU" in self.device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
+            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
+        super()._compile()
 
 
 class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPipelineMixin):
