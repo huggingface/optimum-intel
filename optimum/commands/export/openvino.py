@@ -190,6 +190,24 @@ def parse_args_openvino(parser: "ArgumentParser"):
     )
 
 
+def no_compression_parameter_provided(args):
+    return all(
+        map(
+            lambda x: x is None,
+            (
+                args.ratio,
+                args.group_size,
+                args.sym,
+                args.all_layers,
+                args.dataset,
+                args.num_samples,
+                args.awq,
+                args.sensitivity_metric,
+            ),
+        )
+    )
+
+
 class OVExportCommand(BaseOptimumCLICommand):
     COMMAND = CommandInfo(name="openvino", help="Export PyTorch models to OpenVINO IR.")
 
@@ -230,23 +248,17 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         if self.args.weight_format is None:
             ov_config = None
+            if not no_compression_parameter_provided(self.args):
+                logger.warning(
+                    "The provided compression parameters will not affect conversion because of the missing --weight-format argument."
+                )
         elif self.args.weight_format in {"fp16", "fp32"}:
             ov_config = OVConfig(dtype=self.args.weight_format)
         else:
             is_int8 = self.args.weight_format == "int8"
 
-            # For int4 quantization if not parameter is provided, then use the default config if exist
-            if (
-                not is_int8
-                and self.args.ratio is None
-                and self.args.group_size is None
-                and self.args.sym is None
-                and self.args.all_layers is None
-                and self.args.dataset is None
-                and self.args.num_samples is None
-                and self.args.awq is None
-                and self.args.sensitivity_metric is None
-            ):
+            # For int4 quantization if no parameter is provided, then use the default config if exist
+            if no_compression_parameter_provided(self.args) and not is_int8:
                 quantization_config = get_default_int4_config(self.args.model)
             else:
                 quantization_config = {
