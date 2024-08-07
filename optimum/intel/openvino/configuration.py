@@ -85,7 +85,6 @@ _DEFAULT_4BIT_CONFIGS = {
         "group_size": 64,
         "all_layers": True,
         "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
     },
     "bigscience/bloomz-560m": {
         "bits": 4,
