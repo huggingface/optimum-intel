@@ -213,6 +213,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "blenderbot-small",
         "bloom",
         "codegen",
+        "falcon",
         "gpt2",
         "gpt_neo",
         "gpt_neox",
@@ -220,10 +221,11 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         "llama",
         "llama2",
         # "phi",
+        "distilgpt2",
         "mpt",
         "opt",
     )
-    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2",)
+    IPEX_PATCHED_SUPPORTED_ARCHITECTURES = ("llama2", "distilgpt2", "falcon")
     GENERATION_LENGTH = 100
     SPEEDUP_CACHE = 1.0
 
@@ -263,8 +265,9 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
 
         # Compare tensor outputs
         self.assertTrue(torch.allclose(outputs.logits, transformers_outputs.logits, atol=1e-4))
-        self.assertTrue(torch.equal(outputs.logits, loaded_model_outputs.logits))
-        self.assertTrue(torch.equal(outputs.logits, init_model_outputs.logits))
+        # To avoid float pointing error
+        self.assertTrue(torch.allclose(outputs.logits, loaded_model_outputs.logits, atol=1e-7))
+        self.assertTrue(torch.allclose(outputs.logits, init_model_outputs.logits, atol=1e-7))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_pipeline(self, model_arch):
@@ -281,7 +284,8 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     # High optimized model llama is not supported assisted decoding for now.
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_assisted_decoding(self, model_arch):
-        if model_arch == "llama2":
+        # Patched models are not support assisted decoding for now.
+        if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES:
             return
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -334,6 +338,24 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
                 transformers_outputs = trasnformers_model.generate(**tokens, generation_config=generation_config)
                 self.assertIsInstance(outputs, torch.Tensor)
                 self.assertTrue(torch.equal(outputs, transformers_outputs))
+
+    @parameterized.expand(IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
+    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    def test_patched_model(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        patched_model_id = MODEL_NAMES["patched_" + model_arch]
+        ipex_model = IPEXModelForCausalLM.from_pretrained(model_id, export=True)
+        exported_model = IPEXModelForCausalLM.from_pretrained(patched_model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer(
+            "This is a sample",
+            return_tensors="pt",
+            return_token_type_ids=False if model_arch in ("llama", "llama2") else None,
+        )
+        inputs = ipex_model.prepare_inputs_for_generation(**tokens)
+        ipex_outputs = ipex_model(**inputs)
+        exported_outputs = exported_model(**inputs)
+        self.assertTrue(torch.allclose(ipex_outputs.logits, exported_outputs.logits, atol=1e-7))
 
     def test_compare_with_and_without_past_key_values(self):
         model_id = "echarlaix/tiny-random-gpt2-torchscript"
