@@ -369,7 +369,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         #     f" speedup: {without_pkv_timer.elapsed / with_pkv_timer.elapsed:.3f}",
         # )
 
-    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version > 2.3.0 supports ipex model patching")
+    @unittest.skipIf(is_ipex_version("<", "2.3.0"), reason="Only ipex version >= 2.3.0 supports ipex model patching")
     @parameterized.expand(IPEX_PATCHED_SUPPORTED_ARCHITECTURES)
     def test_patched_model(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
