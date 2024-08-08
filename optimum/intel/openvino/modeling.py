@@ -17,6 +17,7 @@ import os
 import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import MethodType
 from typing import Dict, Optional, Union
 
 import numpy as np
@@ -37,6 +38,7 @@ from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
+    AutoTokenizer,
     PretrainedConfig,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
@@ -371,23 +373,27 @@ class OVModelForFeatureExtraction(OVModel):
 
     def __init__(self, model=None, config=None, **kwargs):
         super().__init__(model, config, **kwargs)
+        
+        from sentence_transformers import SentenceTransformer
+        self.encode = MethodType(SentenceTransformer.encode, self)
+        self._text_length = MethodType(SentenceTransformer._text_length, self)
+        self.default_prompt_name = None
+        self.truncate_dim = None
+        self.model_id = None
 
     @add_start_docstrings_to_model_forward(
-        INPUTS_DOCSTRING.format("batch_size, sequence_length")
+        INPUTS_DOCSTRING.format("inputs")
         + FEATURE_EXTRACTION_EXAMPLE.format(
             processor_class=_TOKENIZER_FOR_DOC,
             model_class="OVModelForFeatureExtraction",
             checkpoint="sentence-transformers/all-MiniLM-L6-v2",
         )
     )
-    def forward(
-        self,
-        input_ids: Union[torch.Tensor, np.ndarray],
-        attention_mask: Union[torch.Tensor, np.ndarray],
-        token_type_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
-        **kwargs,
-    ):
+    def forward(self, inputs: Dict[str, torch.Tensor]):
         self.compile()
+        input_ids = inputs.get('input_ids')
+        attention_mask = inputs.get('attention_mask')
+        token_type_ids = inputs.get('token_type_ids')
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
@@ -405,12 +411,10 @@ class OVModelForFeatureExtraction(OVModel):
             inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
         outputs = self._inference(inputs)
-        last_hidden_state = (
-            torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
-            if not np_inputs
-            else outputs["last_hidden_state"]
-        )
-        return BaseModelOutput(last_hidden_state=last_hidden_state)
+        return {
+            'token_embeddings': torch.from_numpy(outputs["token_embeddings"]).to(self.device),
+            'sentence_embedding': torch.from_numpy(outputs["sentence_embedding"]).to(self.device),
+        }
 
     @classmethod
     def _from_transformers(
@@ -464,17 +468,63 @@ class OVModelForFeatureExtraction(OVModel):
             force_download=force_download,
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
-            library_name="transformers",
+            library_name="sentence_transformers",
         )
 
         config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(
+        model =  cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
             **kwargs,
         )
+        model.model_id = model_id
+
+        return 
+    
+def tokenize(
+        self, texts: Union[List[str], List[Dict], List[Tuple[str, str]]], padding: Union[str, bool] = True
+    ) -> Dict[str, torch.Tensor]:
+        """Tokenizes a text and maps tokens to token-ids"""
+        tokenizer_args = {'token': None, 'trust_remote_code': False, 'revision': None, 'local_files_only': False, 'model_max_length': 384}
+        tokenizer = AutoTokenizer.from_pretrained(
+           self.model_id,
+            **tokenizer_args,
+        )
+        
+        output = {}
+        if isinstance(texts[0], str):
+            to_tokenize = [texts]
+        elif isinstance(texts[0], dict):
+            to_tokenize = []
+            output["text_keys"] = []
+            for lookup in texts:
+                text_key, text = next(iter(lookup.items()))
+                to_tokenize.append(text)
+                output["text_keys"].append(text_key)
+            to_tokenize = [to_tokenize]
+        else:
+            batch1, batch2 = [], []
+            for text_tuple in texts:
+                batch1.append(text_tuple[0])
+                batch2.append(text_tuple[1])
+            to_tokenize = [batch1, batch2]
+
+        # strip
+        to_tokenize = [[str(s).strip() for s in col] for col in to_tokenize]
+
+
+        output.update(
+            tokenizer(
+                *to_tokenize,
+                padding=padding,
+                truncation="longest_first",
+                return_tensors="pt",
+                max_length=tokenizer_args['model_max_length'],
+            )
+        )
+        return output 
 
 
 MASKED_LM_EXAMPLE = r"""
