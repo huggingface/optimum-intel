@@ -13,13 +13,14 @@
 #  limitations under the License.
 import copy
 import inspect
+import json
 import logging
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import torch
-from transformers import PretrainedConfig
 from transformers.utils.quantization_config import QuantizationConfigMixin
 
 from optimum.configuration_utils import BaseConfig
@@ -40,7 +41,7 @@ class OVQuantizationMethod(str, Enum):
 
 
 _DEFAULT_4BIT_CONFIGS = {
-    "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 128, "scale_estimation": True},
+    "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
     "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
     "togethercomputer/RedPajama-INCITE-7B-Instruct": {"bits": 4, "sym": False, "group_size": 128},
@@ -52,9 +53,9 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
-    "meta-llama/Llama-2-7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
-    "meta-llama/Llama-2-7b-chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
-    "meta-llama/Llama-2-13b-chat": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
+    "meta-llama/Llama-2-7b-hf": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
+    "meta-llama/Llama-2-7b-chat-hf": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
+    "meta-llama/Llama-2-13b-chat-hf": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "stabilityai/stablelm-3b-4e1t": {
         "bits": 4,
         "sym": True,
@@ -96,12 +97,7 @@ _DEFAULT_4BIT_CONFIGS = {
     },
     "mistralai/Mixtral-8x7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "facebook/opt-2.7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.7},
-    "togethercomputer/RedPajama-INCITE-Chat-3B-v1": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 128,
-        "scale_estimation": True,
-    },
+    "togethercomputer/RedPajama-INCITE-Chat-3B-v1": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "lmsys/vicuna-7b-v1.5": {"bits": 4, "sym": False, "group_size": 128, "ratio": 1.0},
     "stabilityai/stablelm-tuned-alpha-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "mistralai/Mistral-7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.9},
@@ -113,17 +109,9 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
-    "openai-community/gpt2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.5, "scale_estimation": True},
     "lmsys/longchat-7b-16k": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
     "bigcode/starcoder2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
     "TinyLlama/TinyLlama-1.1B-Chat-v1.0": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
-    "stabilityai/stablelm-tuned-alpha-7b": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 128,
-        "ratio": 0.6,
-        "scale_estimation": True,
-    },
     "microsoft/phi-2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
 }
 
@@ -134,6 +122,32 @@ _DEFAULT_4BIT_CONFIG = {
     "group_size": 128,
     "all_layers": None,
 }
+
+
+def _check_default_4bit_configs(model_id_or_path: str):
+    if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
+        return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
+
+    config_path = Path(model_id_or_path) / "config.json"
+    if config_path.exists():
+        with config_path.open("r") as config_f:
+            config = json.load(config_f)
+            original_model_name = config.get("_name_or_path", "")
+        if original_model_name in _DEFAULT_4BIT_CONFIGS:
+            return _DEFAULT_4BIT_CONFIGS[original_model_name]
+
+    return None
+
+
+def get_default_int4_config(model_id_or_path: str):
+    """
+    Args:
+        model_id_or_path (`str`):
+            id of the model or path to it.
+    Returns:
+        Default int4 config for the given model or generic default int4 config.
+    """
+    return _check_default_4bit_configs(model_id_or_path) or _DEFAULT_4BIT_CONFIG
 
 
 @dataclass
@@ -378,10 +392,6 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
 
         if self.bits != 8:
             raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
-
-
-def _check_default_4bit_configs(config: PretrainedConfig):
-    return _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, None)
 
 
 class OVConfig(BaseConfig):

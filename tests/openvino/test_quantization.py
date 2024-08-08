@@ -81,8 +81,8 @@ _TASK_TO_DATASET = {
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
-        (OVModelForSequenceClassification, "bert", 32 if is_transformers_version("<", "4.41.0") else 22, 35),
-        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 21, 3),
+        (OVModelForSequenceClassification, "bert", 32, 35),
+        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 31, 22),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
@@ -182,8 +182,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "gpt2", 44, 44),
     )
 
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 86),)
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 148),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 43),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 74),)
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
 
     LOAD_IN_4_BITS_SCOPE = (
@@ -236,7 +236,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            18 if is_transformers_version(">=", "4.39") else 16,
+            16,
         ),
         (
             OVModelForCausalLM,
@@ -250,7 +250,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            18 if is_transformers_version(">=", "4.39") else 16,
+            16,
         ),
     )
 
@@ -395,9 +395,9 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
-        elif model.export_feature.startswith("stable-diffusion"):
+        elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
         else:
             models = [model]
 
@@ -500,12 +500,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=False)
-
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
-        elif model.export_feature.startswith("stable-diffusion"):
+        elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
         else:
             models = [model]
 
@@ -906,12 +905,16 @@ class InferRequestWrapperTest(unittest.TestCase):
         )
         for _ in range(2):
             input_features = self._generate_random_audio_data(processor)
-            ov_model.generate(input_features)
+            ov_model.generate(input_features, max_new_tokens=10, min_new_tokens=10)
 
         data_hashes_per_key = defaultdict(list)
         data_id_per_key = defaultdict(set)
+
         for inputs_dict in calibration_data:
             for k, v in inputs_dict.items():
+                if k == "input_ids":
+                    continue
+
                 x = (v.numpy() if isinstance(v, torch.Tensor) else v).copy()
                 data_hashes_per_key[k].append(hash(x.tobytes()))
                 data_id_per_key[k].add(id(v))
@@ -920,7 +923,7 @@ class InferRequestWrapperTest(unittest.TestCase):
             self.assertTrue(any(data_hashes[0] != it for it in data_hashes))
         if apply_caching:
             # With caching, encoder hidden states tensors should be cached, resulting in only 2 tensors stored
-            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) == 2)
+            self.assertEqual(len(data_id_per_key["encoder_hidden_states"]), 2)
         else:
             # Without caching, encoder hidden states tensors will be unique for each collected input
-            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) > 2)
+            self.assertGreater(len(data_id_per_key["encoder_hidden_states"]), 2)

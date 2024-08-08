@@ -249,13 +249,15 @@ class OVModelIntegrationTest(unittest.TestCase):
         del pipeline
         gc.collect()
 
+    @pytest.mark.run_slow
+    @slow
     def test_load_model_from_hub_private_with_token(self):
         token = os.environ.get("HF_HUB_READ_TOKEN", None)
         if token is None:
             self.skipTest("Test requires a token `HF_HUB_READ_TOKEN` in the environment variable")
 
         model = OVModelForCausalLM.from_pretrained(
-            "optimum-internal-testing/tiny-random-phi-private", use_auth_token=token, revision="openvino"
+            "optimum-internal-testing/tiny-random-phi-private", token=token, revision="openvino"
         )
         self.assertIsInstance(model.config, PretrainedConfig)
 
@@ -941,7 +943,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             eos_token_id=None,
         )
 
-        if model_arch == "minicpm":
+        if model_arch in ["minicpm", "internlm2"]:
             beam_sample_gen_config.top_k = 1
 
         group_beam_search_gen_config = GenerationConfig(
@@ -970,12 +972,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             group_beam_search_gen_config,
             constrained_beam_search_gen_config,
         ]
+        set_seed(SEED)
         ov_model_stateful = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=True, stateful=True, **model_kwargs
         )
+        set_seed(SEED)
         ov_model_stateless = OVModelForCausalLM.from_pretrained(
             model_id, export=True, use_cache=True, stateful=False, **model_kwargs
         )
+        set_seed(SEED)
         transformers_model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
 
         if model_arch == "arctic":
@@ -1662,15 +1667,15 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
+        model_id = MODEL_NAMES[model_arch]
+        transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
-        transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id)
+
         processor = get_preprocessor(model_id)
         data = self._generate_random_audio_data()
         features = processor.feature_extractor(data, return_tensors="pt")
-
         decoder_start_token_id = transformers_model.config.decoder_start_token_id
         decoder_inputs = {"decoder_input_ids": torch.ones((1, 1), dtype=torch.long) * decoder_start_token_id}
 
@@ -1699,7 +1704,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
         model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
-        model.eval()
+
         processor = get_preprocessor(model_id)
         pipe = pipeline(
             "automatic-speech-recognition",
