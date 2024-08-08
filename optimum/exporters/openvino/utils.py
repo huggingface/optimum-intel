@@ -12,24 +12,17 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-
 import inspect
 from collections import namedtuple
-
-from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from transformers.utils import is_torch_available
 
 from openvino.runtime import Dimension, PartialShape, Symbol
 from openvino.runtime.utils.types import get_element_type
+from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.utils import is_diffusers_available
-
-from pathlib import Path
-
-from optimum.exporters import TasksManager
-from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 
 InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
@@ -168,34 +161,48 @@ def clear_class_registry():
     torch.jit._state._clear_class_state()
 
 
-def ov_infer_library_from_model_name_or_path(model_name_or_path: Union[str, Path],
-                                             subfolder: str = "",
-                                             revision: Optional[str] = None,
-                                             cache_dir: str = HUGGINGFACE_HUB_CACHE,
-                                             token: Optional[Union[bool, str]] = None):
-    all_files, _ = TasksManager.get_model_files(model_name_or_path,
-                                                subfolder=subfolder,
-                                                cache_dir=cache_dir,
-                                                revision=revision,
-                                                token=token)
-    if "open_clip_config.json" in all_files:
-        library_name = "open_clip"
-    else:
-        library_name = TasksManager._infer_library_from_model_name_or_path(
-            model_name_or_path=model_name_or_path, cache_dir=cache_dir
+def _get_open_clip_submodels_fn_and_export_configs(
+    model,
+    library_name: str = "open_clip",
+    task: Optional[str] = None,
+    preprocessors: List = None,
+    custom_export_configs: Dict[str, "OnnxConfig"] = None,
+    fn_get_submodels: Callable = None,
+):
+    custom_export = {}
+    if not custom_export_configs or "model_vision" in custom_export_configs:
+        visual_model = model.visual
+        setattr(visual_model, "config", model.config.vision_config)
+        export_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=model.visual, exporter="openvino", task=task, library_name=library_name
         )
+        vision_cfg = export_config_constructor(
+            model.config.vision_config,
+            int_dtype="int64",
+            float_dtype="fp32",
+            preprocessors=preprocessors,
+        )
+        custom_export["model_vision"] = vision_cfg
 
-    return library_name
+    if not custom_export_configs or "model_text" in custom_export_configs:
+        text_model = model.text
+        setattr(text_model, "config", model.config.text_config)
+        export_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=model.text, exporter="openvino", task=task, library_name=library_name
+        )
+        text_cfg = export_config_constructor(
+            model.config.text_config,
+            int_dtype="int64",
+            float_dtype="fp32",
+            preprocessors=preprocessors,
+        )
+        custom_export["model_text"] = text_cfg
 
-def ov_infer_library_from_model_or_model_class(
-    model: Union["PreTrainedModel", "TFPreTrainedModel", "ModelMixin", "DiffusionPipeline"]):
+    if fn_get_submodels is None:
 
-    if model.__module__.startswith("open_clip"):
-        library_name = 'open_clip'
-    elif model.__module__.startswith("optimum"):
-        # for wrapped models like timm in optimum.intel.openvino.modeling_timm
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
-    else:
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
-        
-    return library_name
+        def get_submodels(model):
+            return {"model_text": model.text, "model_vision": model.visual}
+
+        fn_get_submodels = get_submodels
+
+    return custom_export, fn_get_submodels

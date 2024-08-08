@@ -107,7 +107,9 @@ _open_clip_available = importlib.util.find_spec("open_clip") is not None
 _open_clip_version = "N/A"
 if _open_clip_available:
     try:
-        _open_clip_version = importlib_metadata.version("open_clip")
+        import open_clip
+
+        _open_clip_version = open_clip.__version__
     except importlib_metadata.PackageNotFoundError:
         pass
 

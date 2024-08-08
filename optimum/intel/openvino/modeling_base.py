@@ -61,6 +61,7 @@ class OVBaseModel(OptimizedModel):
     export_feature = None
     _supports_cache_class = False
     _library_name = "transformers"
+    xml_model_name = OV_XML_FILE_NAME
 
     def __init__(
         self,
@@ -255,7 +256,7 @@ class OVBaseModel(OptimizedModel):
             raise ValueError(
                 "`save_pretrained()` is not supported with `compile_only=True` mode, to save your model please initialize your model with compile_only=False"
             )
-        dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
+        dst_path = os.path.join(save_directory, self.xml_model_name)
         openvino.save_model(self.model, dst_path, compress_to_fp16=False)
         generation_config = getattr(self, "generation_config", None)
         if generation_config is not None:

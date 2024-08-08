@@ -13,7 +13,6 @@
 #  limitations under the License.
 
 import gc
-import json
 import logging
 import operator
 import warnings
@@ -21,10 +20,9 @@ from functools import reduce
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
-from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, CLIPConfig
+from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 from transformers.utils import is_torch_available
 
 from openvino.runtime import Core, Type, save_model
@@ -37,11 +35,14 @@ from optimum.intel.utils.import_utils import (
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_transformers_version,
-    is_open_clip_available
+)
+from optimum.intel.utils.modeling_utils import (
+    OpenClipForZeroShotImageClassification,
+    _infer_library_from_model_name_or_path,
 )
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-from .utils import _MAX_UNCOMPRESSED_SIZE, clear_class_registry, ov_infer_library_from_model_name_or_path
+from .utils import _MAX_UNCOMPRESSED_SIZE, clear_class_registry
 
 
 if TYPE_CHECKING:
@@ -62,11 +63,11 @@ def infer_task(
     revision: Optional[str] = None,
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     token: Optional[Union[bool, str]] = None,
-    library_name: Optional[str] = None
+    library_name: Optional[str] = None,
 ):
     task = TasksManager.map_from_synonym(task)
     if task == "auto":
-        if library_name == 'open_clip':
+        if library_name == "open_clip":
             task = "zero-shot-image-classification"
         else:
             try:
@@ -189,17 +190,13 @@ def main_export(
             raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
         token = use_auth_token
 
-    original_task = task
-    task = infer_task(
-        task, model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
-    )
     if framework is None:
         framework = TasksManager.determine_framework(
             model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
         )
 
     if library_name is None:
-        library_name = ov_infer_library_from_model_name_or_path(
+        library_name = _infer_library_from_model_name_or_path(
             model_name_or_path=model_name_or_path,
             subfolder=subfolder,
             revision=revision,
@@ -215,7 +212,13 @@ def main_export(
 
     original_task = task
     task = infer_task(
-        task, model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token, library_name=library_name
+        task,
+        model_name_or_path,
+        subfolder=subfolder,
+        revision=revision,
+        cache_dir=cache_dir,
+        token=token,
+        library_name=library_name,
     )
 
     do_gptq_patching = False
@@ -318,45 +321,8 @@ def main_export(
 
         GPTQQuantizer.post_init_model = post_init_model
 
-    model = None
     if library_name == "open_clip":
-        if is_open_clip_available():
-            import open_clip
-            model, _ = open_clip.create_model_from_pretrained(f'hf-hub:{model_name_or_path}', cache_dir=cache_dir, force_custom_text=True)
-            # tokenizer = open_clip.get_tokenizer(f'hf-hub:{model_name_or_path}')
-            # preprocessors = [tokenizer, preprocessor]
-
-            if not getattr(model, 'config', None):
-                model_config = None
-                try:
-                    model_config = AutoConfig.from_pretrained(model_name_or_path)
-                except:
-                    pass
-
-                if model_config is None:
-                    try:
-                        config_path = hf_hub_download(repo_id=model_name_or_path, filename="open_clip_config.json", cache_dir=cache_dir)
-                        cfg = {}
-                        with open(config_path, 'r', encoding='utf-8') as f:
-                            cfg = json.load(f)
-                        model_config = CLIPConfig(text_config_dict=cfg['model_cfg']['vision_cfg'], vision_config_dict=cfg['model_cfg']['text_cfg'])
-                    except:
-                        pass
-
-                if model_config is None:
-                    raise ImportError(
-                        f"Could not load config for model {model_name_or_path}"
-                    )
-
-                setattr(model, 'config', model_config)
-
-            if not getattr(model.config, 'model_type', None):
-                setattr(model.config, 'model_type', 'clip')
-                setattr(model.config, 'export_model_type', 'clip')
-        else:
-            raise ImportError(
-                "Could not import open_clip module, please, install it to download and convert model"
-            )
+        model = OpenClipForZeroShotImageClassification.from_pretrained(model_name_or_path, cache_dir=cache_dir)
     else:
         model = TasksManager.get_model_from_task(
             task,

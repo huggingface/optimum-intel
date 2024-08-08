@@ -36,6 +36,9 @@ from optimum.intel import (  # noqa
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
+    OVModelOpenCLIPForZeroShotImageClassification,
+    OVModelOpenCLIPText,
+    OVModelOpenCLIPVisual,
     OVSentenceTransformer,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
@@ -319,3 +322,20 @@ class OVCLIExportTestCase(unittest.TestCase):
             )
             model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False)
             self.assertFalse("last_hidden_state" in model.output_names)
+
+    def test_exporters_cli_open_clip(self):
+        model_id = MODEL_NAMES["open-clip"]
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {model_id} --framework pt {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model_vision = eval(_HEAD_TO_AUTOMODELS["open_clip_vision"]).from_pretrained(tmpdir, compile=False)
+            model_text = eval(_HEAD_TO_AUTOMODELS["open_clip_text"]).from_pretrained(tmpdir, compile=False)
+            self.assertTrue("image_features" in model_vision.output_names)
+            self.assertTrue("text_features" in model_text.output_names)
+
+            model = eval(_HEAD_TO_AUTOMODELS["open_clip"]).from_pretrained(tmpdir, compile=False)
+            self.assertTrue("text_features" in model.text_model.output_names)
+            self.assertTrue("image_features" in model.visual_model.output_names)

@@ -25,7 +25,6 @@ from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, ModelPatcher, override_arguments
-
 from optimum.intel.utils.import_utils import (
     _openvino_version,
     _torch_version,
@@ -35,7 +34,6 @@ from optimum.intel.utils.import_utils import (
     is_transformers_version,
 )
 
-import importlib.util
 from ...intel.utils.import_utils import is_open_clip_available
 
 
@@ -2607,12 +2605,12 @@ if is_open_clip_available():
     import open_clip
 
 
-def _text_global_pool_patched(x, text: Optional[torch.Tensor] = None, pool_type: str = 'argmax'):
-    if pool_type == 'first':
+def _text_global_pool_patched(x, text: Optional[torch.Tensor] = None, pool_type: str = "argmax"):
+    if pool_type == "first":
         pooled, tokens = x[:, 0], x[:, 1:]
-    elif pool_type == 'last':
+    elif pool_type == "last":
         pooled, tokens = x[:, -1], x[:, :-1]
-    elif pool_type == 'argmax':
+    elif pool_type == "argmax":
         text = text.to(dtype=torch.int32)  # ONNX Runtime is unable to run argmax with int64 input, hence this cast.
         # take features from the eot embedding (eot_token is the highest number in each sequence)
         assert text is not None
@@ -2624,11 +2622,11 @@ def _text_global_pool_patched(x, text: Optional[torch.Tensor] = None, pool_type:
 
 class OpenCLIPModelPatcher(ModelPatcher):
     def __init__(
-            self,
-            config: "OnnxConfig",
-            model: Union["PreTrainedModel", "TFPreTrainedModel"],
-            model_kwargs: Optional[Dict[str, Any]] = None,
-        ):
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
         super().__init__(config, model, model_kwargs)
 
         self.original_text_global_pool = open_clip.transformer.text_global_pool

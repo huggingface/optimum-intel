@@ -22,9 +22,9 @@ from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 
 from ...exporters import TasksManager
 from ...intel.utils.import_utils import DIFFUSERS_IMPORT_ERROR, is_diffusers_available
+from ...intel.utils.modeling_utils import _infer_library_from_model_name_or_path
 from ...utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 from ..base import BaseOptimumCLICommand, CommandInfo
-from ...exporters.openvino.utils import ov_infer_library_from_model_name_or_path
 
 
 logger = logging.getLogger(__name__)
@@ -235,7 +235,9 @@ class OVExportCommand(BaseOptimumCLICommand):
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args
-            library_name = ov_infer_library_from_model_name_or_path(model_name_or_path=self.args.model, cache_dir=self.args.cache_dir)
+            library_name = _infer_library_from_model_name_or_path(
+                model_name_or_path=self.args.model, cache_dir=self.args.cache_dir
+            )
             if library_name == "sentence_transformers":
                 logger.warning(
                     "Library name is not specified. There are multiple possible variants: `sentence_transformers`, `transformers`."

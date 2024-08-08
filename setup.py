@@ -54,6 +54,7 @@ TESTS_REQUIRE = [
     "einops",
     "tiktoken",
     "sentence-transformers",
+    "open_clip_torch>=2.26.1",
 ]
 
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]

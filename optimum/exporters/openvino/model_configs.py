@@ -16,11 +16,12 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from packaging import version
-from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
 from optimum.exporters.onnx.model_configs import (
+    CLIPOnnxConfig,
+    CLIPTextOnnxConfig,
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
@@ -32,11 +33,8 @@ from optimum.exporters.onnx.model_configs import (
     UNetOnnxConfig,
     VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
-    CLIPOnnxConfig,
     VisionOnnxConfig,
-    CLIPTextOnnxConfig
 )
-from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -68,20 +66,19 @@ from .model_patcher import (
     MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
+    OpenCLIPModelPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     QwenModelPatcher,
     RotaryEmbPatcher,
     UpdateCausalMaskModelPatcher,
     XverseModelPatcher,
-    OpenCLIPModelPatcher
 )
 
 
 def init_model_configs():
-    library_to_task_map = getattr(TasksManager, '_LIBRARY_TO_SUPPORTED_MODEL_TYPES')
-    library_to_task_map['open_clip'] = {}
-    setattr(TasksManager, '_LIBRARY_TO_SUPPORTED_MODEL_TYPES', library_to_task_map)
+    if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
+        TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -1086,7 +1083,7 @@ class DeciOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
 
 @register_in_tasks_manager("clip", *["zero-shot-image-classification"], library_name="open_clip")
 class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
-    DEFAULT_ONNX_OPSET = 15
+    DEFAULT_ONNX_OPSET = 14
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -1101,7 +1098,6 @@ class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
         return {
             "text_features": {0: "text_batch_size"},
             "image_features": {0: "image_batch_size"},
-            "logit_scale": {},
         }
 
     def rename_ambiguous_inputs(self, inputs):
@@ -1112,10 +1108,11 @@ class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         # override sequence_length shape here in the kwargs
-        kwargs["sequence_length"] = self._preprocessors[0].model_max_length
+        kwargs["sequence_length"] = self._config.text_config.context_length
         return super().generate_dummy_inputs(framework, **kwargs)
 
-    def generate_dummy_inputs_for_validation(self, reference_model_inputs: Dict[str, Any], onnx_input_names: Optional[List[str]] = None
+    def generate_dummy_inputs_for_validation(
+        self, reference_model_inputs: Dict[str, Any], onnx_input_names: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         if "attention_mask" in reference_model_inputs:
             reference_model_inputs.pop("attention_mask")
@@ -1124,14 +1121,16 @@ class OpenCLIPOpenVINOConfig(CLIPOnnxConfig):
         if "text" in onnx_input_names and "input_ids" in reference_model_inputs:
             reference_model_inputs["text"] = reference_model_inputs.pop("input_ids")
         return super().generate_dummy_inputs_for_validation(reference_model_inputs)
-    
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
-        ) -> "ModelPatcher":
+    ) -> "ModelPatcher":
         return OpenCLIPModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip_text_model", *["zero-shot-image-classification"], library_name="open_clip")
+@register_in_tasks_manager(
+    "clip-text-model", *["zero-shot-image-classification", "feature-extraction"], library_name="open_clip"
+)
 class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -1156,23 +1155,19 @@ class OpenCLIPTextOpenVINOConfig(CLIPTextOnnxConfig):
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         # override sequence_length shape here in the kwargs
-        kwargs["sequence_length"] = self._preprocessors[0].model_max_length
+        kwargs["sequence_length"] = self._config.context_length
         dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
         return dummy_inputs
 
-    def generate_dummy_inputs_for_validation(self, reference_model_inputs: Dict[str, Any], onnx_input_names: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
-        if "attention_mask" in reference_model_inputs:
-            reference_model_inputs.pop("attention_mask")
-        if "image" in onnx_input_names and "pixel_values" in reference_model_inputs:
-            reference_model_inputs["image"] = reference_model_inputs.pop("pixel_values")
-        if "text" in onnx_input_names and "input_ids" in reference_model_inputs:
-            reference_model_inputs["text"] = reference_model_inputs.pop("input_ids")
-        return super().generate_dummy_inputs_for_validation(reference_model_inputs)
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
         return OpenCLIPModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
-@register_in_tasks_manager("clip_vision_model", *["zero-shot-image-classification"], library_name="open_clip")
+@register_in_tasks_manager(
+    "clip-vision-model", *["zero-shot-image-classification", "feature-extraction"], library_name="open_clip"
+)
 class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
     DEFAULT_ONNX_OPSET = 14
 
@@ -1194,19 +1189,6 @@ class OpenCLIPVisualOpenVINOConfig(VisionOnnxConfig):
         model_inputs = {}
         model_inputs["x"] = inputs["pixel_values"]
         return model_inputs
-
-    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
-        return super().generate_dummy_inputs(framework, **kwargs)
-
-    def generate_dummy_inputs_for_validation(self, reference_model_inputs: Dict[str, Any], onnx_input_names: Optional[List[str]] = None
-    ) -> Dict[str, Any]:
-        if "attention_mask" in reference_model_inputs:
-            reference_model_inputs.pop("attention_mask")
-        if "image" in onnx_input_names and "pixel_values" in reference_model_inputs:
-            reference_model_inputs["image"] = reference_model_inputs.pop("pixel_values")
-        if "text" in onnx_input_names and "input_ids" in reference_model_inputs:
-            reference_model_inputs["text"] = reference_model_inputs.pop("input_ids")
-        return super().generate_dummy_inputs_for_validation(reference_model_inputs)
 
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
