@@ -138,6 +138,7 @@ class OVBaseDecoderModel(OVModel):
         self._first_iter_beam_search = False
         self._second_iter_beam_search = False
         self.update_pkv_precision()
+        self.update_int_precision()
         if self.is_dynamic:
             self.model = self._reshape(self.model, -1, -1)
         is_stateful_supported = ensure_stateful_is_available(warn=False)
@@ -214,6 +215,16 @@ class OVBaseDecoderModel(OVModel):
                 if self.is_dynamic:
                     self.model = self._reshape(self.model, -1, -1)
                 self.request = None
+
+    def update_int_precision(self):
+        # OpenVino GPU & CPU plugins do not support i64 type so internally converting i64 type tensor to i32.
+        # To avoid runtime type conversion, setting i64 tensors to i32 tensors.
+        ppp = PrePostProcessor(self.model)
+        for key in self.model.inputs:
+            in_name = key.get_any_name()
+            if key.get_element_type() == Type.i64 and in_name in ["input_ids", "position_ids", "attention_mask"]:
+                ppp.input(in_name).tensor().set_element_type(Type.i32)
+        self.model = ppp.build()
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
