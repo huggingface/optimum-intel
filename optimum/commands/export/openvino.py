@@ -262,6 +262,9 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "scale_estimation": self.args.scale_estimation,
                 }
 
+            if quantization_config.get("dataset", None) is not None:
+                quantization_config["trust_remote_code"] = self.args.trust_remote_code
+
             if self.args.weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:
                 logger.warning(
                     f"--weight-format {self.args.weight_format} is deprecated, possible choices are fp32, fp16, int8, int4"

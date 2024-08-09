@@ -263,6 +263,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sym: bool = False,
         group_size: Optional[int] = None,
         tokenizer: Optional[str] = None,
+        trust_remote_code: bool = False,
         dataset: Optional[Union[str, List[str]]] = None,
         ratio: float = 1.0,
         all_layers: Optional[bool] = None,
@@ -275,6 +276,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
         self.tokenizer = tokenizer
+        self.trust_remote_code = trust_remote_code
         self.dataset = dataset
         self.group_size = group_size or (-1 if bits == 8 else 128)
         self.ratio = ratio
