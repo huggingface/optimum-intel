@@ -132,9 +132,10 @@ class InferRequestWrapper:
             data_hash = hash(data.tobytes())
 
             # Avoid data copying if tensor contains data encountered earlier
-            if data_hash not in self.tensor_cache:
-                self.tensor_cache[data_hash] = copy.deepcopy(v)
-            copied_inputs[k] = self.tensor_cache[data_hash]
+            self.tensor_cache.setdefault(k, {})
+            if data_hash not in self.tensor_cache[k]:
+                self.tensor_cache[k][data_hash] = copy.deepcopy(v)
+            copied_inputs[k] = self.tensor_cache[k][data_hash]
         self.collected_inputs.append(copied_inputs)
 
     def __call__(self, *args, **kwargs):
