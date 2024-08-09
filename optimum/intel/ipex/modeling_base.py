@@ -129,7 +129,6 @@ def ipex_jit_trace(model, task, use_cache):
 
     return trace_model
 
-
 class IPEXModel(OptimizedModel):
     auto_model_class = AutoModel
     export_feature = "feature-extraction"
