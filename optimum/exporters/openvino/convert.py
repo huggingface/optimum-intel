@@ -635,9 +635,9 @@ def export_from_model(
             if is_nncf_available():
                 from ...intel.openvino.configuration import OVConfig
 
-                ov_config = OVConfig(quantization_config={"bits": 8})
+                ov_config = OVConfig(quantization_config={"bits": 8, "sym": False})
 
-                logger.info("The model weights will be quantized to int8.")
+                logger.info("The model weights will be quantized to int8_asym.")
             else:
                 logger.warning(
                     "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
