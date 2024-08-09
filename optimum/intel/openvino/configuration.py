@@ -84,7 +84,6 @@ _DEFAULT_4BIT_CONFIGS = {
         "sym": True,
         "group_size": 64,
         "all_layers": True,
-        "dataset": "wikitext2",
     },
     "bigscience/bloomz-560m": {
         "bits": 4,
