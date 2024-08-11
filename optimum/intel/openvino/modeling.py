@@ -18,7 +18,7 @@ import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MethodType
-from typing import Dict, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import openvino
@@ -481,50 +481,50 @@ class OVModelForFeatureExtraction(OVModel):
         )
         model.model_id = model_id
 
-        return 
+        return model
     
-def tokenize(
-        self, texts: Union[List[str], List[Dict], List[Tuple[str, str]]], padding: Union[str, bool] = True
-    ) -> Dict[str, torch.Tensor]:
-        """Tokenizes a text and maps tokens to token-ids"""
-        tokenizer_args = {'token': None, 'trust_remote_code': False, 'revision': None, 'local_files_only': False, 'model_max_length': 384}
-        tokenizer = AutoTokenizer.from_pretrained(
-           self.model_id,
-            **tokenizer_args,
-        )
-        
-        output = {}
-        if isinstance(texts[0], str):
-            to_tokenize = [texts]
-        elif isinstance(texts[0], dict):
-            to_tokenize = []
-            output["text_keys"] = []
-            for lookup in texts:
-                text_key, text = next(iter(lookup.items()))
-                to_tokenize.append(text)
-                output["text_keys"].append(text_key)
-            to_tokenize = [to_tokenize]
-        else:
-            batch1, batch2 = [], []
-            for text_tuple in texts:
-                batch1.append(text_tuple[0])
-                batch2.append(text_tuple[1])
-            to_tokenize = [batch1, batch2]
-
-        # strip
-        to_tokenize = [[str(s).strip() for s in col] for col in to_tokenize]
-
-
-        output.update(
-            tokenizer(
-                *to_tokenize,
-                padding=padding,
-                truncation="longest_first",
-                return_tensors="pt",
-                max_length=tokenizer_args['model_max_length'],
+    def tokenize(
+            self, texts: Union[List[str], List[Dict], List[Tuple[str, str]]], padding: Union[str, bool] = True
+        ) -> Dict[str, torch.Tensor]:
+            """Tokenizes a text and maps tokens to token-ids"""
+            tokenizer_args = {'token': None, 'trust_remote_code': False, 'revision': None, 'local_files_only': False, 'model_max_length': 384}
+            tokenizer = AutoTokenizer.from_pretrained(
+            self.model_id,
+                **tokenizer_args,
             )
-        )
-        return output 
+            
+            output = {}
+            if isinstance(texts[0], str):
+                to_tokenize = [texts]
+            elif isinstance(texts[0], dict):
+                to_tokenize = []
+                output["text_keys"] = []
+                for lookup in texts:
+                    text_key, text = next(iter(lookup.items()))
+                    to_tokenize.append(text)
+                    output["text_keys"].append(text_key)
+                to_tokenize = [to_tokenize]
+            else:
+                batch1, batch2 = [], []
+                for text_tuple in texts:
+                    batch1.append(text_tuple[0])
+                    batch2.append(text_tuple[1])
+                to_tokenize = [batch1, batch2]
+
+            # strip
+            to_tokenize = [[str(s).strip() for s in col] for col in to_tokenize]
+
+
+            output.update(
+                tokenizer(
+                    *to_tokenize,
+                    padding=padding,
+                    truncation="longest_first",
+                    return_tensors="pt",
+                    max_length=tokenizer_args['model_max_length'],
+                )
+            )
+            return output 
 
 
 MASKED_LM_EXAMPLE = r"""
