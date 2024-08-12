@@ -656,6 +656,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "qwen2",
             "qwen2-moe",
             "arctic",
+            "exaone",
         )
 
     GENERATION_LENGTH = 100
@@ -675,6 +676,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "codegen2",
         "arctic",
         "glm4",
+        "exaone",
     )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

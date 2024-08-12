@@ -357,6 +357,21 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
         return LlamaModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
+@register_in_tasks_manager(
+    "exaone",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
+    pass
+
+
 class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
