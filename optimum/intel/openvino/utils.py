@@ -28,6 +28,8 @@ from openvino.runtime import Type as OVType
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
+from optimum.intel.utils.import_utils import is_torch_version
+
 
 logger = logging.getLogger(__name__)
 
@@ -74,15 +76,15 @@ OV_TO_PT_TYPE = {
     "i8": torch.int8,
     "u8": torch.uint8,
     "i16": torch.int16,
-    "u16": torch.uint16,
     "i32": torch.int32,
-    "u32": torch.uint32,
     "i64": torch.int64,
-    "u64": torch.uint64,
     "f16": torch.float16,
     "f32": torch.float32,
     "f64": torch.float64,
 }
+
+if is_torch_version(">=", "2.4.0"):
+    OV_TO_PT_TYPE.update({"u16": torch.uint16, "u32": torch.uint32, "u64": torch.uint64})
 
 
 STR_TO_OV_TYPE = {
