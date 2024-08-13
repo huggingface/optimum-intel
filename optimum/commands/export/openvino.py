@@ -192,9 +192,9 @@ def parse_args_openvino(parser: "ArgumentParser"):
 
 def no_compression_parameter_provided(args):
     return all(
-        map(
-            lambda x: x is None,
-            (
+        (
+            it is None
+            for it in (
                 args.ratio,
                 args.group_size,
                 args.sym,
@@ -203,7 +203,7 @@ def no_compression_parameter_provided(args):
                 args.num_samples,
                 args.awq,
                 args.sensitivity_metric,
-            ),
+            )
         )
     )
 
