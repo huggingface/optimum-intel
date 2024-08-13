@@ -351,7 +351,7 @@ class OVQuantizer(OptimumQuantizer):
                     "quantization. Will rely on `calibration_dataset`."
                 )
 
-            if calibration_dataset is None and isinstance(quantization_config.dataset, str):
+            if calibration_dataset is None and quantization_config.dataset is not None:
                 from optimum.intel import OVModelForCausalLM
 
                 if isinstance(self.model, OVModelForCausalLM):
@@ -676,7 +676,12 @@ class OVQuantizer(OptimumQuantizer):
             quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
         )
         nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
-        calibration_dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
+        if isinstance(quantization_config.dataset, str):
+            calibration_dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
+        else:
+            calibration_dataset = [
+                tokenizer(text, return_tensors="pt") for text in quantization_config.dataset[:nsamples]
+            ]
         calibration_dataset = prepare_dataset(calibration_dataset)
         calibration_dataset = nncf.Dataset(calibration_dataset, lambda x: self.model.prepare_inputs(**x))
 

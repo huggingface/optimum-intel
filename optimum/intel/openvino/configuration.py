@@ -221,11 +221,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
-            The dataset used for data-aware compression or quantization with NNCF. You can provide your own dataset
-            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new'] for language models
-            or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models.
-            Alternatively, you can provide data objects via `calibration_dataset` argument
-            of `OVQuantizer.quantize()` method.
+            The dataset used for data-aware compression with NNCF. For language models you can provide your own dataset
+            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new']. For diffusion models it
+            must be one of ['conceptual_captions', 'laion/220k-GPT4Vision-captions-from-LIVIS', 'laion/filtered-wit'].
+            Alternatively, you can provide data objects via `calibration_dataset` argument of `OVQuantizer.quantize()`
+            method.
         ratio (`float`, defaults to 1.0):
             The ratio between baseline and backup precisions (e.g. 0.9 means 90% of layers quantized to INT4_ASYM
             and the rest to INT8_ASYM).
