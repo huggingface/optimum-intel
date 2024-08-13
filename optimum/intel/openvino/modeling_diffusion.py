@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import openvino
 import PIL
+import torch
 from diffusers import (
     DDIMScheduler,
     LMSDiscreteScheduler,
@@ -77,7 +78,7 @@ logger = logging.getLogger(__name__)
 class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
     auto_model_class = StableDiffusionPipeline
     config_name = "model_index.json"
-    export_feature = "stable-diffusion"
+    export_feature = "text-to-image"
 
     def __init__(
         self,
@@ -423,10 +424,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         return self
 
     @property
-    def device(self) -> str:
-        return self._device.lower()
-
-    @property
     def height(self) -> int:
         height = self.unet.model.inputs[0].get_partial_shape()[2]
         if height.is_dynamic:
@@ -631,20 +628,24 @@ class OVModelPart:
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
                 and not str(self._model_dir).startswith(gettempdir())
-                and "gpu" in self.device.lower()
+                and "GPU" in self._device
             ):
                 self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
-            logger.info(f"Compiling the {self._model_name} to {self.device} ...")
-            self.request = core.compile_model(self.model, self.device, self.ov_config)
+            logger.info(f"Compiling the {self._model_name} to {self._device} ...")
+            self.request = core.compile_model(self.model, self._device, self.ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
-                logger.info(f"{self.device} SUPPORTED_PROPERTIES:")
+                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
                 _print_compiled_model_properties(self.request)
 
     @property
-    def device(self):
+    def _device(self) -> str:
         return self.parent_model._device
+
+    @property
+    def device(self) -> torch.device:
+        return self.parent_model.device
 
 
 class OVModelTextEncoder(OVModelPart):
@@ -717,7 +718,7 @@ class OVModelVaeDecoder(OVModelPart):
         return list(outputs.values())
 
     def _compile(self):
-        if "GPU" in self.device:
+        if "GPU" in self._device:
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
         super()._compile()
 
@@ -738,7 +739,7 @@ class OVModelVaeEncoder(OVModelPart):
         return list(outputs.values())
 
     def _compile(self):
-        if "GPU" in self.device:
+        if "GPU" in self._device:
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
         super()._compile()
 
@@ -799,6 +800,8 @@ class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPi
 
 
 class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiffusionImg2ImgPipelineMixin):
+    export_feature = "image-to-image"
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
@@ -841,6 +844,8 @@ class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiff
 
 
 class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiffusionInpaintPipelineMixin):
+    export_feature = "inpainting"
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]],
@@ -912,7 +917,6 @@ class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiff
 
 class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
     auto_model_class = StableDiffusionXLPipeline
-    export_feature = "stable-diffusion-xl"
 
     def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -988,6 +992,7 @@ class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusi
 
 class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLImg2ImgPipelineMixin):
     auto_model_class = StableDiffusionXLImg2ImgPipeline
+    export_feature = "image-to-image"
 
     def __call__(
         self,

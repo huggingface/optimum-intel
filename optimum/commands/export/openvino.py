@@ -13,7 +13,6 @@
 # limitations under the License.
 """Defines the command line for the export with OpenVINO."""
 
-import json
 import logging
 import sys
 from pathlib import Path
@@ -213,19 +212,7 @@ class OVExportCommand(BaseOptimumCLICommand):
 
     def run(self):
         from ...exporters.openvino.__main__ import infer_task, main_export, maybe_convert_tokenizers
-        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, _DEFAULT_4BIT_CONFIGS, OVConfig
-
-        def _get_default_int4_config(model_id_or_path, library_name):
-            if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
-                return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
-            if "transformers" in library_name and (Path(model_id_or_path) / "config.json").exists():
-                with (Path(model_id_or_path) / "config.json").open("r") as config_f:
-                    config = json.load(config_f)
-                    original_model_name = config.get("_name_or_path", "")
-                if original_model_name in _DEFAULT_4BIT_CONFIGS:
-                    return _DEFAULT_4BIT_CONFIGS[original_model_name]
-
-            return _DEFAULT_4BIT_CONFIG
+        from ...intel.openvino.configuration import _DEFAULT_4BIT_CONFIG, OVConfig, get_default_int4_config
 
         if self.args.library is None:
             # TODO: add revision, subfolder and token to args
@@ -260,7 +247,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 and self.args.awq is None
                 and self.args.sensitivity_metric is None
             ):
-                quantization_config = _get_default_int4_config(self.args.model, library_name)
+                quantization_config = get_default_int4_config(self.args.model)
             else:
                 quantization_config = {
                     "bits": 8 if is_int8 else 4,
@@ -274,6 +261,9 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "sensitivity_metric": self.args.sensitivity_metric,
                     "scale_estimation": self.args.scale_estimation,
                 }
+
+            if quantization_config.get("dataset", None) is not None:
+                quantization_config["trust_remote_code"] = self.args.trust_remote_code
 
             if self.args.weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:
                 logger.warning(

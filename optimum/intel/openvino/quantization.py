@@ -262,11 +262,12 @@ class OVQuantizer(OptimumQuantizer):
             logger.warning(
                 "`quantization_config` was not provided. In the future, please provide `quantization_config`"
             )
-            ov_config.quantization_config = (
-                OVWeightQuantizationConfig(bits=8)
-                if calibration_dataset is None
-                else OVWeightQuantizationConfig(bits=8)
-            )
+            if calibration_dataset is None:
+                logger.warning("Calibration dataset was not provided, assuming weight only quantization.")
+                ov_config.quantization_config = OVWeightQuantizationConfig(bits=8)
+            else:
+                logger.warning("Calibration dataset was provided, assuming static quantization.")
+                ov_config.quantization_config = OVQuantizationConfig()
 
         if isinstance(self.model, OVBaseModel):
             self._quantize_ovbasemodel(
@@ -671,7 +672,9 @@ class OVQuantizer(OptimumQuantizer):
     def _prepare_builtin_dataset(self, quantization_config: OVWeightQuantizationConfig):
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        tokenizer = AutoTokenizer.from_pretrained(quantization_config.tokenizer)
+        tokenizer = AutoTokenizer.from_pretrained(
+            quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
+        )
         nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
         calibration_dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
         calibration_dataset = prepare_dataset(calibration_dataset)
