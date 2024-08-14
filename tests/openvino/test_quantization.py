@@ -544,7 +544,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     save_model_patch.assert_called_with(
                         unittest.mock.ANY,
                         unittest.mock.ANY,
-                        ov_config=OVConfig(dtype="fp32"),
+                        ov_config=OVConfig(dtype="auto"),
                         library_name="transformers",
                     )
 
