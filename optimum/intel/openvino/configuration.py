@@ -53,9 +53,9 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
-    "meta-llama/Llama-2-7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
-    "meta-llama/Llama-2-7b-chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
-    "meta-llama/Llama-2-13b-chat": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
+    "meta-llama/Llama-2-7b-hf": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
+    "meta-llama/Llama-2-7b-chat-hf": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
+    "meta-llama/Llama-2-13b-chat-hf": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "stabilityai/stablelm-3b-4e1t": {
         "bits": 4,
         "sym": True,
@@ -84,8 +84,6 @@ _DEFAULT_4BIT_CONFIGS = {
         "sym": True,
         "group_size": 64,
         "all_layers": True,
-        "dataset": "wikitext2",
-        "quant_method": OVQuantizationMethod.AWQ,
     },
     "bigscience/bloomz-560m": {
         "bits": 4,
@@ -263,6 +261,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sym: bool = False,
         group_size: Optional[int] = None,
         tokenizer: Optional[str] = None,
+        trust_remote_code: bool = False,
         dataset: Optional[Union[str, List[str]]] = None,
         ratio: float = 1.0,
         all_layers: Optional[bool] = None,
@@ -275,6 +274,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
         self.tokenizer = tokenizer
+        self.trust_remote_code = trust_remote_code
         self.dataset = dataset
         self.group_size = group_size or (-1 if bits == 8 else 128)
         self.ratio = ratio
