@@ -357,6 +357,8 @@ class OVQuantizer(OptimumQuantizer):
                 if isinstance(self.model, OVModelForCausalLM):
                     calibration_dataset = self._prepare_causal_lm_dataset(quantization_config)
                 elif is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+                    if not isinstance(quantization_config.dataset, str):
+                        raise ValueError("Please provide dataset as one of the accepted dataset labels.")
                     calibration_dataset = self._prepare_unet_dataset(
                         quantization_config.num_samples, dataset_name=quantization_config.dataset
                     )
