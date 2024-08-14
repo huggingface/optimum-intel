@@ -44,7 +44,6 @@ from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 from optimum.intel.utils.import_utils import (
     compare_versions,
     is_openvino_tokenizers_available,
-    is_transformers_version,
 )
 
 
