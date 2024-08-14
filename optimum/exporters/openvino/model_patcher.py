@@ -103,7 +103,9 @@ def patch_model_with_bettertransformer(model):
 
 def patch_update_causal_mask(model, transformers_version):
     if is_transformers_version(">=", transformers_version):
-        model.model._update_causal_mask = types.MethodType(_llama_gemma_update_causal_mask, model.model)
+        inner_model = getattr(model, "model", getattr(model, "transformer", None))
+        if inner_model is not None:
+            inner_model._update_causal_mask = types.MethodType(_llama_gemma_update_causal_mask, inner_model)
 
 
 def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -563,8 +565,9 @@ class LlamaModelPatcher(DecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if hasattr(self._model.model, "_orig_update_causal_mask"):
-            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+        inner_model = getattr(self._model, "model", getattr(self._model, "transformer", None))
+        if hasattr(inner_model, "_orig_update_causal_mask"):
+            inner_model._update_causal_mask = inner_model._orig_update_causal_mask
 
 
 # copied from https://github.com/huggingface/transformers/commit/57d7594a79a9f5d835abf2d4d384db0e4818e548 to unblock export with transformers 4.42
