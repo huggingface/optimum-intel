@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
+from transformers.utils import is_torch_available
 
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
@@ -38,6 +39,11 @@ from .utils import clear_class_registry
 
 if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
+
+
+if is_torch_available():
+    import torch
+
 
 _COMPRESSION_OPTIONS = {
     "int8": {"bits": 8},
@@ -218,9 +224,6 @@ def main_export(
         model_name_or_path, subfolder=subfolder, revision=revision, cache_dir=cache_dir, token=token
     )
 
-    if framework == "pt":
-        import torch
-
     if library_name is None:
         library_name = TasksManager._infer_library_from_model_name_or_path(
             model_name_or_path=model_name_or_path,
@@ -316,8 +319,6 @@ def main_export(
     logger.warning(loading_kwargs)
     # Patch the modules to export of GPTQ models w/o GPU
     if do_gptq_patching:
-        import torch
-
         torch.set_default_dtype(torch.float32)
         orig_cuda_check = torch.cuda.is_available
         torch.cuda.is_available = lambda: True
