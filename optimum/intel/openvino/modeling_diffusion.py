@@ -718,7 +718,7 @@ class OVModelVaeDecoder(OVModelPart):
         return list(outputs.values())
 
     def _compile(self):
-        if "GPU" in self._device:
+        if "GPU" in self._device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
         super()._compile()
 
@@ -739,7 +739,7 @@ class OVModelVaeEncoder(OVModelPart):
         return list(outputs.values())
 
     def _compile(self):
-        if "GPU" in self._device:
+        if "GPU" in self._device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
         super()._compile()
 
