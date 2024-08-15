@@ -77,6 +77,17 @@ class IPEXModelForCausalLM(metaclass=DummyObject):
         requires_backends(cls, ["ipex"])
 
 
+class IPEXModelForSeq2SeqLM(metaclass=DummyObject):
+    _backends = ["ipex"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["ipex"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["ipex"])
+
+
 class IPEXModelForQuestionAnswering(metaclass=DummyObject):
     _backends = ["ipex"]
 
