@@ -83,7 +83,14 @@ _DEFAULT_4BIT_CONFIGS = {
     "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
     "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
     "openlm-research/open_llama_3b": {"bits": 4, "sym": False, "group_size": 64, "all_layers": True},
-    "openlm-research/open_llama_3b_v2": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
+    "openlm-research/open_llama_3b_v2": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
     "tiiuae/falcon-7b-instruct": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
     "psmathur/orca_mini_3b": {
         "bits": 4,
