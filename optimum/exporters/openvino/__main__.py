@@ -387,7 +387,7 @@ def main_export(
     )
 
     if convert_tokenizer:
-        maybe_convert_tokenizers(library_name, output, model, preprocessors)
+        maybe_convert_tokenizers(library_name, output, model, preprocessors, task=task)
 
     clear_class_registry()
     del model
@@ -399,7 +399,7 @@ def main_export(
         GPTQQuantizer.post_init_model = orig_post_init_model
 
 
-def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None):
+def maybe_convert_tokenizers(library_name: str, output: Path, model=None, preprocessors=None, task=None):
     """
     Tries to convert tokenizers to OV format and export them to disk.
 
@@ -412,6 +412,8 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
             Model instance.
         preprocessors (`Iterable`, *optional*, defaults to None):
             Iterable possibly containing tokenizers to be converted.
+        task (`str`, *optional*, defaults to None):
+            The task to export the model for. Affects tokenizer conversion parameters.
     """
     from optimum.exporters.openvino.convert import export_tokenizer
 
@@ -420,7 +422,7 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
             if tokenizer:
                 try:
-                    export_tokenizer(tokenizer, output)
+                    export_tokenizer(tokenizer, output, task=task)
                 except Exception as exception:
                     logger.warning(
                         "Could not load tokenizer using specified model ID or path. OpenVINO tokenizer/detokenizer "
@@ -430,6 +432,6 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
             for tokenizer_name in ("tokenizer", "tokenizer_2"):
                 tokenizer = getattr(model, tokenizer_name, None)
                 if tokenizer:
-                    export_tokenizer(tokenizer, output / tokenizer_name)
+                    export_tokenizer(tokenizer, output / tokenizer_name, task=task)
     else:
         logger.warning("Tokenizer won't be converted.")
