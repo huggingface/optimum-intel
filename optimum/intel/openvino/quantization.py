@@ -352,12 +352,14 @@ class OVQuantizer(OptimumQuantizer):
                     "quantization. Will rely on `calibration_dataset`."
                 )
 
-            if calibration_dataset is None and isinstance(quantization_config.dataset, str):
+            if calibration_dataset is None and quantization_config.dataset is not None:
                 from optimum.intel import OVModelForCausalLM
 
                 if isinstance(self.model, OVModelForCausalLM):
-                    calibration_dataset = self._prepare_builtin_dataset(quantization_config)
+                    calibration_dataset = self._prepare_causal_lm_dataset(quantization_config)
                 elif is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+                    if not isinstance(quantization_config.dataset, str):
+                        raise ValueError("Please provide dataset as one of the accepted dataset labels.")
                     calibration_dataset = self._prepare_unet_dataset(
                         quantization_config.num_samples, dataset_name=quantization_config.dataset
                     )
@@ -676,14 +678,20 @@ class OVQuantizer(OptimumQuantizer):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
 
-    def _prepare_builtin_dataset(self, quantization_config: OVWeightQuantizationConfig):
+    def _prepare_causal_lm_dataset(self, quantization_config: OVWeightQuantizationConfig):
         from optimum.gptq.data import get_dataset, prepare_dataset
 
         tokenizer = AutoTokenizer.from_pretrained(
             quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
         )
         nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
-        calibration_dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
+        config_dataset = quantization_config.dataset
+        if isinstance(config_dataset, str):
+            calibration_dataset = get_dataset(config_dataset, tokenizer, seqlen=32, nsamples=nsamples)
+        elif isinstance(config_dataset, list) and all(isinstance(it, str) for it in config_dataset):
+            calibration_dataset = [tokenizer(text, return_tensors="pt") for text in config_dataset[:nsamples]]
+        else:
+            raise ValueError("Please provide dataset as one of the accepted dataset labels or as a list of strings.")
         calibration_dataset = prepare_dataset(calibration_dataset)
         calibration_dataset = nncf.Dataset(calibration_dataset, lambda x: self.model.prepare_inputs(**x))
 

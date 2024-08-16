@@ -225,6 +225,19 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
+            "opt",
+            dict(
+                bits=4,
+                sym=True,
+                group_size=-1,
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                dataset=["one two, " * i for i in range(10)],
+            ),
+            14,
+        ),
+        (
+            OVModelForCausalLM,
             "llama_awq",
             dict(
                 bits=4,
