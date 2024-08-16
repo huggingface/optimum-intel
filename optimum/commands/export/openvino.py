@@ -331,7 +331,7 @@ class OVExportCommand(BaseOptimumCLICommand):
             model = model_cls.from_pretrained(self.args.model, export=True, quantization_config=quantization_config)
             model.save_pretrained(self.args.output)
             if not self.args.disable_convert_tokenizer:
-                maybe_convert_tokenizers(library_name, self.args.output, model)
+                maybe_convert_tokenizers(library_name, self.args.output, model, task=task)
         elif task.startswith("text-generation") and quantize_with_dataset:
             from optimum.intel import OVModelForCausalLM
 
@@ -350,7 +350,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                 preprocessors = maybe_load_preprocessors(
                     self.args.model, trust_remote_code=self.args.trust_remote_code
                 )
-                maybe_convert_tokenizers(library_name, self.args.output, preprocessors=preprocessors)
+                maybe_convert_tokenizers(library_name, self.args.output, preprocessors=preprocessors, task=task)
         else:
             # TODO : add input shapes
             main_export(
