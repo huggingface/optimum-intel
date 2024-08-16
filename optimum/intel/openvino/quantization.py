@@ -374,10 +374,10 @@ class OVQuantizer(OptimumQuantizer):
                     quantization_config_copy = copy.deepcopy(quantization_config)
                     quantization_config_copy.dataset = None
                     quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
-                    for sd_submodel_name in ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"]:
-                        sd_submodel = getattr(self.model, sd_submodel_name)
-                        if sd_submodel is not None:
-                            _weight_only_quantization(sd_submodel.model, quantization_config_copy)
+                    sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"]
+                    sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
+                    for sub_model in sub_models:
+                        _weight_only_quantization(sub_model.model, quantization_config_copy)
 
                     # Apply hybrid quantization to UNet
                     self.model.unet.model = _hybrid_quantization(
@@ -387,7 +387,13 @@ class OVQuantizer(OptimumQuantizer):
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     self.model.model = _hybrid_quantization(self.model.model, quantization_config, calibration_dataset)
             else:
-                _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)
+                if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+                    sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2", "unet"]
+                    sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
+                    for sub_model in sub_models:
+                        _weight_only_quantization(sub_model.model, quantization_config)
+                else:
+                    _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)
             if save_directory is not None:
                 self.model.save_pretrained(save_directory)
                 ov_config.save_pretrained(save_directory)
