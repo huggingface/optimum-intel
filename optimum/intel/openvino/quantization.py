@@ -681,7 +681,7 @@ class OVQuantizer(OptimumQuantizer):
         config_dataset = quantization_config.dataset
         if isinstance(config_dataset, str):
             calibration_dataset = get_dataset(config_dataset, tokenizer, seqlen=32, nsamples=nsamples)
-        elif isinstance(config_dataset, list) and all([isinstance(it, str) for it in config_dataset]):
+        elif isinstance(config_dataset, list) and all(isinstance(it, str) for it in config_dataset):
             calibration_dataset = [tokenizer(text, return_tensors="pt") for text in config_dataset[:nsamples]]
         else:
             raise ValueError("Please provide dataset as one of the accepted dataset labels or as a list of strings.")
