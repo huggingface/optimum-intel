@@ -375,7 +375,7 @@ class OVQuantizer(OptimumQuantizer):
                     quantization_config_copy.dataset = None
                     quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
                     sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"]
-                    sub_models = filter(lambda x: x is not None, (getattr(model_, name) for name in sub_model_names))
+                    sub_models = filter(lambda x: x is not None, (getattr(self.model, name) for name in sub_model_names))
                     for sub_model in sub_models:
                         _weight_only_quantization(sub_model.model, quantization_config_copy)
 
@@ -389,7 +389,7 @@ class OVQuantizer(OptimumQuantizer):
             else:
                 if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
                     sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2", "unet"]
-                    sub_models = filter(lambda x: x is not None, (getattr(model_, name) for name in sub_model_names))
+                    sub_models = filter(lambda x: x is not None, (getattr(self.model, name) for name in sub_model_names))
                     for sub_model in sub_models:
                         _weight_only_quantization(sub_model.model, quantization_config)
                 else:

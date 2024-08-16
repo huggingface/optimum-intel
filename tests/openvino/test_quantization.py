@@ -420,6 +420,18 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             model.save_pretrained(tmp_dir)
 
+    def test_stable_diffusion_with_weight_compression(self):
+        int8_pipe = OVStableDiffusionPipeline.from_pretrained(model_id=MODEL_NAMES['stable-diffusion'], export=True)
+        quantization_config = OVWeightQuantizationConfig(bits=8, num_samples=2, quant_method=OVQuantizationMethod.DEFAULT)
+        quantizer = OVQuantizer(int8_pipe)
+
+        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
+
+        num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(int8_pipe.unet)
+        self.assertEqual(0, num_fake_quantize)
+        self.assertEqual(242, num_int8)
+        self.assertEqual(0, num_int4)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
         self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8
