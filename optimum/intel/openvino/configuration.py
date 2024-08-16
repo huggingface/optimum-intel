@@ -140,7 +140,15 @@ _DEFAULT_4BIT_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
         "scale_estimation": True,
     },
-    "microsoft/phi-2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
+    "microsoft/phi-2": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
     "stabilityai/stablelm-tuned-alpha-7b": {
         "bits": 4,
         "sym": False,
