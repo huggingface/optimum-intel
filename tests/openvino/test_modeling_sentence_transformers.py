@@ -51,6 +51,7 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
         set_seed(SEED)
         ov_model = OVModelForSentenceTransformer.from_pretrained(model_id, from_transformers=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        self.assertTrue(hasattr(ov_model, "encode"))
         st_model = SentenceTransformer(model_id)
         sentences = ["This is an example sentence", "Each sentence is converted"]
         st_embeddings = st_model.encode(sentences)
