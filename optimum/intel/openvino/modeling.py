@@ -17,8 +17,7 @@ import os
 import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import MethodType
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Optional, Union
 
 import numpy as np
 import openvino
@@ -38,7 +37,6 @@ from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
-    AutoTokenizer,
     PretrainedConfig,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
@@ -57,7 +55,7 @@ from transformers.modeling_outputs import (
 from optimum.exporters import TasksManager
 
 from ...exporters.openvino import main_export
-from ..utils.import_utils import is_timm_available, is_timm_version
+from ..utils.import_utils import is_timm_available, is_timm_version, is_sentence_transformers_available
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import _is_timm_ov_dir
@@ -274,12 +272,8 @@ class OVModelForQuestionAnswering(OVModel):
             inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
         outputs = self._inference(inputs)
-        start_logits = (
-            torch.from_numpy(outputs["start_logits"]).to(self.device) if not np_inputs else outputs["start_logits"]
-        )
-        end_logits = (
-            torch.from_numpy(outputs["end_logits"]).to(self.device) if not np_inputs else outputs["end_logits"]
-        )
+        start_logits = torch.from_numpy(outputs["start_logits"]).to(self.device) if not np_inputs else outputs["start_logits"]
+        end_logits = torch.from_numpy(outputs["end_logits"]).to(self.device) if not np_inputs else outputs["end_logits"]
         return QuestionAnsweringModelOutput(start_logits=start_logits, end_logits=end_logits)
 
 
@@ -373,27 +367,23 @@ class OVModelForFeatureExtraction(OVModel):
 
     def __init__(self, model=None, config=None, **kwargs):
         super().__init__(model, config, **kwargs)
-        
-        from sentence_transformers import SentenceTransformer
-        self.encode = MethodType(SentenceTransformer.encode, self)
-        self._text_length = MethodType(SentenceTransformer._text_length, self)
-        self.default_prompt_name = None
-        self.truncate_dim = None
-        self.model_id = None
 
     @add_start_docstrings_to_model_forward(
-        INPUTS_DOCSTRING.format("inputs")
+        INPUTS_DOCSTRING.format("batch_size, sequence_length")
         + FEATURE_EXTRACTION_EXAMPLE.format(
             processor_class=_TOKENIZER_FOR_DOC,
             model_class="OVModelForFeatureExtraction",
             checkpoint="sentence-transformers/all-MiniLM-L6-v2",
         )
     )
-    def forward(self, inputs: Dict[str, torch.Tensor]):
+    def forward(
+        self,
+        input_ids: Union[torch.Tensor, np.ndarray],
+        attention_mask: Union[torch.Tensor, np.ndarray],
+        token_type_ids: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        **kwargs,
+    ):
         self.compile()
-        input_ids = inputs.get('input_ids')
-        attention_mask = inputs.get('attention_mask')
-        token_type_ids = inputs.get('token_type_ids')
 
         np_inputs = isinstance(input_ids, np.ndarray)
         if not np_inputs:
@@ -411,10 +401,8 @@ class OVModelForFeatureExtraction(OVModel):
             inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
         outputs = self._inference(inputs)
-        return {
-            'token_embeddings': torch.from_numpy(outputs["token_embeddings"]).to(self.device),
-            'sentence_embedding': torch.from_numpy(outputs["sentence_embedding"]).to(self.device),
-        }
+        last_hidden_state = torch.from_numpy(outputs["last_hidden_state"]).to(self.device) if not np_inputs else outputs["last_hidden_state"]
+        return BaseModelOutput(last_hidden_state=last_hidden_state)
 
     @classmethod
     def _from_transformers(
@@ -455,6 +443,11 @@ class OVModelForFeatureExtraction(OVModel):
         else:
             ov_config = OVConfig(dtype="fp32")
 
+        if is_sentence_transformers_available():
+            library_name = "sentence_transformers"
+        else:
+            warnings.warn("Sentence Tranfromers is not installed. Using transfromers pipeline.")
+            library_name = "transformers"
         # OVModelForFeatureExtraction works with Transformers type of models, thus even sentence-transformers models are loaded as such.
         main_export(
             model_name_or_path=model_id,
@@ -468,63 +461,33 @@ class OVModelForFeatureExtraction(OVModel):
             force_download=force_download,
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
-            library_name="sentence_transformers",
+            library_name=library_name,
         )
 
         config.save_pretrained(save_dir_path)
-        model =  cls._from_pretrained(
+        model = cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
             **kwargs,
         )
-        model.model_id = model_id
+        if len(model.model.outputs) == 2:  # Sentence Transormers output
+            from .modeling_sentence_transformers import OVModelForSTFeatureExtraction
 
-        return model
-    
-    def tokenize(
-            self, texts: Union[List[str], List[Dict], List[Tuple[str, str]]], padding: Union[str, bool] = True
-        ) -> Dict[str, torch.Tensor]:
-            """Tokenizes a text and maps tokens to token-ids"""
-            tokenizer_args = {'token': None, 'trust_remote_code': False, 'revision': None, 'local_files_only': False, 'model_max_length': 384}
-            tokenizer = AutoTokenizer.from_pretrained(
-            self.model_id,
-                **tokenizer_args,
+            model = OVModelForSTFeatureExtraction(
+                model=model.model,
+                config=config,
+                model_save_dir=save_dir_path,
+                quantization_config=quantization_config,
+                model_id=model_id,
+                **kwargs,
             )
-            
-            output = {}
-            if isinstance(texts[0], str):
-                to_tokenize = [texts]
-            elif isinstance(texts[0], dict):
-                to_tokenize = []
-                output["text_keys"] = []
-                for lookup in texts:
-                    text_key, text = next(iter(lookup.items()))
-                    to_tokenize.append(text)
-                    output["text_keys"].append(text_key)
-                to_tokenize = [to_tokenize]
-            else:
-                batch1, batch2 = [], []
-                for text_tuple in texts:
-                    batch1.append(text_tuple[0])
-                    batch2.append(text_tuple[1])
-                to_tokenize = [batch1, batch2]
-
-            # strip
-            to_tokenize = [[str(s).strip() for s in col] for col in to_tokenize]
-
-
-            output.update(
-                tokenizer(
-                    *to_tokenize,
-                    padding=padding,
-                    truncation="longest_first",
-                    return_tensors="pt",
-                    max_length=tokenizer_args['model_max_length'],
-                )
-            )
-            return output 
+            return model
+        else:
+            if is_sentence_transformers_available():
+                warnings.warn("Couldn't use this model with Sentence Tranfromers. Using transfromers pipeline.")
+            return model
 
 
 MASKED_LM_EXAMPLE = r"""
@@ -665,9 +628,7 @@ class OVModelForImageClassification(OVModel):
         local_timm_model = _is_timm_ov_dir(model_id)
         if local_timm_model or (not os.path.isdir(model_id) and model_info(model_id).library_name == "timm"):
             if not is_timm_available():
-                raise ImportError(
-                    "To load a timm model, timm needs to be installed. Please install it with `pip install timm`."
-                )
+                raise ImportError("To load a timm model, timm needs to be installed. Please install it with `pip install timm`.")
 
             if is_timm_version("<", "0.9.0"):
                 raise ImportError(
@@ -940,9 +901,7 @@ class OVModelForAudioXVector(OVModel):
 
         outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
-        embeddings = (
-            torch.from_numpy(outputs["embeddings"]).to(self.device) if not np_inputs else outputs["embeddings"]
-        )
+        embeddings = torch.from_numpy(outputs["embeddings"]).to(self.device) if not np_inputs else outputs["embeddings"]
 
         return XVectorOutput(logits=logits, embeddings=embeddings)
 
@@ -1058,9 +1017,7 @@ class OVModelForCustomTasks(OVModel):
         inputs_names = set(kwargs)
 
         if not expected_inputs_names.issubset(inputs_names):
-            raise ValueError(
-                f"Got unexpected inputs: expecting the following inputs : {', '.join(expected_inputs_names)} but got : {', '.join(inputs_names)}."
-            )
+            raise ValueError(f"Got unexpected inputs: expecting the following inputs : {', '.join(expected_inputs_names)} but got : {', '.join(inputs_names)}.")
 
         np_inputs = isinstance(next(iter(kwargs.values())), np.ndarray)
         inputs = {}

@@ -151,6 +151,16 @@ if _accelerate_available:
         _accelerate_available = False
 
 
+_sentence_transformers_available = importlib.util.find_spec("sentence_transformers") is not None
+_sentence_transformers_available = "N/A"
+
+if _sentence_transformers_available:
+    try:
+        _sentence_transformers_available = importlib_metadata.version("sentence_transformers")
+    except importlib_metadata.PackageNotFoundError:
+        _sentence_transformers_available = False
+
+
 def is_transformers_available():
     return _transformers_available
 
@@ -232,16 +242,11 @@ def is_openvino_tokenizers_available():
                 message += "pip uninstall -y openvino-nightly && "
             message += "pip install --force-reinstall openvino openvino-tokenizers\n"
             if is_nightly:
-                message += (
-                    "openvino-nightly package will be deprecated in the future - use pre-release drops instead. "
-                )
+                message += "openvino-nightly package will be deprecated in the future - use pre-release drops instead. "
             message += "To update both OpenVINO and OpenVINO Tokenizers to the latest pre-release version perform:\n"
             if is_nightly:
                 message += "pip uninstall -y openvino-nightly && "
-            message += (
-                "pip install --pre -U openvino openvino-tokenizers "
-                "--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
-            )
+            message += "pip install --pre -U openvino openvino-tokenizers " "--extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly"
         logger.warning(message)
         return False
 
@@ -270,6 +275,10 @@ def is_datasets_available():
 
 def is_accelerate_available():
     return _accelerate_available
+
+
+def is_sentence_transformers_available():
+    return _sentence_transformers_available
 
 
 # This function was copied from: https://github.com/huggingface/accelerate/blob/874c4967d94badd24f893064cc3bef45f57cadf7/src/accelerate/utils/versions.py#L319
