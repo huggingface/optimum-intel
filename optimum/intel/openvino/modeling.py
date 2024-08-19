@@ -443,11 +443,6 @@ class OVModelForFeatureExtraction(OVModel):
         else:
             ov_config = OVConfig(dtype="fp32")
 
-        if is_sentence_transformers_available():
-            library_name = "sentence_transformers"
-        else:
-            warnings.warn("Sentence Tranfromers is not installed. Using transfromers pipeline.")
-            library_name = "transformers"
         # OVModelForFeatureExtraction works with Transformers type of models, thus even sentence-transformers models are loaded as such.
         main_export(
             model_name_or_path=model_id,
@@ -461,7 +456,7 @@ class OVModelForFeatureExtraction(OVModel):
             force_download=force_download,
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
-            library_name=library_name,
+            library_name="transformers",
         )
 
         config.save_pretrained(save_dir_path)
@@ -472,10 +467,11 @@ class OVModelForFeatureExtraction(OVModel):
             quantization_config=quantization_config,
             **kwargs,
         )
-        if len(model.model.outputs) == 2:  # Sentence Transormers output
-            from .modeling_sentence_transformers import OVModelForSTFeatureExtraction
+        if {"token_embeddings", "sentence_embedding"} == {name for output in model.model.outputs for name in output.names}:  # Sentence Transormers outputs
+            warnings.warn("This model is Sentence Tranfromers converted model. Please use OVModelForSentenceTransformer explicitly for this model.")
+            from .modeling_sentence_transformers import OVModelForSentenceTransformer
 
-            model = OVModelForSTFeatureExtraction(
+            model = OVModelForSentenceTransformer(
                 model=model.model,
                 config=config,
                 model_save_dir=save_dir_path,
@@ -483,11 +479,7 @@ class OVModelForFeatureExtraction(OVModel):
                 model_id=model_id,
                 **kwargs,
             )
-            return model
-        else:
-            if is_sentence_transformers_available():
-                warnings.warn("Couldn't use this model with Sentence Tranfromers. Using transfromers pipeline.")
-            return model
+        return model
 
 
 MASKED_LM_EXAMPLE = r"""

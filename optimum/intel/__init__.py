@@ -24,6 +24,7 @@ from .utils import (
     is_neural_compressor_available,
     is_nncf_available,
     is_openvino_available,
+    is_sentence_transformers_available,
 )
 from .version import __version__
 
@@ -39,9 +40,7 @@ try:
 except OptionalDependencyNotAvailable:
     from .utils import dummy_ipex_objects
 
-    _import_structure["utils.dummy_ipex_objects"] = [
-        name for name in dir(dummy_ipex_objects) if not name.startswith("_")
-    ]
+    _import_structure["utils.dummy_ipex_objects"] = [name for name in dir(dummy_ipex_objects) if not name.startswith("_")]
 else:
     _import_structure["ipex"] = [
         "inference_mode",
@@ -119,9 +118,7 @@ try:
 except OptionalDependencyNotAvailable:
     from .utils import dummy_openvino_objects
 
-    _import_structure["utils.dummy_openvino_objects"] = [
-        name for name in dir(dummy_openvino_objects) if not name.startswith("_")
-    ]
+    _import_structure["utils.dummy_openvino_objects"] = [name for name in dir(dummy_openvino_objects) if not name.startswith("_")]
 else:
     _import_structure["openvino"].extend(
         [
@@ -151,9 +148,7 @@ try:
 except OptionalDependencyNotAvailable:
     from .utils import dummy_neural_compressor_objects
 
-    _import_structure["utils.dummy_neural_compressor_objects"] = [
-        name for name in dir(dummy_neural_compressor_objects) if not name.startswith("_")
-    ]
+    _import_structure["utils.dummy_neural_compressor_objects"] = [name for name in dir(dummy_neural_compressor_objects) if not name.startswith("_")]
 else:
     _import_structure["neural_compressor"] = [
         "INCConfig",
@@ -178,6 +173,21 @@ except OptionalDependencyNotAvailable:
     _import_structure["utils.dummy_neural_compressor_and_diffusers_objects"] = ["INCStableDiffusionPipeline"]
 else:
     _import_structure["neural_compressor"].append("INCStableDiffusionPipeline")
+
+
+try:
+    if not (is_openvino_available() and is_sentence_transformers_available()):
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    _import_structure["utils.dummy_openvino_and_sentence_transformers_objects"] = [
+        "OVModelForSentenceTransformer",
+    ]
+else:
+    _import_structure["openvino"].extend(
+        [
+            "OVModelForSentenceTransformer",
+        ]
+    )
 
 
 if TYPE_CHECKING:
@@ -303,6 +313,18 @@ if TYPE_CHECKING:
         from .utils.dummy_neural_compressor_and_diffusers_objects import INCStableDiffusionPipeline
     else:
         from .neural_compressor import INCStableDiffusionPipeline
+
+    try:
+        if not (is_openvino_available() and is_sentence_transformers_available()):
+            raise OptionalDependencyNotAvailable()
+    except OptionalDependencyNotAvailable:
+        from .utils.dummy_openvino_and_sentence_transformers_objects import (
+            OVModelForSentenceTransformer,
+        )
+    else:
+        from .openvino import (
+            OVModelForSentenceTransformer,
+        )
 
 else:
     import sys

@@ -23,6 +23,7 @@ from .import_utils import (
     is_neural_compressor_version,
     is_nncf_available,
     is_openvino_available,
+    is_sentence_transformers_available,
     is_torch_version,
     is_transformers_available,
     is_transformers_version,
