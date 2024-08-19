@@ -249,7 +249,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            16,
+            8,
         ),
         (
             OVModelForCausalLM,
@@ -263,7 +263,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            16,
+            8,
         ),
     )
 
@@ -569,7 +569,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     save_model_patch.assert_called_with(
                         unittest.mock.ANY,
                         unittest.mock.ANY,
-                        ov_config=OVConfig(dtype="fp32"),
+                        ov_config=OVConfig(dtype="auto"),
                         library_name="transformers",
                     )
 
@@ -592,7 +592,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         save_model_patch.assert_called_with(
                             unittest.mock.ANY,
                             unittest.mock.ANY,
-                            ov_config=OVConfig(dtype="fp32"),
+                            ov_config=OVConfig(dtype="auto"),
                             library_name="transformers",
                         )
                         compression_params = {

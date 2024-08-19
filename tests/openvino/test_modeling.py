@@ -1015,6 +1015,30 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 f"generation config : {gen_config}, transformers output {transformers_outputs}, ov_model_stateless output {ov_stateless_outputs}",
             )
 
+    def test_load_with_different_dtype(self):
+        set_seed(SEED)
+        model_id = MODEL_NAMES["llama"]
+        pt_model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        texts = ["this is a simple input"]
+        test_input = tokenizer(texts, return_tensors="pt")
+
+        ref_logits = pt_model(**test_input).logits
+        torch_dtypes = [None, "auto", "float32", torch.float16]
+        if is_openvino_version(">", "2024.2.0"):
+            torch_dtypes.append("bfloat16")
+
+        for dtype in torch_dtypes:
+            ov_model = OVModelForCausalLM.from_pretrained(model_id=model_id, export=True, torch_dtype=dtype)
+            ov_logits = ov_model(**test_input).logits
+            self.assertTrue(
+                torch.allclose(torch.Tensor(ov_logits), ref_logits, atol=5e-3),
+                f"values are not close for {dtype if dtype is not None else 'None'}, max diff = {torch.abs(ov_logits - ref_logits).max()}",
+            )
+
 
 class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
