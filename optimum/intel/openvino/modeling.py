@@ -55,7 +55,7 @@ from transformers.modeling_outputs import (
 from optimum.exporters import TasksManager
 
 from ...exporters.openvino import main_export
-from ..utils.import_utils import is_timm_available, is_timm_version, is_sentence_transformers_available
+from ..utils.import_utils import is_timm_available, is_timm_version
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import _is_timm_ov_dir
@@ -272,8 +272,12 @@ class OVModelForQuestionAnswering(OVModel):
             inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
         outputs = self._inference(inputs)
-        start_logits = torch.from_numpy(outputs["start_logits"]).to(self.device) if not np_inputs else outputs["start_logits"]
-        end_logits = torch.from_numpy(outputs["end_logits"]).to(self.device) if not np_inputs else outputs["end_logits"]
+        start_logits = (
+            torch.from_numpy(outputs["start_logits"]).to(self.device) if not np_inputs else outputs["start_logits"]
+        )
+        end_logits = (
+            torch.from_numpy(outputs["end_logits"]).to(self.device) if not np_inputs else outputs["end_logits"]
+        )
         return QuestionAnsweringModelOutput(start_logits=start_logits, end_logits=end_logits)
 
 
@@ -401,7 +405,11 @@ class OVModelForFeatureExtraction(OVModel):
             inputs["token_type_ids"] = token_type_ids if token_type_ids is not None else np.zeros_like(input_ids)
 
         outputs = self._inference(inputs)
-        last_hidden_state = torch.from_numpy(outputs["last_hidden_state"]).to(self.device) if not np_inputs else outputs["last_hidden_state"]
+        last_hidden_state = (
+            torch.from_numpy(outputs["last_hidden_state"]).to(self.device)
+            if not np_inputs
+            else outputs["last_hidden_state"]
+        )
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
     @classmethod
@@ -467,8 +475,12 @@ class OVModelForFeatureExtraction(OVModel):
             quantization_config=quantization_config,
             **kwargs,
         )
-        if {"token_embeddings", "sentence_embedding"} == {name for output in model.model.outputs for name in output.names}:  # Sentence Transormers outputs
-            warnings.warn("This model is Sentence Tranfromers converted model. Please use OVModelForSentenceTransformer explicitly for this model.")
+        if {"token_embeddings", "sentence_embedding"}.issubset(
+            {name for output in model.model.outputs for name in output.names}
+        ):  # Sentence Transormers outputs
+            warnings.warn(
+                "This model is Sentence Tranfromers converted model. Please use OVModelForSentenceTransformer explicitly for this model."
+            )
             from .modeling_sentence_transformers import OVModelForSentenceTransformer
 
             model = OVModelForSentenceTransformer(
@@ -620,7 +632,9 @@ class OVModelForImageClassification(OVModel):
         local_timm_model = _is_timm_ov_dir(model_id)
         if local_timm_model or (not os.path.isdir(model_id) and model_info(model_id).library_name == "timm"):
             if not is_timm_available():
-                raise ImportError("To load a timm model, timm needs to be installed. Please install it with `pip install timm`.")
+                raise ImportError(
+                    "To load a timm model, timm needs to be installed. Please install it with `pip install timm`."
+                )
 
             if is_timm_version("<", "0.9.0"):
                 raise ImportError(
@@ -893,7 +907,9 @@ class OVModelForAudioXVector(OVModel):
 
         outputs = self._inference(inputs)
         logits = torch.from_numpy(outputs["logits"]).to(self.device) if not np_inputs else outputs["logits"]
-        embeddings = torch.from_numpy(outputs["embeddings"]).to(self.device) if not np_inputs else outputs["embeddings"]
+        embeddings = (
+            torch.from_numpy(outputs["embeddings"]).to(self.device) if not np_inputs else outputs["embeddings"]
+        )
 
         return XVectorOutput(logits=logits, embeddings=embeddings)
 
@@ -1009,7 +1025,9 @@ class OVModelForCustomTasks(OVModel):
         inputs_names = set(kwargs)
 
         if not expected_inputs_names.issubset(inputs_names):
-            raise ValueError(f"Got unexpected inputs: expecting the following inputs : {', '.join(expected_inputs_names)} but got : {', '.join(inputs_names)}.")
+            raise ValueError(
+                f"Got unexpected inputs: expecting the following inputs : {', '.join(expected_inputs_names)} but got : {', '.join(inputs_names)}."
+            )
 
         np_inputs = isinstance(next(iter(kwargs.values())), np.ndarray)
         inputs = {}

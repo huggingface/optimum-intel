@@ -40,7 +40,9 @@ try:
 except OptionalDependencyNotAvailable:
     from .utils import dummy_ipex_objects
 
-    _import_structure["utils.dummy_ipex_objects"] = [name for name in dir(dummy_ipex_objects) if not name.startswith("_")]
+    _import_structure["utils.dummy_ipex_objects"] = [
+        name for name in dir(dummy_ipex_objects) if not name.startswith("_")
+    ]
 else:
     _import_structure["ipex"] = [
         "inference_mode",
@@ -118,7 +120,9 @@ try:
 except OptionalDependencyNotAvailable:
     from .utils import dummy_openvino_objects
 
-    _import_structure["utils.dummy_openvino_objects"] = [name for name in dir(dummy_openvino_objects) if not name.startswith("_")]
+    _import_structure["utils.dummy_openvino_objects"] = [
+        name for name in dir(dummy_openvino_objects) if not name.startswith("_")
+    ]
 else:
     _import_structure["openvino"].extend(
         [
@@ -148,7 +152,9 @@ try:
 except OptionalDependencyNotAvailable:
     from .utils import dummy_neural_compressor_objects
 
-    _import_structure["utils.dummy_neural_compressor_objects"] = [name for name in dir(dummy_neural_compressor_objects) if not name.startswith("_")]
+    _import_structure["utils.dummy_neural_compressor_objects"] = [
+        name for name in dir(dummy_neural_compressor_objects) if not name.startswith("_")
+    ]
 else:
     _import_structure["neural_compressor"] = [
         "INCConfig",

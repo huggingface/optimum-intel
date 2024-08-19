@@ -1,19 +1,19 @@
-from types import MethodType
-from typing import Dict, List, Optional, Tuple, Union
 import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import MethodType
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from sentence_transformers import SentenceTransformer
-from transformers.file_utils import add_start_docstrings
 from transformers import AutoTokenizer, PretrainedConfig
+from transformers.file_utils import add_start_docstrings
 
+from ...exporters.openvino import main_export
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import MODEL_START_DOCSTRING, OVModel
-from ...exporters.openvino import main_export
 
 
 @add_start_docstrings(
@@ -129,9 +129,17 @@ class OVModelForSentenceTransformer(OVModel):
 
         return model
 
-    def tokenize(self, texts: Union[List[str], List[Dict], List[Tuple[str, str]]], padding: Union[str, bool] = True) -> Dict[str, torch.Tensor]:
+    def tokenize(
+        self, texts: Union[List[str], List[Dict], List[Tuple[str, str]]], padding: Union[str, bool] = True
+    ) -> Dict[str, torch.Tensor]:
         """Tokenizes a text and maps tokens to token-ids"""
-        tokenizer_args = {"token": None, "trust_remote_code": False, "revision": None, "local_files_only": False, "model_max_length": 384}
+        tokenizer_args = {
+            "token": None,
+            "trust_remote_code": False,
+            "revision": None,
+            "local_files_only": False,
+            "model_max_length": 384,
+        }
         tokenizer = AutoTokenizer.from_pretrained(
             self.model_id,
             **tokenizer_args,
