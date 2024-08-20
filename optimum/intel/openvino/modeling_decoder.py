@@ -142,7 +142,7 @@ class OVBaseDecoderModel(OVModel):
         self._first_iter_beam_search = False
         self._second_iter_beam_search = False
         self.update_pkv_precision()
-        if self.is_dynamic:
+        if self.is_dynamic and not self.compile_only:
             self.model = self._reshape(self.model, -1, -1)
         is_stateful_supported = ensure_stateful_is_available(warn=False)
 
@@ -178,6 +178,9 @@ class OVBaseDecoderModel(OVModel):
 
         if use_cache ^ self.use_cache:
             raise_error(self.use_cache, use_cache, "use_cache")
+        
+        if self.compile_only:
+            self.request = self.model.create_infer_request()
 
         if not self.compile_only and enable_compilation:
             self.compile()
@@ -379,6 +382,8 @@ class OVBaseDecoderModel(OVModel):
 
     def compile(self):
         if self.request is None:
+            if self.compile_only:
+                self.request = self.model.create_infer_request()
             super().compile()
             self.request = self.request.create_infer_request()
 

@@ -175,16 +175,21 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
 
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
+        compile_only = kwargs.get(compile_only, True)
+
         # Load model from a local directory
         if os.path.isdir(model_id):
-            encoder = cls.load_model(os.path.join(model_id, encoder_file_name), quantization_config)
-            decoder = cls.load_model(os.path.join(model_id, decoder_file_name), quantization_config)
-            if use_cache:
-                decoder_with_past = cls.load_model(
-                    os.path.join(model_id, decoder_with_past_file_name), quantization_config
-                )
 
             model_save_dir = Path(model_id)
+            if not compile_only:
+                encoder = cls.load_model(os.path.join(model_id, encoder_file_name), quantization_config)
+                decoder = cls.load_model(os.path.join(model_id, decoder_file_name), quantization_config)
+                if use_cache:
+                    decoder_with_past = cls.load_model(
+                        os.path.join(model_id, decoder_with_past_file_name), quantization_config
+                    )
+            else:
+                encoder = cls._compile_model(os.path.join(model_id, encoder_file_name), kwargs.get("device"), kwargs.get("ov_config"), True, model_save_dir)
 
         # Load model from hub
         else:
@@ -210,11 +215,16 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 file_names[name] = model_cache_path
 
             model_save_dir = Path(model_cache_path).parent
-            encoder = cls.load_model(file_names["encoder"], quantization_config)
-            decoder = cls.load_model(file_names["decoder"], quantization_config)
-            if use_cache:
-                decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
-
+            if not compile_only:
+                encoder = cls.load_model(file_names["encoder"], quantization_config)
+                decoder = cls.load_model(file_names["decoder"], quantization_config)
+                if use_cache:
+                    decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
+            else:
+                encoder = cls._compile_model(file_names["encoder", kwargs.get("device"), kwargs.get("ov_config"), True, model_save_dir])
+                decoder = cls._compile_model(file_names["decoder", kwargs.get("device"), kwargs.get("ov_config"), True, model_save_dir])
+                if use_cache:
+                    decoder_with_past = cls._compile_model(file_names["decoder_with_past", kwargs.get("device"), kwargs.get("ov_config"), True, model_save_dir])
         try:
             generation_config = GenerationConfig.from_pretrained(
                 model_id,
@@ -288,6 +298,11 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             if use_cache:
                 task = task + "-with-past"
 
+        compile_only = kwargs.pop("compile_only", False)
+        if compile_only:
+            logger.warning("`compile_only` mode will be disabled because it does not support model export."
+                            "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`")
+            compile_only = False
         # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
         if load_in_8bit is None and not quantization_config:
             ov_config = None
@@ -315,6 +330,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             use_cache=use_cache,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
+            compile_only=compile_only,
             **kwargs,
         )
 
@@ -344,6 +360,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             sequence_length (`int`):
                 The sequence length.
         """
+        if self.compile_only:
+            logger.warning("`reshape()` does not supported in `compile_only` mode")
+            return
         logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.encoder_model = self._reshape(self.encoder_model, batch_size, sequence_length, is_decoder=False)
@@ -355,6 +374,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
+        if self.compile_only:
+            logger.warning("`half()` does not supported in `compile_only` mode")
+            return self
         apply_moc_transformations(self.encoder_model, cf=False)
         apply_moc_transformations(self.decoder_model, cf=False)
         compress_model_transformation(self.encoder_model)
