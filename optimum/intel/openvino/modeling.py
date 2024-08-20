@@ -440,8 +440,10 @@ class OVModelForFeatureExtraction(OVModel):
         **kwargs,
     ):
         if compile_only:
-            logger.warning("`compile_only` mode will be disabled because it does not support model export."
-                            "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`")
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
             compile_only = False
 
         save_dir = TemporaryDirectory()

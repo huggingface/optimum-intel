@@ -110,10 +110,12 @@ class OVBaseDecoderModel(OVModel):
 
         compile_only = kwargs.get("compile_only", False)
         enable_compilation = kwargs.get("compile", True)
-        kwargs["compile"] = False or compile_only # avoid extra compilation in the base class
+        kwargs["compile"] = False or compile_only  # avoid extra compilation in the base class
         if compile_only and not enable_compilation:
-            raise ValueError("`compile_only` mode does not support disabling compilation."
-                             "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`")
+            raise ValueError(
+                "`compile_only` mode does not support disabling compilation."
+                "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
+            )
 
         super().__init__(
             model,
@@ -178,7 +180,7 @@ class OVBaseDecoderModel(OVModel):
 
         if use_cache ^ self.use_cache:
             raise_error(self.use_cache, use_cache, "use_cache")
-        
+
         if self.compile_only:
             self.request = self.model.create_infer_request()
 
@@ -233,7 +235,9 @@ class OVBaseDecoderModel(OVModel):
         """
 
         if self.compile_only:
-            logger.warning("`compile_only` does not support model saving on disk, you already should have preconverted model")
+            logger.warning(
+                "`compile_only` does not support model saving on disk, you already should have preconverted model"
+            )
             return
         model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
@@ -275,8 +279,10 @@ class OVBaseDecoderModel(OVModel):
 
         compile_only = kwargs.pop("compile_only", False)
         if compile_only:
-            logger.warning("`compile_only` mode will be disabled because it does not support model export."
-                            "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`")
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
             compile_only = False
 
         if task is None:
@@ -339,9 +345,8 @@ class OVBaseDecoderModel(OVModel):
         height: int = None,
         width: int = None,
     ):
-        
         if self.compile_only:
-            logger.warning("model reshaping does not supported in `compile_only` mode")
+            logger.warning("model reshaping does not support `compile_only` mode")
             return model
 
         if height is not None:

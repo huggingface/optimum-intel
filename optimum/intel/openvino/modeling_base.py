@@ -77,8 +77,10 @@ class OVBaseModel(OptimizedModel):
         enable_compilation = kwargs.get("compile", True)
 
         if self.compile_only and not enable_compilation:
-            raise ValueError("`compile_only` mode does not support disabling compilation."
-                                "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`")
+            raise ValueError(
+                "`compile_only` mode does not support disabling compilation."
+                "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
+            )
 
         if self.is_dynamic and not self.compile_only:
             height = -1 if self.export_feature == "image-classification" else None
@@ -195,27 +197,38 @@ class OVBaseModel(OptimizedModel):
         return model
 
     @staticmethod
-    def _compile_model(file_name: Union[str, Path], device: Optional[str] = None, ov_config: Optional[Dict[str, str]] = None, allow_set_cache_dir=False, model_save_dir:Union[str, Path] = None):
+    def _compile_model(
+        file_name: Union[str, Path],
+        device: Optional[str] = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        allow_set_cache_dir=False,
+        model_save_dir: Union[str, Path] = None,
+    ):
         logger.info(f"Compiling the model to {device} ...")
         if isinstance(file_name, str):
             file_name = Path(file_name)
+        ov_config = ov_config or {}
 
         if model_save_dir is None:
             model_save_dir = file_name.parent
-        if (
-            "CACHE_DIR" not in ov_config.keys() and (allow_set_cache_dir
-            or (not str(model_save_dir).startswith(gettempdir()) and "gpu" in device.lower()))
+        if "CACHE_DIR" not in ov_config.keys() and (
+            allow_set_cache_dir
+            or (not str(model_save_dir).startswith(gettempdir()) and (device is not None and "gpu" in device.lower()))
         ):
             # Set default CACHE_DIR only if it is not set, if the model is not in a temporary directory, and device is GPU
             cache_dir = Path(model_save_dir).joinpath("model_cache")
             ov_config["CACHE_DIR"] = str(cache_dir)
             logger.info(f"Setting OpenVINO CACHE_DIR to {str(cache_dir)}")
         if file_name.suffix == ".onnx":
-            compiled_model = core.compile_model(file_name, device.upper() if device is not None else device, config=ov_config)
+            compiled_model = core.compile_model(
+                file_name, device.upper() if device is not None else device, config=ov_config
+            )
         else:
-            compiled_model = core.compile_model(file_name, device.upper() if device is not None else device, config=ov_config)
+            compiled_model = core.compile_model(
+                file_name, device.upper() if device is not None else device, config=ov_config
+            )
         if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
-            logger.info(f"{device} SUPPORTED_PROPERTIES:")
+            logger.info(f"{device if device is not None else 'AUTO'} SUPPORTED_PROPERTIES:")
             _print_compiled_model_properties(compiled_model)
         return compiled_model
 
@@ -230,7 +243,9 @@ class OVBaseModel(OptimizedModel):
         """
 
         if self.compile_only:
-            logger.warning("save_pretrained does not work for `compile_only` mode")
+            logger.warning(
+                "`compile_only` does not support model saving on disk, you already should have preconverted model"
+            )
             return
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(self.model, dst_path, compress_to_fp16=False)
@@ -320,7 +335,13 @@ class OVBaseModel(OptimizedModel):
         if not compile_only:
             model = cls.load_model(model_cache_path, quantization_config=quantization_config)
         else:
-            model = cls._compile_model(model_cache_path, kwargs.get("device"), kwargs.get("ov_config"), allow_set_cache_dir=True, model_save_dir=model_cache_path.parent)
+            model = cls._compile_model(
+                model_cache_path,
+                kwargs.get("device"),
+                kwargs.get("ov_config"),
+                allow_set_cache_dir=True,
+                model_save_dir=model_cache_path.parent,
+            )
 
         try:
             generation_config = GenerationConfig.from_pretrained(
@@ -526,8 +547,10 @@ class OVBaseModel(OptimizedModel):
 
         compile_only = kwargs.pop("compile_only", False)
         if compile_only:
-            logger.warning("`compile_only` mode will be disabled because it does not support model export."
-                            "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`")
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
             compile_only = False
 
         # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
@@ -579,10 +602,11 @@ class OVBaseModel(OptimizedModel):
         save_dir_path = Path(save_dir.name)
         compile_only = kwargs.pop("compile_only", False)
         if compile_only:
-            logger.warning("`compile_only` mode will be disabled because it does not support model export."
-                            "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`")
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
             compile_only = False
-
 
         # Export the model to the ONNX format
         export(
@@ -660,7 +684,7 @@ class OVBaseModel(OptimizedModel):
                 The image width.
         """
         if self.compile_only:
-            logger.warning("`reshape()` does not supported in `compile_only` mode")
+            logger.warning("`reshape()` does not support `compile_only` mode")
             return self
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
@@ -672,7 +696,7 @@ class OVBaseModel(OptimizedModel):
         Converts all the model weights to FP16
         """
         if self.compile_only:
-            logger.warning("`half()` does not supported in `compile_only` mode")
+            logger.warning("`half()` does not support `compile_only` mode")
             return self
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)

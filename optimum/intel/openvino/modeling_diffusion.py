@@ -176,6 +176,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             save_directory (`str` or `Path`):
                 The directory where to save the model files
         """
+        if self.compile_only:
+            logger.warning(
+                "`compile_only` does not support model saving on disk, you already should have preconverted model"
+            )
+            return
+
         save_directory = Path(save_directory)
 
         sub_models_to_save = {
@@ -307,7 +313,11 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         elif compile_only:
             unet = cls._compile_model(unet_path, kwargs.get("device"), kwargs.get("ov_config"), True, model_save_dir)
             for key, value in components.items():
-                components[key] = cls._compile_model(value, kwargs.get("device"), kwargs.get("ov_config"), True, model_save_dir)if value.is_file() else None
+                components[key] = (
+                    cls._compile_model(value, kwargs.get("device"), kwargs.get("ov_config"), True, model_save_dir)
+                    if value.is_file()
+                    else None
+                )
         else:
             # Load uncompressed models to apply hybrid quantization further
             unet = cls.load_model(unet_path)
@@ -371,10 +381,11 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         compile_only = kwargs.pop("compile_only", False)
 
         if compile_only:
-            logger.warning("`compile_only` mode will be disabled because it does not support model export."
-                            "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`")
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
             compile_only = False
-
 
         main_export(
             model_name_or_path=model_id,
@@ -413,7 +424,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     def to(self, device: str):
         if self.compile_only:
-            logger.warning("`to()` does not supported in `compile_only` mode")
+            logger.warning("`to()` does not support `compile_only` mode")
             return self
 
         if isinstance(device, str):
@@ -538,7 +549,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         num_images_per_prompt: int = -1,
     ):
         if self.compile_only:
-            logger.warning("`reshape()` not supported in `compile_only` mode")
+            logger.warning("`reshape()` not support `compile_only` mode")
             return self
 
         self.is_dynamic = -1 in {batch_size, height, width, num_images_per_prompt}
@@ -574,7 +585,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
         if self.compile_only:
-            logger.warning("`half()` not supported in `compile_only` mode")
+            logger.warning("`half()` does not support `compile_only` mode")
             return self
 
         compress_model_transformation(self.vae_decoder.model)
@@ -587,7 +598,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     def clear_requests(self):
         if self.compile_only:
-            logger.warning("`clear_requests()` not supported in `compile_only` mode")
+            logger.warning("`clear_requests()` does not support in `compile_only` mode")
             return
         self.vae_decoder.request = None
         self.unet.request = None
