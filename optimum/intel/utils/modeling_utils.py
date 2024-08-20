@@ -162,7 +162,7 @@ def bind_cores_for_best_perf():
             nodes = numa.get_max_node() + 1
             rank_per_node = math.ceil(world_size / nodes)
             num_cpus_per_nodes = int(psutil.cpu_count(logical=False) / nodes)
-            node_id = int(rank_id / rank_per_node)
+            node_id = int((rank_id+1) / rank_per_node)
             rank_offset_per_node = rank_id % rank_per_node
             if os.getenv("OMP_NUM_THREADS") is None:
                 # set OMP_NUM_THREADS to num of physical cores per socket
