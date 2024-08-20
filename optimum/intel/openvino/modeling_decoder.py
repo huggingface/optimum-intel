@@ -108,8 +108,12 @@ class OVBaseDecoderModel(OVModel):
                 "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
             )
 
+        compile_only = kwargs.get("compile_only", False)
         enable_compilation = kwargs.get("compile", True)
-        kwargs["compile"] = False  # avoid extra compilation in the base class
+        kwargs["compile"] = False or compile_only # avoid extra compilation in the base class
+        if compile_only and not enable_compilation:
+            raise ValueError("`compile_only` mode does not support disabling compilation."
+                             "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`")
 
         super().__init__(
             model,
@@ -175,11 +179,11 @@ class OVBaseDecoderModel(OVModel):
         if use_cache ^ self.use_cache:
             raise_error(self.use_cache, use_cache, "use_cache")
 
-        if enable_compilation:
+        if not self.compile_only and enable_compilation:
             self.compile()
 
     def update_pkv_precision(self, force_fp32=False):
-        if not self.use_cache or self.stateful:
+        if not self.use_cache or self.stateful or self.compile_only:
             return
 
         pkv_precision = Type.f32
@@ -224,6 +228,10 @@ class OVBaseDecoderModel(OVModel):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
+
+        if self.compile_only:
+            logger.warning("`compile_only` does not support model saving on disk, you already should have preconverted model")
+            return
         model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
@@ -261,6 +269,12 @@ class OVBaseDecoderModel(OVModel):
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
         cls._model_save_dir_tempdirectory_instance = save_dir
+
+        compile_only = kwargs.pop("compile_only", False)
+        if compile_only:
+            logger.warning("`compile_only` mode will be disabled because it does not support model export."
+                            "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`")
+            compile_only = False
 
         if task is None:
             task = cls.export_feature
@@ -310,6 +324,7 @@ class OVBaseDecoderModel(OVModel):
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
             trust_remote_code=trust_remote_code,
+            compile_only=compile_only,
             **kwargs,
         )
 
@@ -321,6 +336,11 @@ class OVBaseDecoderModel(OVModel):
         height: int = None,
         width: int = None,
     ):
+        
+        if self.compile_only:
+            logger.warning("model reshaping does not supported in `compile_only` mode")
+            return model
+
         if height is not None:
             logger.warning(f"`height` set to `{height}` will be ignored during reshaping operation.")
 
@@ -748,6 +768,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
+        compile_only: bool = False,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
@@ -766,7 +787,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
-        model = cls.load_model(model_cache_path)
+        if not compile_only:
+            model = cls.load_model(model_cache_path)
+        else:
+            model = None
 
         model_type = config.model_type.replace("_", "-")
         export_transformers_version = Version(
@@ -808,6 +832,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             config=config,
             model_save_dir=model_cache_path.parent,
             compile=enable_compilation,
+            compile_only=compile_only,
             quantization_config=quantization_config,
             **kwargs,
         )
