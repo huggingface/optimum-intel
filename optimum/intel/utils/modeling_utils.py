@@ -12,13 +12,13 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import os
 import re
 from pathlib import Path
 from typing import List, Optional, Union
 
 import torch
 from huggingface_hub import HfApi, HfFolder
-import os
 
 
 MULTI_QUERY_ATTN_MODELS = {"falcon", "gpt_bigcode"}
@@ -112,6 +112,7 @@ def _find_files_matching_pattern(
 
     return files
 
+
 def get_int_from_env(env_keys, default):
     """Returns the first positive env value found in the `env_keys` list or the default."""
     for e in env_keys:
@@ -120,8 +121,9 @@ def get_int_from_env(env_keys, default):
             return val
     return default
 
+
 def bind_cores_for_best_perf():
-    """    
+    """
     Set number of threads per rank, numa cpu affinity and numa memory binding if not already set for better OOB performance.
     Works for wold_size >= 1 and rank >= 1
 
@@ -138,31 +140,33 @@ def bind_cores_for_best_perf():
         model_inputs = tokenizer(input_sentence, return_tensors="pt")
         generation_kwargs = dict(max_new_tokens=500)
         generated_ids = model.generate(**model_inputs, **generation_kwargs)
-    
+
     Returns:
         None
-    
+
     """
-    
+
     import importlib.util
     import platform
+
     system = platform.system()
     if system == "Linux":
         if importlib.util.find_spec("numa") is not None:
+            import math
+
             import numa
             import psutil
-            import math 
 
-            world_size= get_int_from_env(
-                    ["WORLD_SIZE", "PMI_SIZE", "OMPI_COMM_WORLD_SIZE", "MV2_COMM_WORLD_SIZE"], 1
-                )
-            rank_id= get_int_from_env(
-                    ["LOCAL_RANK", "MPI_LOCALRANKID", "OMPI_COMM_WORLD_LOCAL_RANK", "MV2_COMM_WORLD_LOCAL_RANK"], 0
-                )
+            local_size = get_int_from_env(
+                ["MPI_LOCALNRANKS", "OMPI_COMM_WORLD_LOCAL_SIZE", "MV2_COMM_WORLD_LOCAL_SIZE"], 1
+            )
+            rank_id = get_int_from_env(
+                ["LOCAL_RANK", "MPI_LOCALRANKID", "OMPI_COMM_WORLD_LOCAL_RANK", "MV2_COMM_WORLD_LOCAL_RANK"], 0
+            )
             nodes = numa.get_max_node() + 1
-            rank_per_node = math.ceil(world_size / nodes)
+            rank_per_node = math.ceil(local_size / nodes)
             num_cpus_per_nodes = int(psutil.cpu_count(logical=False) / nodes)
-            node_id = int((rank_id+1) / rank_per_node)
+            node_id = int(rank_id / rank_per_node)
             rank_offset_per_node = rank_id % rank_per_node
             if os.getenv("OMP_NUM_THREADS") is None:
                 # set OMP_NUM_THREADS to num of physical cores per socket
@@ -174,18 +178,15 @@ def bind_cores_for_best_perf():
             if len(numa.get_membind()) == nodes:
                 # if numa memory binding is not set, set it to the node where the rank is running
                 numa.set_membind([node_id])
-        
+
             torch.set_num_threads(num_cpus_per_rank)
 
-
             if len(numa.get_affinity(0)) == psutil.cpu_count(logical=True):
-                #if numa affinity is unset (default value is set to all logical cores) set it to the physical cores assigned to the rank
+                # if numa affinity is unset (default value is set to all logical cores) set it to the physical cores assigned to the rank
                 cpu_start = num_cpus_per_rank * rank_offset_per_node
                 numa.set_affinity(
                     0,
-                    list(numa.node_to_cpus(node_id))[
-                        cpu_start : cpu_start + num_cpus_per_rank
-                    ],
+                    list(numa.node_to_cpus(node_id))[cpu_start : cpu_start + num_cpus_per_rank],
                 )
             print(f"affinity={numa.get_affinity(0)}, membind = {numa.get_membind()}")
         else:
