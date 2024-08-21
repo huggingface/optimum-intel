@@ -189,7 +189,7 @@ def _check_default_4bit_configs(model_id_or_path: str):
             return _DEFAULT_4BIT_CONFIGS[original_model_name]
 
     for model_id, config in _DEFAULT_4BIT_CONFIGS.items():
-        short_id = model_id.split("/")[1]
+        short_id = model_id.split("/")[-1]
         if model_path.name == short_id:
             return config
 
