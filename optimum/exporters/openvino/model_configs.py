@@ -932,6 +932,10 @@ class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
     library_name="transformers",
 )
 class MistralOpenVINOConfig(MistralOnnxConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
+        num_key_value_heads="num_key_value_heads", allow_new=True, num_attention_heads="num_hidden_layers"
+    )
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
