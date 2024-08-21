@@ -12,16 +12,24 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import logging
+import math
 import os
+import platform
 import re
 from pathlib import Path
 from typing import List, Optional, Union
 
+import psutil
 import torch
 from huggingface_hub import HfApi, HfFolder
 
+from .import_utils import is_numa_available
+
 
 MULTI_QUERY_ATTN_MODELS = {"falcon", "gpt_bigcode"}
+
+logger = logging.getLogger(__name__)
 
 
 def get_model_device(model: torch.nn.Module) -> torch.device:
@@ -145,17 +153,10 @@ def bind_cores_for_best_perf():
         None
 
     """
-
-    import importlib.util
-    import platform
-
     system = platform.system()
     if system == "Linux":
-        if importlib.util.find_spec("numa") is not None:
-            import math
-
+        if is_numa_available():
             import numa
-            import psutil
 
             local_size = get_int_from_env(
                 ["MPI_LOCALNRANKS", "OMPI_COMM_WORLD_LOCAL_SIZE", "MV2_COMM_WORLD_LOCAL_SIZE"], 1
@@ -169,12 +170,11 @@ def bind_cores_for_best_perf():
             node_id = int(rank_id / rank_per_node)
             rank_offset_per_node = rank_id % rank_per_node
             if os.getenv("OMP_NUM_THREADS") is None:
-                # set OMP_NUM_THREADS to num of physical cores per socket
                 num_cpus_per_rank = max(int(num_cpus_per_nodes / rank_per_node), 1)
-                print("setting OMP_NUM_THREADS to", num_cpus_per_rank)
+                logger.info(f"Setting OMP_NUM_THREADS to {num_cpus_per_rank} for better performance")
             else:
                 num_cpus_per_rank = int(os.getenv("OMP_NUM_THREADS"))
-                print("OMP_NUM_THREADS already set to ", num_cpus_per_rank)
+                logger.info(f"OMP_NUM_THREADS already set to  {num_cpus_per_rank}")
             if len(numa.get_membind()) == nodes:
                 # if numa memory binding is not set, set it to the node where the rank is running
                 numa.set_membind([node_id])
@@ -188,8 +188,9 @@ def bind_cores_for_best_perf():
                     0,
                     list(numa.node_to_cpus(node_id))[cpu_start : cpu_start + num_cpus_per_rank],
                 )
-            print(f"affinity={numa.get_affinity(0)}, membind = {numa.get_membind()}")
+            logger.info(f"affinity={numa.get_affinity(0)}, membind = {numa.get_membind()}")
         else:
-            print("numa module not found, skipping binding cores")
+            logger.warning("numa module not found, skipping binding cores")
+
     else:
-        print("OS not supported, skipping binding cores")
+        logger.error("bind_cores_for_best_perf: OS not supported, skipping binding cores")
