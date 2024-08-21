@@ -80,6 +80,7 @@ MODEL_NAMES = {
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "minicpm": "katuni4ka/tiny-random-minicpm",
     "mistral": "echarlaix/tiny-random-mistral",
+    "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
     "mixtral": "TitanML/tiny-mixtral",
     "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
     "mobilenet_v1": "google/mobilenet_v1_0.75_192",
