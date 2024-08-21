@@ -129,7 +129,7 @@ class OVBaseDecoderModel(OVModel):
         )
         self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
-        model_has_sinks = model_has_state(self.model)
+        model_has_sinks = model_has_state(self.model, compile_only)
         self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs) or model_has_sinks
         stateful = kwargs.pop("stateful", None)  # stateful model only if it is converted with stateful=True
         self.stateful = model_has_sinks
@@ -137,7 +137,9 @@ class OVBaseDecoderModel(OVModel):
         self.num_pkv = 2
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
-        self._original_model = self.model.clone()  # keep original model for serialization
+        self._original_model = (
+            self.model.clone() if not compile_only else None
+        )  # keep original model for serialization
         self._pkv_precision = Type.f32
         self.next_beam_idx = None
         self._past_length = 0
@@ -800,7 +802,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if not compile_only:
             model = cls.load_model(model_cache_path)
         else:
-            model = None
+            model = cls._compile_model(
+                model_cache_path, kwargs.get("device", "CPU"), kwargs.get("ov_config"), True, model_cache_path.parent
+            )
 
         model_type = config.model_type.replace("_", "-")
         export_transformers_version = Version(
@@ -852,6 +856,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 raise ImportError(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
                 )
+
+            if compile_only:
+                logger.warning(
+                    "Quantization is not available for `compile_only` mode, quantization config will be ignored"
+                )
+                return causal_model
 
             from optimum.intel.openvino.quantization import OVQuantizer
 

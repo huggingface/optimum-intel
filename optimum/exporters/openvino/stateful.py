@@ -24,9 +24,11 @@ from optimum.exporters import TasksManager
 from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version, is_transformers_version
 
 
-def model_has_state(ov_model: ov.Model):
-    # TODO: Provide a better way based on the variables availability, but OV Python API doesn't expose required methods
-    return len(ov_model.get_sinks()) > 0
+def model_has_state(ov_model: ov.Model, is_compiled=False):
+    if not is_compiled:
+        # TODO: Provide a better way based on the variables availability, but OV Python API doesn't expose required methods
+        return len(ov_model.get_sinks()) > 0
+    return len(ov_model.query_state()) > 0
 
 
 def model_has_input_output_name(ov_model: ov.Model, name: str):

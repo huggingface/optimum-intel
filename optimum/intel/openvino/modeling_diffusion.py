@@ -241,7 +241,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         model_id = str(model_id)
         patterns = set(config.keys())
         sub_models_names = patterns.intersection({"feature_extractor", "tokenizer", "tokenizer_2", "scheduler"})
-
         if not os.path.isdir(model_id):
             patterns.update({"vae_encoder", "vae_decoder"})
             allow_patterns = {os.path.join(k, "*") for k in patterns if not k.startswith("_")}
@@ -311,10 +310,17 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             for key, value in components.items():
                 components[key] = cls.load_model(value, quantization_config) if value.is_file() else None
         elif compile_only:
-            unet = cls._compile_model(unet_path, kwargs.get("device"), kwargs.get("ov_config"), True, model_save_dir)
+            ov_config = kwargs.get("ov_config", {})
+            device = kwargs.get("device", "CPU")
+            vae_ov_conifg = {**ov_config}
+            if "GPU" in device.upper() and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg:
+                vae_ov_conifg["INFERENCE_PRECISION_HINT"] = "f32"
+            unet = cls._compile_model(unet_path, device, ov_config, True, model_save_dir)
             for key, value in components.items():
                 components[key] = (
-                    cls._compile_model(value, kwargs.get("device"), kwargs.get("ov_config"), True, model_save_dir)
+                    cls._compile_model(
+                        value, device, ov_config if "vae" not in key else vae_ov_conifg, True, model_save_dir
+                    )
                     if value.is_file()
                     else None
                 )

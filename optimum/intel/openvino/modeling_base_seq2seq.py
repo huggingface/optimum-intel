@@ -191,11 +191,26 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             else:
                 encoder = cls._compile_model(
                     os.path.join(model_id, encoder_file_name),
-                    kwargs.get("device"),
+                    kwargs.get("device", "CPU"),
                     kwargs.get("ov_config"),
                     True,
                     model_save_dir,
                 )
+                decoder = cls._compile_model(
+                    os.path.join(model_id, decoder_file_name),
+                    kwargs.get("device", "CPU"),
+                    kwargs.get("ov_config"),
+                    True,
+                    model_save_dir,
+                )
+                if use_cache:
+                    decoder_with_past = cls._compile_model(
+                        os.path.join(model_id, decoder_with_past_file_name),
+                        kwargs.get("device", "CPU"),
+                        kwargs.get("ov_config"),
+                        True,
+                        model_save_dir,
+                    )
 
         # Load model from hub
         else:
@@ -228,15 +243,15 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
             else:
                 encoder = cls._compile_model(
-                    file_names["encoder"], kwargs.get("device"), kwargs.get("ov_config"), True, model_save_dir
+                    file_names["encoder"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), True, model_save_dir
                 )
                 decoder = cls._compile_model(
-                    file_names["decoder"], kwargs.get("device"), kwargs.get("ov_config"), True, model_save_dir
+                    file_names["decoder"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), True, model_save_dir
                 )
                 if use_cache:
                     decoder_with_past = cls._compile_model(
                         file_names["decoder_with_past"],
-                        kwargs.get("device"),
+                        kwargs.get("device", "CPU"),
                         kwargs.get("ov_config"),
                         True,
                         model_save_dir,
