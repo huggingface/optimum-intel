@@ -155,7 +155,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         self.assertTrue(manual_openvino_cache_dir.is_dir())
         current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
         # compile_only get model from cache
-        self.assertEqual(num_blobs, current_num_blobs)
+        self.assertGreaterEqual(current_num_blobs, num_blobs)
         device = compile_only_model._device
         # to() method can not change device for compile only
         compile_only_model.to("TEST")

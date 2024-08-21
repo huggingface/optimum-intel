@@ -271,6 +271,10 @@ class OVQuantizer(OptimumQuantizer):
                 ov_config.quantization_config = OVQuantizationConfig()
 
         if isinstance(self.model, OVBaseModel):
+            if self.model.compile_only:
+                raise ValueError(
+                    "Quantization for `compile_only` model is not supported. Please load model with `compile_only=False`"
+                )
             self._quantize_ovbasemodel(
                 ov_config,
                 save_directory,
