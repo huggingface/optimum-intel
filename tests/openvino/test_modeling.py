@@ -657,6 +657,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "qwen2-moe",
             "arctic",
             "exaone",
+            "mistral-nemo",
         )
 
     GENERATION_LENGTH = 100

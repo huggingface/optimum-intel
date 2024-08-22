@@ -315,8 +315,6 @@ def main_export(
         if dtype in [torch.float16, torch.bfloat16]:
             patch_16bit = True
         loading_kwargs["torch_dtype"] = dtype
-
-    logger.warning(loading_kwargs)
     # Patch the modules to export of GPTQ models w/o GPU
     if do_gptq_patching:
         torch.set_default_dtype(torch.float32)
