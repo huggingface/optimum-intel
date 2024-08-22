@@ -179,13 +179,19 @@ def _check_default_4bit_configs(model_id_or_path: str):
     if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
         return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
 
-    config_path = Path(model_id_or_path) / "config.json"
+    model_path = Path(model_id_or_path)
+    config_path = model_path / "config.json"
     if config_path.exists():
         with config_path.open("r") as config_f:
             config = json.load(config_f)
             original_model_name = config.get("_name_or_path", "")
         if original_model_name in _DEFAULT_4BIT_CONFIGS:
             return _DEFAULT_4BIT_CONFIGS[original_model_name]
+
+    for model_id, config in _DEFAULT_4BIT_CONFIGS.items():
+        short_id = model_id.split("/")[-1]
+        if model_path.name == short_id:
+            return config
 
     return None
 

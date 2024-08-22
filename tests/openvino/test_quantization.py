@@ -903,6 +903,13 @@ class OVQuantizationConfigTest(unittest.TestCase):
             value = prepared_config.__getattribute__(field_name)
             self.assertEqual(value, reference_value)
 
+    def test_for_no_short_id_duplicates(self):
+        short_ids = set()
+        for model_id in _DEFAULT_4BIT_CONFIGS.keys():
+            short_id = model_id.split("/")[1]
+            assert short_id not in short_ids
+            short_ids.add(short_id)
+
 
 class InferRequestWrapperTest(unittest.TestCase):
     MODEL_ID = ("openai/whisper-tiny.en",)
