@@ -25,14 +25,29 @@ from .modeling import MODEL_START_DOCSTRING, OVModel
 class OVModelForSentenceTransformer(OVModel):
     export_feature = "feature-extraction"
 
-    def __init__(self, model=None, config=None, model_id=None, **kwargs):
+    def __init__(self, model=None, config=None, orig_model_id_or_path=None, **kwargs):
         super().__init__(model, config, **kwargs)
 
         self.encode = MethodType(SentenceTransformer.encode, self)
         self._text_length = MethodType(SentenceTransformer._text_length, self)
         self.default_prompt_name = None
         self.truncate_dim = None
-        self.model_id = model_id
+        self.orig_model_id_or_path = orig_model_id_or_path
+        self.tokenizer_args = {
+            "token": None,
+            "trust_remote_code": False,
+            "revision": None,
+            "local_files_only": False,
+            "model_max_length": 384,
+        }
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.orig_model_id_or_path,
+            **self.tokenizer_args,
+        )
+
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        super()._save_pretrained(save_directory)
+        self.tokenizer.save_pretrained(save_directory)
 
     def forward(self, inputs: Dict[str, torch.Tensor]):
         self.compile()
@@ -122,6 +137,7 @@ class OVModelForSentenceTransformer(OVModel):
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
+            orig_model_id_or_path=model_id,
             **kwargs,
         )
 
@@ -133,18 +149,6 @@ class OVModelForSentenceTransformer(OVModel):
         self, texts: Union[List[str], List[Dict], List[Tuple[str, str]]], padding: Union[str, bool] = True
     ) -> Dict[str, torch.Tensor]:
         """Tokenizes a text and maps tokens to token-ids"""
-        tokenizer_args = {
-            "token": None,
-            "trust_remote_code": False,
-            "revision": None,
-            "local_files_only": False,
-            "model_max_length": 384,
-        }
-        tokenizer = AutoTokenizer.from_pretrained(
-            self.model_id,
-            **tokenizer_args,
-        )
-
         output = {}
         if isinstance(texts[0], str):
             to_tokenize = [texts]
@@ -167,12 +171,12 @@ class OVModelForSentenceTransformer(OVModel):
         to_tokenize = [[str(s).strip() for s in col] for col in to_tokenize]
 
         output.update(
-            tokenizer(
+            self.tokenizer(
                 *to_tokenize,
                 padding=padding,
                 truncation="longest_first",
                 return_tensors="pt",
-                max_length=tokenizer_args["model_max_length"],
+                max_length=self.tokenizer_args["model_max_length"],
             )
         )
         return output
