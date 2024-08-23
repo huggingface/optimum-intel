@@ -153,44 +153,40 @@ def bind_cores_for_best_perf():
         None
 
     """
-    system = platform.system()
-    if system == "Linux":
-        if is_numa_available():
-            import numa
+    if platform.system() != "Linux":
+        logger.error("bind_cores_for_best_perf: OS not supported, this function can only be run on Linux systems.")
+        raise OSError("bind_cores_for_best_perf: OS not supported, this function can only be run on Linux systems.")
+    if not is_numa_available():
+        logger.error("'numa' module not found")
+        raise ImportError("'numa' module not found, install with 'pip install numa'")
+    import numa
 
-            local_size = get_int_from_env(
-                ["MPI_LOCALNRANKS", "OMPI_COMM_WORLD_LOCAL_SIZE", "MV2_COMM_WORLD_LOCAL_SIZE"], 1
-            )
-            rank_id = get_int_from_env(
-                ["LOCAL_RANK", "MPI_LOCALRANKID", "OMPI_COMM_WORLD_LOCAL_RANK", "MV2_COMM_WORLD_LOCAL_RANK"], 0
-            )
-            nodes = numa.get_max_node() + 1
-            rank_per_node = math.ceil(local_size / nodes)
-            num_cpus_per_nodes = int(psutil.cpu_count(logical=False) / nodes)
-            node_id = int(rank_id / rank_per_node)
-            rank_offset_per_node = rank_id % rank_per_node
-            if os.getenv("OMP_NUM_THREADS") is None:
-                num_cpus_per_rank = max(int(num_cpus_per_nodes / rank_per_node), 1)
-                logger.info(f"Setting OMP_NUM_THREADS to {num_cpus_per_rank} for better performance")
-            else:
-                num_cpus_per_rank = int(os.getenv("OMP_NUM_THREADS"))
-                logger.info(f"OMP_NUM_THREADS already set to  {num_cpus_per_rank}")
-            if len(numa.get_membind()) == nodes:
-                # if numa memory binding is not set, set it to the node where the rank is running
-                numa.set_membind([node_id])
-
-            torch.set_num_threads(num_cpus_per_rank)
-
-            if len(numa.get_affinity(0)) == psutil.cpu_count(logical=True):
-                # if numa affinity is unset (default value is set to all logical cores) set it to the physical cores assigned to the rank
-                cpu_start = num_cpus_per_rank * rank_offset_per_node
-                numa.set_affinity(
-                    0,
-                    list(numa.node_to_cpus(node_id))[cpu_start : cpu_start + num_cpus_per_rank],
-                )
-            logger.info(f"affinity={numa.get_affinity(0)}, membind = {numa.get_membind()}")
-        else:
-            logger.warning("numa module not found, skipping binding cores")
-
+    local_size = get_int_from_env(["MPI_LOCALNRANKS", "OMPI_COMM_WORLD_LOCAL_SIZE", "MV2_COMM_WORLD_LOCAL_SIZE"], 1)
+    rank_id = get_int_from_env(
+        ["LOCAL_RANK", "MPI_LOCALRANKID", "OMPI_COMM_WORLD_LOCAL_RANK", "MV2_COMM_WORLD_LOCAL_RANK"], 0
+    )
+    nodes = numa.get_max_node() + 1
+    rank_per_node = math.ceil(local_size / nodes)
+    num_cpus_per_nodes = int(psutil.cpu_count(logical=False) / nodes)
+    node_id = int(rank_id / rank_per_node)
+    rank_offset_per_node = rank_id % rank_per_node
+    if os.getenv("OMP_NUM_THREADS") is None:
+        num_cpus_per_rank = max(int(num_cpus_per_nodes / rank_per_node), 1)
+        logger.info(f"Setting OMP_NUM_THREADS to {num_cpus_per_rank} for better performance")
     else:
-        logger.error("bind_cores_for_best_perf: OS not supported, skipping binding cores")
+        num_cpus_per_rank = int(os.getenv("OMP_NUM_THREADS"))
+        logger.info(f"OMP_NUM_THREADS already set to  {num_cpus_per_rank}")
+    if len(numa.get_membind()) == nodes:
+        # if numa memory binding is not set, set it to the node where the rank is running
+        numa.set_membind([node_id])
+
+    torch.set_num_threads(num_cpus_per_rank)
+
+    if len(numa.get_affinity(0)) == psutil.cpu_count(logical=True):
+        # if numa affinity is unset (default value is set to all logical cores) set it to the physical cores assigned to the rank
+        cpu_start = num_cpus_per_rank * rank_offset_per_node
+        numa.set_affinity(
+            0,
+            list(numa.node_to_cpus(node_id))[cpu_start : cpu_start + num_cpus_per_rank],
+        )
+    logger.info(f"affinity={numa.get_affinity(0)}, membind = {numa.get_membind()}")
