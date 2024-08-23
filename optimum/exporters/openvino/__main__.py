@@ -31,13 +31,15 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.openvino.convert import export_from_model
 from optimum.intel.utils.import_utils import (
+    is_nncf_available,
     is_openvino_tokenizers_available,
     is_openvino_version,
-    is_transformers_version, is_nncf_available,
+    is_transformers_version,
 )
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-from .utils import clear_class_registry, _MAX_UNCOMPRESSED_SIZE
+from .utils import _MAX_UNCOMPRESSED_SIZE, clear_class_registry
+
 
 if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
@@ -449,15 +451,13 @@ def main_export(
             continue
 
         if not is_nncf_available():
-            raise ImportError(
-                "Quantization of the weights requires nncf, please install it with `pip install nncf`"
-            )
+            raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
 
         from optimum.intel.openvino.quantization import _weight_only_quantization
 
         _weight_only_quantization(submodel, quantization_config)
 
-        compressed_submodel_path = Path(str(submodel_path).replace(".xml", "_compressed.xml"))
+        compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
         save_model(submodel, compressed_submodel_path, compress_to_fp16=ov_config and ov_config.dtype == "fp16")
         compressed_submodel_paths.append((submodel_path, compressed_submodel_path))
 
