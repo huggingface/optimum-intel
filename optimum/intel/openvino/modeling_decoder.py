@@ -404,7 +404,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> Dict:
         batch_size = input_ids.shape[0]
-        if self.config.model_type == "bloom":
+        if self.config.model_type == "bloom" and is_transformers_version("<", "4.44"):
             batch_size *= self.config.num_attention_heads
 
         inputs = {}
@@ -619,7 +619,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     shape = input_tensor.shape if isinstance(input_tensor, Tensor) else list(input_tensor.shape)
                     dtype = input_tensor.element_type if isinstance(input_tensor, Tensor) else Type(input_tensor.dtype)
                     upd_batch_size = indicies.shape[0]
-                    if self.config.model_type == "bloom":
+                    if self.config.model_type == "bloom" and is_transformers_version("<", "4.44"):
                         upd_batch_size *= self.config.num_attention_heads
                     shape[
                         (
@@ -632,9 +632,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         upd_model_inputs["input_ids"] = unique_input_ids
         if "beam_idx" in model_inputs:
             beam_range = (
-                unique_input_ids.shape[0]
-                if self.config.model_type != "bloom"
-                else unique_input_ids.shape[0] * self.config.num_attention_heads
+                unique_input_ids.shape[0] * self.config.num_attention_heads
+                if (self.config.model_type == "bloom" and is_transformers_version("<", "4.44"))
+                else unique_input_ids.shape[0]
             )
             beam_idx = np.arange(beam_range, dtype=int)
             upd_model_inputs["beam_idx"] = beam_idx
@@ -781,7 +781,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         model = cls.load_model(model_cache_path)
 
         model_type = config.model_type.replace("_", "-")
-        if model_type == "bloom":
+        if model_type == "bloom" and is_transformers_version("<", "4.44"):
             init_cls = OVBloomForCausalLM
         elif model_type == "gpt-bigcode":
             init_cls = OVGPTBigCodeForCausalLM
