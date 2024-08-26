@@ -11,6 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import inspect
 
 # ruff: noqa
 
@@ -22,6 +23,7 @@ from collections import defaultdict
 from enum import Enum
 from functools import partial
 from typing import Union
+
 import pytest
 import evaluate
 import numpy as np
@@ -538,76 +540,80 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(0, num_int8)
 
     def test_ovmodel_load_large_model_with_default_compressed_weights(self):
-        with unittest.mock.patch("torch.nn.Module.parameters") as model_parameters:
-            mock_tensor = unittest.mock.Mock()
-            mock_tensor.numel = lambda: 2000000000
-            mock_tensor.requires_grad = True
-            model_parameters.return_value = [mock_tensor]
-            with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
-                with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
-                    _ = OVModelForCausalLM.from_pretrained(
-                        MODEL_NAMES["llama"], export=True, compile=False, use_cache=False
-                    )
-                    save_model_patch.assert_called_with(
-                        unittest.mock.ANY,
-                        unittest.mock.ANY,
-                        ov_config=OVConfig(quantization_config={"bits": 8}),
-                        library_name="transformers",
-                    )
+        def main_export_in_stacktrace(*args, **kwargs):
+            # Compression was called from `main_export`
+            self.assertTrue(inspect.stack()[5].function == "main_export")
+
+        with unittest.mock.patch(
+            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+        ) as ov_constant_shape:
+            ov_constant_shape.return_value = (2000000000,)
+            with unittest.mock.patch(
+                "nncf.compress_weights", side_effect=main_export_in_stacktrace
+            ) as compress_weights_patch:
+                _ = OVModelForCausalLM.from_pretrained(
+                    MODEL_NAMES["llama"], export=True, compile=False, use_cache=False
+                )
+                compression_params = {
+                    "mode": nncf.CompressWeightsMode.INT8_ASYM,
+                    "ratio": 1.0,
+                    "group_size": -1,
+                    "all_layers": None,
+                    "sensitivity_metric": None,
+                    "dataset": None,
+                    "ignored_scope": nncf.IgnoredScope(),
+                    "awq": None,
+                    "subset_size": 128,
+                    "scale_estimation": None,
+                }
+                compress_weights_patch.assert_called_with(
+                    unittest.mock.ANY,
+                    **compression_params,
+                )
 
     def test_ovmodel_load_large_model_with_uncompressed_weights(self):
-        with unittest.mock.patch("torch.nn.Module.parameters") as model_parameters:
-            mock_tensor = unittest.mock.Mock()
-            mock_tensor.numel = lambda: 2000000000
-            mock_tensor.requires_grad = True
-            model_parameters.return_value = [mock_tensor]
-            with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
-                with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
-                    _ = OVModelForCausalLM.from_pretrained(
-                        MODEL_NAMES["llama"], export=True, load_in_8bit=False, compile=False, use_cache=False
-                    )
-                    save_model_patch.assert_called_with(
-                        unittest.mock.ANY,
-                        unittest.mock.ANY,
-                        ov_config=OVConfig(dtype="auto"),
-                        library_name="transformers",
-                    )
+        with unittest.mock.patch(
+            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+        ) as ov_constant_shape:
+            ov_constant_shape.return_value = (2000000000,)
+            with unittest.mock.patch("nncf.compress_weights") as compress_weights_patch:
+                _ = OVModelForCausalLM.from_pretrained(
+                    MODEL_NAMES["llama"], export=True, load_in_8bit=False, compile=False, use_cache=False
+                )
+                compress_weights_patch.assert_not_called()
 
     def test_ovmodel_load_large_model_with_additional_quantization_config(self):
-        with unittest.mock.patch("torch.nn.Module.parameters") as model_parameters:
-            mock_tensor = unittest.mock.Mock()
-            mock_tensor.numel = lambda: 2000000000
-            mock_tensor.requires_grad = True
-            with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
-                with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
-                    with unittest.mock.patch("nncf.compress_weights") as compress_weights_patch:
-                        _ = OVModelForCausalLM.from_pretrained(
-                            MODEL_NAMES["llama"],
-                            export=True,
-                            compile=False,
-                            use_cache=False,
-                            quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, group_size=-1, ratio=0.8),
-                        )
-                        # quantization will be performed later, using load_model
-                        save_model_patch.assert_called_with(
-                            unittest.mock.ANY,
-                            unittest.mock.ANY,
-                            ov_config=OVConfig(dtype="auto"),
-                            library_name="transformers",
-                        )
-                        compression_params = {
-                            "mode": nncf.CompressWeightsMode.INT4_SYM,
-                            "ratio": 0.8,
-                            "group_size": -1,
-                            "all_layers": None,
-                            "sensitivity_metric": None,
-                            "dataset": None,
-                            "ignored_scope": nncf.IgnoredScope(),
-                            "awq": None,
-                            "subset_size": 128,
-                            "scale_estimation": None,
-                        }
-                        compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
+        def main_export_not_in_stacktrace(*args, **kwargs):
+            # Compression was not called from `main_export`
+            self.assertTrue(all(frame_info.function != "main_export" for frame_info in inspect.stack()))
+
+        with unittest.mock.patch(
+            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+        ) as ov_constant_shape:
+            ov_constant_shape.return_value = (2000000000,)
+            with unittest.mock.patch(
+                "nncf.compress_weights", side_effect=main_export_not_in_stacktrace
+            ) as compress_weights_patch:
+                _ = OVModelForCausalLM.from_pretrained(
+                    MODEL_NAMES["llama"],
+                    export=True,
+                    compile=False,
+                    use_cache=False,
+                    quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, group_size=-1, ratio=0.8),
+                )
+                compression_params = {
+                    "mode": nncf.CompressWeightsMode.INT4_SYM,
+                    "ratio": 0.8,
+                    "group_size": -1,
+                    "all_layers": None,
+                    "sensitivity_metric": None,
+                    "dataset": None,
+                    "ignored_scope": nncf.IgnoredScope(),
+                    "awq": None,
+                    "subset_size": 128,
+                    "scale_estimation": None,
+                }
+                compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_dynamic_with_config(self, model_cls, model_name, quantization_config, expected_ov_int4):
