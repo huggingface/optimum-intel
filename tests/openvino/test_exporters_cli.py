@@ -41,7 +41,10 @@ from optimum.intel import (  # noqa
 )
 from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
-from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
+from optimum.intel.utils.import_utils import (
+    compare_versions,
+    is_openvino_tokenizers_available,
+)
 
 
 class OVCLIExportTestCase(unittest.TestCase):
@@ -170,6 +173,9 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             if number_of_tokenizers == 1:
                 self.assertTrue("Detokenizer is not supported, convert tokenizer only." in output, output)
+
+            if task.startswith("text-generation") and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
+                self.assertIn("Set tokenizer padding side to left", output)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):

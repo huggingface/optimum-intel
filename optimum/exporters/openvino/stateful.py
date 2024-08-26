@@ -200,10 +200,10 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     """
 
     key_value_input_names = [
-        key.get_any_name() for key in ov_model.inputs if any("key_values" in key_name for key_name in key.get_names())
+        key_name for key in ov_model.inputs for key_name in key.get_names() if "key_values" in key_name
     ]
     key_value_output_names = [
-        key.get_any_name() for key in ov_model.outputs if any("present" in key_name for key_name in key.get_names())
+        key_name for key in ov_model.outputs for key_name in key.get_names() if "present" in key_name
     ]
     not_kv_inputs = [
         input for input in ov_model.inputs if not any(name in key_value_input_names for name in input.get_names())

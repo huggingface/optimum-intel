@@ -64,7 +64,7 @@ from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, recursive_to_device
 logger = logging.getLogger(__name__)
 
 
-_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit")
+_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
@@ -481,7 +481,14 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             elif "_reorder_cache" in self.model_cls.__dict__:
                 self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
 
-        if is_transformers_version(">=", "4.38.0") and model_type in {"llama", "phi", "persimmon", "mistral"}:
+        if is_transformers_version(">=", "4.38.0") and model_type in {
+            "llama",
+            "phi",
+            "persimmon",
+            "mistral",
+            "falcon",
+            "gpt2",
+        }:
             self.prepare_inputs_for_generation = _ipex_prepare_inputs_for_generation
         else:
             self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)
@@ -500,8 +507,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         d_k = self.normalized_config.hidden_size // self.normalized_config.num_attention_heads
         batch_size = input_ids.shape[0]
 
-        if model_type in {"mistral", "llama"}:
-            num_attention_heads = self.normalized_config.num_key_value_heads
+        if model_type in {"mistral", "llama", "falcon"}:
+            num_attention_heads = getattr(self.normalized_config, "num_key_value_heads", 1)
         else:
             num_attention_heads = self.normalized_config.num_attention_heads
 
