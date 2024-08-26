@@ -151,7 +151,6 @@ if _accelerate_available:
         _accelerate_available = False
 
 _numa_available = importlib.util.find_spec("numa") is not None
-_numa_version = "N/A"
 
 if _numa_available:
     try:
