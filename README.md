@@ -210,6 +210,11 @@ You can find more examples in the [documentation](https://huggingface.co/docs/op
 
 
 ## IPEX
+IPEX export can be used through the Optimum command-line interface:
+```bash
+optimum-cli export ipex -m gpt2 --torch_dtype bfloat16 ipex-gpt2
+```
+
 To load your IPEX model, you can just replace your `AutoModelForXxx` class with the corresponding `IPEXModelForXxx` class. You can set `export=True` to load a PyTorch checkpoint, export your model via TorchScript and apply IPEX optimizations : both operators optimization (replaced with customized IPEX operators) and graph-level optimization (like operators fusion) will be applied on your model.
 ```diff
   from transformers import AutoTokenizer, pipeline
@@ -224,6 +229,10 @@ To load your IPEX model, you can just replace your `AutoModelForXxx` class with 
   pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
   results = pipe("He's a dreadful magician and")
 
++ # You can also use the model exported by Optimum command-line interface
++ exported_model = IPEXModelForCausalLM.from_pretrained("ipex-gpt2")
++ pipe = pipeline("text-generation", model=exported_model, tokenizer=tokenizer)
++ results = pipe("He's a dreadful magician and")
 ```
 
 For more details, please refer to the [documentation](https://intel.github.io/intel-extension-for-pytorch/#introduction).
@@ -231,7 +240,7 @@ For more details, please refer to the [documentation](https://intel.github.io/in
 
 ## Running the examples
 
-Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory to see how 🤗 Optimum Intel can be used to optimize models and accelerate inference.
+Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) and [`notebooks`](https://github.com/huggingface/optimum-intel/tree/main/notebooks) directory to see how 🤗 Optimum Intel can be used to optimize models and accelerate inference.
 
 Do not forget to install requirements for every example:
 
