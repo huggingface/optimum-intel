@@ -161,7 +161,7 @@ def bind_cores_for_best_perf():
         raise ImportError("'numa' module not found, install with 'pip install numa'")
     import numa
 
-    local_size = get_int_from_env(["MPI_LOCALNRANKS", "OMPI_COMM_WORLD_LOCAL_SIZE", "MV2_COMM_WORLD_LOCAL_SIZE"], 1)
+    local_size = get_int_from_env(["LOCAL_WORLD_SIZE≈", "MPI_LOCALNRANKS", "OMPI_COMM_WORLD_LOCAL_SIZE", "MV2_COMM_WORLD_LOCAL_SIZE"], 1)
     rank_id = get_int_from_env(
         ["LOCAL_RANK", "MPI_LOCALRANKID", "OMPI_COMM_WORLD_LOCAL_RANK", "MV2_COMM_WORLD_LOCAL_RANK"], 0
     )
