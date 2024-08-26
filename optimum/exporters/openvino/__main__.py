@@ -446,8 +446,12 @@ def main_export(
                     quantization_config = {"bits": 8, "sym": False}
                     logger.info("The model weights will be quantized to int8_asym.")
                 else:
-                    continue
-        if not quantization_config:
+                    logger.warning(
+                        "The model will be converted with no weights quantization. Quantization of the weights to int8 "
+                        "requires nncf. Please install it with `pip install nncf`"
+                    )
+                    break
+        if quantization_config is None:
             continue
 
         if not is_nncf_available():
