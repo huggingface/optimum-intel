@@ -15,7 +15,7 @@ Optimum Intel can be used to load models from the [Hub](https://huggingface.co/m
 ## Loading
 
 You can load models from HuggingFace Model Hub, it will be optimized by ipex (including weight prepack and graph mode) during loading. The ipex will patch custom op for models like llama, bert, vit.
-For now, the IPEX optimization is only supported for CPUs, the original model will be exported via TorchScript. In the future `torch.compile` will be used and model exported via TorchScript will get deprecated.
+For now, support is only enabled for CPUs and the original model will be exported via TorchScript. In the future `torch.compile` will be used and model exported via TorchScript will get deprecated.
 
 ```diff
   import torch
