@@ -2437,7 +2437,7 @@ class Gemma2ModelPatcher(LlamaModelPatcher):
             sign_names = list(signature.parameters.keys())
             pkv_argument_index = sign_names.index("past_key_values")
             cache_position_index = sign_names.index("cache_position") if "cache_position" in sign_names else -1
-            position_ids_index = sign_names.index("position_ids") if "position_ids" in sign_names else -1
+            input_ids_index = sign_names.index("input_ids" if "input_ids" in sign_names else "inputs_embeds")
             if legacy_pkv is None and len(args) >= pkv_argument_index:
                 legacy_pkv = args[pkv_argument_index]
                 pkv_in_args = True
@@ -2454,8 +2454,12 @@ class Gemma2ModelPatcher(LlamaModelPatcher):
                 and cache_position_index != -1
                 and (cache_position_index > len(args) and "cache_position" not in kwargs)
             ):
-                if position_ids_index != -1 and (position_ids_index <= len(args) or "position_ids" in kwargs):
-                    kwargs["cache_position"] = kwargs.get("position_ids", args[position_ids_index])[0]
+                past_seen_tokens = legacy_pkv[0][0].shape[-2]
+                input_ids = args[input_ids_index]
+                cache_position = torch.arange(
+                    past_seen_tokens, past_seen_tokens + input_ids.shape[1], device=input_ids.device
+                )
+                kwargs["cache_position"] = cache_position
 
             outputs = self.orig_forward(*args, **kwargs)
             if return_legacy_cache:

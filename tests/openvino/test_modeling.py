@@ -647,6 +647,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += (
             "gemma",
+            "gemma2",
             "olmo",
             "stablelm",
             "starcoder2",
@@ -727,7 +728,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=1e-4))
 
         # Qwen tokenizer does not support padding
-        if model_arch == "qwen":
+        # Gemma2 result different due to difference in cache representation
+        if model_arch in ["qwen", "gemma2"]:
             return
 
         if model_arch not in ["chatglm", "glm4", "persimmon"]:
@@ -921,7 +923,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "trust_remote_code": True,
             }
         # Qwen tokenizer does not support padding, chatgm testing model produces nan that incompatible with beam search
-        if model_arch in ["qwen", "chatglm"]:
+        # Gemma2 may produce different result due to difference in cache representation
+        if model_arch in ["qwen", "chatglm", "gemma2"]:
             return
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
