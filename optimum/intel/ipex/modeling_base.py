@@ -67,7 +67,7 @@ from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, recursive_to_device
 logger = logging.getLogger(__name__)
 
 
-_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit")
+_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
@@ -124,8 +124,8 @@ def ipex_jit_trace(model, task, use_cache):
         sample_inputs.pop("past_key_values")
 
     # Use Tensor Processing Primitives to accelerate linear, see https://arxiv.org/abs/2104.05755.
-    # Only ipex >= 2.3.0 supports tpp.
-    if is_ipex_version(">=", "2.3.0"):
+    # Only ipex >= 2.3.0 supports tpp. The tpp is only verified for llm in generation tasks.
+    if is_ipex_version(">=", "2.3.0") and task in _IPEX_EXPORTED_GENERATION_TASKS:
         _enable_tpp()
     model = ipex.optimize(model.eval(), dtype=model.dtype, inplace=True)
     # Disable repack while jit tracing to reduce the memory
@@ -488,12 +488,21 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             self._reorder_cache = _ipex_reorder_cache
         else:
             # Check if _reorder_cache is a static method
-            if isinstance(self.model_cls.__dict__["_reorder_cache"], staticmethod):
+            if "_reorder_cache" in self.model_cls.__dict__ and isinstance(
+                self.model_cls.__dict__["_reorder_cache"], staticmethod
+            ):
                 self._reorder_cache = self.model_cls._reorder_cache
-            else:
+            elif "_reorder_cache" in self.model_cls.__dict__:
                 self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
 
-        if is_transformers_version(">=", "4.38.0") and model_type in {"llama", "phi", "persimmon", "mistral"}:
+        if is_transformers_version(">=", "4.38.0") and model_type in {
+            "llama",
+            "phi",
+            "persimmon",
+            "mistral",
+            "falcon",
+            "gpt2",
+        }:
             self.prepare_inputs_for_generation = _ipex_prepare_inputs_for_generation
         else:
             self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)
@@ -512,8 +521,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         d_k = self.normalized_config.hidden_size // self.normalized_config.num_attention_heads
         batch_size = input_ids.shape[0]
 
-        if model_type in {"mistral", "llama"}:
-            num_attention_heads = self.normalized_config.num_key_value_heads
+        if model_type in {"mistral", "llama", "falcon"}:
+            num_attention_heads = getattr(self.normalized_config, "num_key_value_heads", 1)
         else:
             num_attention_heads = self.normalized_config.num_attention_heads
 

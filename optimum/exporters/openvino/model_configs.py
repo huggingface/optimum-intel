@@ -16,6 +16,7 @@ from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 from packaging import version
+from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers.utils import is_tf_available
 
 from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
@@ -23,13 +24,16 @@ from optimum.exporters.onnx.model_configs import (
     CodeGenOnnxConfig,
     FalconOnnxConfig,
     GemmaOnnxConfig,
+    GPTNeoXOnnxConfig,
     LlamaOnnxConfig,
+    MistralOnnxConfig,
     MPTOnnxConfig,
     PhiOnnxConfig,
     UNetOnnxConfig,
     VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
 )
+from optimum.exporters.onnx.model_patcher import ModelPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import (
@@ -49,16 +53,21 @@ from .model_patcher import (
     ChatGLMModelPatcher,
     CodeGenModelPatcher,
     DBRXModelPatcher,
-    GemmaModelPatcher,
+    FalconModelPatcher,
+    GptNeoxJapaneseModelPatcher,
+    GptNeoxModelPatcher,
     InternLM2Patcher,
     InternLMModelPatcher,
     JaisModelPatcher,
     LlamaModelPatcher,
+    MistralModelPatcher,
     MixtralModelPatcher,
     MPTModelPatcher,
     PersimmonModelPatcher,
     Phi3ModelPatcher,
     QwenModelPatcher,
+    RotaryEmbPatcher,
+    UpdateCausalMaskModelPatcher,
     XverseModelPatcher,
 )
 
@@ -118,6 +127,11 @@ class Qwen2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+
 
 @register_in_tasks_manager("qwen2-moe", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
@@ -126,6 +140,11 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("minicpm", *["text-generation", "text-generation-with-past"], library_name="transformers")
@@ -144,6 +163,11 @@ class StableLMOpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 class ChatGLM2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -319,7 +343,7 @@ class GemmaOpenVINOConfig(GemmaOnnxConfig):
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
-        return GemmaModelPatcher(self, model, model_kwargs=model_kwargs)
+        return LlamaModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
@@ -338,6 +362,21 @@ class LlamaOpenVINOConfig(LlamaOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return LlamaModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "exaone",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class ExaoneOpenVINOConfig(LlamaOpenVINOConfig):
+    pass
 
 
 class QwenDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -467,6 +506,17 @@ class Starcoder2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+def patch_model_for_export(
+    self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+) -> "ModelPatcher":
+    return RotaryEmbPatcher(self, model, model_kwargs=model_kwargs)
+
 
 @register_in_tasks_manager("internlm2", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class InternLM2OpenVINOConfig(TextDecoderWithPositionIdsOnnxConfig):
@@ -531,6 +581,24 @@ class Phi3OpenVINOConfig(PhiOnnxConfig):
         return Phi3ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
+@register_in_tasks_manager(
+    "phi",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class PhiOpenVINOConfig(PhiOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return UpdateCausalMaskModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
 class OVFalconDummyPastKeyValuesGenerator(FalconDummyPastKeyValuesGenerator):
     def __init__(
         self,
@@ -576,6 +644,11 @@ class FalconOpenVINOConfig(FalconOnnxConfig):
         OVFalconDummyPastKeyValuesGenerator,
     ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = OVFalconDummyPastKeyValuesGenerator
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return FalconModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("unet", *["semantic-segmentation"], library_name="diffusers")
@@ -669,6 +742,11 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOnnxConfig):
     # GPTNeoxJapanese does not require position_ids input.
     DEFAULT_ONNX_OPSET = 13
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return GptNeoxJapaneseModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager(
@@ -840,3 +918,82 @@ class ArcticOpenVINOConfig(MixtralOpenVINOConfig):
             )
 
         return ArcticModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+class OVMistralDummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        random_sequence_length_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            random_batch_size_range=random_batch_size_range,
+            random_sequence_length_range=random_sequence_length_range,
+            **kwargs,
+        )
+        self.head_dim = getattr(normalized_config, "head_dim", self.hidden_size // self.num_attention_heads)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        shape = (
+            self.batch_size,
+            self.num_key_value_heads,
+            self.sequence_length,
+            self.head_dim,
+        )
+        return [
+            (
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+            )
+            for _ in range(self.num_layers)
+        ]
+
+
+@register_in_tasks_manager(
+    "mistral",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class MistralOpenVINOConfig(MistralOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        OVMistralDummyPastKeyValuesGenerator,
+    ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+    DUMMY_PKV_GENERATOR_CLASS = OVMistralDummyPastKeyValuesGenerator
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return MistralModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "gpt-neox",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class GPTNeoxOpenVINOConfig(GPTNeoXOnnxConfig):
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return GptNeoxModelPatcher(self, model, model_kwargs=model_kwargs)

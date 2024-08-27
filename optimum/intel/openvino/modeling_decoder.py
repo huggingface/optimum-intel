@@ -41,11 +41,10 @@ from ...exporters.openvino.stateful import model_has_state
 from ..utils.import_utils import is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
-    _DEFAULT_4BIT_CONFIG,
-    _DEFAULT_4BIT_CONFIGS,
     OVConfig,
     OVWeightQuantizationConfig,
     _check_default_4bit_configs,
+    get_default_int4_config,
 )
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, STR_TO_OV_TYPE
@@ -282,9 +281,16 @@ class OVBaseDecoderModel(OVModel):
         if load_in_8bit is None and not quantization_config:
             ov_export_config = None
         else:
-            ov_export_config = OVConfig(dtype="fp32")
+            ov_export_config = OVConfig(dtype="auto")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
+
+        torch_dtype = kwargs.pop("torch_dtype", None)
+
+        model_loading_kwargs = {}
+
+        if torch_dtype is not None:
+            model_loading_kwargs["torch_dtype"] = torch_dtype
 
         main_export(
             model_name_or_path=model_id,
@@ -299,6 +305,7 @@ class OVBaseDecoderModel(OVModel):
             trust_remote_code=trust_remote_code,
             ov_config=ov_export_config,
             stateful=stateful,
+            model_loading_kwargs=model_loading_kwargs,
         )
 
         config.is_decoder = True
@@ -311,6 +318,7 @@ class OVBaseDecoderModel(OVModel):
             stateful=None,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
+            trust_remote_code=trust_remote_code,
             **kwargs,
         )
 
@@ -781,7 +789,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = cls
 
         if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
-            quantization_config = _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, _DEFAULT_4BIT_CONFIG)
+            quantization_config = get_default_int4_config(config.name_or_path)
+            if quantization_config.get("dataset", None) is not None:
+                quantization_config["trust_remote_code"] = kwargs.get("trust_remote_code", False)
+
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         enable_compilation = kwargs.pop("compile", True) and not quantization_config
@@ -816,7 +827,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             from optimum.intel.openvino.quantization import OVQuantizer
 
-            default_config = _check_default_4bit_configs(config)
+            default_config = _check_default_4bit_configs(config.name_or_path)
 
             if default_config:
                 logger.info(

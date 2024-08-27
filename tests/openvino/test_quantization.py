@@ -61,7 +61,13 @@ from optimum.intel import (
     OVWeightQuantizationConfig,
     OVDynamicQuantizationConfig,
 )
-from optimum.intel.openvino.configuration import OVQuantizationMethod, OVQuantizationConfigBase
+from optimum.intel.openvino.configuration import (
+    OVQuantizationMethod,
+    OVQuantizationConfigBase,
+    _DEFAULT_4BIT_CONFIGS,
+    _DEFAULT_4BIT_CONFIG,
+)
+from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
@@ -75,8 +81,8 @@ _TASK_TO_DATASET = {
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
-        (OVModelForSequenceClassification, "bert", 32 if is_transformers_version("<", "4.41.0") else 22, 35),
-        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 21, 3),
+        (OVModelForSequenceClassification, "bert", 32, 35),
+        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 31, 22),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
@@ -176,8 +182,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "gpt2", 44, 44),
     )
 
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 86),)
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 148),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 43),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 74),)
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
 
     LOAD_IN_4_BITS_SCOPE = (
@@ -219,6 +225,19 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
+            "opt",
+            dict(
+                bits=4,
+                sym=True,
+                group_size=-1,
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                dataset=["one two, " * i for i in range(10)],
+            ),
+            14,
+        ),
+        (
+            OVModelForCausalLM,
             "llama_awq",
             dict(
                 bits=4,
@@ -230,7 +249,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            16,
+            8,
         ),
         (
             OVModelForCausalLM,
@@ -244,7 +263,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            16,
+            8,
         ),
     )
 
@@ -389,9 +408,9 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
-        elif model.export_feature.startswith("stable-diffusion"):
+        elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
         else:
             models = [model]
 
@@ -413,6 +432,18 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(0, num_int4)
 
             model.save_pretrained(tmp_dir)
+
+    def test_stable_diffusion_with_weight_compression(self):
+        int8_pipe = OVStableDiffusionPipeline.from_pretrained(model_id=MODEL_NAMES["stable-diffusion"], export=True)
+        quantization_config = OVWeightQuantizationConfig(bits=8, quant_method=OVQuantizationMethod.DEFAULT)
+        quantizer = OVQuantizer(int8_pipe)
+
+        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
+
+        num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(int8_pipe.unet)
+        self.assertEqual(0, num_fake_quantize)
+        self.assertEqual(242, num_int8)
+        self.assertEqual(0, num_int4)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
@@ -494,12 +525,11 @@ class OVWeightCompressionTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=False)
-
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
-        elif model.export_feature.startswith("stable-diffusion"):
+        elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
         else:
             models = [model]
 
@@ -519,7 +549,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                         MODEL_NAMES["llama"], export=True, compile=False, use_cache=False
                     )
                     save_model_patch.assert_called_with(
-                        unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(quantization_config={"bits": 8})
+                        unittest.mock.ANY,
+                        unittest.mock.ANY,
+                        ov_config=OVConfig(quantization_config={"bits": 8}),
+                        library_name="transformers",
                     )
 
     def test_ovmodel_load_large_model_with_uncompressed_weights(self):
@@ -534,7 +567,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                         MODEL_NAMES["llama"], export=True, load_in_8bit=False, compile=False, use_cache=False
                     )
                     save_model_patch.assert_called_with(
-                        unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(dtype="fp32")
+                        unittest.mock.ANY,
+                        unittest.mock.ANY,
+                        ov_config=OVConfig(dtype="auto"),
+                        library_name="transformers",
                     )
 
     def test_ovmodel_load_large_model_with_additional_quantization_config(self):
@@ -554,7 +590,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                         )
                         # quantization will be performed later, using load_model
                         save_model_patch.assert_called_with(
-                            unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(dtype="fp32")
+                            unittest.mock.ANY,
+                            unittest.mock.ANY,
+                            ov_config=OVConfig(dtype="auto"),
+                            library_name="transformers",
                         )
                         compression_params = {
                             "mode": nncf.CompressWeightsMode.INT4_SYM,
@@ -820,6 +859,13 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(bits=8, fast_bias_correction=True, weight_only=False), OVQuantizationConfig, None),
     )
 
+    def get_default_configurations() -> dict:
+        default_configurations = deepcopy(_DEFAULT_4BIT_CONFIGS)
+        default_configurations.update({"default": _DEFAULT_4BIT_CONFIG})
+        return default_configurations
+
+    DEFAULT_CONFIGURATIONS = get_default_configurations()
+
     @parameterized.expand(QUANTIZATION_CONFIGS)
     def test_config_serialization(self, quantization_config: OVQuantizationConfigBase):
         ov_config = OVConfig(quantization_config=quantization_config)
@@ -849,6 +895,21 @@ class OVQuantizationConfigTest(unittest.TestCase):
             if hasattr(ov_config.quantization_config, k):
                 self.assertEqual(getattr(ov_config.quantization_config, k), v)
 
+    @parameterized.expand(DEFAULT_CONFIGURATIONS)
+    def test_named_default_configurations(self, config_id: str):
+        custom_configuration = self.DEFAULT_CONFIGURATIONS[config_id]
+        prepared_config = OVModelForCausalLM._prepare_weight_quantization_config(custom_configuration)
+        for field_name, reference_value in custom_configuration.items():
+            value = prepared_config.__getattribute__(field_name)
+            self.assertEqual(value, reference_value)
+
+    def test_for_no_short_id_duplicates(self):
+        short_ids = set()
+        for model_id in _DEFAULT_4BIT_CONFIGS.keys():
+            short_id = model_id.split("/")[1]
+            assert short_id not in short_ids
+            short_ids.add(short_id)
+
 
 class InferRequestWrapperTest(unittest.TestCase):
     MODEL_ID = ("openai/whisper-tiny.en",)
@@ -876,12 +937,16 @@ class InferRequestWrapperTest(unittest.TestCase):
         )
         for _ in range(2):
             input_features = self._generate_random_audio_data(processor)
-            ov_model.generate(input_features)
+            ov_model.generate(input_features, max_new_tokens=10, min_new_tokens=10)
 
         data_hashes_per_key = defaultdict(list)
         data_id_per_key = defaultdict(set)
+
         for inputs_dict in calibration_data:
             for k, v in inputs_dict.items():
+                if k == "input_ids":
+                    continue
+
                 x = (v.numpy() if isinstance(v, torch.Tensor) else v).copy()
                 data_hashes_per_key[k].append(hash(x.tobytes()))
                 data_id_per_key[k].add(id(v))
@@ -890,7 +955,7 @@ class InferRequestWrapperTest(unittest.TestCase):
             self.assertTrue(any(data_hashes[0] != it for it in data_hashes))
         if apply_caching:
             # With caching, encoder hidden states tensors should be cached, resulting in only 2 tensors stored
-            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) == 2)
+            self.assertEqual(len(data_id_per_key["encoder_hidden_states"]), 2)
         else:
             # Without caching, encoder hidden states tensors will be unique for each collected input
-            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) > 2)
+            self.assertGreater(len(data_id_per_key["encoder_hidden_states"]), 2)

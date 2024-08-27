@@ -41,7 +41,10 @@ from optimum.intel import (  # noqa
 )
 from optimum.intel.openvino.configuration import _DEFAULT_4BIT_CONFIGS
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
-from optimum.intel.utils.import_utils import is_openvino_tokenizers_available
+from optimum.intel.utils.import_utils import (
+    compare_versions,
+    is_openvino_tokenizers_available,
+)
 
 
 class OVCLIExportTestCase(unittest.TestCase):
@@ -61,9 +64,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("audio-classification", "wav2vec2"),
         ("fill-mask", "bert"),
         ("feature-extraction", "blenderbot"),
-        ("stable-diffusion", "stable-diffusion"),
-        ("stable-diffusion-xl", "stable-diffusion-xl"),
-        ("stable-diffusion-xl", "stable-diffusion-xl-refiner"),
+        ("text-to-image", "stable-diffusion"),
+        ("text-to-image", "stable-diffusion-xl"),
+        ("image-to-image", "stable-diffusion-xl-refiner"),
     )
     EXPECTED_NUMBER_OF_TOKENIZER_MODELS = {
         "gpt2": 2,
@@ -86,25 +89,31 @@ class OVCLIExportTestCase(unittest.TestCase):
     )
 
     TEST_4BIT_CONFIGURATONS = [
-        ("text-generation-with-past", "opt125m", "int4_sym_g128", 4, 144),
+        ("text-generation-with-past", "opt125m", "int4_sym_g128", 4, 72),
         ("text-generation-with-past", "opt125m", "int4_asym_g128", 4, 144),
-        ("text-generation-with-past", "opt125m", "int4_sym_g64", 4, 144),
+        ("text-generation-with-past", "opt125m", "int4_sym_g64", 4, 72),
         ("text-generation-with-past", "opt125m", "int4_asym_g64", 4, 144),
-        ("text-generation-with-past", "llama_awq", "int4 --ratio 1.0 --sym --group-size 16 --all-layers", 0, 32),
+        (
+            "text-generation-with-past",
+            "llama_awq",
+            "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
+            0,
+            16,
+        ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
             4,
-            28,
+            14,
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --scale-estimation --dataset wikitext2 --num-samples 100 ",
             4,
-            28,
+            14,
         ),
     ]
 
@@ -133,7 +142,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+            eval(
+                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
+                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            ).from_pretrained(tmpdir, **model_kwargs)
 
     @parameterized.expand(
         arch
@@ -161,6 +174,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             if number_of_tokenizers == 1:
                 self.assertTrue("Detokenizer is not supported, convert tokenizer only." in output, output)
 
+            if task.startswith("text-generation") and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
+                self.assertIn("Set tokenizer padding side to left", output)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_fp16(self, task: str, model_type: str):
         with TemporaryDirectory() as tmpdir:
@@ -170,7 +186,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+            eval(
+                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
+                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            ).from_pretrained(tmpdir, **model_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_exporters_cli_int8(self, task: str, model_type: str):
@@ -181,15 +201,19 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+            model = eval(
+                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
+                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            ).from_pretrained(tmpdir, **model_kwargs)
 
             if task.startswith("text2text-generation"):
                 models = [model.encoder, model.decoder]
                 if task.endswith("with-past"):
                     models.append(model.decoder_with_past)
-            elif task.startswith("stable-diffusion"):
+            elif model_type.startswith("stable-diffusion"):
                 models = [model.unet, model.vae_encoder, model.vae_decoder]
-                models.append(model.text_encoder if task == "stable-diffusion" else model.text_encoder_2)
+                models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
             else:
                 models = [model]
 
@@ -206,7 +230,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 shell=True,
                 check=True,
             )
-            model = eval(_HEAD_TO_AUTOMODELS[model_type]).from_pretrained(tmpdir)
+            model = eval(_HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]).from_pretrained(tmpdir)
             num_fq, num_int8, _ = get_num_quantized_nodes(model.unet)
             self.assertEqual(exp_num_int8, num_int8)
             self.assertEqual(exp_num_fq, num_fq)
@@ -221,7 +245,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            model = eval(_HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]).from_pretrained(tmpdir, **model_kwargs)
+            model = eval(
+                _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
+                if task.replace("-with-past", "") in _HEAD_TO_AUTOMODELS
+                else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
+            ).from_pretrained(tmpdir, **model_kwargs)
 
             _, num_int8, num_int4 = get_num_quantized_nodes(model)
             self.assertEqual(expected_int8, num_int8)
@@ -231,10 +259,11 @@ class OVCLIExportTestCase(unittest.TestCase):
 
     def test_exporters_cli_int4_with_local_model_and_default_config(self):
         with TemporaryDirectory() as tmpdir:
-            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["bloom"])
+            pt_model = AutoModelForCausalLM.from_pretrained(MODEL_NAMES["falcon-40b"])
             # overload for matching with default configuration
-            pt_model.config._name_or_path = "bigscience/bloomz-7b1"
+            pt_model.config._name_or_path = "tiiuae/falcon-7b-instruct"
             pt_model.save_pretrained(tmpdir)
+
             subprocess.run(
                 f"optimum-cli export openvino --model {tmpdir} --task text-generation-with-past --weight-format int4 {tmpdir}",
                 shell=True,
@@ -245,16 +274,23 @@ class OVCLIExportTestCase(unittest.TestCase):
             rt_info = model.model.get_rt_info()
             self.assertTrue("nncf" in rt_info)
             self.assertTrue("weight_compression" in rt_info["nncf"])
-            default_config = _DEFAULT_4BIT_CONFIGS["bigscience/bloomz-7b1"]
             model_weight_compression_config = rt_info["nncf"]["weight_compression"]
-            sym = default_config.pop("sym", False)
+
+            default_config = _DEFAULT_4BIT_CONFIGS["tiiuae/falcon-7b-instruct"]
             bits = default_config.pop("bits", None)
             self.assertEqual(bits, 4)
 
-            mode = f'int{bits}_{"sym" if sym else "asym"}'
-            default_config["mode"] = mode
+            sym = default_config.pop("sym", False)
+            default_config["mode"] = f'int{bits}_{"sym" if sym else "asym"}'
+
+            quant_method = default_config.pop("quant_method", None)
+            default_config["awq"] = quant_method == "awq"
+            default_config["gptq"] = quant_method == "gptq"
+
+            default_config.pop("dataset", None)
+
             for key, value in default_config.items():
-                self.assertTrue(key in model_weight_compression_config)
+                self.assertIn(key, model_weight_compression_config)
                 self.assertEqual(
                     model_weight_compression_config[key].value,
                     str(value),
