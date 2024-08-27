@@ -129,7 +129,7 @@ class OVBaseDecoderModel(OVModel):
         )
         self.is_dynamic = dynamic_shapes
         use_cache = kwargs.pop("use_cache", True)
-        model_has_sinks = model_has_state(self.model, compile_only)
+        model_has_sinks = model_has_state(self.model)
         self.use_cache = any("past_key_values" in key.get_any_name() for key in model.inputs) or model_has_sinks
         stateful = kwargs.pop("stateful", None)  # stateful model only if it is converted with stateful=True
         self.stateful = model_has_sinks

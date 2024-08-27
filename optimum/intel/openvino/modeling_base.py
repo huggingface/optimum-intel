@@ -219,14 +219,10 @@ class OVBaseModel(OptimizedModel):
             cache_dir = Path(model_save_dir).joinpath("model_cache")
             ov_config["CACHE_DIR"] = str(cache_dir)
             logger.info(f"Setting OpenVINO CACHE_DIR to {str(cache_dir)}")
-        if file_name.suffix == ".onnx":
-            compiled_model = core.compile_model(
-                file_name, device.upper() if device is not None else device, config=ov_config
-            )
-        else:
-            compiled_model = core.compile_model(
-                file_name, device.upper() if device is not None else device, config=ov_config
-            )
+
+        compiled_model = core.compile_model(
+            file_name, device.upper() if device is not None else device, config=ov_config
+        )
         if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
             logger.info(f"{device if device is not None else 'AUTO'} SUPPORTED_PROPERTIES:")
             _print_compiled_model_properties(compiled_model)
