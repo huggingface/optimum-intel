@@ -15,7 +15,6 @@
 import copy
 import inspect
 import logging
-import types
 import warnings
 from enum import Enum
 from pathlib import Path
@@ -26,7 +25,6 @@ from datasets import Dataset, load_dataset
 from neural_compressor.config import PostTrainingQuantConfig
 from neural_compressor.model.torch_model import IPEXModel, PyTorchModel
 from neural_compressor.quantization import fit
-from packaging.version import parse
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import (
     DataCollator,
@@ -40,16 +38,10 @@ from optimum.quantization_base import OptimumQuantizer
 
 from ..utils.constant import _TASK_ALIASES, WEIGHTS_NAME
 from ..utils.import_utils import (
-    ITREX_IMPORT_ERROR,
     _ipex_version,
-    _itrex_version,
     _neural_compressor_version,
-    _torch_version,
     is_ipex_version,
-    is_itrex_available,
-    is_itrex_version,
     is_neural_compressor_version,
-    is_torch_version,
 )
 from .configuration import INCConfig
 from .modeling_base import (  # noqa
@@ -64,29 +56,9 @@ from .modeling_base import (  # noqa
 )
 from .utils import (
     IPEX_MINIMUM_VERSION,
-    ITREX_MINIMUM_TORCH_VERSION,
-    ITREX_MINIMUM_VERSION,
     NEURAL_COMPRESSOR_MINIMUM_VERSION,
-    NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION,
     INCDataLoader,
 )
-
-
-if is_itrex_available():
-    if is_itrex_version("<", ITREX_MINIMUM_VERSION):
-        raise ImportError(
-            f"Found an incompatible version of `intel-extension-for-transformers`. Found version {_itrex_version}, "
-            f"but only version {ITREX_MINIMUM_VERSION} or higher is supported."
-        )
-
-    from intel_extension_for_transformers.transformers.llm.quantization.utils import convert_to_quantized_model
-    from intel_extension_for_transformers.transformers.modeling.modeling_auto import save_low_bit
-    from intel_extension_for_transformers.transformers.utils.config import (
-        AwqConfig,
-        GPTQConfig,
-        ITREXQuantizationConfigMixin,
-        RtnConfig,
-    )
 
 
 logger = logging.getLogger(__name__)
@@ -153,7 +125,7 @@ class INCQuantizer(OptimumQuantizer):
 
     def quantize(
         self,
-        quantization_config: Union["PostTrainingQuantConfig", "ITREXQuantizationConfigMixin"],
+        quantization_config: Union["PostTrainingQuantConfig"],
         save_directory: Union[str, Path],
         calibration_dataset: Dataset = None,
         batch_size: int = 8,
@@ -166,7 +138,7 @@ class INCQuantizer(OptimumQuantizer):
         Quantize a model given the optimization specifications defined in `quantization_config`.
 
         Args:
-            quantization_config (`Union[PostTrainingQuantConfig, ITREXQuantizationConfigMixin]`):
+            quantization_config (`Union[PostTrainingQuantConfig]`):
                 The configuration containing the parameters related to quantization.
             save_directory (`Union[str, Path]`):
                 The directory where the quantized model should be saved.
@@ -181,9 +153,6 @@ class INCQuantizer(OptimumQuantizer):
         """
         save_directory = Path(save_directory)
         save_directory.mkdir(parents=True, exist_ok=True)
-        device = kwargs.pop("device", "cpu")
-        use_cpu = device == torch.device("cpu") or device == "cpu"
-        use_xpu = device == torch.device("xpu") or device == "xpu"
         calibration_dataloader = None
         default_name = WEIGHTS_NAME
         self._set_task()
@@ -204,58 +173,7 @@ class INCQuantizer(OptimumQuantizer):
                 f"but only version {IPEX_MINIMUM_VERSION} or higher is supported."
             )
 
-        # ITREX Weight Only Quantization
-        if not isinstance(quantization_config, PostTrainingQuantConfig):
-            if is_itrex_version("==", "1.4.2") and (
-                is_torch_version("!=", "2.3.0") or parse(_torch_version).local != "cpu"
-            ):
-                raise ImportError(
-                    f"Found an incompatible version of `intel-extension-for-transformers` and `torch`. Found version itrex {_itrex_version} and torch {_torch_version}, "
-                    f"but only torch 2.3.0+cpu is compatible with ITREX v1.4.2."
-                )
-
-            # check neural-compressor version
-            if is_neural_compressor_version("<", NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION):
-                raise ImportError(
-                    f"Found an incompatible version of neural-compressor. Found version {_neural_compressor_version}, "
-                    f"but only version {NEURAL_COMPRESSOR_WEIGHT_ONLY_MINIMUM_VERSION} or higher supports weight-only quantization."
-                )
-            if not is_itrex_available():
-                raise ImportError(ITREX_IMPORT_ERROR.format("Weight only quantization"))
-
-            if is_torch_version("<", ITREX_MINIMUM_TORCH_VERSION):
-                raise ImportError(
-                    f"Found an incompatible version of `torch`. Found version {_torch_version}, "
-                    f"but only version {ITREX_MINIMUM_TORCH_VERSION} or higher is supported."
-                )
-
-            if not isinstance(quantization_config, ITREXQuantizationConfigMixin):
-                raise TypeError(
-                    "`quantization_config` should either be an instance of `neural_compressor.config.PostTrainingQuantConfig` or "
-                    f"`intel_extension_for_transformers.transformers.utils.config.ITREXQuantizationConfigMixin` but got: {type(quantization_config)} instead."
-                )
-
-            if not isinstance(quantization_config, (GPTQConfig, RtnConfig)):
-                raise ValueError(
-                    f"Weight-only quantization is only support RTN and GPTQ algorithm now! But got {quantization_config}"
-                )
-
-            if calibration_dataset is None and isinstance(quantization_config, (GPTQConfig, AwqConfig)):
-                raise ValueError(
-                    "Weight-only quantization needs a calibration dataset for both GPTQ and AWQ methodologies."
-                )
-
-            if calibration_dataset is not None:
-                calibration_dataloader = self._get_calibration_dataloader(
-                    calibration_dataset=calibration_dataset,
-                    batch_size=batch_size,
-                    remove_unused_columns=remove_unused_columns,
-                    data_collator=data_collator,
-                    use_label=not isinstance(quantization_config, (GPTQConfig)),
-                )
-            quantization_config.calib_dataloader = calibration_dataloader
-
-        elif INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
+        if INCQuantizationMode(quantization_config.approach) == INCQuantizationMode.STATIC:
             # Since PyTorch fx trace does not really require an example_inputs, only need calibration_dataset or calibration_fn here.
             if calibration_dataset is None and self.calibration_fn is None:
                 raise ValueError(
@@ -270,56 +188,37 @@ class INCQuantizer(OptimumQuantizer):
                     data_collator=data_collator,
                 )
 
-        if not isinstance(quantization_config, PostTrainingQuantConfig):
-            if use_cpu:
-                # will remove after intel-extension-for-transformers 1.3.3 release.
-                quantization_config.device = "cpu"
-                quantization_config.post_init_cpu()
-            elif use_xpu:
-                # will remove after intel-extension-for-transformers 1.3.3 release.
-                quantization_config.device = "xpu"
-                quantization_config.post_init_xpu()
+        if isinstance(self._original_model.config, PretrainedConfig):
+            self._original_model.config.backend = quantization_config.backend
 
-            self._quantized_model = convert_to_quantized_model(
-                self._original_model, quantization_config, device=quantization_config.device
-            )
+        compressed_model = fit(
+            self._original_model,
+            conf=quantization_config,
+            calib_dataloader=calibration_dataloader,
+            eval_func=self.eval_fn,
+            calib_func=self.calibration_fn,
+        )
 
-            self._quantized_model.quantization_config = quantization_config
-            self._quantized_model.save_pretrained = types.MethodType(save_low_bit, self._quantized_model)
-            self._quantized_model.save_pretrained(save_directory)
+        if not hasattr(compressed_model, "_model") or compressed_model._model is None:
+            raise RuntimeError("Calling `neural_compressor.fit` returned unexpected results")
 
-        else:
-            if isinstance(self._original_model.config, PretrainedConfig):
-                self._original_model.config.backend = quantization_config.backend
+        if isinstance(self._original_model.config, PretrainedConfig):
+            # If backend is IPEX, then the quantized model is JIT model which will drop the config attribute,
+            # so need set config from original_model.
+            model_config = copy.deepcopy(self._original_model.config)
+            model_config.torch_dtype = "int8"
+            if isinstance(compressed_model, IPEXModel):
+                model_config.torchscript = True
+                model_config.backend = "ipex"
+            model_config.save_pretrained(save_directory)
 
-            compressed_model = fit(
-                self._original_model,
-                conf=quantization_config,
-                calib_dataloader=calibration_dataloader,
-                eval_func=self.eval_fn,
-                calib_func=self.calibration_fn,
-            )
+        self._quantized_model = compressed_model._model
 
-            if not hasattr(compressed_model, "_model") or compressed_model._model is None:
-                raise RuntimeError("Calling `neural_compressor.fit` returned unexpected results")
-
-            if isinstance(self._original_model.config, PretrainedConfig):
-                # If backend is IPEX, then the quantized model is JIT model which will drop the config attribute,
-                # so need set config from original_model.
-                model_config = copy.deepcopy(self._original_model.config)
-                model_config.torch_dtype = "int8"
-                if isinstance(compressed_model, IPEXModel):
-                    model_config.torchscript = True
-                    model_config.backend = "ipex"
-                model_config.save_pretrained(save_directory)
-
-            self._quantized_model = compressed_model._model
-
-            output_path = save_directory.joinpath(file_name or default_name)
-            # Save the quantized model
-            self._save_pretrained(compressed_model, output_path)
-            quantization_config = INCConfig(quantization=quantization_config)
-            quantization_config.save_pretrained(save_directory)
+        output_path = save_directory.joinpath(file_name or default_name)
+        # Save the quantized model
+        self._save_pretrained(compressed_model, output_path)
+        quantization_config = INCConfig(quantization=quantization_config)
+        quantization_config.save_pretrained(save_directory)
 
     @staticmethod
     def _save_pretrained(model: Union[PyTorchModel, IPEXModel], output_path: str):

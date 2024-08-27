@@ -14,6 +14,7 @@
 
 import logging
 import os
+import types
 import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -23,7 +24,10 @@ import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.utils import EntryNotFoundError
+from neural_compressor.transformers import GPTQConfig, RtnConfig
+from neural_compressor.transformers.quantization import convert_to_quantized_model, save_low_bit
 from neural_compressor.utils.pytorch import load
+from packaging import version
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -41,13 +45,21 @@ from transformers import (
 )
 from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
-from transformers.utils import SAFE_WEIGHTS_NAME, WEIGHTS_NAME
+from transformers.utils import (
+    SAFE_WEIGHTS_NAME,
+    WEIGHTS_NAME,
+)
 from transformers.utils.generic import ContextManagers
 
 from optimum.intel.generation import BaseModelForCausalLM
 
 from ...modeling_base import OptimizedModel
-from ..utils.import_utils import _torch_version, is_itrex_available, is_torch_version
+from ..utils.import_utils import (
+    _ipex_version,
+    _neural_compressor_version,
+    _torch_version,
+    is_torch_version,
+)
 from .configuration import INCConfig
 from .utils import QUANTIZATION_CONFIG_NAME
 
@@ -111,8 +123,113 @@ class INCModel(OptimizedModel):
         local_files_only: bool = False,
         subfolder: str = "",
         trust_remote_code: bool = False,
+        *model_args,
         **kwargs,
     ):
+        device_map = kwargs.get("device_map", "cpu")
+        use_xpu = True if device_map == torch.device("xpu") or device_map == "xpu" else False
+
+        config = kwargs.pop("config", None)
+
+        quantization_config = kwargs.pop("quantization_config", None)
+        if not isinstance(config, PretrainedConfig):
+            config, _ = AutoConfig.from_pretrained(
+                model_id,
+                return_unused_kwargs=True,
+                **kwargs,
+            )
+        if hasattr(config, "quantization_config"):
+            if config.quantization_config is None:
+                logger.warning(
+                    "Quantization_config loading failed. If you want to load saved "
+                    "low bit model, please check your quantizate_config.json."
+                )
+            else:
+                logger.info("quantization_config: {}".format(config.quantization_config))
+                try:
+                    from neural_compressor.transformers.models.modeling_auto import (
+                        _BaseQBitsAutoModelClass,
+                    )
+
+                    _BaseQBitsAutoModelClass.ORIG_MODEL = cls.auto_model_class
+                    model = _BaseQBitsAutoModelClass.load_low_bit(
+                        model_id,
+                        *model_args,
+                        config=config,
+                        **kwargs,
+                    )
+                    logger.info("Saved low bit model loading successfully. Other input args " "will be ignored.")
+                    return model
+                except Exception as e:
+                    logger.error(e)
+                    logger.error("Saved low bit model loading failed, please check your model.")
+                    exit(0)
+        if isinstance(
+            quantization_config,
+            (RtnConfig, GPTQConfig),
+        ):
+            logger.info("Applying Weight Only Quantization.")
+            if version.parse(_neural_compressor_version) <= version.parse("2.6"):
+                raise AssertionError("Please use neural_compressor version > 2.6.")
+            if version.parse(_ipex_version) < version.parse("2.3.1"):
+                raise AssertionError("Please use intel_extension_for_pytorch version > 2.3.1.")
+
+            if use_xpu:
+                # TODO: if low_cpu_mem_uasge is True, gptj will have accuracy issue on CPU device.
+                kwargs["low_cpu_mem_usage"] = True
+                kwargs["device_map"] = "cpu"
+                try:
+                    model = cls.auto_model_class.from_pretrained(
+                        model_id,
+                        *model_args,
+                        config=config,
+                        **kwargs,
+                    )
+                    model.config.update({"low_cpu_mem_usage": True})
+                except NotImplementedError:
+                    logger.info(
+                        "Failed to load models with `low_cpu_mem_usage` specified, "
+                        "will fall to traditional load method with higher memory consumption."
+                    )
+                    kwargs["low_cpu_mem_usage"] = False
+                    model = cls.auto_model_class.from_pretrained(
+                        model_id,
+                        *model_args,
+                        config=config,
+                        **kwargs,
+                    )
+                    model.config.update({"low_cpu_mem_usage": False})
+                    quantization_config.post_init_xpu()
+            else:
+                kwargs["low_cpu_mem_usage"] = True
+                model = cls.auto_model_class.from_pretrained(
+                    model_id,
+                    *model_args,
+                    config=config,
+                    **kwargs,
+                )
+                model.config.update({"low_cpu_mem_usage": True})
+                quantization_config.post_init_cpu()
+            model.eval()
+
+            if use_xpu:
+
+                assert hasattr(torch, "xpu") and torch.xpu.is_available(), "There is no xpu device in this system!"
+                quantization_config.update(**{"device": "xpu"})
+                quantization_config.post_init_xpu()
+            if (
+                not torch.cuda.is_available() or device_map == "cpu" or device_map == torch.device("cpu")
+            ) and model.config.model_type == "chatglm":
+                model = model.float()
+            model = convert_to_quantized_model(model, quantization_config, device=device_map)
+            quantization_config.remove_redundant_parameters()
+            model.config.quantization_config = quantization_config
+            # add quantization_config and save_low_bit to pretrained model dynamically
+            model.device_map = device_map
+            model.quantization_config = quantization_config
+            model.save_pretrained = types.MethodType(save_low_bit, model)
+            logger.info("WeightOnlyQuant done.")
+            return model
         if use_auth_token is not None:
             warnings.warn(
                 "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
@@ -164,53 +281,6 @@ class INCModel(OptimizedModel):
                 )
 
         model_save_dir = Path(model_cache_path).parent
-
-        if is_itrex_available():
-            quantization_config_path = None
-            if is_local:
-                quantization_config_path = model_path / subfolder / QUANTIZATION_CONFIG_NAME
-            else:
-                try:
-                    quantization_config_path = hf_hub_download(
-                        repo_id=model_id,
-                        filename=QUANTIZATION_CONFIG_NAME,
-                        subfolder=subfolder,
-                        token=token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                    )
-                except EntryNotFoundError:
-                    pass
-
-            if quantization_config_path and Path(quantization_config_path).is_file():
-                quantization_config = PretrainedConfig.from_pretrained(quantization_config_path)
-                algorithm = getattr(quantization_config, "quant_method", None)
-                if algorithm in {"rtn", "gptq", "awq", "autoround"}:
-                    from intel_extension_for_transformers.transformers.modeling.modeling_auto import (
-                        _BaseQBitsAutoModelClass,
-                    )
-
-                    _BaseQBitsAutoModelClass.ORIG_MODEL = cls.auto_model_class
-
-                    model = _BaseQBitsAutoModelClass.from_pretrained(
-                        pretrained_model_name_or_path=model_id,
-                        token=token,
-                        revision=revision,
-                        force_download=force_download,
-                        cache_dir=cache_dir,
-                        local_files_only=local_files_only,
-                        subfolder=subfolder,
-                        trust_remote_code=trust_remote_code,
-                        use_neural_speed=False,
-                        **kwargs,
-                    )
-
-                    return cls(
-                        model, config=config, model_save_dir=model_save_dir, q_config=quantization_config, **kwargs
-                    )
-
         try:
             inc_config = INCConfig.from_pretrained(model_id, subfolder=subfolder, revision=revision)
             if not is_torch_version("==", inc_config.torch_version):
@@ -254,7 +324,7 @@ class INCModel(OptimizedModel):
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         if isinstance(self.model, torch.nn.Module):
-            # For ITREX model
+            # For INC weight only model
             if isinstance(self._q_config, PretrainedConfig):
                 self._q_config.to_json_file(os.path.join(save_directory, QUANTIZATION_CONFIG_NAME))
                 self.model.save_pretrained(save_directory)

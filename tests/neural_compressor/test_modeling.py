@@ -40,7 +40,6 @@ from optimum.intel import (  # noqa
     INCTrainer,
 )
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS, QUANTIZATION_CONFIG_NAME, WEIGHTS_NAME
-from optimum.intel.utils.import_utils import is_itrex_available
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -147,12 +146,16 @@ class INCModelingTest(unittest.TestCase):
         self.assertEqual(outputs_without_pkv.shape[1], self.GENERATION_LENGTH)
         self.assertTrue(torch.equal(outputs_with_pkv, outputs_without_pkv))
 
-    @unittest.skipIf(not is_itrex_available(), reason="ITREX not available")
-    def test_saving_loading_woq_itrex_model(self):
+    def test_saving_loading_woq_inc_model(self):
+        from neural_compressor.transformers import RtnConfig
+
         model_name = "echarlaix/tiny-random-PhiForCausalLM"
-        subfolder = "itrex"
-        model = INCModelForCausalLM.from_pretrained(model_name, revision="itrex", subfolder=subfolder)
-        tokenizer = AutoTokenizer.from_pretrained(model_name, revision="itrex")
+        subfolder = "inc_woq"
+        quantization_config = RtnConfig(bits=4)
+        model = INCModelForCausalLM.from_pretrained(
+            model_name, quantization_config=quantization_config, subfolder=subfolder
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
         tokens = tokenizer("This is a sample output", return_tensors="pt")
 

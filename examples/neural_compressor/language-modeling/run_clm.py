@@ -35,8 +35,10 @@ import transformers
 from datasets import load_dataset
 from neural_compressor import (
     DistillationConfig,
+    GPTQConfig,
     PostTrainingQuantConfig,
     QuantizationAwareTrainingConfig,
+    RtnConfig,
     WeightPruningConfig,
 )
 from transformers import (
@@ -57,11 +59,7 @@ from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
 from optimum.intel.neural_compressor import INCModelForCausalLM, INCQuantizer, INCTrainer
-from optimum.intel.utils.import_utils import ITREX_IMPORT_ERROR, is_itrex_available
 
-
-if is_itrex_available():
-    from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
@@ -203,12 +201,8 @@ class OptimizationArguments:
         metadata={"help": "Whether or not to verify the loading of the quantized model."},
     )
     bits: str = field(
-        default="4",
-        metadata={"help": "Bits number of weight for weight only quantization. 1~8 bits."},
-    )
-    weight_dtype: str = field(
-        default="int4_clip",
-        metadata={"help": "weight dtype for weight only quantization."},
+        default=4,
+        metadata={"help": "Bits number of weight for weight only quantization. 4 or 8 bits."},
     )
     group_size: int = field(
         default=-1,
@@ -223,7 +217,6 @@ class OptimizationArguments:
         metadata={"help": "Scheme for weight only quantization. Choose from 'sym' and 'asym'."},
     )
     quantization_methodology: str = field(
-        choices=["rtn", "gptq"],
         default="rtn",
         metadata={"help": "Quantization methodology for weight only quantization. Choose from 'rtn' and 'gptq'."},
     )
@@ -248,6 +241,11 @@ class OptimizationArguments:
         default=2048,
         metadata={"help": "Calibration dataset sequence max length, this should align with your model config"},
     )
+
+    def __post_init__(self):
+        woq_algorithms = ["rtn", "gptq"]
+        if self.quantization_methodology not in woq_algorithms:
+            raise ValueError(f"Value must be one of {woq_algorithms}, got {self.quantization_methodology}")
 
 
 @dataclass
@@ -655,13 +653,11 @@ def main():
             else:
                 recipes = {}
             if optim_args.quantization_approach == "weight_only":
-                if not is_itrex_available():
-                    raise ImportError(ITREX_IMPORT_ERROR.format("WeightOnly quantization"))
                 if optim_args.apply_pruning or optim_args.apply_distillation:
                     raise ValueError("Weight only quantization and pruning or distillation cannot be combined.")
 
                 algorithm_args = {
-                    "weight_dtype": optim_args.weight_dtype,
+                    "bits": optim_args.bits,
                     "sym": optim_args.weight_only_scheme == "sym",
                     "group_size": optim_args.group_size,
                 }
@@ -756,10 +752,10 @@ def main():
         trainer.save_metrics("train", metrics)
         trainer.save_state()
 
-    if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic", "weight_only"}:
+    if optim_args.apply_quantization and optim_args.quantization_approach in {"static", "dynamic"}:
         model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
         quantizer = INCQuantizer.from_pretrained(model)
-        if optim_args.quantization_approach in ["static", "weight_only"]:
+        if optim_args.quantization_approach in ["static"]:
             num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
             train_dataset = train_dataset.select(range(num_calibration_samples))
             quantization_config.calibration_sampling_size = num_calibration_samples
@@ -775,6 +771,20 @@ def main():
             ),
         )
         trainer.model = quantizer._quantized_model
+
+    if optim_args.apply_quantization and optim_args.quantization_approach in {"weight_only"}:
+        model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
+        if optim_args.quantization_approach in ["weight_only"]:
+            num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
+            train_dataset = train_dataset.select(range(num_calibration_samples))
+            quantization_config.calibration_sampling_size = num_calibration_samples
+        quantized_model = INCModelForCausalLM.from_pretrained(
+            model_args.model_name_or_path, quantization_config=quantization_config
+        )
+        if hasattr(quantization_config, "tokenizer"):
+            quantization_config.tokenizer.save_pretrained(training_args.output_dir)
+            quantized_model.save_pretrained(training_args.output_dir)
+        trainer.model = quantized_model
 
     if optim_args.apply_quantization and optim_args.verify_loading:
         loaded_model = INCModelForCausalLM.from_pretrained(training_args.output_dir)
