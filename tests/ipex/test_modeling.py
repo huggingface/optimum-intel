@@ -281,11 +281,9 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all("This is a sample" in item["generated_text"] for item in outputs))
 
-    # High optimized model llama is not supported assisted decoding for now.
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_assisted_decoding(self, model_arch):
-        if model_arch == "llama2" and is_ipex_version("<", "2.5.0"):
-        # Patched models are not support assisted decoding for now.
+        # Patched models are not support assisted decoding if ipex < 2.5.
         if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES and is_ipex_version("<", "2.5.0"):
             return
         model_id = MODEL_NAMES[model_arch]
