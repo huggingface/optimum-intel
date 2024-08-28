@@ -25,6 +25,7 @@ import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino.preprocess import PrePostProcessor
 from openvino.runtime import Core, Tensor, Type
+from packaging.version import Version
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
@@ -404,7 +405,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> Dict:
         batch_size = input_ids.shape[0]
-        model_transformers_version = self.model.rt_info.get("optimum", {}).get("transformers_version", "0.0.0")
+        model_transformers_version = Version(
+            self.model.rt_info["optimum"]["transformers_version"].value if "optimum" in self.model.rt_info else "0.0.0"
+        )
         if self.config.model_type == "bloom" and compare_versions(model_transformers_version, "<", "4.44"):
             batch_size *= self.config.num_attention_heads
 
@@ -620,10 +623,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     shape = input_tensor.shape if isinstance(input_tensor, Tensor) else list(input_tensor.shape)
                     dtype = input_tensor.element_type if isinstance(input_tensor, Tensor) else Type(input_tensor.dtype)
                     upd_batch_size = indicies.shape[0]
-                    model_transformers_version = self.model.rt_info.get("optimum", {}).get(
-                        "transformers_version", "0.0.0"
-                    )
-                    if self.config.model_type == "bloom" and compare_versions(model_transformers_version, "<", "4.44"):
+                    export_transformers_version = Version(self.model.rt_info["optimum"]["transformers_version"].value)
+                    if self.config.model_type == "bloom" and compare_versions(
+                        export_transformers_version, "<", "4.44"
+                    ):
                         upd_batch_size *= self.config.num_attention_heads
                     shape[
                         (
@@ -635,10 +638,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     upd_model_inputs[input_name] = Tensor(dtype, shape)
         upd_model_inputs["input_ids"] = unique_input_ids
         if "beam_idx" in model_inputs:
-            model_transformers_version = self.model.rt_info.get("optimum", {}).get("transformers_version", "0.0.0")
+            export_transformers_version = Version(self.model.rt_info["optimum"]["transformers_version"].value)
             beam_range = (
                 unique_input_ids.shape[0] * self.config.num_attention_heads
-                if (self.config.model_type == "bloom" and compare_versions(model_transformers_version, "<", "4.44"))
+                if (self.config.model_type == "bloom" and compare_versions(export_transformers_version, "<", "4.44"))
                 else unique_input_ids.shape[0]
             )
             beam_idx = np.arange(beam_range, dtype=int)
@@ -786,8 +789,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         model = cls.load_model(model_cache_path)
 
         model_type = config.model_type.replace("_", "-")
-        model_transformers_version = model.rt_info.get("optimum", {}).get("transformers_version", "0.0.0")
-        if model_type == "bloom" and compare_versions(model_transformers_version, "<", "4.44"):
+        export_transformers_version = Version(
+            model.rt_info["optimum"]["transformers_version"].value if "optimum" in model.rt_info else "0.0.0"
+        )
+        if model_type == "bloom" and compare_versions(export_transformers_version, "<", "4.44"):
             init_cls = OVBloomForCausalLM
         elif model_type == "gpt-bigcode":
             init_cls = OVGPTBigCodeForCausalLM
