@@ -435,7 +435,7 @@ def main_export(
         submodel_path = Path(output) / submodel_path
         submodel = core.read_model(submodel_path)
 
-        quantization_config = ov_config.quantization_config if ov_config is not None else None
+        quantization_config = None
         if ov_config is None:
             num_parameters = 0
             for op in submodel.get_ops():
@@ -451,6 +451,8 @@ def main_export(
                         "requires nncf. Please install it with `pip install nncf`"
                     )
                     break
+        else:
+            quantization_config = ov_config.quantization_config
         if quantization_config is None:
             continue
 
