@@ -31,7 +31,7 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
-from optimum.exporters.utils import _get_submodels_and_export_configs
+from optimum.exporters.utils import _get_submodels_and_export_configs as _default_get_submodels_and_export_configs, get_decoder_models_for_export
 from optimum.intel.utils.import_utils import (
     _nncf_version,
     _open_clip_version,
@@ -57,6 +57,7 @@ from .utils import (
     clear_class_registry,
     remove_none_from_dummy_inputs,
 )
+from .model_configs import InputEmbedOpenvVINOConfig, LMInputEmbedsConfigHelper, LLavaMultimodalProjectorOpenVINOConfig
 
 
 logger = logging.getLogger(__name__)
@@ -316,8 +317,9 @@ def export_pytorch(
         #       this function is one of the _internal_ steps in a bigger model conversion pipeline.
 
     with torch.no_grad():
-        model.config.torchscript = False
-        model.config.return_dict = True
+        if hasattr(model, "config"):
+            model.config.torchscript = False
+            model.config.return_dict = True
         model.eval()
 
         # Check if we need to override certain configuration item
@@ -358,6 +360,7 @@ def export_pytorch(
                     input_dict = dict(zip(keys, tuple_input))
                     kwargs[input_name] = input_dict
                 outputs = patched_forward(*args, **kwargs)
+                print(outputs.keys())
                 return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs.values()])
 
             patcher.patched_forward = ts_patched_forward
@@ -496,7 +499,7 @@ def export_models(
                 input_shapes=input_shapes,
                 model_kwargs=model_kwargs,
                 ov_config=ov_config,
-                stateful=stateful,
+                stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
                 patch_16bit_model=patch_16bit_model,
             )
         )
@@ -560,7 +563,7 @@ def export_from_model(
 
         logger.info(f"Automatic task detection to: {task}.")
 
-    stateful = stateful and ensure_export_task_support_stateful(task)
+    stateful = stateful and ensure_export_task_support_stateful(task) or getattr(getattr(model, "config", {}), "model_type", None) == "llava"
 
     # TODO: support onnx_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
@@ -598,7 +601,7 @@ def export_from_model(
         )
 
     logging.disable(logging.INFO)
-    export_config, models_and_export_configs = _get_submodels_and_export_configs(
+    export_config, models_and_export_configs, stateful_for_parts = _get_submodels_and_export_configs(
         model=model,
         task=task,
         monolith=False,
@@ -611,6 +614,7 @@ def export_from_model(
         _variant="default",
         legacy=False,
         exporter="openvino",
+        stateful=stateful
     )
     logging.disable(logging.NOTSET)
 
@@ -687,7 +691,7 @@ def export_from_model(
         input_shapes=input_shapes,
         device=device,
         ov_config=ov_config,
-        stateful=stateful,
+        stateful=stateful_for_parts,
         opset=opset,
         model_kwargs=model_kwargs,
         patch_16bit_model=patch_16bit_model,
@@ -778,3 +782,55 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
         pass
 
     return model
+
+
+def _get_llava_submodels_and_export_configs(model: Union["PreTrainedModel", "TFPreTrainedModel"], task: str, library_name:str, int_dtype:str, float_dtype:str, preprocessors: Optional[List[Any]] = None, model_kwargs: Optional[Dict] = None, stateful:bool=True):
+    models_for_export = {}
+    
+    vision_tower = model.vision_tower
+    text_embedding = model.get_input_embeddings()
+    multimodal_projector = model.multi_modal_projector
+    language_model = model.language_model
+    text_embedding.config = language_model.config
+
+    lm_export_config_constructor = TasksManager.get_exporter_config_constructor(model=language_model, exporter="openvino", task="text-generation-with-past", library_name=library_name)
+    lm_export_config = lm_export_config_constructor(language_model.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors, legacy=False)
+    decoder = get_decoder_models_for_export(language_model, lm_export_config)
+    vision_tower.config.output_hidden_states = True
+    vision_export_config_constructor = TasksManager.get_exporter_config_constructor(model=vision_tower, exporter="openvino", task="feature-extraction", library_name=library_name)
+    vision_export_config = vision_export_config_constructor(vision_tower.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors, legacy=False)
+    logger.warning(vision_export_config)
+    lm_export_config = LMInputEmbedsConfigHelper(decoder["model"][1])
+    models_for_export["language_model"] = (decoder["model"][0], lm_export_config)
+    InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = lm_export_config.orig_export_config.NORMALIZED_CONFIG_CLASS
+    text_embedding_export_config = InputEmbedOpenvVINOConfig(language_model.config)
+    models_for_export["text_embeddings_model"] = (text_embedding, text_embedding_export_config)
+    models_for_export["vision_embeddings_model"] = (vision_tower, vision_export_config)
+    models_for_export["multi_modal_projector_model"] = (multimodal_projector, LLavaMultimodalProjectorOpenVINOConfig(vision_tower.config, int_dtype=int_dtype, float_dtype=float_dtype))
+    return models_for_export["language_model"][1], models_for_export, [stateful, False, False, False]
+
+
+
+def _get_submodels_and_export_configs(
+    model: Union["PreTrainedModel", "TFPreTrainedModel", "DiffusionPipeline"],
+    task: str,
+    monolith: bool,
+    custom_export_configs: Dict,
+    custom_architecture: bool,
+    _variant: str,
+    library_name: str,
+    int_dtype: str = "int64",
+    float_dtype: str = "fp32",
+    fn_get_submodels: Optional[Callable] = None,
+    preprocessors: Optional[List[Any]] = None,
+    legacy: bool = False,
+    model_kwargs: Optional[Dict] = None,
+    exporter: str = "openvino",
+    stateful:bool = False
+):
+    if not custom_architecture and library_name == "transformers" and model.config.model_type == "llava":
+        return _get_llava_submodels_and_export_configs(model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful)
+    
+    export_config, models_for_export =  _default_get_submodels_and_export_configs(model, task, monolith, custom_export_configs, custom_architecture, _variant, library_name, int_dtype, float_dtype, fn_get_submodels, preprocessors, legacy, model_kwargs, exporter)
+    stateful_per_model = [stateful] * len(models_for_export)
+    return export_config, models_for_export, stateful_per_model

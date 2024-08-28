@@ -47,7 +47,7 @@ def model_has_input_output_name(ov_model: ov.Model, name: str):
 
 
 def fuse_cache_reorder(
-    ov_model: ov.Model, not_kv_inputs: List[str], key_value_input_names: List[str], gather_dim: int
+    ov_model: ov.Model, not_kv_inputs: List[str], key_value_input_names: List[str], gather_dim: int, main_input_name: str = "input_ids"
 ):
     """
     Fuses reored_cache during generate cycle into ov.Model. Used with stateful models, because we can not modify model state directly.
@@ -72,7 +72,7 @@ def fuse_cache_reorder(
 
     if model_has_input_output_name(ov_model, "beam_idx"):
         raise ValueError("Model already has fused cache")
-    input_batch = ov_model.input("input_ids").get_partial_shape()[0]
+    input_batch = ov_model.input(main_input_name).get_partial_shape()[0]
     beam_idx = opset13.parameter(name="beam_idx", dtype=ov.Type.i32, shape=ov.PartialShape([input_batch]))
     beam_idx.output(0).get_tensor().add_names({"beam_idx"})  # why list is not accepted?
     ov_model.add_parameters([beam_idx])
@@ -87,7 +87,7 @@ def fuse_cache_reorder(
     ov_model.validate_nodes_and_infer_types()
 
 
-def build_state_initializer(ov_model: ov.Model, batch_dim: int):
+def build_state_initializer(ov_model: ov.Model, batch_dim: int, main_input_name="input_ids"):
     """
     Build initialization ShapeOf Expression for all ReadValue ops
 
@@ -97,7 +97,7 @@ def build_state_initializer(ov_model: ov.Model, batch_dim: int):
       batch_dim (int):
           index of dimension corresponding to batch size
     """
-    input_ids = ov_model.input("input_ids")
+    input_ids = ov_model.input(main_input_name)
     batch = opset13.gather(opset13.shape_of(input_ids, output_type="i64"), opset13.constant([0]), opset13.constant(0))
     for op in ov_model.get_ops():
         if op.get_type_name() == "ReadValue":
@@ -118,6 +118,7 @@ def make_stateful(
     batch_dim: int,
     num_attention_heads: int,
     num_beams_and_batch: int = None,
+    main_input_name: str = "input_ids"
 ):
     """
     Hides kv-cache inputs and outputs inside the model as variables.
@@ -167,7 +168,7 @@ def make_stateful(
 
     apply_make_stateful_transformation(ov_model, input_output_map)
     if num_beams_and_batch is None:
-        build_state_initializer(ov_model, batch_dim)
+        build_state_initializer(ov_model, batch_dim, main_input_name)
 
 
 def ensure_stateful_is_available(warn=True):
@@ -189,7 +190,7 @@ def ensure_export_task_support_stateful(task: str):
     return task == "text-generation-with-past"
 
 
-def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
+def patch_stateful(config: PretrainedConfig, ov_model: ov.Model, main_input_name:str = "input_ids"):
     """
     Apply stateful transformation to model to hide key values inputs inside model.
     Select transformation parameters based on model architecture
@@ -213,6 +214,7 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if not key_value_input_names or not key_value_output_names:
         return
 
+    main_input_name = "input_ids" if model_has_input_output_name(ov_model, "input_ids") else "inputs_embeds"
     # By default, batch is the 0-th but chatglm uses 1-st dimension as batch
     # TODO: Deduce from a model via ordinal reshape (?) and topology
     batch_dim = 1 if config.model_type == "chatglm" and not hasattr(config, "rope_ratio") else 0
@@ -222,5 +224,5 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
         config.num_attention_heads if (config.model_type == "bloom" and is_transformers_version("<", "4.44")) else 1
     )
     make_stateful(
-        ov_model, not_kv_inputs, key_value_input_names, key_value_output_names, batch_dim, num_attention_heads, None
+        ov_model, not_kv_inputs, key_value_input_names, key_value_output_names, batch_dim, num_attention_heads, None, main_input_name
     )

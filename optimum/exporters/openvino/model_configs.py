@@ -14,11 +14,14 @@
 
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+import random
+from diffusers import ModelMixin
+
 
 from packaging import version
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig
+from optimum.exporters.onnx.config import TextDecoderOnnxConfig, TextDecoderWithPositionIdsOnnxConfig, VisionOnnxConfig, OnnxConfig
 from optimum.exporters.onnx.model_configs import (
     CLIPOnnxConfig,
     CLIPTextOnnxConfig,
@@ -35,6 +38,7 @@ from optimum.exporters.onnx.model_configs import (
     VaeDecoderOnnxConfig,
     VaeEncoderOnnxConfig,
     VisionOnnxConfig,
+    CLIPVisionModelOnnxConfig
 )
 from optimum.exporters.tasks import TasksManager
 from optimum.utils import DEFAULT_DUMMY_SHAPES
@@ -80,6 +84,11 @@ from .model_patcher import (
 def init_model_configs():
     if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
+    TasksManager._SUPPORTED_MODEL_TYPE["llava"] = {"openvino": {"image-to-text": "LlamaOpenVINOConfig", "image-text-to-text": "LlamaOpenVINOConfig", "vision-question-answering": "LlamaOpenVINOConfig"}}
+    TasksManager._CUSTOM_CLASSES[("pt", "llava", "image-to-text")] = ("transformers", "LlavaForConditionalGeneration")
+    TasksManager._CUSTOM_CLASSES[("pt", "llava", "image-text-to-text")] = ("transformers", "LlavaForConditionalGeneration")
+    TasksManager._CUSTOM_CLASSES[("pt", "llava", "visual-question-answering")] = ("transformers", "LlavaForConditionalGeneration")
+    TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["image-text-to-text"] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["image-to-text"]
 
     supported_model_types = [
         "_SUPPORTED_MODEL_TYPE",
@@ -1027,6 +1036,7 @@ class Gemma2OpenVINOConfig(GemmaOnnxConfig):
         return Gemma2ModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
+<<<<<<< HEAD
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
@@ -1194,3 +1204,123 @@ class IBertOpenVINOConfig(IBertOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return IBertModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOnnxConfig):
+    def __init__(self, export_config):
+        self.orig_export_config = export_config
+        self.DUMMY_INPUT_GENERATOR_CLASSES = export_config.DUMMY_INPUT_GENERATOR_CLASSES
+        self.DEFAULT_ONNX_OPSET = export_config.DEFAULT_ONNX_OPSET
+        self.DUMMY_PKV_GENERATOR_CLASS = export_config.DUMMY_PKV_GENERATOR_CLASS
+        self._config = export_config._config
+        self._normalized_config = export_config._normalized_config
+        self.use_past = export_config.use_past
+    
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        # Refer to DecoderModelPatcher.
+        return self.orig_export_config.patch_model_for_export(model, model_kwargs=model_kwargs)
+    
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return self.orig_export_config.outputs
+
+    @property
+    def inputs(self) ->  Dict[str, Dict[int, str]]:
+        orig_inputs = self.orig_export_config.inputs
+        input_ids_config = orig_inputs.pop("input_ids")
+        orig_inputs["inputs_embeds"] = input_ids_config
+        return orig_inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs = self.orig_export_config.generate_dummy_inputs(framework, **kwargs)
+        input_ids = dummy_inputs.pop("input_ids")
+        inputs_embed_shape = (input_ids.shape[0], input_ids.shape[1], self._normalized_config.hidden_size)
+        inputs_embeds = self.orig_export_config.DUMMY_INPUT_GENERATOR_CLASSES[0].random_float_tensor(inputs_embed_shape)
+        dummy_inputs["inputs_embeds"] = inputs_embeds
+        return dummy_inputs
+
+
+class InputEmbedOpenvVINOConfig(TextDecoderOnnxConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    @property
+    def inputs(self):
+        return {"input_ids": {0: "batch_size", 1: "sequence_length"}}
+
+    @property
+    def outputs(self):
+        return {"inputs_embeds": {0: "batch_size", 1: "sequence_length"}}
+
+
+    def rename_ambiguous_inputs(self, inputs):
+        model_inputs = {}
+        model_inputs["input"] = inputs["input_ids"]
+        return model_inputs
+
+
+
+class DummyLLavaMultiModalProjectorInputGenerator(DummyInputGenerator):
+    SUPPORTED_INPUT_NAMES = ["image_features"]
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        random_batch_size_range: Optional[Tuple[int, int]] = None,
+        **kwargs,
+    ):
+        self.task = task
+
+        if random_batch_size_range:
+            low, high = random_batch_size_range
+            self.batch_size = random.randint(low, high)
+        else:
+            self.batch_size = batch_size
+        self.hidden_size = normalized_config.hidden_size
+        self.num_patches = (normalized_config.image_size //normalized_config.patch_size) ** 2
+        self.normalized_config = normalized_config
+
+    def generate(
+        self,
+        input_name: str,
+        framework: str = "pt",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        shape = [self.batch_size, self.num_patches, self.hidden_size]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+class LLavaMultimodalProjectorOpenVINOConfig(OnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLLavaMultiModalProjectorInputGenerator, )
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+
+    @property
+    def inputs(self)-> Dict[str, Dict[int, str]]:
+        return {"image_features": {0: "batch_size"}}
+    
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"hidden_states": {0: "batch_size"}}
+
+
+@register_in_tasks_manager("clip-vision-model", *["feature-extraction"], library_name="transformers")
+class CLIPVisionModeOpenVIONConfig(CLIPVisionModelOnnxConfig):
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = super().outputs
+        if self._config.output_hidden_states:
+            for i in range(self._config.num_hidden_layers + 1):
+                common_outputs[f"hidden_states.{i}"] = {0: "batch_size"}
+
+        return common_outputs
+
+    def patch_model_for_export(self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None) -> ModelPatcher:
+        model_kwargs = model_kwargs or {}
+        if self._config.output_hidden_states and "output_hidden_states" not in model_kwargs:
+            model_kwargs["output_hidden_states"] = True
+        
+        return super().patch_model_for_export(model, model_kwargs)
