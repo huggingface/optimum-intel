@@ -221,6 +221,7 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
         sym: bool = False,
         ignored_scope: Optional[dict] = None,
         num_samples: Optional[int] = None,
+        dtype: Optional[str] = "int",
         **kwargs,
     ):
         """
@@ -234,10 +235,13 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
                 entries provided via this argument are used to create an instance of `nncf.IgnoredScope` class.
             num_samples (`int`, *optional*):
                 The maximum number of samples composing the calibration dataset.
+            dtype (`str`, defaults to 'int'):
+                Data type to compress weights to.
         """
         self.bits = bits
         self.sym = sym
         self.num_samples = num_samples
+        self.dtype = dtype
 
         if isinstance(ignored_scope, nncf.IgnoredScope):
             ignored_scope = ignored_scope.__dict__
@@ -312,6 +316,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         scale_estimation (`bool`, *optional*):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
+        dtype (`str`, defaults to 'int'):
+            Data type to compress weights to. Possible values: ['int', 'mxfp4_e2m1'].
     """
 
     def __init__(
@@ -329,9 +335,10 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         num_samples: Optional[int] = None,
         quant_method: Union[str, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
         scale_estimation: bool = None,
+        dtype: Optional[str] = "int",
         **kwargs,
     ):
-        super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
+        super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples, dtype=dtype)
         self.tokenizer = tokenizer
         self.trust_remote_code = trust_remote_code
         self.dataset = dataset
@@ -386,6 +393,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         if self.tokenizer is not None and not isinstance(self.tokenizer, str):
             raise ValueError(f"Tokenizer is expected to be a string, but found {self.tokenizer}")
 
+        if self.dtype not in ["int", "mxfp4_e2m1"]:
+            raise ValueError(f"Data type must be on of the following: ['int', 'mxfp4_e2m1'], but found: {self.dtype}.")
+
 
 @dataclass
 class OVDynamicQuantizationConfig(OVWeightQuantizationConfig):
@@ -412,6 +422,7 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
         model_type: str = "transformer",
         fast_bias_correction: bool = True,
         overflow_fix: str = "disable",
+        dtype: Optional[str] = "int",
         **kwargs,
     ):
         """
@@ -434,8 +445,10 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 Whether to apply fast or full bias correction algorithm.
             overflow_fix (`str`, default to "disable"):
                 Parameter for controlling overflow fix setting.
+            dtype (`str`, defaults to 'int'):
+                Data type to compress weights to. Possible value: 'int'.
         """
-        super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
+        super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples, dtype=dtype)
         self.model_type = model_type
         self.fast_bias_correction = fast_bias_correction
         self.overflow_fix = overflow_fix
@@ -449,6 +462,9 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
 
         if self.bits != 8:
             raise ValueError(f"Only support 8-bit for static quantization but found {self.bits}")
+
+        if self.dtype != "int":
+            raise ValueError(f"Data type must equal 'int', but found: {self.dtype}.")
 
 
 class OVConfig(BaseConfig):
@@ -473,8 +489,13 @@ class OVConfig(BaseConfig):
         self.compression = kwargs.get(
             "compression", None
         )  # A field for backward-compatability of training-time compression parameters
-        bits = self.quantization_config.bits if self.quantization_config else None
-        self.dtype = "int" + str(bits) if isinstance(bits, int) else dtype
+        if self.quantization_config is not None:
+            if self.quantization_config.dtype == "int":
+                self.dtype = f"int{self.quantization_config.bits}"
+            else:
+                self.dtype = self.quantization_config.dtype
+        else:
+            self.dtype = dtype
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
         self.input_info = [

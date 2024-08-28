@@ -811,10 +811,15 @@ def _weight_only_quantization(
     if isinstance(config.sensitivity_metric, str):
         sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
 
-    if config.bits == 8:
-        mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
+    if config.dtype == "int":
+        if config.bits == 8:
+            mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
+        else:
+            mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
+    elif config.dtype == "mxfp4_e2m1":
+        mode = CompressWeightsMode.E2M1
     else:
-        mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
+        raise ValueError(f"Not supported weights data type: {config.dtype}.")
 
     return nncf.compress_weights(
         model,

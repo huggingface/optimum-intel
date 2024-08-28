@@ -70,9 +70,9 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4", "int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"],
+        choices=["fp32", "fp16", "int8", "int4", "mxfp4_e2m1", "int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"],
         default=None,
-        help="he weight format of the exported model.",
+        help="The weight format of the exported model.",
     )
     optional_group.add_argument(
         "--library",
@@ -255,12 +255,11 @@ class OVExportCommand(BaseOptimumCLICommand):
         elif self.args.weight_format in {"fp16", "fp32"}:
             ov_config = OVConfig(dtype=self.args.weight_format)
         else:
-            is_int8 = self.args.weight_format == "int8"
-
-            # For int4 quantization if no parameter is provided, then use the default config if exist
-            if no_compression_parameter_provided(self.args) and not is_int8:
+            # For int4 quantization if no parameter is provided, then use the default config if exists
+            if no_compression_parameter_provided(self.args) and self.args.weight_format == "int4":
                 quantization_config = get_default_int4_config(self.args.model)
             else:
+                is_int8 = self.args.weight_format == "int8"
                 quantization_config = {
                     "bits": 8 if is_int8 else 4,
                     "ratio": 1 if is_int8 else (self.args.ratio or _DEFAULT_4BIT_CONFIG["ratio"]),
@@ -272,6 +271,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "quant_method": "awq" if self.args.awq else "default",
                     "sensitivity_metric": self.args.sensitivity_metric,
                     "scale_estimation": self.args.scale_estimation,
+                    "dtype": "int" if "int" in self.args.weight_format else self.args.weight_format,
                 }
 
             if quantization_config.get("dataset", None) is not None:
