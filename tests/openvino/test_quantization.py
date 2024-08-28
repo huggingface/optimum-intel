@@ -225,6 +225,19 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
         (
             OVModelForCausalLM,
+            "opt",
+            dict(
+                bits=4,
+                sym=True,
+                group_size=-1,
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                dataset=["one two, " * i for i in range(10)],
+            ),
+            14,
+        ),
+        (
+            OVModelForCausalLM,
             "llama_awq",
             dict(
                 bits=4,
@@ -236,7 +249,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            16,
+            8,
         ),
         (
             OVModelForCausalLM,
@@ -250,7 +263,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            16,
+            8,
         ),
     )
 
@@ -420,6 +433,18 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             model.save_pretrained(tmp_dir)
 
+    def test_stable_diffusion_with_weight_compression(self):
+        int8_pipe = OVStableDiffusionPipeline.from_pretrained(model_id=MODEL_NAMES["stable-diffusion"], export=True)
+        quantization_config = OVWeightQuantizationConfig(bits=8, quant_method=OVQuantizationMethod.DEFAULT)
+        quantizer = OVQuantizer(int8_pipe)
+
+        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
+
+        num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(int8_pipe.unet)
+        self.assertEqual(0, num_fake_quantize)
+        self.assertEqual(242, num_int8)
+        self.assertEqual(0, num_int4)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
         self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8
@@ -544,7 +569,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                     save_model_patch.assert_called_with(
                         unittest.mock.ANY,
                         unittest.mock.ANY,
-                        ov_config=OVConfig(dtype="fp32"),
+                        ov_config=OVConfig(dtype="auto"),
                         library_name="transformers",
                     )
 
@@ -567,7 +592,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         save_model_patch.assert_called_with(
                             unittest.mock.ANY,
                             unittest.mock.ANY,
-                            ov_config=OVConfig(dtype="fp32"),
+                            ov_config=OVConfig(dtype="auto"),
                             library_name="transformers",
                         )
                         compression_params = {
@@ -877,6 +902,13 @@ class OVQuantizationConfigTest(unittest.TestCase):
         for field_name, reference_value in custom_configuration.items():
             value = prepared_config.__getattribute__(field_name)
             self.assertEqual(value, reference_value)
+
+    def test_for_no_short_id_duplicates(self):
+        short_ids = set()
+        for model_id in _DEFAULT_4BIT_CONFIGS.keys():
+            short_id = model_id.split("/")[1]
+            assert short_id not in short_ids
+            short_ids.add(short_id)
 
 
 class InferRequestWrapperTest(unittest.TestCase):
