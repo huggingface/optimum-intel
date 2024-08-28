@@ -122,9 +122,9 @@ class OVQuantizerTest(unittest.TestCase):
                 ov_config=ov_config,
             )
             model = model_cls.from_pretrained(tmp_dir, file_name=file_name)
-            num_fake_quantize, num_int8, _ = get_num_quantized_nodes(model)
+            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_int8, num_int8)
+            self.assertEqual(expected_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -163,9 +163,9 @@ class OVQuantizerTest(unittest.TestCase):
 
             model = model_cls.from_pretrained(tmp_dir)
 
-            num_fake_quantize, num_int8, _ = get_num_quantized_nodes(model)
+            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_int8, num_int8)
+            self.assertEqual(expected_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -191,7 +191,13 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForCausalLM,
             "gpt2",
             dict(bits=4, sym=False, group_size=-1, ratio=0.8),
-            14,
+            {"int4": 30, "int8": 14}
+        ),
+        (
+            OVModelForCausalLM,
+            "gpt2",
+            dict(bits=4, dtype="mxfp4_e2m1", group_size=32),
+            {"f4e2m1": 20, 'f8e8m0': 20, "int8": 4}
         ),
         (
             OVModelForCausalLM,
@@ -202,13 +208,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=32,
                 ignored_scope={"names": ["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]},
             ),
-            4,
+            {"int4": 38, "int8": 4}
         ),
         (
             OVModelForCausalLM,
             "gpt2",
             dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
-            18,
+            {"int4": 26, "int8": 18}
         ),
         (
             OVModelForCausalLM,
@@ -221,7 +227,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
             ),
-            14,
+            {"int4": 25, "int8": 14}
         ),
         (
             OVModelForCausalLM,
@@ -234,7 +240,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset=["one two, " * i for i in range(10)],
             ),
-            14,
+            {"int4": 25, "int8": 14}
         ),
         (
             OVModelForCausalLM,
@@ -249,7 +255,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            8,
+            {"int4": 12, "int8": 8}
         ),
         (
             OVModelForCausalLM,
@@ -263,7 +269,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            8,
+            {"int4": 12, "int8": 8}
         ),
     )
 
@@ -306,8 +312,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_pt_int8, num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_pt_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -337,8 +343,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int8, num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -363,9 +369,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir, ov_config=ov_config)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8, num_int4 = get_num_quantized_nodes(model)
-            self.assertEqual(expected_int8, num_int8)
-            self.assertEqual(expected_int4, num_int4)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_int8, num_weight_nodes["int8"])
+            self.assertEqual(expected_int4, num_weight_nodes["int4"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -389,8 +395,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int8, num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -416,8 +422,8 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         for i, model in enumerate(models):
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int8[i], num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int8[i], num_weight_nodes["int8"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8):
@@ -426,10 +432,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
 
-            num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
+            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model.unet)
             self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_ov_int8, num_int8)
-            self.assertEqual(0, num_int4)
+            self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
+            self.assertEqual(0, num_weight_nodes["int4"])
 
             model.save_pretrained(tmp_dir)
 
@@ -440,10 +446,10 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
 
-        num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(int8_pipe.unet)
+        num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(int8_pipe.unet)
         self.assertEqual(0, num_fake_quantize)
-        self.assertEqual(242, num_int8)
-        self.assertEqual(0, num_int4)
+        self.assertEqual(242, num_weight_nodes["int8"])
+        self.assertEqual(0, num_weight_nodes["int4"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
@@ -459,10 +465,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(quantization_config.quant_method, OVQuantizationMethod.HYBRID)
 
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config), calibration_dataset=dataset)
-        num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
+        num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model.unet)
         self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
-        self.assertEqual(expected_ov_int8, num_int8)
-        self.assertEqual(0, num_int4)
+        self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
+        self.assertEqual(0, num_weight_nodes["int4"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
     @unittest.mock.patch.dict(
@@ -476,9 +482,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            _, num_int8, num_int4 = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int4, num_int4)
-            self.assertEqual(expected_ov_int8, num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int4, num_weight_nodes["int4"])
+            self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
             model.save_pretrained(tmp_dir)
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
@@ -490,7 +496,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(
-        self, model_cls, model_name, quantization_config, expected_ov_int4
+        self, model_cls, model_name, quantization_config, expected_num_weight_nodes
     ):
         model_id = MODEL_NAMES[model_name]
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -504,13 +510,15 @@ class OVWeightCompressionTest(unittest.TestCase):
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            _, num_int4, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int4, num_int4)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
+            self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             model.save_pretrained(tmp_dir)
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, "int4")
+            dtype = "int4" if quantization_config.dtype != "mxfp4_e2m1" else "mxfp4_e2m1"
+            self.assertEqual(openvino_config.dtype, dtype)
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
@@ -519,8 +527,8 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertTrue(model.use_cache)
 
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type][0]
-        _, num_int8, _ = get_num_quantized_nodes(model)
-        self.assertEqual(expected_ov_int8, num_int8)
+        _, num_weight_nodes = get_num_quantized_nodes(model)
+        self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type):
@@ -534,8 +542,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             models = [model]
 
         for i, model in enumerate(models):
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(0, num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(0, num_weight_nodes["int8"])
 
     def test_ovmodel_load_large_model_with_default_compressed_weights(self):
         with unittest.mock.patch("torch.nn.Module.parameters") as model_parameters:
@@ -610,7 +618,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                         compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
-    def test_ovmodel_4bit_dynamic_with_config(self, model_cls, model_name, quantization_config, expected_ov_int4):
+    def test_ovmodel_4bit_dynamic_with_config(self, model_cls, model_name, quantization_config, expected_num_weight_nodes):
         model_id = MODEL_NAMES[model_name]
         with tempfile.TemporaryDirectory() as tmp_dir:
             group_size = quantization_config.pop("group_size", 32)
@@ -625,13 +633,15 @@ class OVWeightCompressionTest(unittest.TestCase):
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            _, num_int4, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int4, num_int4)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
+            self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             model.save_pretrained(tmp_dir)
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, "int4")
+            dtype = "int4" if quantization_config.dtype != "mxfp4_e2m1" else "mxfp4_e2m1"
+            self.assertEqual(openvino_config.dtype, dtype)
 
 
 class OVQuantizerQATest(unittest.TestCase):
@@ -758,9 +768,9 @@ class OVTrainerTest(unittest.TestCase):
             trainer.save_model()
 
             model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
-            num_fake_quantize, num_int8, _ = get_num_quantized_nodes(model)
+            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_int8, num_int8)
+            self.assertEqual(expected_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
