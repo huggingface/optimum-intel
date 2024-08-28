@@ -38,7 +38,6 @@ class OVModelForSentenceTransformer(OVModel):
             "trust_remote_code": False,
             "revision": None,
             "local_files_only": False,
-            "model_max_length": 384,
         }
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.orig_model_id_or_path,
@@ -176,7 +175,6 @@ class OVModelForSentenceTransformer(OVModel):
                 padding=padding,
                 truncation="longest_first",
                 return_tensors="pt",
-                max_length=self.tokenizer_args["model_max_length"],
             )
         )
         return output
