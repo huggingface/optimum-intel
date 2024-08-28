@@ -464,7 +464,7 @@ def main_export(
         _weight_only_quantization(submodel, quantization_config)
 
         compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
-        save_model(submodel, compressed_submodel_path, compress_to_fp16=ov_config and ov_config.dtype == "fp16")
+        save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
         compressed_submodel_paths.append((submodel_path, compressed_submodel_path))
 
         del submodel
