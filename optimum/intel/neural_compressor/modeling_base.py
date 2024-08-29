@@ -164,10 +164,7 @@ class INCModel(OptimizedModel):
                     logger.error(e)
                     logger.error("Saved low bit model loading failed, please check your model.")
                     exit(0)
-        if isinstance(
-            quantization_config,
-            (RtnConfig, GPTQConfig),
-        ):
+        if isinstance(quantization_config, (RtnConfig, GPTQConfig)):
             logger.info("Applying Weight Only Quantization.")
             if version.parse(_neural_compressor_version) <= version.parse("2.6"):
                 raise AssertionError("Please use neural_compressor version > 2.6.")
