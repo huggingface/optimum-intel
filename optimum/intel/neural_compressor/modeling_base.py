@@ -62,8 +62,11 @@ from .utils import QUANTIZATION_CONFIG_NAME
 
 logger = logging.getLogger(__name__)
 handler = logging.StreamHandler()
-formatter = logging.Formatter("%(levelname)s - %(message)s")
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
 handler.setFormatter(formatter)
+logger.propagate = False
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 MODEL_START_DOCSTRING = r"""
     This model check the superclass documentation for the generic methods the
