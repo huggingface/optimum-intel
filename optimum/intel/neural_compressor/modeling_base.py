@@ -151,7 +151,13 @@ class INCModel(OptimizedModel):
                     _BaseQBitsAutoModelClass.ORIG_MODEL = cls.auto_model_class
                     model = _BaseQBitsAutoModelClass.load_low_bit(
                         model_id,
-                        *model_args,
+                        subfolder=subfolder,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        token=token,
+                        local_files_only=local_files_only,
+                        force_download=force_download,
+                        trust_remote_code=trust_remote_code,
                         config=config,
                         **kwargs,
                     )
