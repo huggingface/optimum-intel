@@ -360,7 +360,6 @@ def export_pytorch(
                     input_dict = dict(zip(keys, tuple_input))
                     kwargs[input_name] = input_dict
                 outputs = patched_forward(*args, **kwargs)
-                print(outputs.keys())
                 return tuple([value if not isinstance(value, list) else tuple(value) for value in outputs.values()])
 
             patcher.patched_forward = ts_patched_forward
@@ -799,7 +798,6 @@ def _get_llava_submodels_and_export_configs(model: Union["PreTrainedModel", "TFP
     vision_tower.config.output_hidden_states = True
     vision_export_config_constructor = TasksManager.get_exporter_config_constructor(model=vision_tower, exporter="openvino", task="feature-extraction", library_name=library_name)
     vision_export_config = vision_export_config_constructor(vision_tower.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors, legacy=False)
-    logger.warning(vision_export_config)
     lm_export_config = LMInputEmbedsConfigHelper(decoder["model"][1])
     models_for_export["language_model"] = (decoder["model"][0], lm_export_config)
     InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = lm_export_config.orig_export_config.NORMALIZED_CONFIG_CLASS

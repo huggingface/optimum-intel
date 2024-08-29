@@ -23,7 +23,15 @@ logger = logging.getLogger(__name__)
 core = ov.Core()
 
 class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
-    def __init__(self, model: ov.Model, text_embeds_model: ov.Model, config: PretrainedConfig = None, device: str = "CPU", dynamic_shapes: bool = True, ov_config: Dict[str, str] | None = None, model_save_dir: str | Path | TemporaryDirectory | None = None, quantization_config: OVWeightQuantizationConfig | Dict | None = None, **kwargs):
+    def __init__(self, model: ov.Model, text_embeds_model: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
+        **kwargs
+    ):
         self.model = model
         self.text_emb_model = text_embeds_model
         self.request = None
@@ -49,13 +57,13 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
     def clear_requests(self):
         del self.request
-        del self.token_emb_request
+        del self.text_emb_request
         self.request = None
-        self.token_emb_request = None
+        self.text_emb_request = None
 
     def embed_tokens(self, input_ids: torch.LongTensor):
-        self._compile_token_emb()
-        res = self.token_emb_request(input_ids, share_inputs=True)
+        self._compile_text_emb()
+        res = self.text_emb_request(input_ids, share_inputs=True)
         return res[0]
 
     def prepare_inputs(
@@ -166,6 +174,7 @@ class OVModelPart:
         self.request = None
         self._model_name = model_name
         self.config = self.parent_model.config
+        self._model_dir = Path(model_dir or parent_model._model_save_dir)
 
     def _compile(self):
         if self.request is None:
@@ -216,7 +225,7 @@ class OVModelPart:
 class OVVisionEmbedding(OVModelPart):
     _model_name = "vision_embeddings"
     def __init__(self, model:ov.Model, parent_model:OVBaseModel) -> None:
-        super(model, parent_model)
+        super().__init__(model, parent_model, model_name=self._model_name)
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
         self.hidden_states_output_names = [key for key in self.output_names if "hidden_states" in key]
@@ -243,9 +252,6 @@ MODEL_PARTS_CLS_MAPPING = {
     "multi_modal_projector": OVMultiModalProjector
 }
 
-MODEL_TYPE_TO_CLS_MAPPING = {
-    "llava": _OVLlavaForCausalLM,
-}
 
 class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
@@ -266,7 +272,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
     ):
         self.config = config
         self.use_cache = kwargs.get("use_cache", True)
-        self.model_save_dir = model_save_dir
+        self._model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = {} if ov_config is None else {**ov_config}
@@ -583,7 +589,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         return self
 
     def forward(self, input_ids, pixel_values, past_key_values=None, inputs_embeds=None, image_sizes=None, attention_mask=None, position_ids=None, **kwargs):
-        inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(input_ids, pixel_values, image_sizes, attention_mask=attention_mask, position_ids=position_ids,  **kwargs)
+        inputs_embeds, attention_mask, position_ids = self.get_multimodal_embeddings(input_ids, pixel_values, image_sizes=image_sizes, attention_mask=attention_mask, position_ids=position_ids, past_key_values=past_key_values , **kwargs)
         return self.language_model.forward(input_ids=None, inputs_embeds=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids, past_key_values=past_key_values, **kwargs)
 
 
@@ -630,7 +636,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
                 # 2 - If the past_length is smaller than input_ids', then input_ids holds all input tokens. We can discard
                 # input_ids based on the past_length.llava
                 elif past_length < input_ids.shape[1]:
-                    input_ids = input_ids[:, past_length:]if labels is None:
+                    input_ids = input_ids[:, past_length:]
                 # 3 - Otherwise (past_length >= input_ids.shape[1]), let's assume input_ids only has unprocessed tokens.
                 elif self.config.image_token_index in input_ids:
                     input_ids = input_ids[:, input_ids.shape[1] - 1 :]
@@ -668,19 +674,13 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
 
 class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
-    additional_parts = ["multi_modal_porjector"]
+    additional_parts = ["multi_modal_projector"]
 
     def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
-        vision_feature_layer = (
-            vision_feature_layer if vision_feature_layer is not None else self.config.vision_feature_layer
-        )
-        vision_feature_select_strategy = (
-            vision_feature_select_strategy
-            if vision_feature_select_strategy is not None
-            else self.config.vision_feature_select_strategy
-        )
+        vision_feature_layer = self.config.vision_feature_layer
+        vision_feature_select_strategy = self.config.vision_feature_select_strategy
         image_outputs = self.vision_embeddings(pixel_values)
         selected_image_feature = image_outputs.hidden_states[vision_feature_layer]
 
@@ -695,11 +695,14 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
 
         return image_features
     
-    def merge_vision_text_embeddings(self, vision_embeds, inputs_embeds, input_ids, attention_mask, position_ids=None,  **kwargs):
+    def merge_vision_text_embeddings(self, vision_embeds, inputs_embeds, input_ids, attention_mask, position_ids=None, **kwargs):
+        image_features = torch.from_numpy(vision_embeds)
+        inputs_embeds = torch.from_numpy(inputs_embeds)
         pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
-        num_images, num_image_patches, embed_dim = vision_embeds.shape
+        
+        num_images, num_image_patches, embed_dim = image_features.shape
         batch_size, sequence_length = input_ids.shape
-        left_padding = not torch.sum(input_ids[:, -1] == torch.tensor(self.config.pad_token_id))
+        left_padding = not torch.sum(input_ids[:, -1] == torch.tensor(pad_token_id))
         # 1. Create a mask to know where special image tokens are
         special_image_token_mask = input_ids == self.config.image_token_index
         num_special_image_tokens = torch.sum(special_image_token_mask, dim=-1)
@@ -746,13 +749,13 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         image_to_overwrite[batch_indices, text_to_overwrite] = False
         image_to_overwrite &= image_to_overwrite.cumsum(-1) - 1 >= nb_image_pad[:, None].to(target_device)
 
-        if image_to_overwrite.sum() != vision_embeds.shape[:-1].numel():
+        if image_to_overwrite.sum() != image_features.shape[:-1].numel():
             raise ValueError(
                 f"The input provided to the model are wrong. The number of image tokens is {torch.sum(special_image_token_mask)} while"
                 f" the number of image given to the model is {num_images}. This prevents correct indexing and breaks batch generation."
             )
 
-        final_embedding[image_to_overwrite] = vision_embeds.contiguous().reshape(-1, embed_dim).to(target_device)
+        final_embedding[image_to_overwrite] = image_features.contiguous().reshape(-1, embed_dim).to(target_device)
         final_attention_mask |= image_to_overwrite
         position_ids = (final_attention_mask.cumsum(-1) - 1).masked_fill_((final_attention_mask == 0), 1)
 
@@ -763,3 +766,45 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         final_embedding[batch_indices, indices_to_mask] = 0
 
         return final_embedding, final_attention_mask, position_ids
+
+    def get_multimodal_embeddings(self, input_ids, pixel_values=None, attention_mask=None, position_ids=None, past_key_values=None, **kwargs):
+        inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(input_ids, pixel_values, attention_mask, position_ids, **kwargs)
+
+        if pixel_values is not None and past_key_values is not None:
+            if not self.language_model.stateful:
+                first_layer_past_key_value = torch.from_numpy(past_key_values[0][0][:, :, :, 0])
+            else:
+                first_layer_past_key_value = torch.from_numpy(self.language_model.request.query_state()[0].state.data[:, :, :, 0])
+
+            # Sum all dimensions of head_dim (-2) to avoid random errors such as: https://github.com/huggingface/transformers/pull/28032#issuecomment-1863691941
+            batch_index, non_attended_tokens = torch.where(first_layer_past_key_value.float().sum(-2) == 0)
+
+            # Get the target length
+            target_length = input_ids.shape[1]
+            past_length = first_layer_past_key_value.shape[-1]
+
+            extended_attention_mask = torch.ones(
+                (attention_mask.shape[0], past_length),
+                dtype=attention_mask.dtype,
+                device=attention_mask.device,
+            )
+
+            # Filter out only the tokens that can be un-attended, this can happen
+            # if one uses Llava + Fused modules where the cache on the
+            # first iteration is already big enough, or if one passes custom cache
+            valid_indices = non_attended_tokens < extended_attention_mask.size(-1)
+            new_batch_index = batch_index[valid_indices]
+            new_non_attended_tokens = non_attended_tokens[valid_indices]
+
+            # Zero-out the places where we don't need to attend
+            extended_attention_mask[new_batch_index, new_non_attended_tokens] = 0
+
+            attention_mask = torch.cat((extended_attention_mask, attention_mask[:, -target_length:]), dim=1)
+            position_ids = torch.sum(attention_mask, dim=1).unsqueeze(-1) - 1
+
+        return inputs_embeds, attention_mask, position_ids
+
+
+MODEL_TYPE_TO_CLS_MAPPING = {
+    "llava": _OVLlavaForCausalLM,
+}
