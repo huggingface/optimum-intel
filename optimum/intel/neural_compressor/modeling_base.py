@@ -45,10 +45,7 @@ from transformers import (
 )
 from transformers.modeling_utils import no_init_weights
 from transformers.models.auto.auto_factory import _get_model_class
-from transformers.utils import (
-    SAFE_WEIGHTS_NAME,
-    WEIGHTS_NAME,
-)
+from transformers.utils import SAFE_WEIGHTS_NAME, WEIGHTS_NAME
 from transformers.utils.generic import ContextManagers
 
 from optimum.intel.generation import BaseModelForCausalLM
