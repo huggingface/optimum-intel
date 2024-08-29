@@ -129,12 +129,6 @@ class INCModel(OptimizedModel):
         config = kwargs.pop("config", None)
 
         quantization_config = kwargs.pop("quantization_config", None)
-        if not isinstance(config, PretrainedConfig):
-            config, _ = AutoConfig.from_pretrained(
-                model_id,
-                return_unused_kwargs=True,
-                **kwargs,
-            )
         if hasattr(config, "quantization_config"):
             if config.quantization_config is None:
                 logger.warning(
