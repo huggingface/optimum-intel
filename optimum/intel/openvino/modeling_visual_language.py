@@ -2,24 +2,28 @@ import os
 import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
-from typing import Dict, Optional, Tuple
-from openvino.runtime.ie_api import Model
-from transformers import PretrainedConfig
+from typing import Dict, Optional, Tuple, Union
+import warnings
+from transformers import PretrainedConfig, GenerationConfig, GenerationMixin, AutoConfig
 from transformers.modeling_outputs import BaseModelOutputWithPooling
-from optimum.intel.openvino.configuration import OVWeightQuantizationConfig
-from .modeling_decoder import OVModelForCausalLM, CausalLMOutputWithPast
-from .modeling_base import OVBaseModel
-from .utils import OV_TO_PT_TYPE, OV_TO_NP_TYPE, _print_compiled_model_properties
+from huggingface_hub import hf_hub_download
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from .utils import OV_TO_PT_TYPE, _print_compiled_model_properties
 import torch
 import openvino as ov
+from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 import numpy as np
+from .modeling_decoder import OVModelForCausalLM, CausalLMOutputWithPast
+from .modeling_base import OVBaseModel
+from .configuration import OVConfig, OVWeightQuantizationConfig
+from ...exporters.openvino import main_export
 
 logger = logging.getLogger(__name__)
 
 core = ov.Core()
 
 class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
-    def __init__(self, model: Model, text_embeds_model: Model, config: PretrainedConfig = None, device: str = "CPU", dynamic_shapes: bool = True, ov_config: Dict[str, str] | None = None, model_save_dir: str | Path | TemporaryDirectory | None = None, quantization_config: OVWeightQuantizationConfig | Dict | None = None, **kwargs):
+    def __init__(self, model: ov.Model, text_embeds_model: ov.Model, config: PretrainedConfig = None, device: str = "CPU", dynamic_shapes: bool = True, ov_config: Dict[str, str] | None = None, model_save_dir: str | Path | TemporaryDirectory | None = None, quantization_config: OVWeightQuantizationConfig | Dict | None = None, **kwargs):
         self.model = model
         self.text_emb_model = text_embeds_model
         self.request = None
@@ -140,9 +144,6 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
         return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
 
-class OVModelForVisualCausalLM(OVBaseModel):
-    pass
-
 
 class OVModelPart:
 
@@ -213,7 +214,7 @@ class OVModelPart:
 
 
 class OVVisionEmbedding(OVModelPart):
-    def __init__(self, model:ov.Model, parent_model:OVModelForVisualCausalLM) -> None:
+    def __init__(self, model:ov.Model, parent_model:OVBaseModel) -> None:
         super(model, parent_model)
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
@@ -236,15 +237,19 @@ class OVMultiModalProjector(OVModelPart):
         result = self.request(hidden_state)[0]
         return result
 
+MODEL_PARTS_CLS_MAPPING = {
+    "multi_modal_projector": OVMultiModalProjector
+}
 
-class OVVisionModelForCausalLM(OVBaseModel):
+class OVVisionModelForCausalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
+    additional_parts = []
 
     def __init__(
         self,
-        encoder: openvino.runtime.Model,
-        decoder: openvino.runtime.Model,
-        decoder_with_past: openvino.runtime.Model = None,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
         config: PretrainedConfig = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
@@ -254,28 +259,42 @@ class OVVisionModelForCausalLM(OVBaseModel):
         **kwargs,
     ):
         self.config = config
-        self.use_cache = decoder_with_past is not None
+        self.use_cache = kwargs.get("use_cache", True)
         self.model_save_dir = model_save_dir
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
+        self.lm_model = language_model
+        self.text_embdings_model = text_embeddings
+        self.vision_embeddings_model = vision_embeddings
 
-        if self.is_dynamic:
-            encoder = self._reshape(encoder, -1, -1, is_decoder=False)
-            decoder = self._reshape(decoder, -1, -1)
-            decoder_with_past = self._reshape(decoder_with_past, -1, -1) if self.use_cache else None
-        self.encoder_model = encoder
-        self.decoder_model = decoder
-        self.decoder_with_past_model = decoder_with_past
-        if self.can_generate():
-            self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
-        else:
-            self.generation_config = None
+        for part in self.additional_parts:
+            setattr(self, f"{part}_model", kwargs.get(part))
+
+        enable_compilation = kwargs.get("compile", True)
+        self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
         self._set_ov_config_parameters()
+        self.language_model = OVModelWithEmbedForCausalLM(self.lm_model, self.text_embdings_model, config=config, deivce=device, ov_config=ov_config, model_save_dir=model_save_dir, quantization_config=quantization_config, compile=False)
+        self.vision_embeddings = OVVisionEmbedding(self.vision_embeddings_model, self)
+        for part in self.additional_parts:
+            model_part = getattr(self, f"{part}_model", None)
+            if model_part is not None:
+                model_part = MODEL_PARTS_CLS_MAPPING[part](model_part, self)
+            setattr(self, part, model_part)
+        
+        if enable_compilation:
+            self.compile()
+
+        # Avoid warnings when creating a transformers pipeline
+        AutoConfig.register(self.base_model_prefix, AutoConfig)
+        try:
+            self.auto_model_class.register(AutoConfig, self.__class__)
+        except AttributeError:
+            pass
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         """
@@ -286,15 +305,17 @@ class OVVisionModelForCausalLM(OVBaseModel):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
-        src_files = [self.encoder_model, self.decoder_model]
-        dst_file_names = [OV_ENCODER_NAME, OV_DECODER_NAME]
-        if self.use_cache:
-            src_files.append(self.decoder_with_past_model)
-            dst_file_names.append(OV_DECODER_WITH_PAST_NAME)
+        src_files = [self.lm_model, self.text_embdings_model, self.vision_embeddings_model]
+        dst_file_names = ["openvino_language_model.xml", "openvino_text_embeddings_model.xml", "openvino_vision_embeddings.xml"]
+        for part in self.additional_parts:
+            model = getattr(self, f"{part}_model", None)
+            if model is not None:
+                src_files.append(model)
+                dst_file_names.append(f"openvino_{part}_model.xml")
 
         for src_file, dst_file_name in zip(src_files, dst_file_names):
             dst_path = os.path.join(save_directory, dst_file_name)
-            openvino.save_model(src_file, dst_path, compress_to_fp16=False)
+            ov.save_model(src_file, dst_path, compress_to_fp16=False)
 
         self._save_openvino_config(save_directory)
         if self.generation_config is not None:
@@ -315,12 +336,7 @@ class OVVisionModelForCausalLM(OVBaseModel):
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        encoder_file_name: Optional[str] = None,
-        decoder_file_name: Optional[str] = None,
-        decoder_with_past_file_name: Optional[str] = None,
         local_files_only: bool = False,
-        use_cache: bool = True,
-        from_onnx: bool = False,
         load_in_8bit: bool = False,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
@@ -368,37 +384,31 @@ class OVVisionModelForCausalLM(OVBaseModel):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
-        default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
-        default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
-        default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
-        encoder_file_name = encoder_file_name or default_encoder_file_name
-        decoder_file_name = decoder_file_name or default_decoder_file_name
-        decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
-        decoder_with_past = None
+        language_model_file_name = "openvino_language_model.xml"
+        text_embeddings_file_name = "openvino_text_embeddings_model.xml"
+        vision_embeddings_file_name = "openvino_vision_embeddings_model.xml"
 
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         # Load model from a local directory
         if os.path.isdir(model_id):
-            encoder = cls.load_model(os.path.join(model_id, encoder_file_name), quantization_config)
-            decoder = cls.load_model(os.path.join(model_id, decoder_file_name), quantization_config)
-            if use_cache:
-                decoder_with_past = cls.load_model(
-                    os.path.join(model_id, decoder_with_past_file_name), quantization_config
-                )
+            language_model = cls.load_model(os.path.join(model_id, language_model_file_name), quantization_config)
+            text_embeddings = cls.load_model(os.path.join(model_id, text_embeddings_file_name), quantization_config)
+            vision_embeddings = cls.load_model(os.path.join(model_id, vision_embeddings_file_name), quantization_config)
+
+            for part in cls.additional_parts:
+                part_file_name = f"openvino_{part}_model.xml"
+                part_model = cls.load_model(os.path.join(model_id, part_file_name), quantization_config)
+                kwargs[part] = part_model
 
             model_save_dir = Path(model_id)
 
         # Load model from hub
         else:
-            model_file_names = {"encoder": encoder_file_name, "decoder": decoder_file_name}
-            if use_cache:
-                model_file_names["decoder_with_past"] = decoder_with_past_file_name
+            model_file_names = {"language_model": language_model_file_name, "text_embeddings": text_embeddings_file_name, "vision_embeddings": vision_embeddings_file_name}
+            for part in cls.additional_parts:
+                model_file_names[part] = part_file_name = f"openvino_{part}_model.xml"
 
-            # If not ONNX then OpenVINO IR : adds binary files
-            if not from_onnx:
-                for key in list(model_file_names.keys()):
-                    model_file_names[key + "_bin"] = model_file_names[key].replace(".xml", ".bin")
             file_names = model_file_names.copy()
             for name, file_name in model_file_names.items():
                 model_cache_path = hf_hub_download(
@@ -413,10 +423,11 @@ class OVVisionModelForCausalLM(OVBaseModel):
                 file_names[name] = model_cache_path
 
             model_save_dir = Path(model_cache_path).parent
-            encoder = cls.load_model(file_names["encoder"], quantization_config)
-            decoder = cls.load_model(file_names["decoder"], quantization_config)
-            if use_cache:
-                decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
+            language_model = cls.load_model(file_names["language_model"], quantization_config)
+            text_embeddings = cls.load_model(file_names["text_embeddings"], quantization_config)
+            vision_embeddings = cls.load_model(file_names["vision_emnbeddings"], quantization_config)
+            for part in cls.additional_parts:
+                kwargs[part] = cls.load_model(file_names[part], quantization_config)
 
         try:
             generation_config = GenerationConfig.from_pretrained(
@@ -432,9 +443,9 @@ class OVVisionModelForCausalLM(OVBaseModel):
             pass
 
         return cls(
-            encoder=encoder,
-            decoder=decoder,
-            decoder_with_past=decoder_with_past,
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
@@ -500,8 +511,6 @@ class OVVisionModelForCausalLM(OVBaseModel):
 
         if task is None:
             task = cls.export_feature
-            if use_cache:
-                task = task + "-with-past"
 
         # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
         if load_in_8bit is None and not quantization_config:
@@ -533,51 +542,49 @@ class OVVisionModelForCausalLM(OVBaseModel):
             **kwargs,
         )
 
-    def _reshape(self, model: ov.Model, batch_size: int, sequence_length: int, is_decoder=True):
-        shapes = {}
-        for inputs in model.inputs:
-            shapes[inputs] = inputs.get_partial_shape()
-            shapes[inputs][0] = batch_size if not is_decoder else -1
-            if inputs.get_any_name().startswith("past_key_values"):
-                shapes[inputs][2] = -1
-            elif inputs.get_any_name().startswith("cache_position"):
-                shapes[inputs][0] = sequence_length
-            elif is_decoder and not inputs.get_any_name().startswith("encoder"):
-                shapes[inputs][1] = -1
-            else:
-                shapes[inputs][1] = sequence_length
-        model.reshape(shapes)
-        return model
-
+    
     def reshape(self, batch_size: int, sequence_length: int):
-        """
-        Propagates the given input shapes on the model's layers, fixing the inputs shapes of the model.
-
-        Arguments:
-            batch_size (`int`):
-                The batch size.
-            sequence_length (`int`):
-                The sequence length.
-        """
-        logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
-        self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
-        self.encoder_model = self._reshape(self.encoder_model, batch_size, sequence_length, is_decoder=False)
-        self.decoder_model = self._reshape(self.decoder_model, batch_size, sequence_length)
-        if self.use_cache:
-            self.decoder_with_past_model = self._reshape(self.decoder_with_past_model, batch_size, sequence_length)
+        logger.warning("Static shapes are not supported for causal language model.")
+        return self
 
     def half(self):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        apply_moc_transformations(self.encoder_model, cf=False)
-        apply_moc_transformations(self.decoder_model, cf=False)
-        compress_model_transformation(self.encoder_model)
-        compress_model_transformation(self.decoder_model)
-        if self.use_cache:
-            apply_moc_transformations(self.decoder_with_past_model, cf=False)
-            compress_model_transformation(self.decoder_with_past_model)
+        apply_moc_transformations(self.lm_model, cf=False)
+        compress_model_transformation(self.lm_model)
+        apply_moc_transformations(self.text_embdings_model, cf=False)
+        compress_model_transformation(self.text_embdings_model)
+        apply_moc_transformations(self.vision_embeddings_model, cf=False)
+        compress_model_transformation(self.vision_embeddings_model)
+        for part in self.additional_parts:
+            model = getattr(self, f"{part}_model", None)
+            if model is not None:
+                apply_moc_transformations(model, cf=False)
+                compress_model_transformation(model)
         return self
 
-    def forward(self, *args, **kwargs):
+    def forward(self, input_ids, pixel_values, **kwargs):
+        inputs_embeds = self.get_multimodal_embeddings(input_ids, pixel_values, **kwargs)
+        return self.language_model.forward(input_ids=None, inputs_embeds=inputs_embeds, **kwargs)
+
+
+    def _reorder_cache(self, past_key_values, beam_idx):
+        return self.language_model._reorder_cache(past_key_values, beam_idx)
+
+
+    def get_vision_embeddings(self, pixel_values, **kwargs):
         raise NotImplementedError
+
+    def get_text_embeddings(self, input_ids, **kwargs):
+        return self.language_model.embed_tokens(input_ids)
+
+    def merge_vision_text_embeddings(self, vision_embeds, inputs_embeds):
+        raise NotImplementedError
+
+    def get_multimodal_embeddings(self, input_ids, pixel_values=None, **kwargs):
+        inputs_embeds = self.get_text_embeddings(input_ids, **kwargs)
+        if pixel_values is not None:
+            vision_embeds = self.get_vision_embeddings(pixel_values, **kwargs)
+            inputs_embeds = self.merge_vision_text_embeddings(vision_embeds, inputs_embeds)
+        return inputs_embeds
