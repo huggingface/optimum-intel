@@ -495,6 +495,7 @@ class WeightOnlyQuantizationTest(INCTestMixin):
 
         with torch.no_grad():
             quantizer_outputs = quantized_model(**tokens)
+        quantized_model.saved_pretrained(tmp_dir)
         loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir)
         with torch.no_grad():
             loaded_outputs = loaded_model(**tokens)
