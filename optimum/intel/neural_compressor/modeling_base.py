@@ -27,7 +27,6 @@ from huggingface_hub.utils import EntryNotFoundError
 from neural_compressor.transformers import GPTQConfig, RtnConfig
 from neural_compressor.transformers.quantization import convert_to_quantized_model, save_low_bit
 from neural_compressor.utils.pytorch import load
-from packaging import version
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -52,9 +51,9 @@ from optimum.intel.generation import BaseModelForCausalLM
 
 from ...modeling_base import OptimizedModel
 from ..utils.import_utils import (
-    _ipex_version,
-    _neural_compressor_version,
     _torch_version,
+    is_ipex_version,
+    is_neural_compressor_version,
     is_torch_version,
 )
 from .configuration import INCConfig
@@ -62,7 +61,9 @@ from .utils import QUANTIZATION_CONFIG_NAME
 
 
 logger = logging.getLogger(__name__)
-
+handler = logging.StreamHandler()
+formatter = logging.Formatter("%(levelname)s - %(message)s")
+handler.setFormatter(formatter)
 
 MODEL_START_DOCSTRING = r"""
     This model check the superclass documentation for the generic methods the
@@ -126,9 +127,13 @@ class INCModel(OptimizedModel):
         device_map = kwargs.get("device_map", "cpu")
         use_xpu = True if device_map == torch.device("xpu") or device_map == "xpu" else False
 
-        config = kwargs.pop("config", None)
-
         quantization_config = kwargs.pop("quantization_config", None)
+        if not isinstance(config, PretrainedConfig):
+            config, _ = AutoConfig.from_pretrained(
+                model_id,
+                return_unused_kwargs=True,
+                **kwargs,
+            )
         if hasattr(config, "quantization_config"):
             if config.quantization_config is None:
                 logger.warning(
@@ -137,13 +142,14 @@ class INCModel(OptimizedModel):
                 )
             else:
                 logger.info("quantization_config: {}".format(config.quantization_config))
+
                 try:
                     from neural_compressor.transformers.models.modeling_auto import (
-                        _BaseQBitsAutoModelClass,
+                        _BaseINCAutoModelClass,
                     )
 
-                    _BaseQBitsAutoModelClass.ORIG_MODEL = cls.auto_model_class
-                    model = _BaseQBitsAutoModelClass.load_low_bit(
+                    _BaseINCAutoModelClass.ORIG_MODEL = cls.auto_model_class
+                    model = _BaseINCAutoModelClass.load_low_bit(
                         model_id,
                         subfolder=subfolder,
                         revision=revision,
@@ -163,10 +169,14 @@ class INCModel(OptimizedModel):
                     exit(0)
         if isinstance(quantization_config, (RtnConfig, GPTQConfig)):
             logger.info("Applying Weight Only Quantization.")
-            if version.parse(_neural_compressor_version) <= version.parse("2.6"):
-                raise AssertionError("Please use neural_compressor version > 2.6.")
-            if version.parse(_ipex_version) < version.parse("2.3.1"):
-                raise AssertionError("Please use intel_extension_for_pytorch version > 2.3.1.")
+            warnings.warn(
+                "Weight only quantization provided by intel_extension_for_transformers is deprecated and it is provided by INC now.",
+                DeprecationWarning,
+            )
+            if is_neural_compressor_version("<=", "3.0"):
+                raise AssertionError("Please use neural_compressor version > 3.0.")
+            if is_ipex_version("<", "2.3.1") and use_xpu:
+                raise AssertionError("Please use intel_extension_for_pytorch version >= 2.3.1.")
 
             if use_xpu:
                 # TODO: if low_cpu_mem_uasge is True, gptj will have accuracy issue on CPU device.
@@ -207,7 +217,6 @@ class INCModel(OptimizedModel):
             model.eval()
 
             if use_xpu:
-
                 assert hasattr(torch, "xpu") and torch.xpu.is_available(), "There is no xpu device in this system!"
                 quantization_config.update(**{"device": "xpu"})
                 quantization_config.post_init_xpu()
@@ -275,6 +284,7 @@ class INCModel(OptimizedModel):
                 )
 
         model_save_dir = Path(model_cache_path).parent
+
         try:
             inc_config = INCConfig.from_pretrained(model_id, subfolder=subfolder, revision=revision)
             if not is_torch_version("==", inc_config.torch_version):

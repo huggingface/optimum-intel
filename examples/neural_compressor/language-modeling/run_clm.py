@@ -35,11 +35,13 @@ import transformers
 from datasets import load_dataset
 from neural_compressor import (
     DistillationConfig,
-    GPTQConfig,
     PostTrainingQuantConfig,
     QuantizationAwareTrainingConfig,
-    RtnConfig,
     WeightPruningConfig,
+)
+from neural_compressor.transformers import (
+    GPTQConfig,
+    RtnConfig,
 )
 from transformers import (
     CONFIG_MAPPING,
