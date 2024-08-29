@@ -187,17 +187,12 @@ class OVWeightCompressionTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
 
     LOAD_IN_4_BITS_SCOPE = (
-        (
-            OVModelForCausalLM,
-            "gpt2",
-            dict(bits=4, sym=False, group_size=-1, ratio=0.8),
-            {"int4": 30, "int8": 14}
-        ),
+        (OVModelForCausalLM, "gpt2", dict(bits=4, sym=False, group_size=-1, ratio=0.8), {"int4": 30, "int8": 14}),
         (
             OVModelForCausalLM,
             "gpt2",
             dict(bits=4, dtype="mxfp4_e2m1", group_size=32),
-            {"f4e2m1": 20, 'f8e8m0': 20, "int8": 4}
+            {"f4e2m1": 20, "f8e8m0": 20, "int8": 4},
         ),
         (
             OVModelForCausalLM,
@@ -208,13 +203,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=32,
                 ignored_scope={"names": ["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]},
             ),
-            {"int4": 38, "int8": 4}
+            {"int4": 38, "int8": 4},
         ),
         (
             OVModelForCausalLM,
             "gpt2",
             dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
-            {"int4": 26, "int8": 18}
+            {"int4": 26, "int8": 18},
         ),
         (
             OVModelForCausalLM,
@@ -227,7 +222,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset="c4",
             ),
-            {"int4": 25, "int8": 14}
+            {"int4": 25, "int8": 14},
         ),
         (
             OVModelForCausalLM,
@@ -240,7 +235,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 dataset=["one two, " * i for i in range(10)],
             ),
-            {"int4": 25, "int8": 14}
+            {"int4": 25, "int8": 14},
         ),
         (
             OVModelForCausalLM,
@@ -255,7 +250,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 quant_method=QuantizationMethod.AWQ,
                 scale_estimation=True,
             ),
-            {"int4": 12, "int8": 8}
+            {"int4": 12, "int8": 8},
         ),
         (
             OVModelForCausalLM,
@@ -269,7 +264,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 dataset="c4",
                 quant_method="awq",
             ),
-            {"int4": 12, "int8": 8}
+            {"int4": 12, "int8": 8},
         ),
     )
 
@@ -618,7 +613,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                         compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
-    def test_ovmodel_4bit_dynamic_with_config(self, model_cls, model_name, quantization_config, expected_num_weight_nodes):
+    def test_ovmodel_4bit_dynamic_with_config(
+        self, model_cls, model_name, quantization_config, expected_num_weight_nodes
+    ):
         model_id = MODEL_NAMES[model_name]
         with tempfile.TemporaryDirectory() as tmp_dir:
             group_size = quantization_config.pop("group_size", 32)
