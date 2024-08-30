@@ -313,7 +313,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
         weight_format (`str`, defaults to 'int'):
-            Data type to compress weights to. Possible values: ['int4', 'int8', 'mxfp4_e2m1'].
+            Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4_e2m1'].
     """
 
     def __init__(
@@ -394,7 +394,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             self.weight_format = "int4" if self.bits == 4 else "int8"
         if self.weight_format not in ["int4", "int8", "mxfp4_e2m1"]:
             raise ValueError(
-                f"Data type must be on of the following: ['int4', 'int8', 'mxfp4_e2m1'], but found: {self.weight_format}."
+                f"Weight format must be one of the following: ['int4', 'int8', 'mxfp4_e2m1'], but found: {self.weight_format}."
             )
 
 
