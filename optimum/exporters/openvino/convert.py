@@ -49,7 +49,6 @@ from ...intel.utils.import_utils import is_nncf_available
 from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_export_task_support_stateful, ensure_stateful_is_available, patch_stateful
 from .utils import (
-    _MAX_UNCOMPRESSED_SIZE,
     OV_XML_FILE_NAME,
     clear_class_registry,
     flattenize_inputs,
@@ -76,21 +75,7 @@ if TYPE_CHECKING:
 
 
 def _save_model(model, path: str, ov_config: Optional["OVConfig"] = None, library_name: Optional[str] = None):
-    compress_to_fp16 = False
-
-    if ov_config is not None:
-        if ov_config.quantization_config:
-            if not is_nncf_available():
-                raise ImportError(
-                    "Quantization of the weights to int8 requires nncf, please install it with `pip install nncf`"
-                )
-
-            from optimum.intel.openvino.quantization import _weight_only_quantization
-
-            _weight_only_quantization(model, ov_config.quantization_config)
-
-        compress_to_fp16 = ov_config.dtype == "fp16"
-
+    compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
     save_model(model, path, compress_to_fp16)
 
@@ -643,25 +628,6 @@ def export_from_model(
     )
     logging.disable(logging.NOTSET)
 
-    if ov_config is None:
-        if library_name == "diffusers":
-            num_parameters = model.unet.num_parameters()
-        else:
-            num_parameters = sum(param.numel() for param in list(model.parameters()) if param.requires_grad)
-
-        if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
-            if is_nncf_available():
-                from ...intel.openvino.configuration import OVConfig
-
-                ov_config = OVConfig(quantization_config={"bits": 8, "sym": False})
-
-                logger.info("The model weights will be quantized to int8_asym.")
-            else:
-                logger.warning(
-                    "The model will be converted with no weights quantization. Quantization of the weights to int8 requires nncf."
-                    "please install it with `pip install nncf`"
-                )
-
     if library_name != "diffusers":
         # Saving the model config and preprocessor as this is needed sometimes.
         model.config.save_pretrained(output)
@@ -719,6 +685,8 @@ def export_from_model(
         model_kwargs=model_kwargs,
         patch_16bit_model=patch_16bit_model,
     )
+
+    return files_subpaths
 
 
 def export_tokenizer(
