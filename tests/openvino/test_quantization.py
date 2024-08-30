@@ -191,7 +191,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "gpt2",
-            dict(bits=4, dtype="mxfp4_e2m1", group_size=32),
+            dict(bits=4, weight_format="mxfp4_e2m1", group_size=32),
             {"f4e2m1": 20, "f8e8m0": 20, "int8": 4},
         ),
         (
@@ -512,8 +512,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
-            dtype = "int4" if quantization_config.dtype != "mxfp4_e2m1" else "mxfp4_e2m1"
-            self.assertEqual(openvino_config.dtype, dtype)
+            self.assertEqual(openvino_config.dtype, quantization_config.weight_format)
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
@@ -637,8 +636,7 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
-            dtype = "int4" if quantization_config.dtype != "mxfp4_e2m1" else "mxfp4_e2m1"
-            self.assertEqual(openvino_config.dtype, dtype)
+            self.assertEqual(openvino_config.dtype, quantization_config.weight_format)
 
 
 class OVQuantizerQATest(unittest.TestCase):

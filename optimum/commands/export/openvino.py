@@ -70,17 +70,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=[
-            "fp32",
-            "fp16",
-            "int8",
-            "int4",
-            "mxfp4_e2m1",
-            "int4_sym_g128",
-            "int4_asym_g128",
-            "int4_sym_g64",
-            "int4_asym_g64",
-        ],
+        choices=["fp32", "fp16", "int8", "int4", "mxfp4_e2m1"],
         default=None,
         help="The weight format of the exported model.",
     )
@@ -281,18 +271,11 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "quant_method": "awq" if self.args.awq else "default",
                     "sensitivity_metric": self.args.sensitivity_metric,
                     "scale_estimation": self.args.scale_estimation,
-                    "dtype": "int" if "int" in self.args.weight_format else self.args.weight_format,
+                    "weight_format": self.args.weight_format,
                 }
 
             if quantization_config.get("dataset", None) is not None:
                 quantization_config["trust_remote_code"] = self.args.trust_remote_code
-
-            if self.args.weight_format in {"int4_sym_g128", "int4_asym_g128", "int4_sym_g64", "int4_asym_g64"}:
-                logger.warning(
-                    f"--weight-format {self.args.weight_format} is deprecated, possible choices are fp32, fp16, int8, int4"
-                )
-                quantization_config["sym"] = "asym" not in self.args.weight_format
-                quantization_config["group_size"] = 128 if "128" in self.args.weight_format else 64
             ov_config = OVConfig(quantization_config=quantization_config)
 
         quantization_config = ov_config.quantization_config if ov_config else None

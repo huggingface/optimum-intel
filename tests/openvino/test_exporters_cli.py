@@ -89,10 +89,8 @@ class OVCLIExportTestCase(unittest.TestCase):
     )
 
     TEST_4BIT_CONFIGURATONS = [
-        ("text-generation-with-past", "opt125m", "int4_sym_g128", {"int8": 4, "int4": 72}),
-        ("text-generation-with-past", "opt125m", "int4_asym_g128", {"int8": 4, "int4": 144}),
-        ("text-generation-with-past", "opt125m", "int4_sym_g64", {"int8": 4, "int4": 72}),
-        ("text-generation-with-past", "opt125m", "int4_asym_g64", {"int8": 4, "int4": 144}),
+        ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", {"int8": 4, "int4": 72}),
+        ("text-generation-with-past", "opt125m", "int4 --group-size 64", {"int8": 4, "int4": 144}),
         ("text-generation-with-past", "opt125m", "mxfp4_e2m1", {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}),
         ("text-generation-with-past", "llama_awq", "int4 --ratio 1.0 --sym --group-size 8 --all-layers", {"int4": 16}),
         (
