@@ -812,7 +812,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
 
 class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
     def pack_image_features(self, image_features, image_sizes, image_newline=None):
-        from trnasformers.models.llava_next.modeling_llava_next import get_anyres_image_grid_shape, unpad_image
+        from transformers.models.llava_next.modeling_llava_next import get_anyres_image_grid_shape, unpad_image
         """
         Reshape, unpad and then pack each image_feature into a single image_features tensor containing all visual vectors.
 
@@ -893,20 +893,21 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
                 raise ValueError(f"pixel_values of shape {pixel_values.shape}, expect to be of 4 or 5 dimensions")
             vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
             if vision_embeds is not None:
+                image_newline = torch.zeros(self.config.text_config.hidden_size, dtype=torch.float32)
                 image_features = torch.split(torch.from_numpy(vision_embeds), image_num_patches, dim=0)
                 image_features, feature_lens = self.pack_image_features(
                     image_features,
                     image_sizes,
-                    image_newline=self.image_newline,
+                    image_newline=image_newline,
                 )
-                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(image_features, inputs_embeds, feature_les=feature_lens, input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids, **kwargs)
+                inputs_embeds, attention_mask, position_ids = self.merge_vision_text_embeddings(image_features, inputs_embeds, feature_lens=feature_lens, input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids, **kwargs)
 
         if pixel_values is not None and past_key_values is not None:
             attention_mask, position_ids = self._filter_unattended_tokens(input_ids, attention_mask, past_key_values)
 
         return inputs_embeds, attention_mask, position_ids
 
-    def merge_vision_text_embeddings(self, vision_embeds, inputs_embeds, input_ids, attention_mask, position_ids=None, **kwargs):
+    def merge_vision_text_embeddings(self, vision_embeds, inputs_embeds, feature_lens, input_ids, attention_mask, position_ids=None, **kwargs):
         image_token_index = self.config.image_token_index
         image_features = torch.from_numpy(vision_embeds) if isinstance(vision_embeds, np.ndarray) else vision_embeds
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds

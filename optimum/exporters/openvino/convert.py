@@ -562,8 +562,7 @@ def export_from_model(
 
         logger.info(f"Automatic task detection to: {task}.")
 
-    stateful = stateful and ensure_export_task_support_stateful(task) or getattr(getattr(model, "config", {}), "model_type", None) == "llava"
-
+    stateful = stateful and ensure_export_task_support_stateful(task) or getattr(getattr(model, "config", {}), "model_type", None) in ["llava", "llava_next"]
     # TODO: support onnx_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
         raise ValueError(
