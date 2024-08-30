@@ -88,6 +88,9 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "llava", "image-to-text")] = ("transformers", "LlavaForConditionalGeneration")
     TasksManager._CUSTOM_CLASSES[("pt", "llava", "image-text-to-text")] = ("transformers", "LlavaForConditionalGeneration")
     TasksManager._CUSTOM_CLASSES[("pt", "llava", "visual-question-answering")] = ("transformers", "LlavaForConditionalGeneration")
+    TasksManager._CUSTOM_CLASSES[("pt", "llava-next", "image-to-text")] = ("transformers", "LlavaNextForConditionalGeneration")
+    TasksManager._CUSTOM_CLASSES[("pt", "llava-next", "image-text-to-text")] = ("transformers", "LlavaNextForConditionalGeneration")
+    TasksManager._CUSTOM_CLASSES[("pt", "llava-next", "visual-question-answering")] = ("transformers", "LlavaNextForConditionalGeneration")
     TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["image-text-to-text"] = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS["image-to-text"]
 
     supported_model_types = [

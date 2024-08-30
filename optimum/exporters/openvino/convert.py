@@ -826,7 +826,7 @@ def _get_submodels_and_export_configs(
     exporter: str = "openvino",
     stateful:bool = False
 ):
-    if not custom_architecture and library_name == "transformers" and model.config.model_type == "llava":
+    if not custom_architecture and library_name == "transformers" and model.config.model_type in ["llava", "llava_next"]:
         return _get_llava_submodels_and_export_configs(model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful)
     
     export_config, models_for_export =  _default_get_submodels_and_export_configs(model, task, monolith, custom_export_configs, custom_architecture, _variant, library_name, int_dtype, float_dtype, fn_get_submodels, preprocessors, legacy, model_kwargs, exporter)
