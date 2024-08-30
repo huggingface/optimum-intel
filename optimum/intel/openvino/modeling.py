@@ -128,7 +128,6 @@ class OVModel(OVBaseModel):
         # Avoid warnings when creating a transformers pipeline
         AutoConfig.register(self.base_model_prefix, AutoConfig)
         self.auto_model_class.register(AutoConfig, self.__class__)
-        self.device = torch.device("cpu")
 
     def to(self, device: str):
         """

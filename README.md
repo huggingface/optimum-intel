@@ -223,7 +223,6 @@ To load your IPEX model, you can just replace your `AutoModelForXxx` class with 
   tokenizer = AutoTokenizer.from_pretrained(model_id)
   pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
   results = pipe("He's a dreadful magician and")
-
 ```
 
 For more details, please refer to the [documentation](https://intel.github.io/intel-extension-for-pytorch/#introduction).
@@ -231,7 +230,7 @@ For more details, please refer to the [documentation](https://intel.github.io/in
 
 ## Running the examples
 
-Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) directory to see how 🤗 Optimum Intel can be used to optimize models and accelerate inference.
+Check out the [`examples`](https://github.com/huggingface/optimum-intel/tree/main/examples) and [`notebooks`](https://github.com/huggingface/optimum-intel/tree/main/notebooks) directory to see how 🤗 Optimum Intel can be used to optimize models and accelerate inference.
 
 Do not forget to install requirements for every example:
 

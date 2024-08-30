@@ -64,7 +64,7 @@ from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS, recursive_to_device
 logger = logging.getLogger(__name__)
 
 
-_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit")
+_IPEX_SUPPORT_MODEL_TYPES = ("llama", "bert", "vit", "falcon", "gpt2")
 _IPEX_EXPORTED_GENERATION_METHODS = ("sample", "greedy_search", "beam_sample", "beam_search", "assisted_generation")
 
 
@@ -198,7 +198,7 @@ class IPEXModel(OptimizedModel):
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        cache_dir: Union[str, Path] = HUGGINGFACE_HUB_CACHE,
         subfolder: str = "",
         local_files_only: bool = False,
         torch_dtype: Optional[Union[str, "torch.dtype"]] = None,
@@ -206,6 +206,40 @@ class IPEXModel(OptimizedModel):
         file_name: Optional[str] = WEIGHTS_NAME,
         **kwargs,
     ):
+        """
+        Loads a model and its configuration file from a directory or the HF Hub.
+
+        Arguments:
+            model_id (`str` or `Path`):
+                The directory from which to load the model.
+                Can be either:
+                    - The model id of a pretrained model hosted inside a model repo on huggingface.co.
+                    - The path to a directory containing the model weights.
+            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
+                Deprecated. Please use `token` instead.
+            token (Optional[Union[bool, str]], defaults to `None`):
+                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
+                when running `huggingface-cli login` (stored in `~/.huggingface`).
+            revision (`str`, *optional*):
+                The specific model version to use. It can be a branch name, a tag name, or a commit id.
+            force_download (`bool`, defaults to `False`):
+                Whether or not to force the (re-)download of the model weights and configuration files, overriding the
+                cached versions if they exist.
+            cache_dir (`Union[str, Path]`, *optional*):
+                The path to a directory in which a downloaded pretrained model configuration should be cached if the
+                standard cache should not be used.
+            subfolder (`str`, *optional*)
+                In case the relevant files are located inside a subfolder of the model repo either locally or on huggingface.co, you can specify the folder name here.
+            local_files_only (`bool`, *optional*, defaults to `False`):
+                Whether or not to only look at local files (i.e., do not try to download the model).
+            torch_dtype (`Optional[Union[str, "torch.dtype"]]`, *optional*)
+                float16 or bfloat16 or float32: load in a specified dtype, ignoring the model config.torch_dtype if one exists. If not specified, the model will get loaded in float32.
+            trust_remote_code (`bool`, *optional*)
+                Allows to use custom code for the modeling hosted in the model repository. This option should only be set for repositories you trust and in which you have read the code, as it will execute on your local machine arbitrary code present in the model repository.
+            file_name (`str`, *optional*):
+                The file name of the model to load. Overwrites the default file name and allows one to load the model
+                with a different name.
+        """
         if use_auth_token is not None:
             warnings.warn(
                 "The `use_auth_token` argument is deprecated and will be removed in v5 of Transformers. Please use `token` instead.",
@@ -474,12 +508,21 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             self._reorder_cache = _ipex_reorder_cache
         else:
             # Check if _reorder_cache is a static method
-            if isinstance(self.model_cls.__dict__["_reorder_cache"], staticmethod):
+            if "_reorder_cache" in self.model_cls.__dict__ and isinstance(
+                self.model_cls.__dict__["_reorder_cache"], staticmethod
+            ):
                 self._reorder_cache = self.model_cls._reorder_cache
-            else:
+            elif "_reorder_cache" in self.model_cls.__dict__:
                 self._reorder_cache = self.model_cls._reorder_cache.__get__(self)
 
-        if is_transformers_version(">=", "4.38.0") and model_type in {"llama", "phi", "persimmon", "mistral"}:
+        if is_transformers_version(">=", "4.38.0") and model_type in {
+            "llama",
+            "phi",
+            "persimmon",
+            "mistral",
+            "falcon",
+            "gpt2",
+        }:
             self.prepare_inputs_for_generation = _ipex_prepare_inputs_for_generation
         else:
             self.prepare_inputs_for_generation = self.model_cls.prepare_inputs_for_generation.__get__(self)
@@ -498,8 +541,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         d_k = self.normalized_config.hidden_size // self.normalized_config.num_attention_heads
         batch_size = input_ids.shape[0]
 
-        if model_type in {"mistral", "llama"}:
-            num_attention_heads = self.normalized_config.num_key_value_heads
+        if model_type in {"mistral", "llama", "falcon"}:
+            num_attention_heads = getattr(self.normalized_config, "num_key_value_heads", 1)
         else:
             num_attention_heads = self.normalized_config.num_attention_heads
 

@@ -29,7 +29,6 @@ from transformers import (
     ImageToTextPipeline,
     Pipeline,
     PreTrainedTokenizer,
-    PreTrainedTokenizerFast,
     QuestionAnsweringPipeline,
     SummarizationPipeline,
     Text2TextGenerationPipeline,

@@ -21,36 +21,36 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.8", "3.12"]
-        transformers-version: ["4.36.0", "4.42.*"]
+        transformers-version: ["4.36.0", "4.43.*"]
         os: [ubuntu-latest]
 
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v4
-    - name: Setup Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        # install PyTorch CPU version to avoid installing CUDA packages on GitHub runner without GPU
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        pip install transformers==${{ matrix.transformers-version }}
-        pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
-    - name: Test with Pytest
-      env:
-        HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
-      run: |
-        pytest tests/openvino/ --ignore tests/openvino/test_modeling_basic.py --durations=0
-    - name: Test basic
-      run: |
-        pip uninstall -y nncf
-        pytest tests/openvino/test_modeling_basic.py
-    - name: Test openvino-nightly
-      run: |
-        pip uninstall -y openvino
-        pip install openvino-nightly
-        python -c "from optimum.intel import OVModelForCausalLM; OVModelForCausalLM.from_pretrained('hf-internal-testing/tiny-random-gpt2', export=True, compile=False)"
-        optimum-cli export openvino -m hf-internal-testing/tiny-random-gpt2 gpt2-ov
+      - uses: actions/checkout@v4
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # install PyTorch CPU version to avoid installing CUDA packages on GitHub runner without GPU
+          pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install .[openvino,openvino-tokenizers,tests,diffusers] onnxruntime
+          pip install transformers==${{ matrix.transformers-version }}
+
+      - name: Test with Pytest
+        env:
+          HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+        run: |
+          pytest tests/openvino/ --ignore tests/openvino/test_modeling_basic.py --durations=0
+      - name: Test basic
+        run: |
+          pip uninstall -y nncf
+          pytest tests/openvino/test_modeling_basic.py
+      - name: Test openvino-nightly
+        run: |
+          pip install -U --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+          python -c "from optimum.intel import OVModelForCausalLM; OVModelForCausalLM.from_pretrained('hf-internal-testing/tiny-random-gpt2', export=True, compile=False)"
+          optimum-cli export openvino -m hf-internal-testing/tiny-random-gpt2 gpt2-ov

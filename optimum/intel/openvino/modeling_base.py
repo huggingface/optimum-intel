@@ -20,6 +20,7 @@ from tempfile import TemporaryDirectory, gettempdir
 from typing import Dict, Optional, Union
 
 import openvino
+import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core, convert_model
@@ -35,7 +36,7 @@ from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
-from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, _print_compiled_model_properties
+from .utils import ONNX_WEIGHTS_NAME, OV_TO_PT_TYPE, OV_XML_FILE_NAME, _print_compiled_model_properties
 
 
 core = Core()
@@ -78,16 +79,27 @@ class OVBaseModel(OptimizedModel):
             model = self._reshape(model, -1, -1, height, width)
 
         input_names = {}
+        input_dtypes = {}
         for idx, key in enumerate(model.inputs):
             names = tuple(key.get_names())
             input_names[next((name for name in names if "/" not in name), names[0])] = idx
+            input_dtypes[
+                next((name for name in names if "/" not in name), names[0])
+            ] = key.get_element_type().get_type_name()
         self.input_names = input_names
+        self.input_dtypes = input_dtypes
 
         output_names = {}
+        output_dtypes = {}
         for idx, key in enumerate(model.outputs):
             names = tuple(key.get_names())
             output_names[next((name for name in names if "/" not in name), names[0])] = idx
+            output_dtypes[
+                next((name for name in names if "/" not in name), names[0])
+            ] = key.get_element_type().get_type_name()
+
         self.output_names = output_names
+        self.output_dtypes = output_dtypes
 
         self.model = model
         self.request = None
@@ -103,6 +115,27 @@ class OVBaseModel(OptimizedModel):
 
         if enable_compilation:
             self.compile()
+
+    @property
+    def device(self) -> torch.device:
+        """
+        `torch.device`: The device on which the module is (for torch compatibility).
+        """
+        return torch.device("cpu")
+
+    @property
+    def dtype(self) -> Optional[torch.dtype]:
+        for dtype in self.input_dtypes.values():
+            torch_dtype = OV_TO_PT_TYPE.get(dtype)
+            if torch_dtype.is_floating_point:
+                return torch_dtype
+
+        for dtype in self.output_dtypes.values():
+            torch_dtype = OV_TO_PT_TYPE.get(dtype)
+            if torch_dtype.is_floating_point:
+                return torch_dtype
+
+        return None
 
     @staticmethod
     def load_model(
