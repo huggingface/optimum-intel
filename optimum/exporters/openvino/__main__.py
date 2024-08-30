@@ -430,7 +430,6 @@ def main_export(
     gc.collect()
 
     core = Core()
-    compressed_submodel_paths = []
     for submodel_path in submodel_paths:
         submodel_path = Path(output) / submodel_path
         submodel = core.read_model(submodel_path)
@@ -465,11 +464,8 @@ def main_export(
 
         compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
         save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
-        compressed_submodel_paths.append((submodel_path, compressed_submodel_path))
-
         del submodel
 
-    for submodel_path, compressed_submodel_path in compressed_submodel_paths:
         submodel_path.unlink()
         submodel_path.with_suffix(".bin").unlink()
         compressed_submodel_path.rename(submodel_path)
