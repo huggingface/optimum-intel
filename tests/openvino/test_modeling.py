@@ -57,6 +57,7 @@ from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES
 
+from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.intel import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
@@ -728,8 +729,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=1e-4))
 
         # Qwen tokenizer does not support padding
-        # Gemma2 result different due to difference in cache representation
-        if model_arch in ["qwen", "gemma2"]:
+
+        if model_arch in ["qwen"]:
             return
 
         if model_arch not in ["chatglm", "glm4", "persimmon"]:
@@ -754,7 +755,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
-        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+        additional_inputs = {}
+        # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
+        # align cache representation in torch model
+        if model_arch == "gemma2":
+            patch_update_causal_mask(transformers_model, "4.43.0")
+            transformers_model._supports_cache_class = True
+            from transformers.cache_utils import DynamicCache
+
+            additional_inputs = {"past_key_values": DynamicCache()}
+        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
         self.assertTrue(torch.allclose(ov_outputs, transformers_outputs))
 
         del transformers_model
@@ -922,9 +932,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
                 "trust_remote_code": True,
             }
-        # Qwen tokenizer does not support padding, chatgm testing model produces nan that incompatible with beam search
-        # Gemma2 may produce different result due to difference in cache representation
-        if model_arch in ["qwen", "chatglm", "gemma2"]:
+        # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
+        if model_arch in ["qwen", "chatglm", "glm4 "]:
             return
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
@@ -990,6 +999,14 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         if model_arch == "arctic":
             transformers_model.to(torch.float32)
+        additional_inputs = {}
+        # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache, align cache representation in torch model
+        if model_arch == "gemma2":
+            patch_update_causal_mask(transformers_model, "4.43.0")
+            transformers_model._supports_cache_class = True
+            from transformers.cache_utils import DynamicCache
+
+            additional_inputs = {"past_key_values": DynamicCache()}
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
         tokens.pop("token_type_ids", None)
@@ -1004,7 +1021,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
             set_seed(SEED)
-            transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+            transformers_outputs = transformers_model.generate(
+                **tokens, generation_config=gen_config, **additional_inputs
+            )
             set_seed(SEED)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
             self.assertTrue(
