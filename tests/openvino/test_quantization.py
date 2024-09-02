@@ -191,7 +191,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (
             OVModelForCausalLM,
             "gpt2",
-            dict(bits=4, weight_format="mxfp4_e2m1", group_size=32),
+            dict(bits=4, weight_format="mxfp4", group_size=32),
             {"f4e2m1": 20, "f8e8m0": 20, "int8": 4},
         ),
         (

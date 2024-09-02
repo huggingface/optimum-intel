@@ -70,7 +70,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4", "mxfp4_e2m1"],
+        choices=["fp32", "fp16", "int8", "int4", "mxfp4"],
         default=None,
         help="The weight format of the exported model.",
     )

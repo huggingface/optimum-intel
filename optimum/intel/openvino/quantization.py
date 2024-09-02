@@ -811,7 +811,7 @@ def _weight_only_quantization(
     if isinstance(config.sensitivity_metric, str):
         sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
 
-    if config.weight_format == "mxfp4_e2m1":
+    if config.weight_format == "mxfp4":
         mode = CompressWeightsMode.E2M1
     else:
         if config.bits == 8:
