@@ -51,7 +51,6 @@ jobs:
           pytest tests/openvino/test_modeling_basic.py
       - name: Test openvino-nightly
         run: |
-          pip uninstall -y openvino
-          pip install openvino-nightly
+          pip install -U --pre openvino openvino-tokenizers --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
           python -c "from optimum.intel import OVModelForCausalLM; OVModelForCausalLM.from_pretrained('hf-internal-testing/tiny-random-gpt2', export=True, compile=False)"
           optimum-cli export openvino -m hf-internal-testing/tiny-random-gpt2 gpt2-ov

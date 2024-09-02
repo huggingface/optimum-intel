@@ -41,7 +41,14 @@ class OVQuantizationMethod(str, Enum):
 
 
 _DEFAULT_4BIT_CONFIGS = {
-    "databricks/dolly-v2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
+    "databricks/dolly-v2-3b": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
     "EleutherAI/gpt-j-6b": {"bits": 4, "sym": False, "group_size": 64},
     "facebook/opt-6.7b": {"bits": 4, "sym": False, "group_size": 64, "ratio": 0.8},
     "togethercomputer/RedPajama-INCITE-7B-Instruct": {"bits": 4, "sym": False, "group_size": 128},
@@ -77,7 +84,14 @@ _DEFAULT_4BIT_CONFIGS = {
     "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
     "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
     "openlm-research/open_llama_3b": {"bits": 4, "sym": False, "group_size": 64, "all_layers": True},
-    "openlm-research/open_llama_3b_v2": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
+    "openlm-research/open_llama_3b_v2": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+    },
     "tiiuae/falcon-7b-instruct": {"bits": 4, "sym": True, "group_size": 64, "all_layers": True},
     "psmathur/orca_mini_3b": {
         "bits": 4,
@@ -95,7 +109,14 @@ _DEFAULT_4BIT_CONFIGS = {
     },
     "mistralai/Mixtral-8x7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "facebook/opt-2.7b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.7},
-    "togethercomputer/RedPajama-INCITE-Chat-3B-v1": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
+    "togethercomputer/RedPajama-INCITE-Chat-3B-v1": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
     "lmsys/vicuna-7b-v1.5": {"bits": 4, "sym": False, "group_size": 128, "ratio": 1.0},
     "stabilityai/stablelm-tuned-alpha-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
     "mistralai/Mistral-7B-v0.1": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.9},
@@ -107,10 +128,42 @@ _DEFAULT_4BIT_CONFIGS = {
         "dataset": "wikitext2",
         "quant_method": OVQuantizationMethod.AWQ,
     },
-    "lmsys/longchat-7b-16k": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
+    "lmsys/longchat-7b-16k": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
     "bigcode/starcoder2-3b": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
-    "TinyLlama/TinyLlama-1.1B-Chat-v1.0": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.8},
-    "microsoft/phi-2": {"bits": 4, "sym": False, "group_size": 128, "ratio": 0.9},
+    "TinyLlama/TinyLlama-1.1B-Chat-v1.0": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
+    "microsoft/phi-2": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
+    "stabilityai/stablelm-tuned-alpha-7b": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "wikitext2",
+        "scale_estimation": True,
+    },
 }
 
 _DEFAULT_4BIT_CONFIG = {
@@ -126,13 +179,19 @@ def _check_default_4bit_configs(model_id_or_path: str):
     if model_id_or_path in _DEFAULT_4BIT_CONFIGS:
         return _DEFAULT_4BIT_CONFIGS[model_id_or_path]
 
-    config_path = Path(model_id_or_path) / "config.json"
+    model_path = Path(model_id_or_path)
+    config_path = model_path / "config.json"
     if config_path.exists():
         with config_path.open("r") as config_f:
             config = json.load(config_f)
             original_model_name = config.get("_name_or_path", "")
         if original_model_name in _DEFAULT_4BIT_CONFIGS:
             return _DEFAULT_4BIT_CONFIGS[original_model_name]
+
+    for model_id, config in _DEFAULT_4BIT_CONFIGS.items():
+        short_id = model_id.split("/")[-1]
+        if model_path.name == short_id:
+            return config
 
     return None
 
@@ -221,11 +280,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 - A path to a *directory* containing vocabulary files required by the tokenizer, for instance saved
                     using the [`~PreTrainedTokenizer.save_pretrained`] method, e.g., `./my_model_directory/`.
         dataset (`str or List[str]`, *optional*):
-            The dataset used for data-aware compression or quantization with NNCF. You can provide your own dataset
-            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new'] for language models
-            or ['conceptual_captions','laion/220k-GPT4Vision-captions-from-LIVIS','laion/filtered-wit'] for diffusion models.
-            Alternatively, you can provide data objects via `calibration_dataset` argument
-            of `OVQuantizer.quantize()` method.
+            The dataset used for data-aware compression with NNCF. For language models you can provide your own dataset
+            in a list of strings or just use the one from the list ['wikitext2','c4','c4-new']. For diffusion models it
+            must be one of ['conceptual_captions', 'laion/220k-GPT4Vision-captions-from-LIVIS', 'laion/filtered-wit'].
+            Alternatively, you can provide data objects via `calibration_dataset` argument of `OVQuantizer.quantize()`
+            method.
         ratio (`float`, defaults to 1.0):
             The ratio between baseline and backup precisions (e.g. 0.9 means 90% of layers quantized to INT4_ASYM
             and the rest to INT8_ASYM).
