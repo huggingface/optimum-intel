@@ -2438,7 +2438,7 @@ class Gemma2ModelPatcher(LlamaModelPatcher):
             pkv_argument_index = sign_names.index("past_key_values")
             cache_position_index = sign_names.index("cache_position") if "cache_position" in sign_names else -1
             input_ids_index = sign_names.index("input_ids" if "input_ids" in sign_names else "inputs_embeds")
-            if legacy_pkv is None and len(args) >= pkv_argument_index:
+            if legacy_pkv is None and len(args) > pkv_argument_index:
                 legacy_pkv = args[pkv_argument_index]
                 pkv_in_args = True
             if legacy_pkv is not None:
