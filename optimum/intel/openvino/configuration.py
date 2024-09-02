@@ -390,8 +390,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError("`all_layers` parameters is not supported for 8-bit quantization")
             if self.sensitivity_metric:
                 raise ValueError("`sensitivity_metric` parameters is not supported for 8-bit quantization")
-            if self.dataset:
-                raise ValueError("`dataset` parameters is not supported for 8-bit quantization")
             if self.quant_method == OVQuantizationMethod.AWQ:
                 raise ValueError("AWQ algorithm is not support for 8-bit quantization")
             if self.scale_estimation:

@@ -792,7 +792,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 quant_method=OVQuantizationMethod.DEFAULT,
             ),
         ),
-        (OVWeightQuantizationConfig(dataset=["hello world", "i'm alive"]),),
+        (OVWeightQuantizationConfig(bits=4, dataset=["hello world", "i'm alive"]),),
         (
             OVQuantizationConfig(
                 ignored_scope={"names": ["op_name"]},
@@ -835,7 +835,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(num_samples=100), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (dict(abc="def"), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (
-            dict(bits=8, fast_bias_correction=True, dataset="wikitext2"),
+            dict(bits=4, fast_bias_correction=True, dataset="wikitext2"),
             OVWeightQuantizationConfig,
             "Can't determine type of OV quantization config",
         ),
@@ -857,7 +857,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(abc="def", weight_only=False), OVQuantizationConfig, None),
         (dict(abc="def", weight_only=True), OVWeightQuantizationConfig, None),
         (
-            dict(bits=8, fast_bias_correction=True, dataset="wikitext2", weight_only=True),
+            dict(bits=4, fast_bias_correction=True, dataset="wikitext2", weight_only=True),
             OVWeightQuantizationConfig,
             None,
         ),
