@@ -509,7 +509,7 @@ class OVConfig(BaseConfig):
             if isinstance(self.quantization_config, OVWeightQuantizationConfig):
                 self.dtype = self.quantization_config.weight_format
             else:
-                self.dtype = f"int{quantization_config.bits}"
+                self.dtype = "int8"
         else:
             self.dtype = dtype
 
