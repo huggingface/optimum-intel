@@ -386,6 +386,16 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError(
                     f"For 8-bit quantization, `group_size` is expected to be set to -1, but was set to {self.group_size}"
                 )
+            if self.all_layers:
+                raise ValueError("`all_layers` parameters is not supported for 8-bit quantization")
+            if self.sensitivity_metric:
+                raise ValueError("`sensitivity_metric` parameters is not supported for 8-bit quantization")
+            if self.dataset:
+                raise ValueError("`dataset` parameters is not supported for 8-bit quantization")
+            if self.quant_method == OVQuantizationMethod.AWQ:
+                raise ValueError("AWQ algorithm is not support for 8-bit quantization")
+            if self.scale_estimation:
+                raise ValueError("Scale Estimation algorithm is not support for 8-bit quantization.")
 
         if self.tokenizer is not None and not isinstance(self.tokenizer, str):
             raise ValueError(f"Tokenizer is expected to be a string, but found {self.tokenizer}")
@@ -396,6 +406,15 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             raise ValueError(
                 f"Weight format must be one of the following: ['int4', 'int8', 'mxfp4'], but found: {self.weight_format}."
             )
+        if self.weight_format == "mxfp4":
+            if self.bits != 4:
+                raise ValueError(
+                    "When applying weight compression with 'mxfp4' weight format the `bits` parameters must be set to 4"
+                )
+            if self.quant_method == OVQuantizationMethod.AWQ:
+                raise ValueError("AWQ algorithm is not support for 'mxfp4' weight format")
+            if self.scale_estimation:
+                raise ValueError("Scale Estimation algorithm is not support for 'mxfp4' weight format")
 
 
 @dataclass
