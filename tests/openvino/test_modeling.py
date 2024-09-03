@@ -933,7 +933,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "trust_remote_code": True,
             }
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
-        if model_arch in ["qwen", "chatglm", "glm4 "]:
+        if model_arch in ["qwen", "chatglm", "glm4"]:
             return
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
