@@ -24,7 +24,7 @@ jobs:
         # This also ensures that the test fails if dependencies break for Python 3.7
         python-version: ["3.8", "3.12"]
         os: ["ubuntu-22.04", "windows-latest"]
-        transformers-version: ["4.43.*"]
+        transformers-version: ["4.44.*"]
         include:
           - python-version: "3.12"
             os: "ubuntu-22.04"
