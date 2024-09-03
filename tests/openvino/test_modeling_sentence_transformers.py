@@ -47,7 +47,7 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ov_model = OVModelForSentenceTransformer.from_pretrained(
-            model_id, from_transformers=True, ov_config=F32_CONFIG
+            model_id, export=True, ov_config=F32_CONFIG
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(hasattr(ov_model, "encode"))
