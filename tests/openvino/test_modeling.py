@@ -603,7 +603,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_sentence_tenaformers_pipeline(self, model_arch):
+    def test_sentence_transformers_pipeline(self, model_arch):
         """
         Check if we call OVModelForFeatureExtraction passing saved ir-model with outputs
         from Sentence Transformers then OVModelForSentenceTransformer will be returned
