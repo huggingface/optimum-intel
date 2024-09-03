@@ -140,7 +140,7 @@ class OVBaseModel(OptimizedModel):
     def load_model(
         file_name: Union[str, Path],
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-    ):
+    ) -> openvino.runtime.Model:
         """
         Loads the model.
 
