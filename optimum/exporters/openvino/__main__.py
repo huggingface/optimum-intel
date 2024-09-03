@@ -14,7 +14,9 @@
 
 import gc
 import logging
+import operator
 import warnings
+from functools import reduce
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
@@ -23,18 +25,20 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 from transformers.utils import is_torch_available
 
+from openvino.runtime import Core, Type, save_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.openvino.convert import export_from_model
 from optimum.intel.utils.import_utils import (
+    is_nncf_available,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_transformers_version,
 )
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-from .utils import clear_class_registry
+from .utils import _MAX_UNCOMPRESSED_SIZE, clear_class_registry
 
 
 if TYPE_CHECKING:
@@ -402,7 +406,7 @@ def main_export(
         model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
 
-    export_from_model(
+    submodel_paths = export_from_model(
         model=model,
         output=output,
         task=task,
@@ -424,6 +428,48 @@ def main_export(
     clear_class_registry()
     del model
     gc.collect()
+
+    core = Core()
+    for submodel_path in submodel_paths:
+        submodel_path = Path(output) / submodel_path
+        submodel = core.read_model(submodel_path)
+
+        quantization_config = None
+        if ov_config is None:
+            num_parameters = 0
+            for op in submodel.get_ops():
+                if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
+                    num_parameters += reduce(operator.mul, op.shape, 1)
+            if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+                if is_nncf_available():
+                    quantization_config = {"bits": 8, "sym": False}
+                    logger.info("The model weights will be quantized to int8_asym.")
+                else:
+                    logger.warning(
+                        "The model will be converted with no weights quantization. Quantization of the weights to int8 "
+                        "requires nncf. Please install it with `pip install nncf`"
+                    )
+                    break
+        else:
+            quantization_config = ov_config.quantization_config
+        if quantization_config is None:
+            continue
+
+        if not is_nncf_available():
+            raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
+
+        from optimum.intel.openvino.quantization import _weight_only_quantization
+
+        _weight_only_quantization(submodel, quantization_config)
+
+        compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
+        save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
+        del submodel
+
+        submodel_path.unlink()
+        submodel_path.with_suffix(".bin").unlink()
+        compressed_submodel_path.rename(submodel_path)
+        compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
 
     # Unpatch modules after GPTQ export
     if do_gptq_patching:

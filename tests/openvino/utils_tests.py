@@ -167,14 +167,23 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
 
 def get_num_quantized_nodes(ov_model):
     num_fake_quantize = 0
-    num_int8 = 0
-    num_int4 = 0
+    num_weight_nodes = {
+        "int8": 0,
+        "int4": 0,
+        "f4e2m1": 0,
+        "f8e8m0": 0,
+    }
     for elem in ov_model.model.get_ops():
         if "FakeQuantize" in elem.name:
             num_fake_quantize += 1
         for i in range(elem.get_output_size()):
-            if elem.get_output_element_type(i).get_type_name() in ["i8", "u8"]:
-                num_int8 += 1
-            if elem.get_output_element_type(i).get_type_name() in ["i4", "u4"]:
-                num_int4 += 1
-    return num_fake_quantize, num_int8, num_int4
+            type_name = elem.get_output_element_type(i).get_type_name()
+            if type_name in ["i8", "u8"]:
+                num_weight_nodes["int8"] += 1
+            if type_name in ["i4", "u4"]:
+                num_weight_nodes["int4"] += 1
+            if type_name == "f4e2m1":
+                num_weight_nodes["f4e2m1"] += 1
+            if type_name == "f8e8m0":
+                num_weight_nodes["f8e8m0"] += 1
+    return num_fake_quantize, num_weight_nodes
