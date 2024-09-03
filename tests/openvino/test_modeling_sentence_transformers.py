@@ -23,7 +23,7 @@ from transformers import (
     set_seed,
 )
 
-from optimum.intel import OVModelForSentenceTransformer
+from optimum.intel import OVSentenceTransformer
 
 
 SEED = 42
@@ -46,7 +46,7 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVModelForSentenceTransformer.from_pretrained(
+        ov_model = OVSentenceTransformer.from_pretrained(
             model_id, export=True, ov_config=F32_CONFIG
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)

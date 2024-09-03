@@ -69,7 +69,7 @@ from optimum.intel import (
     OVModelForMaskedLM,
     OVModelForPix2Struct,
     OVModelForQuestionAnswering,
-    OVModelForSentenceTransformer,
+    OVSentenceTransformer,
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
@@ -611,7 +611,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         with tempfile.TemporaryDirectory() as tmp_dir:
             save_dir = str(tmp_dir)
-            OVModelForSentenceTransformer.from_pretrained(model_id, export=True).save_pretrained(save_dir)
+            OVSentenceTransformer.from_pretrained(model_id, export=True).save_pretrained(save_dir)
             with pytest.raises(ValueError):
                 OVModelForFeatureExtraction.from_pretrained(save_dir)
 

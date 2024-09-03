@@ -186,12 +186,12 @@ try:
         raise OptionalDependencyNotAvailable()
 except OptionalDependencyNotAvailable:
     _import_structure["utils.dummy_openvino_and_sentence_transformers_objects"] = [
-        "OVModelForSentenceTransformer",
+        "OVSentenceTransformer",
     ]
 else:
     _import_structure["openvino"].extend(
         [
-            "OVModelForSentenceTransformer",
+            "OVSentenceTransformer",
         ]
     )
 
@@ -325,11 +325,11 @@ if TYPE_CHECKING:
             raise OptionalDependencyNotAvailable()
     except OptionalDependencyNotAvailable:
         from .utils.dummy_openvino_and_sentence_transformers_objects import (
-            OVModelForSentenceTransformer,
+            OVSentenceTransformer,
         )
     else:
         from .openvino import (
-            OVModelForSentenceTransformer,
+            OVSentenceTransformer,
         )
 
 else:
