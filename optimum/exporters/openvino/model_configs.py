@@ -969,6 +969,8 @@ class GPTNeoxOpenVINOConfig(GPTNeoXOnnxConfig):
     library_name="transformers",
 )
 class Gemma2OpenVINOConfig(GemmaOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.43.0")
+
     def patch_model_for_export(
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
