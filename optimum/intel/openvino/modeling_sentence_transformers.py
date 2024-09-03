@@ -22,7 +22,7 @@ from .modeling import MODEL_START_DOCSTRING, OVModel
     """,
     MODEL_START_DOCSTRING,
 )
-class OVModelForSentenceTransformer(OVModel):
+class OVSentenceTransformer(OVModel):
     export_feature = "feature-extraction"
 
     def __init__(self, model=None, config=None, tokenizer=None, **kwargs):
