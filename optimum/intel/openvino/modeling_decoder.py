@@ -806,6 +806,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 force_download=force_download,
                 local_files_only=local_files_only,
             )
+            if getattr(generation_config, "cache_implementation", None) is not None:
+                generation_config.cache_implementation = None
             kwargs["generation_config"] = generation_config
         except Exception:
             pass

@@ -1005,8 +1005,6 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             patch_update_causal_mask(transformers_model, "4.43.0")
             transformers_model._supports_cache_class = True
             from transformers.cache_utils import DynamicCache
-
-            additional_inputs = {"past_key_values": DynamicCache()}
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
         tokens.pop("token_type_ids", None)
@@ -1021,6 +1019,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
             set_seed(SEED)
+
+            if model_arch == "gemma2":
+                additional_inputs = {"past_key_values": DynamicCache()}
             transformers_outputs = transformers_model.generate(
                 **tokens, generation_config=gen_config, **additional_inputs
             )
