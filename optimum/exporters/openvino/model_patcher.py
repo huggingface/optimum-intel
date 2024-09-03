@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import functools
 import inspect
 import logging as log
 import math
@@ -23,7 +24,7 @@ import torch.nn.functional as F
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
+from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, override_arguments
 from optimum.intel.utils.import_utils import (
     _openvino_version,
     _torch_version,
@@ -2409,3 +2410,60 @@ class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
         super().__enter__()
         for layer in self._model.gpt_neox_japanese.layers:
             _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
+
+
+class Gemma2ModelPatcher(LlamaModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        @functools.wraps(self.orig_forward)
+        def patched_forward(*args, **kwargs):
+            from transformers.cache_utils import DynamicCache
+
+            signature = inspect.signature(self.orig_forward)
+            args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
+
+            return_legacy_cache = False
+            pkv_in_args = False
+            legacy_pkv = None
+            if "past_key_values" in kwargs:
+                legacy_pkv = kwargs.pop("past_key_values", None)
+            sign_names = list(signature.parameters.keys())
+            pkv_argument_index = sign_names.index("past_key_values")
+            cache_position_index = sign_names.index("cache_position") if "cache_position" in sign_names else -1
+            input_ids_index = sign_names.index("input_ids" if "input_ids" in sign_names else "inputs_embeds")
+            if legacy_pkv is None and len(args) > pkv_argument_index:
+                legacy_pkv = args[pkv_argument_index]
+                pkv_in_args = True
+            if legacy_pkv is not None:
+                pkv = DynamicCache.from_legacy_cache(legacy_pkv)
+                return_legacy_cache = True
+                if not pkv_in_args:
+                    kwargs["past_key_values"] = pkv
+                else:
+                    args[pkv_argument_index] = pkv
+
+            if (
+                return_legacy_cache
+                and cache_position_index != -1
+                and (cache_position_index > len(args) and "cache_position" not in kwargs)
+            ):
+                past_seen_tokens = legacy_pkv[0][0].shape[-2]
+                input_ids = args[input_ids_index]
+                cache_position = torch.arange(
+                    past_seen_tokens, past_seen_tokens + input_ids.shape[1], device=input_ids.device
+                )
+                kwargs["cache_position"] = cache_position
+
+            outputs = self.orig_forward(*args, **kwargs)
+            if return_legacy_cache:
+                outputs.past_key_values = outputs.past_key_values.to_legacy_cache()
+
+            return outputs
+
+        self.patched_forward = patched_forward

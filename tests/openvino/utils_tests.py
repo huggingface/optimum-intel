@@ -54,6 +54,7 @@ MODEL_NAMES = {
     "electra": "hf-internal-testing/tiny-random-electra",
     "exaone": "katuni4ka/tiny-random-exaone",
     "gemma": "fxmarty/tiny-random-GemmaForCausalLM",
+    "gemma2": "katuni4ka/tiny-random-gemma2",
     "falcon": "fxmarty/really-tiny-falcon-testing",
     "falcon-40b": "katuni4ka/tiny-random-falcon-40b",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
