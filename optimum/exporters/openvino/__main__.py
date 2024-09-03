@@ -49,15 +49,6 @@ if is_torch_available():
     import torch
 
 
-_COMPRESSION_OPTIONS = {
-    "int8": {"bits": 8},
-    "int4_sym_g128": {"bits": 4, "sym": True, "group_size": 128},
-    "int4_asym_g128": {"bits": 4, "sym": False, "group_size": 128},
-    "int4_sym_g64": {"bits": 4, "sym": True, "group_size": 64},
-    "int4_asym_g64": {"bits": 4, "sym": False, "group_size": 64},
-}
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -108,8 +99,6 @@ def main_export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
-    compression_option: Optional[str] = None,
-    compression_ratio: Optional[float] = None,
     ov_config: "OVConfig" = None,
     stateful: bool = True,
     convert_tokenizer: bool = False,
@@ -171,11 +160,6 @@ def main_export(
         fn_get_submodels (`Optional[Callable]`, defaults to `None`):
             Experimental usage: Override the default submodels that are used at the export. This is
             especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
-        compression_option (`Optional[str]`, defaults to `None`):
-            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
-            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point, `f32` - means no compression.
-        compression_ratio (`Optional[float]`, defaults to `None`):
-            Compression ratio between primary and backup precision (only relevant to INT4).
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
         **kwargs_shapes (`Dict`):
@@ -197,28 +181,6 @@ def main_export(
         if token is not None:
             raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
         token = use_auth_token
-
-    if compression_option is not None:
-        logger.warning(
-            "The `compression_option` argument is deprecated and will be removed in optimum-intel v1.17.0. "
-            "Please, pass an `ov_config` argument instead `OVConfig(..., quantization_config=quantization_config)`."
-        )
-
-    if compression_ratio is not None:
-        logger.warning(
-            "The `compression_ratio` argument is deprecated and will be removed in optimum-intel v1.17.0. "
-            "Please, pass an `ov_config` argument instead `OVConfig(quantization_config={ratio=compression_ratio})`."
-        )
-
-    if ov_config is None and compression_option is not None:
-        from ...intel.openvino.configuration import OVConfig
-
-        if compression_option == "fp16":
-            ov_config = OVConfig(dtype="fp16")
-        elif compression_option != "fp32":
-            q_config = _COMPRESSION_OPTIONS[compression_option] if compression_option in _COMPRESSION_OPTIONS else {}
-            q_config["ratio"] = compression_ratio or 1.0
-            ov_config = OVConfig(quantization_config=q_config)
 
     original_task = task
     task = infer_task(

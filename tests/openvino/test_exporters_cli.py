@@ -108,16 +108,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
     ]
 
-    def _openvino_export(
-        self, model_name: str, task: str, compression_option: str = None, compression_ratio: float = None
-    ):
+    def _openvino_export(self, model_name: str, task: str):
         with TemporaryDirectory() as tmpdir:
             main_export(
                 model_name_or_path=model_name,
                 output=tmpdir,
                 task=task,
-                compression_option=compression_option,
-                compression_ratio=compression_ratio,
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
