@@ -2,7 +2,7 @@ import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MethodType
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -25,24 +25,14 @@ from .modeling import MODEL_START_DOCSTRING, OVModel
 class OVModelForSentenceTransformer(OVModel):
     export_feature = "feature-extraction"
 
-    def __init__(self, model=None, config=None, orig_model_id_or_path=None, **kwargs):
+    def __init__(self, model=None, config=None, tokenizer=None, **kwargs):
         super().__init__(model, config, **kwargs)
 
         self.encode = MethodType(SentenceTransformer.encode, self)
         self._text_length = MethodType(SentenceTransformer._text_length, self)
         self.default_prompt_name = None
         self.truncate_dim = None
-        self.orig_model_id_or_path = orig_model_id_or_path
-        self.tokenizer_args = {
-            "token": None,
-            "trust_remote_code": False,
-            "revision": None,
-            "local_files_only": False,
-        }
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.orig_model_id_or_path,
-            **self.tokenizer_args,
-        )
+        self.tokenizer = tokenizer
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         super()._save_pretrained(save_directory)
@@ -91,6 +81,7 @@ class OVModelForSentenceTransformer(OVModel):
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        tokenizer_kwargs: dict[str, Any] | None = None,
         **kwargs,
     ):
         if use_auth_token is not None:
@@ -131,18 +122,27 @@ class OVModelForSentenceTransformer(OVModel):
         )
 
         config.save_pretrained(save_dir_path)
-        model = cls._from_pretrained(
+        tokenizer_args = {
+            "token": token,
+            "trust_remote_code": trust_remote_code,
+            "revision": revision,
+            "local_files_only": local_files_only,
+        }
+        if tokenizer_kwargs:
+            kwargs["tokenizer_args"].update(tokenizer_kwargs)
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_id,
+            **tokenizer_args,
+        )
+        return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
-            orig_model_id_or_path=model_id,
+            tokenizer=tokenizer,
             **kwargs,
         )
-
-        model.model_id = model_id
-
-        return model
 
     def tokenize(
         self, texts: Union[List[str], List[Dict], List[Tuple[str, str]]], padding: Union[str, bool] = True

@@ -606,15 +606,14 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     def test_sentence_transformers_pipeline(self, model_arch):
         """
         Check if we call OVModelForFeatureExtraction passing saved ir-model with outputs
-        from Sentence Transformers then OVModelForSentenceTransformer will be returned
+        from Sentence Transformers then an appropriate exception raises.
         """
         model_id = MODEL_NAMES[model_arch]
         with tempfile.TemporaryDirectory() as tmp_dir:
             save_dir = str(tmp_dir)
             OVModelForSentenceTransformer.from_pretrained(model_id, export=True).save_pretrained(save_dir)
-            model = OVModelForFeatureExtraction.from_pretrained(save_dir)
-
-        self.assertIsInstance(model, OVModelForSentenceTransformer)
+            with pytest.raises(ValueError):
+                OVModelForFeatureExtraction.from_pretrained(save_dir)
 
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):

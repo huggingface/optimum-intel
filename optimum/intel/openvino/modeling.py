@@ -505,27 +505,17 @@ class OVModelForFeatureExtraction(OVModel):
         if {"token_embeddings", "sentence_embedding"}.issubset(
             {name for output in model.outputs for name in output.names}
         ):  # Sentence Transormers outputs
-            warnings.warn(
+            raise ValueError(
                 "This model is Sentence Tranfromers converted model. Please use OVModelForSentenceTransformer explicitly for this model."
             )
-            from .modeling_sentence_transformers import OVModelForSentenceTransformer
-
-            return OVModelForSentenceTransformer(
-                model=model,
-                config=config,
-                model_save_dir=model_cache_path.parent,
-                quantization_config=quantization_config,
-                orig_model_id_or_path=model_id,
-                **kwargs,
-            )
-        else:
-            return cls(
-                model,
-                config=config,
-                model_save_dir=model_cache_path.parent,
-                quantization_config=quantization_config,
-                **kwargs,
-            )
+        
+        return cls(
+            model,
+            config=config,
+            model_save_dir=model_cache_path.parent,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
 
     @classmethod
     def _from_transformers(
