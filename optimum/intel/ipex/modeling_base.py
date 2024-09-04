@@ -686,7 +686,8 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         # Patch functions to support IAKV cache
         if self._is_ipex_exported:
             _patch_crop_past_key_values()
-            result = super().generate(*args, **kwargs)
+
+        result = super().generate(*args, **kwargs)
 
         return result
 
