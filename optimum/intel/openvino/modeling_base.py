@@ -335,10 +335,18 @@ class OVBaseModel(OptimizedModel):
             revision=revision,
         )
         _export = len(ov_files) == 0
+
         if _export ^ export:
-            logger.warning(
-                f"`export` was set to `{export}` but {len(ov_files)} openvino files were found, export now set to `{_export}`"
-            )
+            if export:
+                logger.warning(
+                    f"The model {model_id} was already converted to the OpenVINO IR but got `export=True`, the model will be converted to OpenVINO once again. "
+                    "Don't forget to save the resulting model with `.save_pretrained()`"
+                )
+            else:
+                logger.warning(
+                    f"No OpenVINO files were found for {model_id}, setting `export=True` to convert the model to the OpenVINO IR. Don't forget to save the resulting model with `.save_pretrained()`"
+                )
+            _export = True
 
         return super().from_pretrained(
             model_id,
