@@ -52,7 +52,7 @@ jobs:
         env:
           HF_HUB_READ_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
         run: |
-          pytest tests/openvino/ --ignore tests/openvino/test_modeling_basic.py
+          pytest tests/openvino/ -s -vvvv -n auto --ignore tests/openvino/test_modeling_basic.py
 
       - name: Test nightly openvino
         run: |
