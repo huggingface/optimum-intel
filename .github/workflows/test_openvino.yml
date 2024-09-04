@@ -22,7 +22,9 @@ jobs:
         transformers-version: ["4.36.0", "4.43.*"]
         os: [ubuntu-latest]
 
-    runs-on: [intel-cpu, 8-cpu, ci]
+    runs-on:
+      group: aws-general-8-plus
+
     steps:
       - uses: actions/checkout@v4
 
