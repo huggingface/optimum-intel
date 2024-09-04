@@ -14,10 +14,17 @@
 
 from typing import Optional, Tuple
 
-from optimum.exporters.onnx.model_configs import FalconOnnxConfig, LlamaOnnxConfig, TextDecoderOnnxConfig
+from optimum.exporters.onnx.model_configs import (
+    FalconOnnxConfig,
+    GPT2OnnxConfig,
+    LlamaOnnxConfig,
+)
 from optimum.utils import DEFAULT_DUMMY_SHAPES
 from optimum.utils.input_generators import DummyPastKeyValuesGenerator, DummyTextInputGenerator
 from optimum.utils.normalized_config import NormalizedTextConfig
+
+
+DEFAULT_DUMMY_SHAPES["batch_size"] = 1
 
 
 class IPEXDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -62,18 +69,30 @@ class IPEXDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         ]
 
 
+class IPEXDummyTextInputGenerator(DummyTextInputGenerator):
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, **kwargs)
+
+
 class LlamaIPEXConfig(LlamaOnnxConfig):
-    DEFAULT_ONNX_OPSET = 14
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, IPEXDummyPastKeyValuesGenerator)
+    DUMMY_INPUT_GENERATOR_CLASSES = (IPEXDummyTextInputGenerator, IPEXDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = IPEXDummyPastKeyValuesGenerator
-    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
 
 
 class FalconIPEXConfig(FalconOnnxConfig):
-    DUMMY_INPUT_GENERATOR_CLASSES = (
-        IPEXDummyPastKeyValuesGenerator,
-    ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
+    DUMMY_INPUT_GENERATOR_CLASSES = (IPEXDummyTextInputGenerator, IPEXDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = IPEXDummyPastKeyValuesGenerator
 
 
-ipex_onnx_config = {"llama": LlamaIPEXConfig, "falcon": FalconIPEXConfig}
+class GPT2IPEXOnnxConfig(GPT2OnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (IPEXDummyTextInputGenerator, IPEXDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = IPEXDummyPastKeyValuesGenerator
+
+
+ipex_onnx_config = {"llama": LlamaIPEXConfig, "falcon": FalconIPEXConfig, "gpt2": GPT2IPEXOnnxConfig}
