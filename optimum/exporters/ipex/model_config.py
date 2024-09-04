@@ -14,13 +14,13 @@
 
 from typing import Optional, Tuple
 
-from optimum.exporters.onnx.model_configs import LlamaOnnxConfig
+from optimum.exporters.onnx.model_configs import FalconOnnxConfig, LlamaOnnxConfig, TextDecoderOnnxConfig
 from optimum.utils import DEFAULT_DUMMY_SHAPES
-from optimum.utils.input_generators import DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator
+from optimum.utils.input_generators import DummyPastKeyValuesGenerator, DummyTextInputGenerator
 from optimum.utils.normalized_config import NormalizedTextConfig
 
 
-class IPEXDummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
+class IPEXDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
         task: str,
@@ -39,7 +39,7 @@ class IPEXDummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
             random_batch_size_range=random_batch_size_range,
             random_sequence_length_range=random_sequence_length_range,
         )
-        self.num_key_value_heads = normalized_config.num_key_value_heads
+        self.num_key_value_heads = getattr(normalized_config, "num_key_value_heads", 1)
         self.max_position_embeddings = normalized_config.max_position_embeddings
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
@@ -63,8 +63,17 @@ class IPEXDummyPastKeyValuesGenerator(MistralDummyPastKeyValuesGenerator):
 
 
 class LlamaIPEXConfig(LlamaOnnxConfig):
+    DEFAULT_ONNX_OPSET = 14
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, IPEXDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = IPEXDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+
+class FalconIPEXConfig(FalconOnnxConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        IPEXDummyPastKeyValuesGenerator,
+    ) + TextDecoderOnnxConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = IPEXDummyPastKeyValuesGenerator
 
 
-ipex_onnx_config = {"llama": LlamaIPEXConfig}
+ipex_onnx_config = {"llama": LlamaIPEXConfig, "falcon": FalconIPEXConfig}

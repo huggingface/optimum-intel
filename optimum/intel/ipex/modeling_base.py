@@ -48,7 +48,9 @@ from transformers.modeling_outputs import CausalLMOutputWithPast, ModelOutput
 from transformers.models.auto.auto_factory import _get_model_class as get_model_class
 from transformers.utils import WEIGHTS_NAME
 
+import optimum
 from optimum.exporters import TasksManager
+from optimum.exporters.tasks import make_backend_config_constructor_for_task
 from optimum.modeling_base import OptimizedModel
 from optimum.utils import NormalizedConfigManager
 
@@ -91,8 +93,14 @@ def _is_patched_with_ipex(model, task):
 def _prepare_inputs_for_ipex_model(model, task, use_cache):
     task = _TASK_ALIASES.get(task, task)
     signature = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.__call__)
+    use_ipex_dummy_input = False
     if _is_patched_with_ipex(model, task) and model.config.model_type in ipex_onnx_config:
-        onnx_config_class = ipex_onnx_config[model.config.model_type]
+        use_ipex_dummy_input = True
+        origin_dummy_batch_size = optimum.utils.input_generators.DEFAULT_DUMMY_SHAPES["batch_size"]
+        optimum.utils.input_generators.DEFAULT_DUMMY_SHAPES["batch_size"] = 1
+        onnx_config_class = make_backend_config_constructor_for_task(
+            ipex_onnx_config[model.config.model_type], task=task
+        )
     else:
         onnx_config_class = TasksManager.get_exporter_config_constructor(model=model, exporter="onnx", task=task)
     float_dtype = get_float_type(model.dtype)
@@ -104,6 +112,17 @@ def _prepare_inputs_for_ipex_model(model, task, use_cache):
         onnx_config = onnx_config_class(model.config)
 
     dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
+
+    # Check attention_mask shape
+    if use_ipex_dummy_input:
+        past_len = dummy_inputs["past_key_values"][0][0].shape[-2]
+        input_len = dummy_inputs["input_ids"].shape[-1]
+        attention_len = dummy_inputs["attention_mask"].shape[-1]
+        if attention_len != input_len + past_len:
+            dummy_inputs["attention_mask"] = torch.ones([dummy_inputs["input_ids"].shape[0], input_len + past_len]).to(
+                dummy_inputs["input_ids"].dtype
+            )
+        optimum.utils.input_generators.DEFAULT_DUMMY_SHAPES["batch_size"] = origin_dummy_batch_size
 
     return {key: dummy_inputs[key] for key in signature.parameters if dummy_inputs.get(key, None) is not None}
 
@@ -666,30 +685,22 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         return generation_config, model_kwargs
 
     def generate(self, *args, **kwargs):
-        if is_ipex_version("<", "2.5.0") and self._is_ipex_exported and kwargs.get("assistant_model", None):
+        # import pdb; pdb.set_trace()
+        if is_ipex_version("<", "2.4.0") and self._is_ipex_exported and kwargs.get("assistant_model", None):
             raise ValueError(
-                f"Assisted decoding is not supported for patched models if ipex < 2.5, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
+                f"Assisted decoding is not supported for patched models if ipex < 2.4, support methods are {_IPEX_EXPORTED_GENERATION_METHODS}"
             )
         # Patch functions to support IAKV cache
         if self._is_ipex_exported:
             _patch_crop_past_key_values()
-        try:
             result = super().generate(*args, **kwargs)
-        except Exception as e:
-            _unpatch_crop_past_key_values()
-            raise e
-        _unpatch_crop_past_key_values()
+
         return result
 
 
 def _patch_crop_past_key_values():
     transformers.generation.candidate_generator._crop_past_key_values = _ipex_crop_past_key_values
     transformers.generation.utils._crop_past_key_values = _ipex_crop_past_key_values
-
-
-def _unpatch_crop_past_key_values():
-    transformers.generation.candidate_generator._crop_past_key_values = _crop_past_key_values
-    transformers.generation.utils._crop_past_key_values = _crop_past_key_values
 
 
 def _ipex_prepare_inputs_for_generation(
@@ -772,7 +783,7 @@ def _ipex_reorder_cache(
 
 
 def _ipex_crop_past_key_values(model, past_key_values, max_length):
-    if isinstance(model, IPEXModel):
+    if isinstance(model, IPEXModel) and _is_patched_with_ipex(model, "text-generation"):
         new_past_key_values = []
         for i in range(len(past_key_values)):
             pkv = []
