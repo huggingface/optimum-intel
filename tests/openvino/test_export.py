@@ -16,7 +16,6 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Optional
 
 import torch
 from parameterized import parameterized
@@ -76,7 +75,6 @@ class ExportModelTest(unittest.TestCase):
     def _openvino_export(
         self,
         model_type: str,
-        compression_option: Optional[str] = None,
         stateful: bool = True,
         patch_16bit_model: bool = False,
     ):
@@ -106,7 +104,6 @@ class ExportModelTest(unittest.TestCase):
                     output=Path(tmpdirname),
                     task=supported_task,
                     preprocessors=preprocessors,
-                    compression_option=compression_option,
                     stateful=stateful,
                 )
 
