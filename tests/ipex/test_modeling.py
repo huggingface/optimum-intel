@@ -284,7 +284,7 @@ class IPEXModelForCausalLMTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_assisted_decoding(self, model_arch):
         # Patched models are not support assisted decoding if ipex < 2.5.
-        if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES and is_ipex_version("<", "2.5.0"):
+        if model_arch in self.IPEX_PATCHED_SUPPORTED_ARCHITECTURES and is_ipex_version("<", "2.4.0"):
             return
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)

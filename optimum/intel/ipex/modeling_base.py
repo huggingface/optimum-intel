@@ -109,7 +109,7 @@ def _prepare_inputs_for_ipex_model(model, task, use_cache):
     dummy_inputs = onnx_config.generate_dummy_inputs(framework="pt")
 
     # Check attention_mask shape
-    if _is_patched_with_ipex(model, task) and model.config.model_type in ipex_onnx_config:
+    if _is_patched_with_ipex(model, task) and model.config.model_type in ipex_onnx_config and use_cache:
         past_len = dummy_inputs["past_key_values"][0][0].shape[-2]
         input_len = dummy_inputs["input_ids"].shape[-1]
         attention_len = dummy_inputs["attention_mask"].shape[-1]
