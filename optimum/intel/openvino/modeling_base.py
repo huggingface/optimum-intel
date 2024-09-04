@@ -28,6 +28,7 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
+from transformers.utils import is_offline_mode
 
 from optimum.exporters.onnx import OnnxConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
@@ -327,26 +328,46 @@ class OVBaseModel(OptimizedModel):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
-        ov_files = _find_files_matching_pattern(
-            model_id,
-            pattern=r"(.*)?openvino(.*)?\_model.xml",
-            subfolder=subfolder,
-            use_auth_token=token,
-            revision=revision,
-        )
-        _export = len(ov_files) == 0
+        if is_offline_mode() and not local_files_only:
+            logger.info("Offline mode: forcing local_files_only=True")
+            local_files_only = True
 
-        if _export ^ export:
-            if export:
-                logger.warning(
-                    f"The model {model_id} was already converted to the OpenVINO IR but got `export=True`, the model will be converted to OpenVINO once again. "
-                    "Don't forget to save the resulting model with `.save_pretrained()`"
-                )
+        _export = export
+        try:
+            if local_files_only:
+                object_id = model_id.replace("/", "--")
+                cached_model_dir = os.path.join(cache_dir, f"models--{object_id}")
+                refs_file = os.path.join(os.path.join(cached_model_dir, "refs"), revision or "main")
+                with open(refs_file) as f:
+                    revision = f.read()
+                model_dir = os.path.join(cached_model_dir, "snapshots", revision)
             else:
-                logger.warning(
-                    f"No OpenVINO files were found for {model_id}, setting `export=True` to convert the model to the OpenVINO IR. Don't forget to save the resulting model with `.save_pretrained()`"
-                )
-            _export = True
+                model_dir = model_id
+
+            ov_files = _find_files_matching_pattern(
+                model_dir,
+                pattern=r"(.*)?openvino(.*)?\_model.xml",
+                subfolder=subfolder,
+                use_auth_token=token,
+                revision=revision,
+            )
+            _export = len(ov_files) == 0
+            if _export ^ export:
+                if export:
+                    logger.warning(
+                        f"The model {model_id} was already converted to the OpenVINO IR but got `export=True`, the model will be converted to OpenVINO once again. "
+                        "Don't forget to save the resulting model with `.save_pretrained()`"
+                    )
+                    _export = True
+                else:
+                    logger.warning(
+                        f"No OpenVINO files were found for {model_id}, setting `export=True` to convert the model to the OpenVINO IR. "
+                        "Don't forget to save the resulting model with `.save_pretrained()`"
+                    )
+        except Exception as exception:
+            logger.warning(
+                f"Could not infer whether the model was already converted or not to the OpenVINO IR, keeping `export={export}`.\n{exception}"
+            )
 
         return super().from_pretrained(
             model_id,
