@@ -46,9 +46,7 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        ov_model = OVSentenceTransformer.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG
-        )
+        ov_model = OVSentenceTransformer.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
         self.assertIsInstance(ov_model.config, PretrainedConfig)
         self.assertTrue(hasattr(ov_model, "encode"))
         st_model = SentenceTransformer(model_id)

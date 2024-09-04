@@ -81,7 +81,7 @@ class OVSentenceTransformer(OVModel):
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-        tokenizer_kwargs: dict[str, Any] | None = None,
+        tokenizer_kwargs: Optional[dict[str, Any]] = None,
         **kwargs,
     ):
         if use_auth_token is not None:

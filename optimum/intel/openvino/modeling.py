@@ -508,7 +508,7 @@ class OVModelForFeatureExtraction(OVModel):
             raise ValueError(
                 "This model is Sentence Tranfromers converted model. Please use OVSentenceTransformer explicitly for this model."
             )
-        
+
         return cls(
             model,
             config=config,

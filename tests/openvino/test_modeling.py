@@ -69,12 +69,12 @@ from optimum.intel import (
     OVModelForMaskedLM,
     OVModelForPix2Struct,
     OVModelForQuestionAnswering,
-    OVSentenceTransformer,
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVision2Seq,
+    OVSentenceTransformer,
     OVStableDiffusionPipeline,
 )
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
