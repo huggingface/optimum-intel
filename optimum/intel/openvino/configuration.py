@@ -312,6 +312,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         scale_estimation (`bool`, *optional*):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
+        weight_format (`str`, defaults to 'int'):
+            Data format weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4'].
     """
 
     def __init__(
@@ -329,6 +331,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         num_samples: Optional[int] = None,
         quant_method: Union[str, OVQuantizationMethod] = OVQuantizationMethod.DEFAULT,
         scale_estimation: bool = None,
+        weight_format: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(bits=bits, sym=sym, ignored_scope=ignored_scope, num_samples=num_samples)
@@ -341,6 +344,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.sensitivity_metric = sensitivity_metric
         self.quant_method = OVQuantizationMethod(quant_method) if isinstance(quant_method, str) else quant_method
         self.scale_estimation = scale_estimation
+        self.weight_format = weight_format
         self.post_init()
 
     def post_init(self):
@@ -382,9 +386,37 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 raise ValueError(
                     f"For 8-bit quantization, `group_size` is expected to be set to -1, but was set to {self.group_size}"
                 )
+            if self.all_layers:
+                raise ValueError("The `all_layers` parameter is not supported for 8-bit quantization")
+            if self.sensitivity_metric:
+                raise ValueError("The `sensitivity_metric` parameter is not supported for 8-bit quantization")
+            if self.quant_method == OVQuantizationMethod.AWQ:
+                raise ValueError(
+                    "The AWQ algorithm is not supported for 8-bit quantization and got `quant_method='awq'`, please update accordingly"
+                )
+            if self.scale_estimation:
+                raise ValueError(
+                    "The Scale Estimation algorithm is not supported for 8-bit quantization and got `scale_estimation=True`, please set `scale_estimation=False`"
+                )
 
         if self.tokenizer is not None and not isinstance(self.tokenizer, str):
             raise ValueError(f"Tokenizer is expected to be a string, but found {self.tokenizer}")
+
+        if self.weight_format is None:
+            self.weight_format = "int4" if self.bits == 4 else "int8"
+        if self.weight_format not in ["int4", "int8", "mxfp4"]:
+            raise ValueError(
+                f"Weight format must be one of the following: ['int4', 'int8', 'mxfp4'], but found: {self.weight_format}."
+            )
+        if self.weight_format == "mxfp4":
+            if self.bits != 4:
+                raise ValueError(
+                    f"When applying weight compression with 'mxfp4' weight format the `bits` parameters must be set to 4, but found {self.bits}"
+                )
+            if self.quant_method == OVQuantizationMethod.AWQ:
+                raise ValueError("The AWQ algorithm is not supported for 'mxfp4' weight format")
+            if self.scale_estimation:
+                raise ValueError("The Scale Estimation algorithm is not supported for 'mxfp4' weight format")
 
 
 @dataclass
@@ -473,8 +505,13 @@ class OVConfig(BaseConfig):
         self.compression = kwargs.get(
             "compression", None
         )  # A field for backward-compatability of training-time compression parameters
-        bits = self.quantization_config.bits if self.quantization_config else None
-        self.dtype = "int" + str(bits) if isinstance(bits, int) else dtype
+        if self.quantization_config is not None:
+            if isinstance(self.quantization_config, OVWeightQuantizationConfig):
+                self.dtype = self.quantization_config.weight_format
+            else:
+                self.dtype = "int8"
+        else:
+            self.dtype = dtype
 
     def add_input_info(self, model_inputs: Dict, force_batch_one: bool = False):
         self.input_info = [

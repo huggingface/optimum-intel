@@ -54,6 +54,7 @@ from .model_patcher import (
     CodeGenModelPatcher,
     DBRXModelPatcher,
     FalconModelPatcher,
+    Gemma2ModelPatcher,
     GptNeoxJapaneseModelPatcher,
     GptNeoxModelPatcher,
     InternLM2Patcher,
@@ -997,3 +998,23 @@ class GPTNeoxOpenVINOConfig(GPTNeoXOnnxConfig):
         self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
     ) -> "ModelPatcher":
         return GptNeoxModelPatcher(self, model, model_kwargs=model_kwargs)
+
+
+@register_in_tasks_manager(
+    "gemma2",
+    *[
+        "feature-extraction",
+        "feature-extraction-with-past",
+        "text-generation",
+        "text-generation-with-past",
+        "text-classification",
+    ],
+    library_name="transformers",
+)
+class Gemma2OpenVINOConfig(GemmaOnnxConfig):
+    MIN_TRANSFORMERS_VERSION = version.parse("4.43.0")
+
+    def patch_model_for_export(
+        self, model: Union["PreTrainedModel", "TFPreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None
+    ) -> "ModelPatcher":
+        return Gemma2ModelPatcher(self, model, model_kwargs=model_kwargs)
