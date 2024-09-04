@@ -90,9 +90,9 @@ class FalconIPEXConfig(FalconOnnxConfig):
     DUMMY_PKV_GENERATOR_CLASS = IPEXDummyPastKeyValuesGenerator
 
 
-class GPT2IPEXOnnxConfig(GPT2OnnxConfig):
+class GPT2IPEXConfig(GPT2OnnxConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (IPEXDummyTextInputGenerator, IPEXDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = IPEXDummyPastKeyValuesGenerator
 
 
-ipex_onnx_config = {"llama": LlamaIPEXConfig, "falcon": FalconIPEXConfig, "gpt2": GPT2IPEXOnnxConfig}
+ipex_onnx_config = {"llama": LlamaIPEXConfig, "falcon": FalconIPEXConfig, "gpt2": GPT2IPEXConfig}
