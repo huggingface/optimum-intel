@@ -97,4 +97,4 @@ respectively `dynamic`, `static`, `weight_only` or `aware_training`.
 
 The flag `--verify_loading` can be passed along to verify that the resulting quantized model can be loaded correctly.
 
-> **_Note:_** `weight_only` quantization_approach requires `neural-compressor` >= 2.3 and `intel-extension-for-transformers` >= 1.3.
+> **_Note:_** `weight_only` quantization_approach requires `neural-compressor` > 3.0.

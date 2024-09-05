@@ -139,6 +139,10 @@ class INCModel(OptimizedModel):
                         _BaseINCAutoModelClass,
                     )
 
+                    warnings.warn(
+                        "Weight only quantization model loading provided by intel_extension_for_transformers is deprecated and it is provided by INC now.",
+                        DeprecationWarning,
+                    )
                     _BaseINCAutoModelClass.ORIG_MODEL = cls.auto_model_class
                     model = _BaseINCAutoModelClass.load_low_bit(
                         model_id,
@@ -157,6 +161,10 @@ class INCModel(OptimizedModel):
                 except Exception as e:
                     raise RuntimeError(f"The quantized model cannot be loaded. Detailed error: {e}")
         if isinstance(quantization_config, (RtnConfig, GPTQConfig)):
+            warnings.warn(
+                "Weight only quantization provided by intel_extension_for_transformers is deprecated and it is provided by INC now.",
+                DeprecationWarning,
+            )
             model = weight_only_quantization(
                 cls.auto_model_class,
                 model_id,

@@ -354,10 +354,6 @@ def weight_only_quantization(
     device_map = kwargs.get("device_map", "xpu" if (hasattr(torch, "xpu") and torch.xpu.is_available()) else "cpu")
     use_xpu = True if device_map == torch.device("xpu") or device_map == "xpu" else False
 
-    warnings.warn(
-        "Weight only quantization provided by intel_extension_for_transformers is deprecated and it is provided by INC now.",
-        DeprecationWarning,
-    )
     if is_neural_compressor_version("<=", "3.0"):
         raise AssertionError("Please use neural_compressor version > 3.0.")
     if is_ipex_version("<", "2.3.1") and use_xpu:
