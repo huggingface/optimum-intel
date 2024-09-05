@@ -21,7 +21,6 @@ from pathlib import Path
 import torch
 from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline, set_seed
-from transformers.utils import SAFE_WEIGHTS_NAME
 
 from optimum.exporters import TasksManager
 from optimum.intel import (  # noqa
@@ -39,7 +38,7 @@ from optimum.intel import (  # noqa
     INCStableDiffusionPipeline,
     INCTrainer,
 )
-from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS, QUANTIZATION_CONFIG_NAME, WEIGHTS_NAME
+from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS, WEIGHTS_NAME
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""

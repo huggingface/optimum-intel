@@ -14,7 +14,6 @@
 
 import logging
 import os
-import types
 import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -25,7 +24,6 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.utils import EntryNotFoundError
 from neural_compressor.transformers import GPTQConfig, RtnConfig
-from neural_compressor.transformers.quantization import convert_to_quantized_model, save_low_bit
 from neural_compressor.utils.pytorch import load
 from transformers import (
     AutoConfig,
@@ -52,11 +50,10 @@ from optimum.intel.generation import BaseModelForCausalLM
 from ...modeling_base import OptimizedModel
 from ..utils.import_utils import (
     _torch_version,
-    is_ipex_version,
-    is_neural_compressor_version,
     is_torch_version,
 )
 from .configuration import INCConfig
+from .quantization import weight_only_quantization
 from .utils import QUANTIZATION_CONFIG_NAME
 
 
@@ -124,19 +121,10 @@ class INCModel(OptimizedModel):
         local_files_only: bool = False,
         subfolder: str = "",
         trust_remote_code: bool = False,
-        *model_args,
         **kwargs,
     ):
-        device_map = kwargs.get("device_map", "cpu")
-        use_xpu = True if device_map == torch.device("xpu") or device_map == "xpu" else False
-
         quantization_config = kwargs.pop("quantization_config", None)
-        if not isinstance(config, PretrainedConfig):
-            config, _ = AutoConfig.from_pretrained(
-                model_id,
-                return_unused_kwargs=True,
-                **kwargs,
-            )
+
         if hasattr(config, "quantization_config"):
             if config.quantization_config is None:
                 logger.warning(
@@ -167,75 +155,25 @@ class INCModel(OptimizedModel):
                     logger.info("Saved low bit model loading successfully. Other input args " "will be ignored.")
                     return model
                 except Exception as e:
-                    logger.error(e)
-                    logger.error("Saved low bit model loading failed, please check your model.")
-                    exit(0)
+                    raise RuntimeError(f"The quantized model cannot be loaded. Detailed error: {e}")
         if isinstance(quantization_config, (RtnConfig, GPTQConfig)):
-            logger.info("Applying Weight Only Quantization.")
-            warnings.warn(
-                "Weight only quantization provided by intel_extension_for_transformers is deprecated and it is provided by INC now.",
-                DeprecationWarning,
+            model = weight_only_quantization(
+                cls.auto_model_class,
+                model_id,
+                quantization_config=quantization_config,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                trust_remote_code=trust_remote_code,
+                config=config,
+                **kwargs,
             )
-            if is_neural_compressor_version("<=", "3.0"):
-                raise AssertionError("Please use neural_compressor version > 3.0.")
-            if is_ipex_version("<", "2.3.1") and use_xpu:
-                raise AssertionError("Please use intel_extension_for_pytorch version >= 2.3.1.")
 
-            if use_xpu:
-                # TODO: if low_cpu_mem_uasge is True, gptj will have accuracy issue on CPU device.
-                kwargs["low_cpu_mem_usage"] = True
-                kwargs["device_map"] = "cpu"
-                try:
-                    model = cls.auto_model_class.from_pretrained(
-                        model_id,
-                        *model_args,
-                        config=config,
-                        **kwargs,
-                    )
-                    model.config.update({"low_cpu_mem_usage": True})
-                except NotImplementedError:
-                    logger.info(
-                        "Failed to load models with `low_cpu_mem_usage` specified, "
-                        "will fall to traditional load method with higher memory consumption."
-                    )
-                    kwargs["low_cpu_mem_usage"] = False
-                    model = cls.auto_model_class.from_pretrained(
-                        model_id,
-                        *model_args,
-                        config=config,
-                        **kwargs,
-                    )
-                    model.config.update({"low_cpu_mem_usage": False})
-                    quantization_config.post_init_xpu()
-            else:
-                kwargs["low_cpu_mem_usage"] = True
-                model = cls.auto_model_class.from_pretrained(
-                    model_id,
-                    *model_args,
-                    config=config,
-                    **kwargs,
-                )
-                model.config.update({"low_cpu_mem_usage": True})
-                quantization_config.post_init_cpu()
-            model.eval()
-
-            if use_xpu:
-                assert hasattr(torch, "xpu") and torch.xpu.is_available(), "There is no xpu device in this system!"
-                quantization_config.update(**{"device": "xpu"})
-                quantization_config.post_init_xpu()
-            if (
-                not torch.cuda.is_available() or device_map == "cpu" or device_map == torch.device("cpu")
-            ) and model.config.model_type == "chatglm":
-                model = model.float()
-            model = convert_to_quantized_model(model, quantization_config, device=device_map)
-            quantization_config.remove_redundant_parameters()
-            model.config.quantization_config = quantization_config
-            # add quantization_config and save_low_bit to pretrained model dynamically
-            model.device_map = device_map
-            model.quantization_config = quantization_config
-            model.save_pretrained = types.MethodType(save_low_bit, model)
-            logger.info("WeightOnlyQuant done.")
             return model
+
         if use_auth_token is not None:
             warnings.warn(
                 "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
