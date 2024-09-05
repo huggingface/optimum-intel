@@ -16,8 +16,7 @@ import logging
 import os
 import warnings
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Dict, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 import openvino
@@ -37,7 +36,6 @@ from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
-    GenerationConfig,
     PretrainedConfig,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
@@ -55,11 +53,9 @@ from transformers.modeling_outputs import (
 
 from optimum.exporters import TasksManager
 
-from ...exporters.openvino import main_export
 from ..utils.import_utils import is_timm_available, is_timm_version
-from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
-from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, _is_timm_ov_dir
+from .utils import _is_timm_ov_dir
 
 
 logger = logging.getLogger(__name__)
@@ -371,6 +367,13 @@ class OVModelForFeatureExtraction(OVModel):
     auto_model_class = AutoModel
 
     def __init__(self, model=None, config=None, **kwargs):
+        if {"token_embeddings", "sentence_embedding"}.issubset(
+            {name for output in model.outputs for name in output.names}
+        ):
+            raise ValueError(
+                "This model is Sentence Transformers converted model. Please use OVSentenceTransformer to load this model."
+            )
+
         super().__init__(model, config, **kwargs)
 
     @add_start_docstrings_to_model_forward(
@@ -412,174 +415,6 @@ class OVModelForFeatureExtraction(OVModel):
             else outputs["last_hidden_state"]
         )
         return BaseModelOutput(last_hidden_state=last_hidden_state)
-
-    @classmethod
-    def _from_pretrained(
-        cls,
-        model_id: Union[str, Path],
-        config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        file_name: Optional[str] = None,
-        subfolder: str = "",
-        from_onnx: bool = False,
-        local_files_only: bool = False,
-        load_in_8bit: bool = False,
-        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-        **kwargs,
-    ):
-        """
-        Loads a model and its configuration file from a directory or the HF Hub.
-
-        Arguments:
-            model_id (`str` or `Path`):
-                The directory from which to load the model.
-                Can be either:
-                    - The model id of a pretrained model hosted inside a model repo on huggingface.co.
-                    - The path to a directory containing the model weights.
-            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
-                Deprecated. Please use `token` instead.
-            token (Optional[Union[bool, str]], defaults to `None`):
-                The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
-                when running `huggingface-cli login` (stored in `~/.huggingface`).
-            revision (`str`, *optional*):
-                The specific model version to use. It can be a branch name, a tag name, or a commit id.
-            cache_dir (`Union[str, Path]`, *optional*):
-                The path to a directory in which a downloaded pretrained model configuration should be cached if the
-                standard cache should not be used.
-            force_download (`bool`, defaults to `False`):
-                Whether or not to force the (re-)download of the model weights and configuration files, overriding the
-                cached versions if they exist.
-            file_name (`str`, *optional*):
-                The file name of the model to load. Overwrites the default file name and allows one to load the model
-                with a different name.
-            local_files_only (`bool`, *optional*, defaults to `False`):
-                Whether or not to only look at local files (i.e., do not try to download the model).
-            load_in_8bit (`bool`, *optional*, defaults to `False`):
-                Whether or not to apply 8-bit weight quantization.
-        """
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
-        model_path = Path(model_id)
-        default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
-        file_name = file_name or default_file_name
-
-        model_cache_path = cls._cached_file(
-            model_path=model_path,
-            token=token,
-            revision=revision,
-            force_download=force_download,
-            cache_dir=cache_dir,
-            file_name=file_name,
-            subfolder=subfolder,
-            local_files_only=local_files_only,
-        )
-
-        quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
-
-        model = cls.load_model(model_cache_path, quantization_config=quantization_config)
-
-        try:
-            generation_config = GenerationConfig.from_pretrained(
-                model_id,
-                token=token,
-                revision=revision,
-                subfolder=subfolder,
-                force_download=force_download,
-                cache_dir=cache_dir,
-            )
-            kwargs["generation_config"] = generation_config
-        except Exception:
-            pass
-
-        if {"token_embeddings", "sentence_embedding"}.issubset(
-            {name for output in model.outputs for name in output.names}
-        ):  # Sentence Transormers outputs
-            raise ValueError(
-                "This model is Sentence Tranfromers converted model. Please use OVSentenceTransformer explicitly for this model."
-            )
-
-        return cls(
-            model,
-            config=config,
-            model_save_dir=model_cache_path.parent,
-            quantization_config=quantization_config,
-            **kwargs,
-        )
-
-    @classmethod
-    def _from_transformers(
-        cls,
-        model_id: str,
-        config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
-        token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        subfolder: str = "",
-        local_files_only: bool = False,
-        task: Optional[str] = None,
-        trust_remote_code: bool = False,
-        load_in_8bit: Optional[bool] = None,
-        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-        **kwargs,
-    ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
-        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
-        # would end-up removing the directory containing the underlying OpenVINO model
-        cls._model_save_dir_tempdirectory_instance = save_dir
-
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="fp32")
-
-        # OVModelForFeatureExtraction works with Transformers type of models, thus even sentence-transformers models are loaded as such.
-        main_export(
-            model_name_or_path=model_id,
-            output=save_dir_path,
-            task=task or cls.export_feature,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-            local_files_only=local_files_only,
-            force_download=force_download,
-            trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
-            library_name="transformers",
-        )
-
-        config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            load_in_8bit=load_in_8bit,
-            quantization_config=quantization_config,
-            **kwargs,
-        )
 
 
 MASKED_LM_EXAMPLE = r"""

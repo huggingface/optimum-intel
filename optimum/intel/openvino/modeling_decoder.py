@@ -306,6 +306,7 @@ class OVBaseDecoderModel(OVModel):
             ov_config=ov_export_config,
             stateful=stateful,
             model_loading_kwargs=model_loading_kwargs,
+            library_name=cls.library_name,
         )
 
         config.is_decoder = True
