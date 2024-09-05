@@ -564,7 +564,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
                 ]
             )
             return past_key_values
-        elif model_type == "bloom":
+        elif model_type == "bloom" and is_transformers_version("<", "4.44"):
             shape_key = (batch_size * num_attention_heads, d_k, 0)
             shape_value = (batch_size * num_attention_heads, 0, d_k)
             key = torch.empty(size=shape_key, dtype=self.model_dtype, device=self._device)

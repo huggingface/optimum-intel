@@ -14,7 +14,9 @@
 
 import gc
 import logging
+import operator
 import warnings
+from functools import reduce
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Union
 
@@ -23,18 +25,20 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase
 from transformers.utils import is_torch_available
 
+from openvino.runtime import Core, Type, save_model
 from optimum.exporters import TasksManager
 from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.constants import SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED
 from optimum.exporters.openvino.convert import export_from_model
 from optimum.intel.utils.import_utils import (
+    is_nncf_available,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_transformers_version,
 )
 from optimum.utils.save_utils import maybe_load_preprocessors
 
-from .utils import clear_class_registry
+from .utils import _MAX_UNCOMPRESSED_SIZE, clear_class_registry
 
 
 if TYPE_CHECKING:
@@ -43,15 +47,6 @@ if TYPE_CHECKING:
 
 if is_torch_available():
     import torch
-
-
-_COMPRESSION_OPTIONS = {
-    "int8": {"bits": 8},
-    "int4_sym_g128": {"bits": 4, "sym": True, "group_size": 128},
-    "int4_asym_g128": {"bits": 4, "sym": False, "group_size": 128},
-    "int4_sym_g64": {"bits": 4, "sym": True, "group_size": 64},
-    "int4_asym_g64": {"bits": 4, "sym": False, "group_size": 64},
-}
 
 
 logger = logging.getLogger(__name__)
@@ -104,8 +99,6 @@ def main_export(
     model_kwargs: Optional[Dict[str, Any]] = None,
     custom_export_configs: Optional[Dict[str, "OnnxConfig"]] = None,
     fn_get_submodels: Optional[Callable] = None,
-    compression_option: Optional[str] = None,
-    compression_ratio: Optional[float] = None,
     ov_config: "OVConfig" = None,
     stateful: bool = True,
     convert_tokenizer: bool = False,
@@ -167,11 +160,6 @@ def main_export(
         fn_get_submodels (`Optional[Callable]`, defaults to `None`):
             Experimental usage: Override the default submodels that are used at the export. This is
             especially useful when exporting a custom architecture that needs to split the ONNX (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
-        compression_option (`Optional[str]`, defaults to `None`):
-            The weight compression option, e.g. `f16` stands for float16 weights, `i8` - INT8 weights, `int4_sym_g128` - INT4 symmetric weights w/ group size 128, `int4_asym_g128` - as previous but asymmetric w/ zero-point,
-            `int4_sym_g64` - INT4 symmetric weights w/ group size 64, "int4_asym_g64" - as previous but asymmetric w/ zero-point, `f32` - means no compression.
-        compression_ratio (`Optional[float]`, defaults to `None`):
-            Compression ratio between primary and backup precision (only relevant to INT4).
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
         **kwargs_shapes (`Dict`):
@@ -193,28 +181,6 @@ def main_export(
         if token is not None:
             raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
         token = use_auth_token
-
-    if compression_option is not None:
-        logger.warning(
-            "The `compression_option` argument is deprecated and will be removed in optimum-intel v1.17.0. "
-            "Please, pass an `ov_config` argument instead `OVConfig(..., quantization_config=quantization_config)`."
-        )
-
-    if compression_ratio is not None:
-        logger.warning(
-            "The `compression_ratio` argument is deprecated and will be removed in optimum-intel v1.17.0. "
-            "Please, pass an `ov_config` argument instead `OVConfig(quantization_config={ratio=compression_ratio})`."
-        )
-
-    if ov_config is None and compression_option is not None:
-        from ...intel.openvino.configuration import OVConfig
-
-        if compression_option == "fp16":
-            ov_config = OVConfig(dtype="fp16")
-        elif compression_option != "fp32":
-            q_config = _COMPRESSION_OPTIONS[compression_option] if compression_option in _COMPRESSION_OPTIONS else {}
-            q_config["ratio"] = compression_ratio or 1.0
-            ov_config = OVConfig(quantization_config=q_config)
 
     original_task = task
     task = infer_task(
@@ -402,7 +368,7 @@ def main_export(
         model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
 
-    export_from_model(
+    submodel_paths = export_from_model(
         model=model,
         output=output,
         task=task,
@@ -424,6 +390,48 @@ def main_export(
     clear_class_registry()
     del model
     gc.collect()
+
+    core = Core()
+    for submodel_path in submodel_paths:
+        submodel_path = Path(output) / submodel_path
+        submodel = core.read_model(submodel_path)
+
+        quantization_config = None
+        if ov_config is None:
+            num_parameters = 0
+            for op in submodel.get_ops():
+                if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
+                    num_parameters += reduce(operator.mul, op.shape, 1)
+            if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+                if is_nncf_available():
+                    quantization_config = {"bits": 8, "sym": False}
+                    logger.info("The model weights will be quantized to int8_asym.")
+                else:
+                    logger.warning(
+                        "The model will be converted with no weights quantization. Quantization of the weights to int8 "
+                        "requires nncf. Please install it with `pip install nncf`"
+                    )
+                    break
+        else:
+            quantization_config = ov_config.quantization_config
+        if quantization_config is None:
+            continue
+
+        if not is_nncf_available():
+            raise ImportError("Quantization of the weights requires nncf, please install it with `pip install nncf`")
+
+        from optimum.intel.openvino.quantization import _weight_only_quantization
+
+        _weight_only_quantization(submodel, quantization_config)
+
+        compressed_submodel_path = submodel_path.parent / f"{submodel_path.stem}_compressed.xml"
+        save_model(submodel, compressed_submodel_path, compress_to_fp16=False)
+        del submodel
+
+        submodel_path.unlink()
+        submodel_path.with_suffix(".bin").unlink()
+        compressed_submodel_path.rename(submodel_path)
+        compressed_submodel_path.with_suffix(".bin").rename(submodel_path.with_suffix(".bin"))
 
     # Unpatch modules after GPTQ export
     if do_gptq_patching:
