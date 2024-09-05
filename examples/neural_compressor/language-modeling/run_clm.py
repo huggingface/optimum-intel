@@ -774,7 +774,7 @@ def main():
         )
         trainer.model = quantizer._quantized_model
 
-    if optim_args.apply_quantization and optim_args.quantization_approach in {"weight_only"}:
+    if optim_args.apply_quantization and optim_args.quantization_approach == "weight_only":
         model = trainer.model if isinstance(trainer.model, PreTrainedModel) else trainer.model._model
         num_calibration_samples = min(len(train_dataset), optim_args.num_calibration_samples)
         train_dataset = train_dataset.select(range(num_calibration_samples))
