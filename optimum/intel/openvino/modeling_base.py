@@ -52,6 +52,7 @@ class OVBaseModel(OptimizedModel):
     auto_model_class = None
     export_feature = None
     _supports_cache_class = False
+    _library_name = "transformers"
 
     def __init__(
         self,
@@ -502,6 +503,7 @@ class OVBaseModel(OptimizedModel):
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
+            library_name=cls._library_name,
             from_onnx=False,
             token=token,
             revision=revision,
