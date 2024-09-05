@@ -16,7 +16,7 @@ from .import_utils import DummyObject, requires_backends
 
 
 class OVSentenceTransformer(metaclass=DummyObject):
-    _backends = ["openvino"]
+    _backends = ["openvino", "sentence_transformers"]
 
     def __init__(self, *args, **kwargs):
         requires_backends(self, ["openvino", "sentence_transformers"])
