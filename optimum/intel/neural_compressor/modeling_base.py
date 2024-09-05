@@ -143,6 +143,9 @@ class INCModel(OptimizedModel):
                         "Weight only quantization model loading provided by intel_extension_for_transformers is deprecated and it is provided by INC now.",
                         DeprecationWarning,
                     )
+                    logger.info(
+                        "The weight only quantized model loading only supports the same format as GPTQ, such as https://huggingface.co/TheBloke/Llama-2-7B-Chat-GPTQ/tree/main."
+                    )
                     _BaseINCAutoModelClass.ORIG_MODEL = cls.auto_model_class
                     model = _BaseINCAutoModelClass.load_low_bit(
                         model_id,
@@ -164,6 +167,9 @@ class INCModel(OptimizedModel):
             warnings.warn(
                 "Weight only quantization provided by intel_extension_for_transformers is deprecated and it is provided by INC now.",
                 DeprecationWarning,
+            )
+            logger.info(
+                "The quantized model parameters will be saved in the same format as GPTQ, here is the sample model https://huggingface.co/TheBloke/Llama-2-7B-Chat-GPTQ/tree/main for details."
             )
             model = weight_only_quantization(
                 cls.auto_model_class,
