@@ -24,6 +24,8 @@ import psutil
 import torch
 from huggingface_hub import HfApi, HfFolder
 
+from optimum.exporters import TasksManager
+
 from .import_utils import is_numa_available
 
 
@@ -102,19 +104,26 @@ def _find_files_matching_pattern(
     Returns:
         `List[Path]`
     """
-    model_path = Path(model_name_or_path) if isinstance(model_name_or_path, str) else model_name_or_path
-    pattern = re.compile(f"{subfolder}/{pattern}" if subfolder != "" else pattern)
-    subfolder = subfolder or "."
+    model_path = Path(model_name_or_path) if not isinstance(model_name_or_path, Path) else model_name_or_path
+
+    if isinstance(use_auth_token, bool):
+        token = HfFolder().get_token()
+    else:
+        token = use_auth_token
+
+    library_name = TasksManager.infer_library_from_model(
+        str(model_name_or_path), subfolder=subfolder, revision=revision, token=token
+    )
+    if library_name == "diffusers":
+        subfolder = os.path.join(subfolder, "unet")
+    else:
+        subfolder = subfolder or "."
 
     if model_path.is_dir():
         glob_pattern = subfolder + "/*"
         files = model_path.glob(glob_pattern)
         files = [p for p in files if re.search(pattern, str(p))]
     else:
-        if isinstance(use_auth_token, bool):
-            token = HfFolder().get_token()
-        else:
-            token = use_auth_token
         repo_files = map(Path, HfApi().list_repo_files(model_name_or_path, revision=revision, token=token))
         files = [Path(p) for p in repo_files if re.match(pattern, str(p)) and str(p.parent) == subfolder]
 
