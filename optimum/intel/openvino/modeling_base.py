@@ -502,7 +502,7 @@ class OVBaseModel(OptimizedModel):
             force_download=force_download,
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
-            library_name=cls.library_name,
+            library_name=cls._library_name,
         )
 
         config.save_pretrained(save_dir_path)

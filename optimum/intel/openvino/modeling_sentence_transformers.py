@@ -77,8 +77,8 @@ class OVSentenceTransformer(OVModel):
         local_files_only: bool = False,
         **kwargs,
     ):
-        trust_remote_code = kwargs.pop("trust_remote_code")
-        tokenizer_kwargs = kwargs.pop("tokenizer_kwargs")
+        trust_remote_code = kwargs.pop("trust_remote_code", False)
+        tokenizer_kwargs = kwargs.pop("tokenizer_kwargs", None)
 
         tokenizer_args = {
             "token": token,

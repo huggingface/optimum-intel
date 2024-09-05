@@ -373,7 +373,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             local_files_only=local_files_only,
             force_download=force_download,
             ov_config=ov_config,
-            library_name=cls.library_name,
+            library_name=cls._library_name,
         )
 
         return cls._from_pretrained(
