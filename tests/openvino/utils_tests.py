@@ -54,6 +54,7 @@ MODEL_NAMES = {
     "electra": "hf-internal-testing/tiny-random-electra",
     "exaone": "katuni4ka/tiny-random-exaone",
     "gemma": "fxmarty/tiny-random-GemmaForCausalLM",
+    "gemma2": "katuni4ka/tiny-random-gemma2",
     "falcon": "fxmarty/really-tiny-falcon-testing",
     "falcon-40b": "katuni4ka/tiny-random-falcon-40b",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
@@ -111,6 +112,7 @@ MODEL_NAMES = {
     "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
+    "stable-diffusion-openvino": "hf-internal-testing/tiny-stable-diffusion-openvino",
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
     "stablelm": "hf-internal-testing/tiny-random-StableLmForCausalLM",
@@ -167,14 +169,23 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
 
 def get_num_quantized_nodes(ov_model):
     num_fake_quantize = 0
-    num_int8 = 0
-    num_int4 = 0
+    num_weight_nodes = {
+        "int8": 0,
+        "int4": 0,
+        "f4e2m1": 0,
+        "f8e8m0": 0,
+    }
     for elem in ov_model.model.get_ops():
         if "FakeQuantize" in elem.name:
             num_fake_quantize += 1
         for i in range(elem.get_output_size()):
-            if elem.get_output_element_type(i).get_type_name() in ["i8", "u8"]:
-                num_int8 += 1
-            if elem.get_output_element_type(i).get_type_name() in ["i4", "u4"]:
-                num_int4 += 1
-    return num_fake_quantize, num_int8, num_int4
+            type_name = elem.get_output_element_type(i).get_type_name()
+            if type_name in ["i8", "u8"]:
+                num_weight_nodes["int8"] += 1
+            if type_name in ["i4", "u4"]:
+                num_weight_nodes["int4"] += 1
+            if type_name == "f4e2m1":
+                num_weight_nodes["f4e2m1"] += 1
+            if type_name == "f8e8m0":
+                num_weight_nodes["f8e8m0"] += 1
+    return num_fake_quantize, num_weight_nodes
