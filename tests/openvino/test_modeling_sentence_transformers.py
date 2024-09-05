@@ -13,6 +13,8 @@
 #  limitations under the License.
 
 import gc
+import os
+import tempfile
 import unittest
 
 import numpy as np
@@ -57,4 +59,16 @@ class OVModelForSTFeatureExtractionIntegrationTest(unittest.TestCase):
         self.assertTrue(np.allclose(ov_embeddings, st_embeddings, atol=1e-4))
         del st_embeddings
         del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_sentence_transformers_save_and_infer(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        ov_model = OVSentenceTransformer.from_pretrained(model_id, export=True, ov_config=F32_CONFIG)
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            model_save_path = os.path.join(tmpdirname, "sentence_transformers_ov_model")
+            ov_model.save_pretrained(model_save_path)
+            model = OVSentenceTransformer.from_pretrained(model_save_path)
+            sentences = ["This is an example sentence", "Each sentence is converted"]
+            model.encode(sentences)
         gc.collect()
