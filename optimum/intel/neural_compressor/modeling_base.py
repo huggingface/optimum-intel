@@ -186,7 +186,7 @@ class INCModel(OptimizedModel):
                 **kwargs,
             )
 
-            return model
+            return cls(model, config=config, model_save_dir=None, **kwargs).model
 
         if use_auth_token is not None:
             warnings.warn(
