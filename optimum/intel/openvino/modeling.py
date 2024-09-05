@@ -37,7 +37,6 @@ from transformers import (
     AutoModelForQuestionAnswering,
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
-    GenerationConfig,
     PretrainedConfig,
 )
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
@@ -59,7 +58,7 @@ from ...exporters.openvino import main_export
 from ..utils.import_utils import is_timm_available, is_timm_version
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
-from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, _is_timm_ov_dir
+from .utils import _is_timm_ov_dir
 
 
 logger = logging.getLogger(__name__)
@@ -377,7 +376,7 @@ class OVModelForFeatureExtraction(OVModel):
             raise ValueError(
                 "This model is Sentence Tranfromers converted model. Please use OVSentenceTransformer explicitly for this model."
             )
-        
+
         super().__init__(model, config, **kwargs)
 
     @add_start_docstrings_to_model_forward(

@@ -1,8 +1,6 @@
-import warnings
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from types import MethodType
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -11,8 +9,6 @@ from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
-from ...exporters.openvino import main_export
-from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import MODEL_START_DOCSTRING, OVModel
 
 
@@ -24,6 +20,7 @@ from .modeling import MODEL_START_DOCSTRING, OVModel
 )
 class OVSentenceTransformer(OVModel):
     export_feature = "feature-extraction"
+    _library_name = "sentence_transformers"
 
     def __init__(self, model=None, config=None, tokenizer=None, **kwargs):
         super().__init__(model, config, **kwargs)
@@ -66,61 +63,23 @@ class OVSentenceTransformer(OVModel):
         }
 
     @classmethod
-    def _from_transformers(
+    def _from_pretrained(
         cls,
-        model_id: str,
+        model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        file_name: Optional[str] = None,
         subfolder: str = "",
+        from_onnx: bool = False,
         local_files_only: bool = False,
-        task: Optional[str] = None,
-        trust_remote_code: bool = False,
-        load_in_8bit: Optional[bool] = None,
-        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-        tokenizer_kwargs: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
+        trust_remote_code = kwargs.pop("trust_remote_code", False)
+        tokenizer_kwargs = kwargs.pop("tokenizer_kwargs", None)
 
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
-        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
-        # would end-up removing the directory containing the underlying OpenVINO model
-        cls._model_save_dir_tempdirectory_instance = save_dir
-
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="fp32")
-
-        main_export(
-            model_name_or_path=model_id,
-            output=save_dir_path,
-            task=task or cls.export_feature,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-            local_files_only=local_files_only,
-            force_download=force_download,
-            trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
-            library_name="sentence_transformers",
-        )
-
-        config.save_pretrained(save_dir_path)
         tokenizer_args = {
             "token": token,
             "trust_remote_code": trust_remote_code,
@@ -130,15 +89,19 @@ class OVSentenceTransformer(OVModel):
         if tokenizer_kwargs:
             kwargs["tokenizer_args"].update(tokenizer_kwargs)
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_id,
-            **tokenizer_args,
-        )
-        return cls._from_pretrained(
-            model_id=save_dir_path,
+        tokenizer = AutoTokenizer.from_pretrained(model_id, **tokenizer_args)
+
+        return super()._from_pretrained(
+            model_id=model_id,
             config=config,
-            load_in_8bit=load_in_8bit,
-            quantization_config=quantization_config,
+            token=token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            file_name=file_name,
+            subfolder=subfolder,
+            from_onnx=from_onnx,
+            local_files_only=local_files_only,
             tokenizer=tokenizer,
             **kwargs,
         )
