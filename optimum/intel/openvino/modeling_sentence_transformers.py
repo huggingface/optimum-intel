@@ -81,7 +81,7 @@ class OVSentenceTransformer(OVModel):
         trust_remote_code: bool = False,
         load_in_8bit: Optional[bool] = None,
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-        tokenizer_kwargs: Optional[dict[str, Any]] = None,
+        tokenizer_kwargs: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         if use_auth_token is not None:
@@ -105,7 +105,6 @@ class OVSentenceTransformer(OVModel):
         else:
             ov_config = OVConfig(dtype="fp32")
 
-        # OVModelForFeatureExtraction works with Transformers type of models, thus even sentence-transformers models are loaded as such.
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
