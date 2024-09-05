@@ -612,8 +612,9 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             save_dir = str(tmp_dir)
             OVSentenceTransformer.from_pretrained(model_id, export=True).save_pretrained(save_dir)
-            with pytest.raises(ValueError):
+            with self.assertRaises(Exception) as context:
                 OVModelForFeatureExtraction.from_pretrained(save_dir)
+            self.assertIn("Please use OVSentenceTransformer", str(context.exception))
 
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
