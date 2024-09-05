@@ -112,6 +112,7 @@ MODEL_NAMES = {
     "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
+    "stable-diffusion-openvino": "hf-internal-testing/tiny-stable-diffusion-openvino",
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
     "stablelm": "hf-internal-testing/tiny-random-StableLmForCausalLM",
