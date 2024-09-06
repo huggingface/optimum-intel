@@ -418,60 +418,6 @@ class OVModelForFeatureExtraction(OVModel):
         )
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
-    @classmethod
-    def _from_transformers(
-        cls,
-        model_id: str,
-        config: PretrainedConfig,
-        token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        subfolder: str = "",
-        local_files_only: bool = False,
-        task: Optional[str] = None,
-        trust_remote_code: bool = False,
-        load_in_8bit: Optional[bool] = None,
-        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-        **kwargs,
-    ):
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
-        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
-        # would end-up removing the directory containing the underlying OpenVINO model
-        cls._model_save_dir_tempdirectory_instance = save_dir
-
-        # If load_in_8bit and quantization_config not specified then ov_config is set to None and will be set by default in convert depending on the model size
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="fp32")
-
-        # OVModelForFeatureExtraction works with Transformers type of models, thus even sentence-transformers models are loaded as such.
-        main_export(
-            model_name_or_path=model_id,
-            output=save_dir_path,
-            task=task or cls.export_feature,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-            local_files_only=local_files_only,
-            force_download=force_download,
-            trust_remote_code=trust_remote_code,
-            ov_config=ov_config,
-            library_name="transformers",
-        )
-
-        config.save_pretrained(save_dir_path)
-        return cls._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            load_in_8bit=load_in_8bit,
-            quantization_config=quantization_config,
-            **kwargs,
-        )
-
 
 MASKED_LM_EXAMPLE = r"""
     Example of masked language modeling using `transformers.pipelines`:
