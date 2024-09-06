@@ -373,7 +373,7 @@ class OVModelForFeatureExtraction(OVModel):
             {name for output in model.outputs for name in output.names}
         ):  # Sentence Transormers outputs
             raise ValueError(
-                "This model is Sentence Tranfromers converted model. Please use OVSentenceTransformer explicitly for this model."
+                "This model is a Sentence Transformers model. Please use `OVSentenceTransformer` to load this model."
             )
 
         super().__init__(model, config, **kwargs)
