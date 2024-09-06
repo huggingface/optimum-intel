@@ -36,6 +36,7 @@ from optimum.intel import (  # noqa
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForTokenClassification,
+    OVSentenceTransformer,
     OVStableDiffusionPipeline,
     OVStableDiffusionXLPipeline,
 )
@@ -316,5 +317,5 @@ class OVCLIExportTestCase(unittest.TestCase):
                 shell=True,
                 check=True,
             )
-            model = eval(_HEAD_TO_AUTOMODELS["feature-extraction"]).from_pretrained(tmpdir, compile=False)
+            model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False)
             self.assertFalse("last_hidden_state" in model.output_names)

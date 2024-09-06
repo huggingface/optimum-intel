@@ -369,6 +369,13 @@ class OVModelForFeatureExtraction(OVModel):
     auto_model_class = AutoModel
 
     def __init__(self, model=None, config=None, **kwargs):
+        if {"token_embeddings", "sentence_embedding"}.issubset(
+            {name for output in model.outputs for name in output.names}
+        ):  # Sentence Transormers outputs
+            raise ValueError(
+                "This model is a Sentence Transformers model. Please use `OVSentenceTransformer` to load this model."
+            )
+
         super().__init__(model, config, **kwargs)
 
     @add_start_docstrings_to_model_forward(

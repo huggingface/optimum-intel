@@ -77,6 +77,7 @@ from optimum.intel import (
     OVModelForSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVision2Seq,
+    OVSentenceTransformer,
     OVStableDiffusionPipeline,
 )
 from optimum.intel.openvino import OV_DECODER_NAME, OV_DECODER_WITH_PAST_NAME, OV_ENCODER_NAME, OV_XML_FILE_NAME
@@ -654,6 +655,20 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         del pipe
         del model
         gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_sentence_transformers_pipeline(self, model_arch):
+        """
+        Check if we call OVModelForFeatureExtraction passing saved ir-model with outputs
+        from Sentence Transformers then an appropriate exception raises.
+        """
+        model_id = MODEL_NAMES[model_arch]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            save_dir = str(tmp_dir)
+            OVSentenceTransformer.from_pretrained(model_id, export=True).save_pretrained(save_dir)
+            with self.assertRaises(Exception) as context:
+                OVModelForFeatureExtraction.from_pretrained(save_dir)
+            self.assertIn("Please use `OVSentenceTransformer`", str(context.exception))
 
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):

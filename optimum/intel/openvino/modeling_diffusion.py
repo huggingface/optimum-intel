@@ -78,6 +78,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
     auto_model_class = StableDiffusionPipeline
     config_name = "model_index.json"
     export_feature = "text-to-image"
+    _library_name = "diffusers"
 
     def __init__(
         self,
@@ -372,6 +373,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             local_files_only=local_files_only,
             force_download=force_download,
             ov_config=ov_config,
+            library_name=cls._library_name,
         )
 
         return cls._from_pretrained(
