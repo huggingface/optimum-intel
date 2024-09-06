@@ -159,6 +159,16 @@ if _numa_available:
         _numa_available = False
 
 
+_sentence_transformers_available = importlib.util.find_spec("sentence_transformers") is not None
+_sentence_transformers_available = "N/A"
+
+if _sentence_transformers_available:
+    try:
+        _sentence_transformers_available = importlib_metadata.version("sentence_transformers")
+    except importlib_metadata.PackageNotFoundError:
+        _sentence_transformers_available = False
+
+
 def is_transformers_available():
     return _transformers_available
 
@@ -278,6 +288,10 @@ def is_datasets_available():
 
 def is_accelerate_available():
     return _accelerate_available
+
+
+def is_sentence_transformers_available():
+    return _sentence_transformers_available
 
 
 def is_numa_available():
