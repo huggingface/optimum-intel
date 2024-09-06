@@ -467,22 +467,32 @@ class TrainingOptimizationTest(INCTestMixin):
 
 class WeightOnlyQuantizationTest(INCTestMixin):
     WEIGHT_ONLY_CONFIG = (
-        ("rtn", "int4_clip"),
-        ("gptq", "int4_clip"),
+        ("rtn", 4),
+        ("gptq", 4),
     )
 
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
-    def test_weight_only_quantization(self, methodology, weight_dtype):
+    def test_weight_only_quantization(self, methodology, bits):
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
 
         from neural_compressor.transformers import GPTQConfig, RtnConfig
 
-        bits = 4
         if methodology == "gptq":
-            # max_input_length can be removed after neural-compressor > v2.5.1
-            quantization_config = GPTQConfig(bits=bits, sym=True, damp_percent=0.01)
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            quantization_config = GPTQConfig(
+                bits=bits,
+                sym=True,
+                damp_percent=0.01,
+                desc_act=True,
+                tokenizer=tokenizer,
+                n_samples=20,
+                group_size=8,
+                batch_size=5,
+                seq_len=32,
+                block_size=16,
+            )
         else:
-            quantization_config = RtnConfig(bits=bits)
+            quantization_config = RtnConfig(bits=bits, group_size=8)
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
@@ -494,7 +504,7 @@ class WeightOnlyQuantizationTest(INCTestMixin):
 
         with torch.no_grad():
             quantizer_outputs = quantized_model(**tokens)
-        quantized_model.saved_pretrained(tmp_dir)
+        quantized_model.save_pretrained(tmp_dir)
         loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir)
         with torch.no_grad():
             loaded_outputs = loaded_model(**tokens)
