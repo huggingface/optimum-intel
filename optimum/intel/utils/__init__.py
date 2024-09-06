@@ -22,6 +22,7 @@ from .import_utils import (
     is_neural_compressor_available,
     is_neural_compressor_version,
     is_nncf_available,
+    is_numa_available,
     is_openvino_available,
     is_torch_version,
     is_transformers_available,

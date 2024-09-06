@@ -71,6 +71,7 @@ class INCModel(OptimizedModel):
     auto_model_class = AutoModel
     export_feature = "feature-extraction"
     base_model_prefix = "inc_model"
+    _supports_cache_class = False
 
     def __init__(
         self,

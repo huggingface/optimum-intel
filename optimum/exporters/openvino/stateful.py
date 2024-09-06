@@ -21,7 +21,7 @@ from transformers import PretrainedConfig
 import openvino as ov
 from openvino.runtime import opset13
 from optimum.exporters import TasksManager
-from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version
+from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version, is_transformers_version
 
 
 def model_has_state(ov_model: ov.Model):
@@ -200,10 +200,10 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     """
 
     key_value_input_names = [
-        key.get_any_name() for key in ov_model.inputs if any("key_values" in key_name for key_name in key.get_names())
+        key_name for key in ov_model.inputs for key_name in key.get_names() if "key_values" in key_name
     ]
     key_value_output_names = [
-        key.get_any_name() for key in ov_model.outputs if any("present" in key_name for key_name in key.get_names())
+        key_name for key in ov_model.outputs for key_name in key.get_names() if "present" in key_name
     ]
     not_kv_inputs = [
         input for input in ov_model.inputs if not any(name in key_value_input_names for name in input.get_names())
@@ -213,10 +213,12 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
 
     # By default, batch is the 0-th but chatglm uses 1-st dimension as batch
     # TODO: Deduce from a model via ordinal reshape (?) and topology
-    batch_dim = 1 if config.model_type == "chatglm" else 0
+    batch_dim = 1 if config.model_type == "chatglm" and not hasattr(config, "rope_ratio") else 0
 
     fuse_cache_reorder(ov_model, not_kv_inputs, key_value_input_names, batch_dim)
-    num_attention_heads = config.num_attention_heads if config.model_type == "bloom" else 1
+    num_attention_heads = (
+        config.num_attention_heads if (config.model_type == "bloom" and is_transformers_version("<", "4.44")) else 1
+    )
     make_stateful(
         ov_model, not_kv_inputs, key_value_input_names, key_value_output_names, batch_dim, num_attention_heads, None
     )

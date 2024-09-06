@@ -60,8 +60,7 @@ from optimum.intel import (
     INCStableDiffusionPipeline,
 )
 from optimum.intel.utils.constant import DIFFUSION_WEIGHTS_NAME
-from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
-from optimum.pipelines import ORT_SUPPORTED_TASKS
+from optimum.exporters import TasksManager
 
 
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -88,29 +87,19 @@ class QuantizationTest(INCTestMixin):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_DYNAMIC)
     def test_dynamic_quantization(self, task, model_arch, expected_quantized_matmuls):
         model_name = MODEL_NAMES[model_arch]
-        model_class = ORT_SUPPORTED_TASKS[task]["class"][0]
+        model_class = TasksManager.get_model_class_for_task(task)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-        quantized_model = None
-        save_onnx_model = False
-        model_kwargs = {"use_cache": False, "use_io_binding": False} if task == "text-generation" else {}
         quantization_config = PostTrainingQuantConfig(approach="dynamic")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            for backend in ["torch", "ort"]:
-                if backend == "torch":
-                    model = model_class.auto_model_class.from_pretrained(model_name)
-                else:
-                    model = model_class.from_pretrained(model_name, export=True, **model_kwargs)
-
-                quantizer = INCQuantizer.from_pretrained(model, task=task)
-                quantizer.quantize(
-                    quantization_config=quantization_config,
-                    save_onnx_model=save_onnx_model,
-                    save_directory=tmp_dir,
-                )
-                if backend == "torch":
-                    quantized_model = quantizer._quantized_model
+            model = model_class.from_pretrained(model_name)
+            quantizer = INCQuantizer.from_pretrained(model, task=task)
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                save_directory=tmp_dir,
+            )
+            quantized_model = quantizer._quantized_model
 
             self.check_model_outputs(
                 q_model=quantized_model,
@@ -119,7 +108,6 @@ class QuantizationTest(INCTestMixin):
                 save_directory=tmp_dir,
                 expected_quantized_matmuls=expected_quantized_matmuls,
                 is_static=False,
-                load_onnx_model=True,
                 load_inc_model=True,
             )
 
@@ -127,34 +115,24 @@ class QuantizationTest(INCTestMixin):
     def test_static_quantization(self, task, model_arch, expected_quantized_matmuls):
         num_samples = 10
         model_name = MODEL_NAMES[model_arch]
-        model_class = ORT_SUPPORTED_TASKS[task]["class"][0]
+        model_class = TasksManager.get_model_class_for_task(task)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
         quantized_model = None
-        save_onnx_model = False
         quantization_config = PostTrainingQuantConfig(approach="static")
-        model_kwargs = {"use_cache": False, "use_io_binding": False} if task == "text-generation" else {}
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            for backend in ["torch", "ort"]:
-                if backend == "torch":
-                    model = model_class.auto_model_class.from_pretrained(model_name)
-                else:
-                    model = model_class.from_pretrained(model_name, export=True, **model_kwargs)
-
-                quantizer = INCQuantizer.from_pretrained(model, task=task)
-                calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
-
-                quantizer.quantize(
-                    quantization_config=quantization_config,
-                    calibration_dataset=calibration_dataset,
-                    save_onnx_model=save_onnx_model,
-                    save_directory=tmp_dir,
-                )
-                if backend == "torch":
-                    quantized_model = quantizer._quantized_model
+            model = model_class.from_pretrained(model_name)
+            quantizer = INCQuantizer.from_pretrained(model, task=task)
+            calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=num_samples)
+            quantizer.quantize(
+                quantization_config=quantization_config,
+                calibration_dataset=calibration_dataset,
+                save_directory=tmp_dir,
+            )
+            quantized_model = quantizer._quantized_model
 
             self.check_model_outputs(
                 q_model=quantized_model,
@@ -163,7 +141,6 @@ class QuantizationTest(INCTestMixin):
                 save_directory=tmp_dir,
                 expected_quantized_matmuls=expected_quantized_matmuls,
                 is_static=True,
-                load_onnx_model=True,
                 load_inc_model=True,
                 num_samples=num_samples,
             )
@@ -194,11 +171,9 @@ class QuantizationTest(INCTestMixin):
             quantizer.quantize(
                 quantization_config=quantization_config,
                 save_directory=tmp_dir,
-                save_onnx_model=False,
             )
             loaded_model = INCModelForQuestionAnswering.from_pretrained(tmp_dir)
             inc_config = INCConfig.from_pretrained(tmp_dir)
-            self.assertFalse(inc_config.save_onnx_model)
             self.assertFalse(inc_config.quantization["is_static"])
 
         quantized_model_metric = eval_fn(loaded_model)
@@ -265,7 +240,6 @@ class QuantizationTest(INCTestMixin):
             quantizer.quantize(
                 quantization_config=quantization_config,
                 save_directory=tmp_dir,
-                save_onnx_model=False,
             )
             model = INCModelForCausalLM.from_pretrained(tmp_dir)
 
@@ -283,7 +257,6 @@ class TrainingOptimizationTest(INCTestMixin):
     def test_aware_training_quantization(self, task, model_arch, expected_quantized_matmuls):
         model_name = MODEL_NAMES[model_arch]
         quantization_config = QuantizationAwareTrainingConfig()
-        save_onnx_model = False
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             trainer = self.get_trainer(
@@ -291,7 +264,6 @@ class TrainingOptimizationTest(INCTestMixin):
                 task=task,
                 save_directory=tmp_dir,
                 q_config=quantization_config,
-                save_onnx_model=save_onnx_model,
             )
             self.check_model_outputs(
                 q_model=trainer.model,
@@ -300,7 +272,6 @@ class TrainingOptimizationTest(INCTestMixin):
                 save_directory=tmp_dir,
                 expected_quantized_matmuls=expected_quantized_matmuls,
                 is_static=True,
-                load_onnx_model=save_onnx_model,
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
@@ -315,7 +286,6 @@ class TrainingOptimizationTest(INCTestMixin):
             target_sparsity=target_sparsity,
             pruning_scope="local",
         )
-        save_onnx_model = False
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             trainer = self.get_trainer(
@@ -324,7 +294,6 @@ class TrainingOptimizationTest(INCTestMixin):
                 save_directory=tmp_dir,
                 q_config=quantization_config,
                 p_config=pruning_config,
-                save_onnx_model=save_onnx_model,
             )
             self.check_model_outputs(
                 q_model=trainer.model,
@@ -333,7 +302,6 @@ class TrainingOptimizationTest(INCTestMixin):
                 save_directory=tmp_dir,
                 expected_quantized_matmuls=expected_quantized_matmuls,
                 is_static=True,
-                load_onnx_model=save_onnx_model,
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
@@ -348,7 +316,6 @@ class TrainingOptimizationTest(INCTestMixin):
             target_sparsity=target_sparsity,
             pruning_scope="local",
         )
-        save_onnx_model = True
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             trainer = self.get_trainer(
@@ -356,7 +323,6 @@ class TrainingOptimizationTest(INCTestMixin):
                 task=task,
                 save_directory=tmp_dir,
                 p_config=pruning_config,
-                save_onnx_model=save_onnx_model,
                 num_train_samples=64,
             )
             self.check_model_outputs(
@@ -366,7 +332,6 @@ class TrainingOptimizationTest(INCTestMixin):
                 save_directory=tmp_dir,
                 expected_quantized_matmuls=0,
                 is_static=True,
-                load_onnx_model=save_onnx_model,
             )
             sparsity = trainer.get_model_sparsity()
             inc_config = INCConfig.from_pretrained(tmp_dir)
@@ -379,9 +344,8 @@ class TrainingOptimizationTest(INCTestMixin):
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_distillation(self, task, model_arch, expected_quantized_matmuls):
         model_name = MODEL_NAMES[model_arch]
-        teacher_model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
+        teacher_model = TasksManager.get_model_class_for_task(task).from_pretrained(model_name)
         distillation_config = DistillationConfig(teacher_model=teacher_model)
-        save_onnx_model = True
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             trainer = self.get_trainer(
@@ -389,7 +353,6 @@ class TrainingOptimizationTest(INCTestMixin):
                 task=task,
                 save_directory=tmp_dir,
                 d_config=distillation_config,
-                save_onnx_model=save_onnx_model,
             )
             self.check_model_outputs(
                 q_model=trainer.model,
@@ -398,7 +361,6 @@ class TrainingOptimizationTest(INCTestMixin):
                 save_directory=tmp_dir,
                 expected_quantized_matmuls=0,
                 is_static=True,
-                load_onnx_model=save_onnx_model,
             )
             inc_config = INCConfig.from_pretrained(tmp_dir)
             self.assertEqual(inc_config.distillation["teacher_model_name_or_path"], model_name)

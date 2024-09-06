@@ -23,7 +23,6 @@ import evaluate
 import numpy as np
 import torch
 from datasets import load_dataset
-from onnx import load as onnx_load
 from transformers import AutoTokenizer, TrainingArguments, default_data_collator
 
 from optimum.intel import (
@@ -44,10 +43,8 @@ from optimum.intel import (
 from optimum.intel.utils.import_utils import is_ipex_available
 
 from optimum.intel.neural_compressor.utils import _HEAD_TO_AUTOMODELS
-from optimum.intel.utils.constant import ONNX_WEIGHTS_NAME
-from optimum.onnxruntime import ORTModelForCausalLM, ORTModelForSequenceClassification
-from optimum.pipelines import ORT_SUPPORTED_TASKS
 from optimum.exporters.onnx import MODEL_TYPES_REQUIRING_POSITION_IDS
+from optimum.exporters import TasksManager
 
 if is_ipex_available():
     from optimum.intel import (
@@ -110,15 +107,6 @@ MODEL_NAMES = {
 }
 
 
-def num_quantized_matmul_onnx_model(onnx_model):
-    num_quantized_matmul = 0
-    for node in onnx_model.graph.node:
-        if "QuantizeLinear" in node.name:
-            num_quantized_matmul += 1
-
-    return num_quantized_matmul
-
-
 def _preprocess_function(examples, tokenizer, column_name):
     return tokenizer(examples[column_name], padding="max_length", max_length=128, truncation=True)
 
@@ -155,20 +143,11 @@ class INCTestMixin(unittest.TestCase):
         save_directory,
         expected_quantized_matmuls,
         is_static=True,
-        load_onnx_model=True,
         load_inc_model=True,
         num_samples=None,
-        file_name=None,
         load_ipex_model=False,
     ):
         tokens = tokenizer("This is a sample input", return_tensors="pt")
-        file_name = ONNX_WEIGHTS_NAME if task != "text-generation" else "decoder_model.onnx"
-
-        model_kwargs = (
-            {"decoder_file_name": file_name, "use_cache": False, "use_io_binding": False}
-            if task == "text-generation"
-            else {"file_name": file_name}
-        )
         inc_config = INCConfig.from_pretrained(save_directory)
 
         if num_samples is not None:
@@ -184,23 +163,6 @@ class INCTestMixin(unittest.TestCase):
                 inc_model = eval(auto_class).from_pretrained(save_directory)
                 inc_model_outputs = inc_model(**tokens)
                 self.assertTrue(torch.allclose(inc_model_outputs["logits"], outputs, atol=1e-2))
-                # self.assertEqual(inc_config.save_onnx_model, load_onnx_model)
-
-        if load_onnx_model:
-            onnx_model = onnx_load(os.path.join(save_directory, file_name))
-            num_quantized_matmul = num_quantized_matmul_onnx_model(onnx_model)
-
-            if num_quantized_matmul > 0:
-                self.assertEqual(inc_config.quantization["is_static"], is_static)
-
-            self.assertEqual(expected_quantized_matmuls, num_quantized_matmul)
-            ort_model = ORT_SUPPORTED_TASKS[task]["class"][0].from_pretrained(save_directory, **model_kwargs)
-            model_type = ort_model.config.model_type.replace("_", "-")
-            if model_type in MODEL_TYPES_REQUIRING_POSITION_IDS:
-                tokens["position_ids"] = torch.arange(len(tokens["input_ids"])).unsqueeze(0)
-            ort_outputs = ort_model(**tokens)
-            self.assertTrue("logits" in ort_outputs)
-            # self.assertTrue(torch.allclose(ort_outputs.logits, outputs, atol=1e-2))
 
     @staticmethod
     def get_trainer(
@@ -210,11 +172,10 @@ class INCTestMixin(unittest.TestCase):
         q_config=None,
         p_config=None,
         d_config=None,
-        save_onnx_model=True,
         num_train_samples=8,
         num_eval_samples=8,
     ):
-        model = ORT_SUPPORTED_TASKS[task]["class"][0].auto_model_class.from_pretrained(model_name)
+        model = TasksManager.get_model_class_for_task(task).from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
@@ -241,6 +202,6 @@ class INCTestMixin(unittest.TestCase):
         )
         trainer.train()
         trainer.evaluate()
-        trainer.save_model(save_onnx_model=save_onnx_model)
+        trainer.save_model()
         trainer.model.eval()
         return trainer

@@ -150,6 +150,14 @@ if _accelerate_available:
     except importlib_metadata.PackageNotFoundError:
         _accelerate_available = False
 
+_numa_available = importlib.util.find_spec("numa") is not None
+
+if _numa_available:
+    try:
+        importlib_metadata.version("numa")
+    except importlib_metadata.PackageNotFoundError:
+        _numa_available = False
+
 
 def is_transformers_available():
     return _transformers_available
@@ -272,6 +280,10 @@ def is_accelerate_available():
     return _accelerate_available
 
 
+def is_numa_available():
+    return _numa_available
+
+
 # This function was copied from: https://github.com/huggingface/accelerate/blob/874c4967d94badd24f893064cc3bef45f57cadf7/src/accelerate/utils/versions.py#L319
 def compare_versions(library_or_version: Union[str, Version], operation: str, requirement_version: str):
     """
@@ -370,6 +382,15 @@ def is_timm_version(operation: str, version: str):
     if not _timm_available:
         return False
     return compare_versions(parse(_timm_version), operation, version)
+
+
+def is_datasets_version(operation: str, version: str):
+    """
+    Compare the current datasets version to a given reference with an operation.
+    """
+    if not _datasets_available:
+        return False
+    return compare_versions(parse(_datasets_version), operation, version)
 
 
 DIFFUSERS_IMPORT_ERROR = """

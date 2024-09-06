@@ -20,6 +20,7 @@ from tempfile import TemporaryDirectory, gettempdir
 from typing import Dict, Optional, Union
 
 import openvino
+import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core, convert_model
@@ -27,14 +28,16 @@ from openvino._offline_transformations import apply_moc_transformations, compres
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 from transformers.generation import GenerationMixin
+from transformers.utils import is_offline_mode
 
 from optimum.exporters.onnx import OnnxConfig
-from optimum.modeling_base import OptimizedModel
+from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 
 from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available
+from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
-from .utils import ONNX_WEIGHTS_NAME, OV_XML_FILE_NAME, _print_compiled_model_properties
+from .utils import ONNX_WEIGHTS_NAME, OV_TO_PT_TYPE, OV_XML_FILE_NAME, _print_compiled_model_properties
 
 
 core = Core()
@@ -50,6 +53,7 @@ logger = logging.getLogger(__name__)
 class OVBaseModel(OptimizedModel):
     auto_model_class = None
     export_feature = None
+    _supports_cache_class = False
 
     def __init__(
         self,
@@ -76,16 +80,27 @@ class OVBaseModel(OptimizedModel):
             model = self._reshape(model, -1, -1, height, width)
 
         input_names = {}
+        input_dtypes = {}
         for idx, key in enumerate(model.inputs):
             names = tuple(key.get_names())
             input_names[next((name for name in names if "/" not in name), names[0])] = idx
+            input_dtypes[
+                next((name for name in names if "/" not in name), names[0])
+            ] = key.get_element_type().get_type_name()
         self.input_names = input_names
+        self.input_dtypes = input_dtypes
 
         output_names = {}
+        output_dtypes = {}
         for idx, key in enumerate(model.outputs):
             names = tuple(key.get_names())
             output_names[next((name for name in names if "/" not in name), names[0])] = idx
+            output_dtypes[
+                next((name for name in names if "/" not in name), names[0])
+            ] = key.get_element_type().get_type_name()
+
         self.output_names = output_names
+        self.output_dtypes = output_dtypes
 
         self.model = model
         self.request = None
@@ -102,11 +117,32 @@ class OVBaseModel(OptimizedModel):
         if enable_compilation:
             self.compile()
 
+    @property
+    def device(self) -> torch.device:
+        """
+        `torch.device`: The device on which the module is (for torch compatibility).
+        """
+        return torch.device("cpu")
+
+    @property
+    def dtype(self) -> Optional[torch.dtype]:
+        for dtype in self.input_dtypes.values():
+            torch_dtype = OV_TO_PT_TYPE.get(dtype)
+            if torch_dtype.is_floating_point:
+                return torch_dtype
+
+        for dtype in self.output_dtypes.values():
+            torch_dtype = OV_TO_PT_TYPE.get(dtype)
+            if torch_dtype.is_floating_point:
+                return torch_dtype
+
+        return None
+
     @staticmethod
     def load_model(
         file_name: Union[str, Path],
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-    ):
+    ) -> openvino.runtime.Model:
         """
         Loads the model.
 
@@ -131,7 +167,11 @@ class OVBaseModel(OptimizedModel):
 
         if isinstance(file_name, str):
             file_name = Path(file_name)
-        model = core.read_model(file_name) if not file_name.suffix == ".onnx" else convert_model(file_name)
+        model = (
+            core.read_model(file_name.resolve(), file_name.with_suffix(".bin").resolve())
+            if not file_name.suffix == ".onnx"
+            else convert_model(file_name)
+        )
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
 
@@ -182,7 +222,6 @@ class OVBaseModel(OptimizedModel):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -204,8 +243,6 @@ class OVBaseModel(OptimizedModel):
                 Can be either:
                     - The model id of a pretrained model hosted inside a model repo on huggingface.co.
                     - The path to a directory containing the model weights.
-            use_auth_token (Optional[Union[bool, str]], defaults to `None`):
-                Deprecated. Please use `token` instead.
             token (Optional[Union[bool, str]], defaults to `None`):
                 The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
                 when running `huggingface-cli login` (stored in `~/.huggingface`).
@@ -225,15 +262,6 @@ class OVBaseModel(OptimizedModel):
             load_in_8bit (`bool`, *optional*, defaults to `False`):
                 Whether or not to apply 8-bit weight quantization.
         """
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
@@ -274,6 +302,87 @@ class OVBaseModel(OptimizedModel):
             **kwargs,
         )
 
+    @classmethod
+    @add_start_docstrings(FROM_PRETRAINED_START_DOCSTRING)
+    def from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        export: bool = False,
+        force_download: bool = False,
+        use_auth_token: Optional[Union[bool, str]] = None,
+        token: Optional[Union[bool, str]] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        subfolder: str = "",
+        config: Optional[PretrainedConfig] = None,
+        local_files_only: bool = False,
+        trust_remote_code: bool = False,
+        revision: Optional[str] = None,
+        **kwargs,
+    ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
+        if is_offline_mode() and not local_files_only:
+            logger.info("Offline mode: forcing local_files_only=True")
+            local_files_only = True
+
+        _export = export
+        try:
+            if local_files_only:
+                object_id = model_id.replace("/", "--")
+                cached_model_dir = os.path.join(cache_dir, f"models--{object_id}")
+                refs_file = os.path.join(os.path.join(cached_model_dir, "refs"), revision or "main")
+                with open(refs_file) as f:
+                    revision = f.read()
+                model_dir = os.path.join(cached_model_dir, "snapshots", revision)
+            else:
+                model_dir = model_id
+
+            ov_files = _find_files_matching_pattern(
+                model_dir,
+                pattern=r"(.*)?openvino(.*)?\_model.xml",
+                subfolder=subfolder,
+                use_auth_token=token,
+                revision=revision,
+            )
+            _export = len(ov_files) == 0
+            if _export ^ export:
+                if export:
+                    logger.warning(
+                        f"The model {model_id} was already converted to the OpenVINO IR but got `export=True`, the model will be converted to OpenVINO once again. "
+                        "Don't forget to save the resulting model with `.save_pretrained()`"
+                    )
+                    _export = True
+                else:
+                    logger.warning(
+                        f"No OpenVINO files were found for {model_id}, setting `export=True` to convert the model to the OpenVINO IR. "
+                        "Don't forget to save the resulting model with `.save_pretrained()`"
+                    )
+        except Exception as exception:
+            logger.warning(
+                f"Could not infer whether the model was already converted or not to the OpenVINO IR, keeping `export={export}`.\n{exception}"
+            )
+
+        return super().from_pretrained(
+            model_id,
+            export=_export,
+            force_download=force_download,
+            token=token,
+            cache_dir=cache_dir,
+            subfolder=subfolder,
+            config=config,
+            local_files_only=local_files_only,
+            trust_remote_code=trust_remote_code,
+            revision=revision,
+            **kwargs,
+        )
+
     @staticmethod
     def _prepare_weight_quantization_config(
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None, load_in_8bit: bool = False
@@ -299,7 +408,6 @@ class OVBaseModel(OptimizedModel):
     @staticmethod
     def _cached_file(
         model_path: Union[Path, str],
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -308,15 +416,6 @@ class OVBaseModel(OptimizedModel):
         subfolder: str = "",
         local_files_only: bool = False,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         # locates a file in a local folder and repo, downloads and cache it if necessary.
         model_path = Path(model_path)
         if model_path.is_dir():
@@ -347,7 +446,6 @@ class OVBaseModel(OptimizedModel):
         cls,
         model_id: str,
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -371,8 +469,6 @@ class OVBaseModel(OptimizedModel):
                     - The path to a directory containing the model weights.            save_dir (`str` or `Path`):
                 The directory where the exported ONNX model should be saved, default to
                 `transformers.file_utils.default_cache_path`, which is the cache directory for transformers.
-            use_auth_token (`Optional[str]`, defaults to `None`):
-                Deprecated. Please use `token` instead.
             token (Optional[Union[bool, str]], defaults to `None`):
                 The token to use as HTTP bearer authorization for remote files. If `True`, will use the token generated
                 when running `huggingface-cli login` (stored in `~/.huggingface`).
@@ -381,15 +477,6 @@ class OVBaseModel(OptimizedModel):
             kwargs (`Dict`, *optional*):
                 kwargs will be passed to the model during initialization
         """
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
@@ -431,7 +518,6 @@ class OVBaseModel(OptimizedModel):
         model,
         config: PretrainedConfig,
         onnx_config: OnnxConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -440,15 +526,6 @@ class OVBaseModel(OptimizedModel):
         stateful: bool = False,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
@@ -553,3 +630,27 @@ class OVBaseModel(OptimizedModel):
         if isinstance(self, GenerationMixin):
             return True
         return False
+
+    def _inference(self, inputs):
+        try:
+            outputs = self.request(inputs)
+        except Exception as e:
+            invalid_inputs_msg = self._incompatible_inputs_warning(inputs)
+            if invalid_inputs_msg is not None:
+                e.args += (invalid_inputs_msg,)
+            raise e
+        return outputs
+
+    def _incompatible_inputs_warning(self, inputs: Dict):
+        expected_inputs_names = set(self.input_names.keys())
+        inputs_names = set(inputs.keys())
+
+        if expected_inputs_names != inputs_names:
+            return f"Got unexpected inputs: expecting the following inputs {expected_inputs_names} but got {inputs_names}."
+
+        for input_name in inputs:
+            if inputs[input_name] is None:
+                dtype = self.request.inputs[self.input_names[input_name]].get_element_type()
+                return f"Got unexpected inputs: `{input_name}` set to {type(inputs[input_name])} while expected to be {dtype}."
+
+        return None

@@ -16,7 +16,6 @@ import importlib
 import logging
 import os
 import shutil
-import warnings
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
@@ -25,6 +24,7 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import openvino
 import PIL
+import torch
 from diffusers import (
     DDIMScheduler,
     LMSDiscreteScheduler,
@@ -33,6 +33,7 @@ from diffusers import (
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
 )
+from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available
 from huggingface_hub import snapshot_download
@@ -76,7 +77,7 @@ logger = logging.getLogger(__name__)
 class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
     auto_model_class = StableDiffusionPipeline
     config_name = "model_index.json"
-    export_feature = "stable-diffusion"
+    export_feature = "text-to-image"
 
     def __init__(
         self,
@@ -90,6 +91,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         tokenizer: Optional["CLIPTokenizer"] = None,
         tokenizer_2: Optional["CLIPTokenizer"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
+        safety_checker: Optional["StableDiffusionSafetyChecker"] = None,
         device: str = "CPU",
         dynamic_shapes: bool = True,
         compile: bool = True,
@@ -135,7 +137,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         self.tokenizer_2 = tokenizer_2
         self.scheduler = scheduler
         self.feature_extractor = feature_extractor
-        self.safety_checker = None
+        self.safety_checker = safety_checker
         self.preprocessors = []
 
         if self.is_dynamic:
@@ -207,7 +209,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         cls,
         model_id: Union[str, Path],
         config: Dict[str, Any],
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
@@ -223,15 +224,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         vae_decoder_file_name = vae_decoder_file_name or default_file_name
         text_encoder_file_name = text_encoder_file_name or default_file_name
@@ -346,7 +338,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         cls,
         model_id: str,
         config: Dict[str, Any],
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -360,15 +351,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
@@ -419,10 +401,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             logger.debug(f"device must be of type {str} but got {type(device)} instead")
 
         return self
-
-    @property
-    def device(self) -> str:
-        return self._device.lower()
 
     @property
     def height(self) -> int:
@@ -629,20 +607,24 @@ class OVModelPart:
             if (
                 "CACHE_DIR" not in self.ov_config.keys()
                 and not str(self._model_dir).startswith(gettempdir())
-                and "gpu" in self.device.lower()
+                and "GPU" in self._device
             ):
                 self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
 
-            logger.info(f"Compiling the {self._model_name} to {self.device} ...")
-            self.request = core.compile_model(self.model, self.device, self.ov_config)
+            logger.info(f"Compiling the {self._model_name} to {self._device} ...")
+            self.request = core.compile_model(self.model, self._device, self.ov_config)
             # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
             if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
-                logger.info(f"{self.device} SUPPORTED_PROPERTIES:")
+                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
                 _print_compiled_model_properties(self.request)
 
     @property
-    def device(self):
+    def _device(self) -> str:
         return self.parent_model._device
+
+    @property
+    def device(self) -> torch.device:
+        return self.parent_model.device
 
 
 class OVModelTextEncoder(OVModelPart):
@@ -715,7 +697,7 @@ class OVModelVaeDecoder(OVModelPart):
         return list(outputs.values())
 
     def _compile(self):
-        if "GPU" in self.device:
+        if "GPU" in self._device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
         super()._compile()
 
@@ -736,7 +718,7 @@ class OVModelVaeEncoder(OVModelPart):
         return list(outputs.values())
 
     def _compile(self):
-        if "GPU" in self.device:
+        if "GPU" in self._device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
         super()._compile()
 
@@ -797,6 +779,8 @@ class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPi
 
 
 class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiffusionImg2ImgPipelineMixin):
+    export_feature = "image-to-image"
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
@@ -839,6 +823,8 @@ class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiff
 
 
 class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiffusionInpaintPipelineMixin):
+    export_feature = "inpainting"
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]],
@@ -910,7 +896,6 @@ class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiff
 
 class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
     auto_model_class = StableDiffusionXLPipeline
-    export_feature = "stable-diffusion-xl"
 
     def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -986,6 +971,7 @@ class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusi
 
 class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLImg2ImgPipelineMixin):
     auto_model_class = StableDiffusionXLImg2ImgPipeline
+    export_feature = "image-to-image"
 
     def __call__(
         self,
@@ -1081,6 +1067,22 @@ class OVLatentConsistencyModelPipeline(OVStableDiffusionPipelineBase, LatentCons
             num_images_per_prompt=num_images_per_prompt,
             **kwargs,
         )
+
+    def run_safety_checker(self, image: np.ndarray):
+        if self.safety_checker is None:
+            has_nsfw_concept = None
+        else:
+            # Transpose the image to NHWC
+            image = image.transpose(0, 2, 3, 1)
+
+            feature_extractor_input = self.image_processor.numpy_to_pil(image)
+            safety_checker_input = self.feature_extractor(feature_extractor_input, return_tensors="pt")
+            image, has_nsfw_concept = self.safety_checker(images=image, clip_input=safety_checker_input.pixel_values)
+
+            # Transpose the image back to NCHW
+            image = image.transpose(0, 3, 1, 2)
+
+        return image, has_nsfw_concept
 
 
 def _raise_invalid_batch_size(

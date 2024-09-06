@@ -28,8 +28,8 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=1.11",
-    "transformers>=4.36.0,<4.42.0",
-    "optimum~=1.20",
+    "transformers>=4.36,<4.45",
+    "optimum@git+https://github.com/huggingface/optimum.git",
     "datasets>=1.4.0",
     "sentencepiece",
     "setuptools",
@@ -39,7 +39,7 @@ INSTALL_REQUIRE = [
 
 TESTS_REQUIRE = [
     "accelerate",
-    "pytest<8.2",
+    "pytest>=7.2.0,<8.0.0",
     "parameterized",
     "Pillow",
     "evaluate",
@@ -56,13 +56,13 @@ TESTS_REQUIRE = [
     "sentence-transformers",
 ]
 
-QUALITY_REQUIRE = ["black~=23.1", "ruff>=0.0.241"]
+QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
-    "neural-compressor": ["neural-compressor>=2.2.0", "onnxruntime<1.15.0", "accelerate"],
-    "openvino": ["openvino>=2023.3", "nncf>=2.10.0", "openvino-tokenizers[transformers]"],
-    "nncf": ["nncf>=2.10.0"],
-    "ipex": ["intel-extension-for-pytorch", "transformers>=4.39.0,<=4.41.2"],
+    "neural-compressor": ["neural-compressor>=2.2.0,<3.0", "accelerate", "transformers<4.43"],
+    "openvino": ["openvino>=2023.3", "nncf>=2.11.0", "openvino-tokenizers[transformers]"],
+    "nncf": ["nncf>=2.11.0"],
+    "ipex": ["intel-extension-for-pytorch", "transformers>=4.39,<4.45"],
     "diffusers": ["diffusers"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,

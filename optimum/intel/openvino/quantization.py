@@ -38,7 +38,6 @@ from torch.utils.data import DataLoader, RandomSampler
 from transformers import AutoTokenizer, DataCollator, PreTrainedModel, default_data_collator
 from transformers.pytorch_utils import Conv1D
 from transformers.utils import is_accelerate_available
-from transformers.utils.quantization_config import QuantizationMethod
 
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.tasks import TasksManager
@@ -48,7 +47,12 @@ from ...exporters.openvino import export, export_pytorch_via_onnx
 from ...exporters.openvino.model_patcher import patch_model_with_bettertransformer
 from ...exporters.openvino.stateful import ensure_export_task_support_stateful, ensure_stateful_is_available
 from ..utils.constant import _TASK_ALIASES
-from ..utils.import_utils import DATASETS_IMPORT_ERROR, is_datasets_available, is_diffusers_available
+from ..utils.import_utils import (
+    DATASETS_IMPORT_ERROR,
+    is_datasets_available,
+    is_datasets_version,
+    is_diffusers_available,
+)
 from ..utils.modeling_utils import get_model_device
 from .configuration import OVConfig, OVQuantizationConfig, OVQuantizationMethod, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
@@ -128,9 +132,10 @@ class InferRequestWrapper:
             data_hash = hash(data.tobytes())
 
             # Avoid data copying if tensor contains data encountered earlier
-            if data_hash not in self.tensor_cache:
-                self.tensor_cache[data_hash] = copy.deepcopy(v)
-            copied_inputs[k] = self.tensor_cache[data_hash]
+            self.tensor_cache.setdefault(k, {})
+            if data_hash not in self.tensor_cache[k]:
+                self.tensor_cache[k][data_hash] = copy.deepcopy(v)
+            copied_inputs[k] = self.tensor_cache[k][data_hash]
         self.collected_inputs.append(copied_inputs)
 
     def __call__(self, *args, **kwargs):
@@ -189,11 +194,6 @@ class OVQuantizer(OptimumQuantizer):
         signature = inspect.signature(self.model.forward)
         self._signature_columns = list(signature.parameters.keys())
 
-    @property
-    def input_names(self):
-        logger.warning("The`input_names` attribute is deprecated and will be removed in v1.18.0")
-        return None
-
     @classmethod
     def from_pretrained(cls, model: PreTrainedModel, **kwargs):
         # TODO : Create model
@@ -208,7 +208,6 @@ class OVQuantizer(OptimumQuantizer):
         batch_size: int = 1,
         data_collator: Optional[DataCollator] = None,
         remove_unused_columns: bool = True,
-        weights_only: bool = None,
         **kwargs,
     ):
         """
@@ -231,10 +230,6 @@ class OVQuantizer(OptimumQuantizer):
                 The function to use to form a batch from a list of elements of the calibration dataset.
             remove_unused_columns (`bool`, defaults to `True`):
                 Whether to remove the columns unused by the model forward method.
-            weights_only (`bool`, *optional*):
-                Being deprecated.
-                Compress weights to integer precision (8-bit by default) while keeping activations
-                floating-point. Fits best for LLM footprint reduction and performance acceleration.
 
         Examples:
         ```python
@@ -259,31 +254,20 @@ class OVQuantizer(OptimumQuantizer):
         >>> optimized_model = OVModelForSequenceClassification.from_pretrained("./quantized_model")
         ```
         """
-        # TODO: deprecate weights_only argument
-        if weights_only is not None:
-            logger.warning(
-                "`weights_only` argument is deprecated and will be removed in v1.18.0. In the future please provide `ov_config.quantization_config` "
-                "as an instance of `OVWeightQuantizationConfig` for weight-only compression or as an instance of `OVQuantizationConfig` for full model quantization."
-            )
-
         if ov_config is None:
             ov_config = OVConfig()
         if not isinstance(ov_config, OVConfig):
             raise TypeError(f"`ov_config` should be an `OVConfig`, but got: {type(ov_config)} instead.")
         quantization_config = ov_config.quantization_config
         if quantization_config is None:
-            if (weights_only is None or weights_only is True) and calibration_dataset is None:
-                if weights_only is None:
-                    logger.info(
-                        "`quantization_config` was not provided, 8-bit asymmetric weight quantization will be applied."
-                    )
+            logger.warning(
+                "`quantization_config` was not provided. In the future, please provide `quantization_config`"
+            )
+            if calibration_dataset is None:
+                logger.warning("Calibration dataset was not provided, assuming weight only quantization.")
                 ov_config.quantization_config = OVWeightQuantizationConfig(bits=8)
             else:
-                logger.warning(
-                    "`quantization_config` was not provided, but calibration dataset was provided, assuming full "
-                    "model quantization is intended. In the future, please provide `quantization_config` as an "
-                    "instance of OVQuantizationConfig."
-                )
+                logger.warning("Calibration dataset was provided, assuming static quantization.")
                 ov_config.quantization_config = OVQuantizationConfig()
 
         if isinstance(self.model, OVBaseModel):
@@ -368,12 +352,14 @@ class OVQuantizer(OptimumQuantizer):
                     "quantization. Will rely on `calibration_dataset`."
                 )
 
-            if calibration_dataset is None and isinstance(quantization_config.dataset, str):
+            if calibration_dataset is None and quantization_config.dataset is not None:
                 from optimum.intel import OVModelForCausalLM
 
                 if isinstance(self.model, OVModelForCausalLM):
-                    calibration_dataset = self._prepare_builtin_dataset(quantization_config)
+                    calibration_dataset = self._prepare_causal_lm_dataset(quantization_config)
                 elif is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+                    if not isinstance(quantization_config.dataset, str):
+                        raise ValueError("Please provide dataset as one of the accepted dataset labels.")
                     calibration_dataset = self._prepare_unet_dataset(
                         quantization_config.num_samples, dataset_name=quantization_config.dataset
                     )
@@ -390,10 +376,10 @@ class OVQuantizer(OptimumQuantizer):
                     quantization_config_copy = copy.deepcopy(quantization_config)
                     quantization_config_copy.dataset = None
                     quantization_config_copy.quant_method = OVQuantizationMethod.DEFAULT
-                    for sd_submodel_name in ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"]:
-                        sd_submodel = getattr(self.model, sd_submodel_name)
-                        if sd_submodel is not None:
-                            _weight_only_quantization(sd_submodel.model, quantization_config_copy)
+                    sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2"]
+                    sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
+                    for sub_model in sub_models:
+                        _weight_only_quantization(sub_model.model, quantization_config_copy)
 
                     # Apply hybrid quantization to UNet
                     self.model.unet.model = _hybrid_quantization(
@@ -403,7 +389,13 @@ class OVQuantizer(OptimumQuantizer):
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     self.model.model = _hybrid_quantization(self.model.model, quantization_config, calibration_dataset)
             else:
-                _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)
+                if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+                    sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2", "unet"]
+                    sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
+                    for sub_model in sub_models:
+                        _weight_only_quantization(sub_model.model, quantization_config)
+                else:
+                    _weight_only_quantization(self.model.model, quantization_config, calibration_dataset)
             if save_directory is not None:
                 self.model.save_pretrained(save_directory)
                 ov_config.save_pretrained(save_directory)
@@ -595,6 +587,7 @@ class OVQuantizer(OptimumQuantizer):
         use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        trust_remote_code: bool = False,
     ) -> "Dataset":
         """
         Create the calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
@@ -620,6 +613,10 @@ class OVQuantizer(OptimumQuantizer):
                 when running `huggingface-cli login` (stored in `~/.huggingface`).
             cache_dir (`str`, *optional*):
                 Caching directory for a calibration dataset.
+            trust_remote_code (`bool`, defaults to `False`):
+                Whether or not to allow for custom models defined on the Hub in their own modeling files. This option
+                should only be set to `True` for repositories you trust and in which you have read the code, as it will
+                execute code present on the Hub on your local machine.
         Returns:
             The calibration `datasets.Dataset` to use for the post-training static quantization calibration step.
         """
@@ -634,15 +631,14 @@ class OVQuantizer(OptimumQuantizer):
 
         if not is_datasets_available():
             raise ValueError(DATASETS_IMPORT_ERROR.format("OVQuantizer.get_calibration_dataset"))
+
         from datasets import load_dataset
 
-        calibration_dataset = load_dataset(
-            dataset_name,
-            name=dataset_config_name,
-            split=dataset_split,
-            token=token,
-            cache_dir=cache_dir,
-        )
+        datasets_kwargs = {"name": dataset_config_name, "split": dataset_split, "token": token, "cache_dir": cache_dir}
+        if is_datasets_version(">=", "2.20.0"):
+            datasets_kwargs["trust_remote_code"] = trust_remote_code
+
+        calibration_dataset = load_dataset(dataset_name, **datasets_kwargs)
 
         if num_samples is not None:
             num_samples = min(num_samples, len(calibration_dataset))
@@ -682,12 +678,20 @@ class OVQuantizer(OptimumQuantizer):
         ignored_columns = list(set(dataset.column_names) - set(self._signature_columns))
         return dataset.remove_columns(ignored_columns)
 
-    def _prepare_builtin_dataset(self, quantization_config: OVWeightQuantizationConfig):
+    def _prepare_causal_lm_dataset(self, quantization_config: OVWeightQuantizationConfig):
         from optimum.gptq.data import get_dataset, prepare_dataset
 
-        tokenizer = AutoTokenizer.from_pretrained(quantization_config.tokenizer)
+        tokenizer = AutoTokenizer.from_pretrained(
+            quantization_config.tokenizer, trust_remote_code=quantization_config.trust_remote_code
+        )
         nsamples = quantization_config.num_samples if quantization_config.num_samples else 128
-        calibration_dataset = get_dataset(quantization_config.dataset, tokenizer, seqlen=32, nsamples=nsamples)
+        config_dataset = quantization_config.dataset
+        if isinstance(config_dataset, str):
+            calibration_dataset = get_dataset(config_dataset, tokenizer, seqlen=32, nsamples=nsamples)
+        elif isinstance(config_dataset, list) and all(isinstance(it, str) for it in config_dataset):
+            calibration_dataset = [tokenizer(text, return_tensors="pt") for text in config_dataset[:nsamples]]
+        else:
+            raise ValueError("Please provide dataset as one of the accepted dataset labels or as a list of strings.")
         calibration_dataset = prepare_dataset(calibration_dataset)
         calibration_dataset = nncf.Dataset(calibration_dataset, lambda x: self.model.prepare_inputs(**x))
 
@@ -747,9 +751,9 @@ class OVQuantizer(OptimumQuantizer):
             from datasets import load_dataset
 
             dataset_metadata = PREDEFINED_SD_DATASETS[dataset_name]
-            dataset = load_dataset(dataset_name, split=dataset_metadata["split"], streaming=True).shuffle(
-                seed=self.seed
-            )
+            datasets_kwargs = {"split": dataset_metadata["split"], "streaming": True}
+            dataset = load_dataset(dataset_name, **datasets_kwargs).shuffle(seed=self.seed)
+
             input_names = dataset_metadata["inputs"]
             dataset = dataset.select_columns(list(input_names.values()))
 
@@ -807,10 +811,13 @@ def _weight_only_quantization(
     if isinstance(config.sensitivity_metric, str):
         sensitivity_metric = getattr(SensitivityMetric, config.sensitivity_metric.upper())
 
-    if config.bits == 8:
-        mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
+    if config.weight_format == "mxfp4":
+        mode = CompressWeightsMode.E2M1
     else:
-        mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
+        if config.bits == 8:
+            mode = CompressWeightsMode.INT8_SYM if config.sym else CompressWeightsMode.INT8_ASYM
+        else:
+            mode = CompressWeightsMode.INT4_SYM if config.sym else CompressWeightsMode.INT4_ASYM
 
     return nncf.compress_weights(
         model,
@@ -819,10 +826,11 @@ def _weight_only_quantization(
         group_size=config.group_size,
         all_layers=config.all_layers,
         sensitivity_metric=sensitivity_metric,
-        awq=config.quant_method == QuantizationMethod.AWQ or None,
+        awq=getattr(config.quant_method, "name", "") == "AWQ" or None,
         ignored_scope=config.get_ignored_scope_instance(),
         dataset=dataset,
         subset_size=config.num_samples if config.num_samples else 128,
+        scale_estimation=config.scale_estimation,
     )
 
 

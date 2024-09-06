@@ -14,7 +14,6 @@
 import copy
 import logging
 import os
-import warnings
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
@@ -25,6 +24,7 @@ import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino.preprocess import PrePostProcessor
 from openvino.runtime import Core, Tensor, Type
+from packaging.version import Version
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
@@ -38,16 +38,21 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
-from ..utils.import_utils import is_nncf_available
+from ..utils.import_utils import compare_versions, is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
-from .configuration import _DEFAULT_4BIT_CONFIGS, OVConfig, OVWeightQuantizationConfig, _check_default_4bit_configs
+from .configuration import (
+    OVConfig,
+    OVWeightQuantizationConfig,
+    _check_default_4bit_configs,
+    get_default_int4_config,
+)
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, STR_TO_OV_TYPE
 
 
 if TYPE_CHECKING:
+    from transformers.generation.streamers import BaseStreamer
     from transformers.modeling_utils import PreTrainedModel
-    from transformers.streamers import BaseStreamer
 
 
 logger = logging.getLogger(__name__)
@@ -238,7 +243,6 @@ class OVBaseDecoderModel(OVModel):
         cls,
         model_id: str,
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -252,15 +256,6 @@ class OVBaseDecoderModel(OVModel):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
@@ -276,9 +271,16 @@ class OVBaseDecoderModel(OVModel):
         if load_in_8bit is None and not quantization_config:
             ov_export_config = None
         else:
-            ov_export_config = OVConfig(dtype="fp32")
+            ov_export_config = OVConfig(dtype="auto")
 
         stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
+
+        torch_dtype = kwargs.pop("torch_dtype", None)
+
+        model_loading_kwargs = {}
+
+        if torch_dtype is not None:
+            model_loading_kwargs["torch_dtype"] = torch_dtype
 
         main_export(
             model_name_or_path=model_id,
@@ -293,6 +295,7 @@ class OVBaseDecoderModel(OVModel):
             trust_remote_code=trust_remote_code,
             ov_config=ov_export_config,
             stateful=stateful,
+            model_loading_kwargs=model_loading_kwargs,
         )
 
         config.is_decoder = True
@@ -305,6 +308,7 @@ class OVBaseDecoderModel(OVModel):
             stateful=None,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
+            trust_remote_code=trust_remote_code,
             **kwargs,
         )
 
@@ -328,9 +332,9 @@ class OVBaseDecoderModel(OVModel):
             shapes[inputs][0] = -1
             input_name = inputs.get_any_name()
             if input_name.startswith("past_key_values"):
-                if (
-                    len(inputs.partial_shape) == 3 and input_name.endswith("value")
-                ) or self.config.model_type == "chatglm":
+                if (len(inputs.partial_shape) == 3 and input_name.endswith("value")) or (
+                    self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio")
+                ):
                     shapes[inputs][1] = -1
                 else:
                     shapes[inputs][2] = -1
@@ -390,7 +394,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> Dict:
         batch_size = input_ids.shape[0]
-        if self.config.model_type == "bloom":
+        model_transformers_version = Version(
+            self.model.rt_info["optimum"]["transformers_version"].value if "optimum" in self.model.rt_info else "0.0.0"
+        )
+        if self.config.model_type == "bloom" and compare_versions(model_transformers_version, "<", "4.44"):
             batch_size *= self.config.num_attention_heads
 
         inputs = {}
@@ -421,7 +428,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     model_inputs = self.model.input(input_name)
                     dtype = OV_TO_NP_TYPE[model_inputs.get_element_type().get_type_name()]
                     shape = model_inputs.get_partial_shape()
-                    if self.config.model_type == "chatglm":
+                    if self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"):
                         shape[0] = 0
                         shape[1] = batch_size
                     else:
@@ -571,9 +578,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 ):
                     past_key_values = tuple(
                         tuple(
-                            past_state[indicies]
-                            if not self.config.model_type == "chatglm"
-                            else past_state[:, indicies, ...]
+                            (
+                                past_state[indicies]
+                                if not (self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"))
+                                else past_state[:, indicies, ...]
+                            )
                             for past_state in layer_past
                         )
                         for layer_past in past_key_values
@@ -603,16 +612,26 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     shape = input_tensor.shape if isinstance(input_tensor, Tensor) else list(input_tensor.shape)
                     dtype = input_tensor.element_type if isinstance(input_tensor, Tensor) else Type(input_tensor.dtype)
                     upd_batch_size = indicies.shape[0]
-                    if self.config.model_type == "bloom":
+                    export_transformers_version = Version(self.model.rt_info["optimum"]["transformers_version"].value)
+                    if self.config.model_type == "bloom" and compare_versions(
+                        export_transformers_version, "<", "4.44"
+                    ):
                         upd_batch_size *= self.config.num_attention_heads
-                    shape[0 if not self.config.model_type == "chatglm" else 1] = upd_batch_size
+                    shape[
+                        (
+                            0
+                            if not (self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"))
+                            else 1
+                        )
+                    ] = upd_batch_size
                     upd_model_inputs[input_name] = Tensor(dtype, shape)
         upd_model_inputs["input_ids"] = unique_input_ids
         if "beam_idx" in model_inputs:
+            export_transformers_version = Version(self.model.rt_info["optimum"]["transformers_version"].value)
             beam_range = (
-                unique_input_ids.shape[0]
-                if self.config.model_type != "bloom"
-                else unique_input_ids.shape[0] * self.config.num_attention_heads
+                unique_input_ids.shape[0] * self.config.num_attention_heads
+                if (self.config.model_type == "bloom" and compare_versions(export_transformers_version, "<", "4.44"))
+                else unique_input_ids.shape[0]
             )
             beam_idx = np.arange(beam_range, dtype=int)
             upd_model_inputs["beam_idx"] = beam_idx
@@ -633,8 +652,12 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
-        _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
-        generation_mode = _generation_config.get_generation_mode(assistant_model)
+        if is_transformers_version(">=", "4.39.0"):
+            _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
+            generation_mode = _generation_config.get_generation_mode(assistant_model)
+        else:
+            _generation_config = generation_config or self.generation_config
+            generation_mode = self._get_generation_mode(_generation_config, assistant_model)
 
         is_beam_search = generation_mode in [
             GenerationMode.BEAM_SEARCH,
@@ -669,7 +692,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         ):
             return past_key_values[0].shape[-2]
         seq_length_dim = -2
-        if self.config.model_type == "chatglm":
+        if self.config.model_type == "chatglm" and not hasattr(self.config, "rope_ratio"):
             seq_length_dim = 0
         elif self.config.model_type == "qwen":
             seq_length_dim = 1
@@ -715,7 +738,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[Union[str, None]] = None,
         force_download: bool = False,
@@ -728,15 +750,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         model_path = Path(model_id)
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         file_name = file_name or default_file_name
@@ -755,7 +768,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         model = cls.load_model(model_cache_path)
 
         model_type = config.model_type.replace("_", "-")
-        if model_type == "bloom":
+        export_transformers_version = Version(
+            model.rt_info["optimum"]["transformers_version"].value if "optimum" in model.rt_info else "0.0.0"
+        )
+        if model_type == "bloom" and compare_versions(export_transformers_version, "<", "4.44"):
             init_cls = OVBloomForCausalLM
         elif model_type == "gpt-bigcode":
             init_cls = OVGPTBigCodeForCausalLM
@@ -763,7 +779,10 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             init_cls = cls
 
         if isinstance(quantization_config, dict) and quantization_config == {"bits": 4}:
-            quantization_config = _DEFAULT_4BIT_CONFIGS.get(config.name_or_path, quantization_config)
+            quantization_config = get_default_int4_config(config.name_or_path)
+            if quantization_config.get("dataset", None) is not None:
+                quantization_config["trust_remote_code"] = kwargs.get("trust_remote_code", False)
+
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
 
         enable_compilation = kwargs.pop("compile", True) and not quantization_config
@@ -777,6 +796,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 force_download=force_download,
                 local_files_only=local_files_only,
             )
+            if getattr(generation_config, "cache_implementation", None) is not None:
+                generation_config.cache_implementation = None
             kwargs["generation_config"] = generation_config
         except Exception:
             pass
@@ -798,7 +819,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
             from optimum.intel.openvino.quantization import OVQuantizer
 
-            default_config = _check_default_4bit_configs(config)
+            default_config = _check_default_4bit_configs(config.name_or_path)
 
             if default_config:
                 logger.info(

@@ -44,12 +44,17 @@ MODEL_NAMES = {
     "dbrx": "katuni4ka/tiny-random-dbrx",
     "deberta": "hf-internal-testing/tiny-random-deberta",
     "deberta_v2": "hf-internal-testing/tiny-random-DebertaV2Model",
-    "deit": "hf-internal-testing/tiny-random-deit",
+    "deit": "hf-internal-testing/tiny-random-DeiTModel",
     "convnext": "hf-internal-testing/tiny-random-convnext",
+    "convnextv2": "hf-internal-testing/tiny-random-ConvNextV2Model",
     "distilbert": "hf-internal-testing/tiny-random-distilbert",
     "donut": "fxmarty/tiny-doc-qa-vision-encoder-decoder",
+    "donut-swin": "hf-internal-testing/tiny-random-DonutSwinModel",
+    "detr": "hf-internal-testing/tiny-random-DetrModel",
     "electra": "hf-internal-testing/tiny-random-electra",
+    "exaone": "katuni4ka/tiny-random-exaone",
     "gemma": "fxmarty/tiny-random-GemmaForCausalLM",
+    "gemma2": "katuni4ka/tiny-random-gemma2",
     "falcon": "fxmarty/really-tiny-falcon-testing",
     "falcon-40b": "katuni4ka/tiny-random-falcon-40b",
     "flaubert": "hf-internal-testing/tiny-random-flaubert",
@@ -76,24 +81,28 @@ MODEL_NAMES = {
     "mbart": "hf-internal-testing/tiny-random-mbart",
     "minicpm": "katuni4ka/tiny-random-minicpm",
     "mistral": "echarlaix/tiny-random-mistral",
+    "mistral-nemo": "katuni4ka/tiny-random-mistral-nemo",
     "mixtral": "TitanML/tiny-mixtral",
     "mobilebert": "hf-internal-testing/tiny-random-MobileBertModel",
     "mobilenet_v1": "google/mobilenet_v1_0.75_192",
     "mobilenet_v2": "hf-internal-testing/tiny-random-MobileNetV2Model",
     "mobilevit": "hf-internal-testing/tiny-random-mobilevit",
     "mpt": "hf-internal-testing/tiny-random-MptForCausalLM",
+    "mpnet": "hf-internal-testing/tiny-random-MPNetModel",
     "mt5": "stas/mt5-tiny-random",
     "nystromformer": "hf-internal-testing/tiny-random-NystromformerModel",
     "olmo": "katuni4ka/tiny-random-olmo-hf",
     "orion": "katuni4ka/tiny-random-orion",
     "pegasus": "hf-internal-testing/tiny-random-pegasus",
+    "perceiver_text": "hf-internal-testing/tiny-random-language_perceiver",
+    "perceiver_vision": "hf-internal-testing/tiny-random-vision_perceiver_conv",
     "persimmon": "hf-internal-testing/tiny-random-PersimmonForCausalLM",
     "pix2struct": "fxmarty/pix2struct-tiny-random",
     "phi": "echarlaix/tiny-random-PhiForCausalLM",
-    "phi3": "katuni4ka/tiny-random-phi3",
+    "phi3": "Xenova/tiny-random-Phi3ForCausalLM",
     "poolformer": "hf-internal-testing/tiny-random-PoolFormerModel",
     "qwen": "katuni4ka/tiny-random-qwen",
-    "qwen2": "Qwen/Qwen1.5-0.5B",
+    "qwen2": "fxmarty/tiny-dummy-qwen2",
     "qwen2-moe": "katuni4ka/tiny-random-qwen1.5-moe",
     "resnet": "hf-internal-testing/tiny-random-resnet",
     "roberta": "hf-internal-testing/tiny-random-roberta",
@@ -103,6 +112,7 @@ MODEL_NAMES = {
     "speech_to_text": "hf-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "hf-internal-testing/tiny-random-squeezebert",
     "stable-diffusion": "hf-internal-testing/tiny-stable-diffusion-torch",
+    "stable-diffusion-openvino": "hf-internal-testing/tiny-stable-diffusion-openvino",
     "stable-diffusion-xl": "echarlaix/tiny-random-stable-diffusion-xl",
     "stable-diffusion-xl-refiner": "echarlaix/tiny-random-stable-diffusion-xl-refiner",
     "stablelm": "hf-internal-testing/tiny-random-StableLmForCausalLM",
@@ -112,6 +122,7 @@ MODEL_NAMES = {
     "sew_d": "asapp/sew-d-tiny-100k-ft-ls100h",
     "arctic": "katuni4ka/tiny-random-snowflake",
     "swin": "hf-internal-testing/tiny-random-SwinModel",
+    "swin-window": "yujiepan/tiny-random-swin-patch4-window7-224",
     "t5": "hf-internal-testing/tiny-random-t5",
     "trocr": "microsoft/trocr-small-handwritten",
     "unispeech": "hf-internal-testing/tiny-random-unispeech",
@@ -129,6 +140,7 @@ MODEL_NAMES = {
     "xlm_roberta": "hf-internal-testing/tiny-xlm-roberta",
     "xglm": "hf-internal-testing/tiny-random-XGLMForCausalLM",
     "xverse": "katuni4ka/tiny-random-xverse",
+    "glm4": "katuni4ka/tiny-random-glm4",
 }
 
 
@@ -157,14 +169,23 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
 
 def get_num_quantized_nodes(ov_model):
     num_fake_quantize = 0
-    num_int8 = 0
-    num_int4 = 0
+    num_weight_nodes = {
+        "int8": 0,
+        "int4": 0,
+        "f4e2m1": 0,
+        "f8e8m0": 0,
+    }
     for elem in ov_model.model.get_ops():
         if "FakeQuantize" in elem.name:
             num_fake_quantize += 1
         for i in range(elem.get_output_size()):
-            if elem.get_output_element_type(i).get_type_name() in ["i8", "u8"]:
-                num_int8 += 1
-            if elem.get_output_element_type(i).get_type_name() in ["i4", "u4"]:
-                num_int4 += 1
-    return num_fake_quantize, num_int8, num_int4
+            type_name = elem.get_output_element_type(i).get_type_name()
+            if type_name in ["i8", "u8"]:
+                num_weight_nodes["int8"] += 1
+            if type_name in ["i4", "u4"]:
+                num_weight_nodes["int4"] += 1
+            if type_name == "f4e2m1":
+                num_weight_nodes["f4e2m1"] += 1
+            if type_name == "f8e8m0":
+                num_weight_nodes["f8e8m0"] += 1
+    return num_fake_quantize, num_weight_nodes

@@ -11,6 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import inspect
 
 # ruff: noqa
 
@@ -23,6 +24,7 @@ from enum import Enum
 from functools import partial
 from typing import Union
 
+import pytest
 import evaluate
 import numpy as np
 import torch
@@ -37,6 +39,7 @@ from transformers import (
     TrainingArguments,
     default_data_collator,
 )
+from transformers.testing_utils import slow
 from transformers.utils.quantization_config import QuantizationMethod
 
 from optimum.intel import (
@@ -60,10 +63,16 @@ from optimum.intel import (
     OVWeightQuantizationConfig,
     OVDynamicQuantizationConfig,
 )
-from optimum.intel.openvino.configuration import OVQuantizationMethod, OVQuantizationConfigBase
+from optimum.intel.openvino.configuration import (
+    OVQuantizationMethod,
+    OVQuantizationConfigBase,
+    _DEFAULT_4BIT_CONFIGS,
+    _DEFAULT_4BIT_CONFIG,
+)
+from copy import deepcopy
 
 from optimum.intel.openvino.quantization import InferRequestWrapper
-from optimum.intel.utils.import_utils import is_openvino_version
+from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
 from utils_tests import MODEL_NAMES, get_num_quantized_nodes, _ARCHITECTURES_TO_EXPECTED_INT8
 
 _TASK_TO_DATASET = {
@@ -74,8 +83,8 @@ _TASK_TO_DATASET = {
 
 class OVQuantizerTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES_TORCH_MODEL = (
-        (OVModelForSequenceClassification, "bert", 22, 35),
-        (OVModelForCausalLM, "gpt2", 41, 3),
+        (OVModelForSequenceClassification, "bert", 32, 35),
+        (OVModelForCausalLM, "gpt2", 41 if is_transformers_version("<", "4.42.0") else 31, 22),
     )
     SUPPORTED_ARCHITECTURES_OV_MODEL = (
         (OVModelForSequenceClassification, "bert", 32, 35),
@@ -105,6 +114,7 @@ class OVQuantizerTest(unittest.TestCase):
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,
                 dataset_split="train",
+                trust_remote_code=True,
             )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             quantizer.quantize(
@@ -114,10 +124,9 @@ class OVQuantizerTest(unittest.TestCase):
                 ov_config=ov_config,
             )
             model = model_cls.from_pretrained(tmp_dir, file_name=file_name)
-
-            num_fake_quantize, num_int8, _ = get_num_quantized_nodes(model)
+            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_int8, num_int8)
+            self.assertEqual(expected_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -149,15 +158,16 @@ class OVQuantizerTest(unittest.TestCase):
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,
                 dataset_split="train",
+                trust_remote_code=True,
             )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
 
             model = model_cls.from_pretrained(tmp_dir)
 
-            num_fake_quantize, num_int8, _ = get_num_quantized_nodes(model)
+            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_int8, num_int8)
+            self.assertEqual(expected_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -169,23 +179,22 @@ class OVQuantizerTest(unittest.TestCase):
 
 
 class OVWeightCompressionTest(unittest.TestCase):
-    # TODO : add models
     SUPPORTED_ARCHITECTURES_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = (
         (OVModelForSequenceClassification, "bert", 70, 70),
         (OVModelForCausalLM, "gpt2", 44, 44),
     )
 
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 86),)
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 148),)
-
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 62, 43),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS = ((OVModelForCausalLM, "opt125m", 0, 74),)
     SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS = ((OVModelForCausalLM, "gpt2", 44, 44),)
 
     LOAD_IN_4_BITS_SCOPE = (
+        (OVModelForCausalLM, "gpt2", dict(bits=4, sym=False, group_size=-1, ratio=0.8), {"int4": 30, "int8": 14}),
         (
             OVModelForCausalLM,
             "gpt2",
-            dict(bits=4, sym=False, group_size=-1, ratio=0.8),
-            14,
+            dict(bits=4, weight_format="mxfp4", group_size=32),
+            {"f4e2m1": 20, "f8e8m0": 20, "int8": 4},
         ),
         (
             OVModelForCausalLM,
@@ -196,13 +205,13 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=32,
                 ignored_scope={"names": ["__module.model.transformer.h.2.mlp.c_fc/aten::addmm/MatMul"]},
             ),
-            4,
+            {"int4": 38, "int8": 4},
         ),
         (
             OVModelForCausalLM,
             "gpt2",
             dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
-            18,
+            {"int4": 26, "int8": 18},
         ),
         (
             OVModelForCausalLM,
@@ -213,9 +222,22 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=-1,
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
-                dataset="ptb",
+                dataset="c4",
             ),
-            14,
+            {"int4": 25, "int8": 14},
+        ),
+        (
+            OVModelForCausalLM,
+            "opt",
+            dict(
+                bits=4,
+                sym=True,
+                group_size=-1,
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                dataset=["one two, " * i for i in range(10)],
+            ),
+            {"int4": 25, "int8": 14},
         ),
         (
             OVModelForCausalLM,
@@ -226,10 +248,25 @@ class OVWeightCompressionTest(unittest.TestCase):
                 group_size=16,
                 ratio=0.8,
                 sensitivity_metric="mean_activation_magnitude",
-                dataset="ptb",
+                dataset="c4",
                 quant_method=QuantizationMethod.AWQ,
+                scale_estimation=True,
             ),
-            16,
+            {"int4": 12, "int8": 8},
+        ),
+        (
+            OVModelForCausalLM,
+            "llama_awq",
+            dict(
+                bits=4,
+                sym=True,
+                group_size=16,
+                ratio=0.8,
+                sensitivity_metric="mean_activation_magnitude",
+                dataset="c4",
+                quant_method="awq",
+            ),
+            {"int4": 12, "int8": 8},
         ),
     )
 
@@ -272,8 +309,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_pt_int8, num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_pt_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -303,8 +340,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int8, num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -329,9 +366,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir, ov_config=ov_config)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8, num_int4 = get_num_quantized_nodes(model)
-            self.assertEqual(expected_int8, num_int8)
-            self.assertEqual(expected_int4, num_int4)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_int8, num_weight_nodes["int8"])
+            self.assertEqual(expected_int4, num_weight_nodes["int4"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -342,7 +379,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_STATEFUL_WITH_EXPECTED_8BIT_COMPRESSED_MATMULS)
-    @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
     def test_ovmodel_8bit_weight_compression_stateful(self, model_cls, model_name, expected_pt_int8, expected_ov_int8):
         task = model_cls.export_feature
         model_id = MODEL_NAMES[model_name]
@@ -356,8 +392,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             quantizer.quantize(save_directory=tmp_dir)
             model = model_cls.from_pretrained(tmp_dir)
 
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int8, num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -375,16 +411,16 @@ class OVWeightCompressionTest(unittest.TestCase):
 
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
-        elif model.export_feature.startswith("stable-diffusion"):
+        elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
         else:
             models = [model]
 
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
         for i, model in enumerate(models):
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int8[i], num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int8[i], num_weight_nodes["int8"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION)
     def test_ovmodel_hybrid_quantization(self, model_cls, model_type, expected_num_fake_quantize, expected_ov_int8):
@@ -393,12 +429,24 @@ class OVWeightCompressionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
 
-            num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
+            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model.unet)
             self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_ov_int8, num_int8)
-            self.assertEqual(0, num_int4)
+            self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
+            self.assertEqual(0, num_weight_nodes["int4"])
 
             model.save_pretrained(tmp_dir)
+
+    def test_stable_diffusion_with_weight_compression(self):
+        int8_pipe = OVStableDiffusionPipeline.from_pretrained(model_id=MODEL_NAMES["stable-diffusion"], export=True)
+        quantization_config = OVWeightQuantizationConfig(bits=8, quant_method=OVQuantizationMethod.DEFAULT)
+        quantizer = OVQuantizer(int8_pipe)
+
+        quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config))
+
+        num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(int8_pipe.unet)
+        self.assertEqual(0, num_fake_quantize)
+        self.assertEqual(242, num_weight_nodes["int8"])
+        self.assertEqual(0, num_weight_nodes["int4"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION[-1:])
     def test_ovmodel_hybrid_quantization_with_custom_dataset(
@@ -408,19 +456,16 @@ class OVWeightCompressionTest(unittest.TestCase):
         dataset = [
             "dream rose covered with clean crystal, sharp edges, transparent, beautiful, highly detailed, high render"
         ]
-        model = model_cls.from_pretrained(
-            model_id,
-            export=True,
-        )
+        model = model_cls.from_pretrained(model_id, export=True)
         quantizer = OVQuantizer(model)
-        quantization_config = OVWeightQuantizationConfig(
-            bits=8, num_samples=3, quant_method=OVQuantizationMethod.HYBRID
-        )
+        quantization_config = OVWeightQuantizationConfig(bits=8, num_samples=3, quant_method="hybrid")
+        self.assertEqual(quantization_config.quant_method, OVQuantizationMethod.HYBRID)
+
         quantizer.quantize(ov_config=OVConfig(quantization_config=quantization_config), calibration_dataset=dataset)
-        num_fake_quantize, num_int8, num_int4 = get_num_quantized_nodes(model.unet)
+        num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model.unet)
         self.assertEqual(expected_num_fake_quantize, num_fake_quantize)
-        self.assertEqual(expected_ov_int8, num_int8)
-        self.assertEqual(0, num_int4)
+        self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
+        self.assertEqual(0, num_weight_nodes["int4"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_4BIT_AUTOCOMPRESSED_MATMULS)
     @unittest.mock.patch.dict(
@@ -434,9 +479,9 @@ class OVWeightCompressionTest(unittest.TestCase):
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            _, num_int8, num_int4 = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int4, num_int4)
-            self.assertEqual(expected_ov_int8, num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(expected_ov_int4, num_weight_nodes["int4"])
+            self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
             model.save_pretrained(tmp_dir)
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
@@ -448,119 +493,134 @@ class OVWeightCompressionTest(unittest.TestCase):
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
     def test_ovmodel_4bit_auto_compression_with_config(
-        self, model_cls, model_name, quantization_config, expected_ov_int4
+        self, model_cls, model_name, quantization_config, expected_num_weight_nodes
     ):
         model_id = MODEL_NAMES[model_name]
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantization_config = OVWeightQuantizationConfig.from_dict(quantization_config)
             model = model_cls.from_pretrained(model_id, export=True, quantization_config=quantization_config)
-            if quantization_config.quant_method == QuantizationMethod.AWQ:
-                # TODO: Check that AWQ was actually applied
+            if quantization_config.quant_method.lower() == "awq" or quantization_config.scale_estimation:
+                # TODO: Check that AWQ and SE was actually applied
                 pass
 
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            _, num_int4, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int4, num_int4)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
+            self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             model.save_pretrained(tmp_dir)
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, "int4")
+            self.assertEqual(openvino_config.dtype, quantization_config.weight_format)
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
-    @unittest.skipIf(not IS_SUPPORT_STATEFUL, "Stateful models supported only in 2023.3 and above")
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=True)
         self.assertTrue(model.stateful)
         self.assertTrue(model.use_cache)
 
         expected_ov_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type][0]
-        _, num_int8, _ = get_num_quantized_nodes(model)
-        self.assertEqual(expected_ov_int8, num_int8)
+        _, num_weight_nodes = get_num_quantized_nodes(model)
+        self.assertEqual(expected_ov_int8, num_weight_nodes["int8"])
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION)
     def test_ovmodel_load_with_uncompressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=False)
-
         if model.export_feature.startswith("text2text-generation"):
             models = [model.encoder, model.decoder, model.decoder_with_past]
-        elif model.export_feature.startswith("stable-diffusion"):
+        elif model.export_feature == "text-to-image":
             models = [model.unet, model.vae_encoder, model.vae_decoder]
-            models.append(model.text_encoder if model.export_feature == "stable-diffusion" else model.text_encoder_2)
+            models.append(model.text_encoder if model_type == "stable-diffusion" else model.text_encoder_2)
         else:
             models = [model]
 
         for i, model in enumerate(models):
-            _, num_int8, _ = get_num_quantized_nodes(model)
-            self.assertEqual(0, num_int8)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            self.assertEqual(0, num_weight_nodes["int8"])
 
     def test_ovmodel_load_large_model_with_default_compressed_weights(self):
-        with unittest.mock.patch("torch.nn.Module.parameters") as model_parameters:
-            mock_tensor = unittest.mock.Mock()
-            mock_tensor.numel = lambda: 2000000000
-            mock_tensor.requires_grad = True
-            model_parameters.return_value = [mock_tensor]
-            with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
-                with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
-                    _ = OVModelForCausalLM.from_pretrained(
-                        MODEL_NAMES["llama"], export=True, compile=False, use_cache=False
-                    )
-                    save_model_patch.assert_called_with(
-                        unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(quantization_config={"bits": 8})
-                    )
+        def main_export_in_stacktrace(*args, **kwargs):
+            # Compression was called from `main_export`
+            self.assertTrue(inspect.stack()[5].function == "main_export")
+
+        with unittest.mock.patch(
+            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+        ) as ov_constant_shape:
+            ov_constant_shape.return_value = (2000000000,)
+            with unittest.mock.patch(
+                "nncf.compress_weights", side_effect=main_export_in_stacktrace
+            ) as compress_weights_patch:
+                _ = OVModelForCausalLM.from_pretrained(
+                    MODEL_NAMES["llama"], export=True, compile=False, use_cache=False
+                )
+                compression_params = {
+                    "mode": nncf.CompressWeightsMode.INT8_ASYM,
+                    "ratio": 1.0,
+                    "group_size": -1,
+                    "all_layers": None,
+                    "sensitivity_metric": None,
+                    "dataset": None,
+                    "ignored_scope": nncf.IgnoredScope(),
+                    "awq": None,
+                    "subset_size": 128,
+                    "scale_estimation": None,
+                }
+                compress_weights_patch.assert_called_with(
+                    unittest.mock.ANY,
+                    **compression_params,
+                )
 
     def test_ovmodel_load_large_model_with_uncompressed_weights(self):
-        with unittest.mock.patch("torch.nn.Module.parameters") as model_parameters:
-            mock_tensor = unittest.mock.Mock()
-            mock_tensor.numel = lambda: 2000000000
-            mock_tensor.requires_grad = True
-            model_parameters.return_value = [mock_tensor]
-            with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
-                with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
-                    _ = OVModelForCausalLM.from_pretrained(
-                        MODEL_NAMES["llama"], export=True, load_in_8bit=False, compile=False, use_cache=False
-                    )
-                    save_model_patch.assert_called_with(
-                        unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(dtype="fp32")
-                    )
+        with unittest.mock.patch(
+            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+        ) as ov_constant_shape:
+            ov_constant_shape.return_value = (2000000000,)
+            with unittest.mock.patch("nncf.compress_weights") as compress_weights_patch:
+                _ = OVModelForCausalLM.from_pretrained(
+                    MODEL_NAMES["llama"], export=True, load_in_8bit=False, compile=False, use_cache=False
+                )
+                compress_weights_patch.assert_not_called()
 
     def test_ovmodel_load_large_model_with_additional_quantization_config(self):
-        with unittest.mock.patch("torch.nn.Module.parameters") as model_parameters:
-            mock_tensor = unittest.mock.Mock()
-            mock_tensor.numel = lambda: 2000000000
-            mock_tensor.requires_grad = True
-            with unittest.mock.patch("openvino.runtime.ie_api.Core.read_model") as core_patch:
-                with unittest.mock.patch("optimum.exporters.openvino.convert._save_model") as save_model_patch:
-                    with unittest.mock.patch("nncf.compress_weights") as compress_weights_patch:
-                        _ = OVModelForCausalLM.from_pretrained(
-                            MODEL_NAMES["llama"],
-                            export=True,
-                            compile=False,
-                            use_cache=False,
-                            quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, group_size=-1, ratio=0.8),
-                        )
-                        # quantization will be performed later, using load_model
-                        save_model_patch.assert_called_with(
-                            unittest.mock.ANY, unittest.mock.ANY, ov_config=OVConfig(dtype="fp32")
-                        )
-                        compression_params = {
-                            "mode": nncf.CompressWeightsMode.INT4_SYM,
-                            "ratio": 0.8,
-                            "group_size": -1,
-                            "all_layers": None,
-                            "sensitivity_metric": None,
-                            "dataset": None,
-                            "ignored_scope": nncf.IgnoredScope(),
-                            "awq": None,
-                            "subset_size": 128,
-                        }
-                        compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
+        def main_export_not_in_stacktrace(*args, **kwargs):
+            # Compression was not called from `main_export`
+            self.assertTrue(all(frame_info.function != "main_export" for frame_info in inspect.stack()))
+
+        with unittest.mock.patch(
+            "openvino.runtime.op.Constant.shape", new_callable=unittest.mock.PropertyMock
+        ) as ov_constant_shape:
+            ov_constant_shape.return_value = (2000000000,)
+            with unittest.mock.patch(
+                "nncf.compress_weights", side_effect=main_export_not_in_stacktrace
+            ) as compress_weights_patch:
+                _ = OVModelForCausalLM.from_pretrained(
+                    MODEL_NAMES["llama"],
+                    export=True,
+                    compile=False,
+                    use_cache=False,
+                    quantization_config=OVWeightQuantizationConfig(bits=4, sym=True, group_size=-1, ratio=0.8),
+                )
+                compression_params = {
+                    "mode": nncf.CompressWeightsMode.INT4_SYM,
+                    "ratio": 0.8,
+                    "group_size": -1,
+                    "all_layers": None,
+                    "sensitivity_metric": None,
+                    "dataset": None,
+                    "ignored_scope": nncf.IgnoredScope(),
+                    "awq": None,
+                    "subset_size": 128,
+                    "scale_estimation": None,
+                }
+                compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
     @parameterized.expand(LOAD_IN_4_BITS_SCOPE)
-    def test_ovmodel_4bit_dynamic_with_config(self, model_cls, model_name, quantization_config, expected_ov_int4):
+    def test_ovmodel_4bit_dynamic_with_config(
+        self, model_cls, model_name, quantization_config, expected_num_weight_nodes
+    ):
         model_id = MODEL_NAMES[model_name]
         with tempfile.TemporaryDirectory() as tmp_dir:
             group_size = quantization_config.pop("group_size", 32)
@@ -575,19 +635,22 @@ class OVWeightCompressionTest(unittest.TestCase):
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            _, num_int4, _ = get_num_quantized_nodes(model)
-            self.assertEqual(expected_ov_int4, num_int4)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
+            self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             model.save_pretrained(tmp_dir)
 
             openvino_config = OVConfig.from_pretrained(tmp_dir)
             self.assertEqual(openvino_config.quantization_config.bits, 4)
-            self.assertEqual(openvino_config.dtype, "int4")
+            self.assertEqual(openvino_config.dtype, quantization_config.weight_format)
 
 
 class OVQuantizerQATest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = (("hf-internal-testing/tiny-random-BertForQuestionAnswering",),)
+    SUPPORTED_ARCHITECTURES = ("hf-internal-testing/tiny-random-BertForQuestionAnswering",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_automodel_static_quantization(self, model_name):
         def preprocess_function(examples, tokenizer):
             return tokenizer(
@@ -604,6 +667,7 @@ class OVQuantizerQATest(unittest.TestCase):
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,
                 dataset_split="test",
+                trust_remote_code=True,
             )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
@@ -626,6 +690,8 @@ class OVQuantizerQATest(unittest.TestCase):
             self.assertEqual(ov_config.quantization_config.to_dict(), loaded_config.quantization_config.to_dict())
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.run_slow
+    @slow
     def test_ovmodel_static_quantization(self, model_name):
         def preprocess_function(examples, tokenizer):
             return tokenizer(
@@ -642,6 +708,7 @@ class OVQuantizerQATest(unittest.TestCase):
                 preprocess_function=partial(preprocess_function, tokenizer=tokenizer),
                 num_samples=10,
                 dataset_split="test",
+                trust_remote_code=True,
             )
             ov_config = OVConfig(quantization_config=OVQuantizationConfig())
             quantizer.quantize(save_directory=tmp_dir, calibration_dataset=calibration_dataset, ov_config=ov_config)
@@ -665,12 +732,13 @@ class OVQuantizerQATest(unittest.TestCase):
 
 
 class OVTrainerTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("distilbert-base-uncased", 67, 38),)
+    SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS = (("albert", 65, 39),)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_EXPECTED_QUANTIZED_MATMULS)
     def test_aware_training_quantization(self, model_name, expected_fake_quantize, expected_int8):
-        model = AutoModelForSequenceClassification.from_pretrained(model_name)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model_id = MODEL_NAMES[model_name]
+        model = AutoModelForSequenceClassification.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
         ov_config = OVConfig()
         dataset = load_dataset("glue", "sst2")
         dataset = dataset.map(
@@ -701,9 +769,9 @@ class OVTrainerTest(unittest.TestCase):
             trainer.save_model()
 
             model = OVModelForSequenceClassification.from_pretrained(tmp_dir)
-            num_fake_quantize, num_int8, _ = get_num_quantized_nodes(model)
+            num_fake_quantize, num_weight_nodes = get_num_quantized_nodes(model)
             self.assertEqual(expected_fake_quantize, num_fake_quantize)
-            self.assertEqual(expected_int8, num_int8)
+            self.assertEqual(expected_int8, num_weight_nodes["int8"])
 
             tokens = tokenizer("This is a sample input", return_tensors="pt")
             outputs = model(**tokens)
@@ -730,7 +798,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 quant_method=OVQuantizationMethod.DEFAULT,
             ),
         ),
-        (OVWeightQuantizationConfig(dataset=["hello world", "i'm alive"]),),
+        (OVWeightQuantizationConfig(bits=4, dataset=["hello world", "i'm alive"]),),
         (
             OVQuantizationConfig(
                 ignored_scope={"names": ["op_name"]},
@@ -773,7 +841,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(num_samples=100), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (dict(abc="def"), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (
-            dict(bits=8, fast_bias_correction=True, dataset="wikitext2"),
+            dict(bits=4, fast_bias_correction=True, dataset="wikitext2"),
             OVWeightQuantizationConfig,
             "Can't determine type of OV quantization config",
         ),
@@ -795,12 +863,19 @@ class OVQuantizationConfigTest(unittest.TestCase):
         (dict(abc="def", weight_only=False), OVQuantizationConfig, None),
         (dict(abc="def", weight_only=True), OVWeightQuantizationConfig, None),
         (
-            dict(bits=8, fast_bias_correction=True, dataset="wikitext2", weight_only=True),
+            dict(bits=4, fast_bias_correction=True, dataset="wikitext2", weight_only=True),
             OVWeightQuantizationConfig,
             None,
         ),
         (dict(bits=8, fast_bias_correction=True, weight_only=False), OVQuantizationConfig, None),
     )
+
+    def get_default_configurations() -> dict:
+        default_configurations = deepcopy(_DEFAULT_4BIT_CONFIGS)
+        default_configurations.update({"default": _DEFAULT_4BIT_CONFIG})
+        return default_configurations
+
+    DEFAULT_CONFIGURATIONS = get_default_configurations()
 
     @parameterized.expand(QUANTIZATION_CONFIGS)
     def test_config_serialization(self, quantization_config: OVQuantizationConfigBase):
@@ -831,6 +906,21 @@ class OVQuantizationConfigTest(unittest.TestCase):
             if hasattr(ov_config.quantization_config, k):
                 self.assertEqual(getattr(ov_config.quantization_config, k), v)
 
+    @parameterized.expand(DEFAULT_CONFIGURATIONS)
+    def test_named_default_configurations(self, config_id: str):
+        custom_configuration = self.DEFAULT_CONFIGURATIONS[config_id]
+        prepared_config = OVModelForCausalLM._prepare_weight_quantization_config(custom_configuration)
+        for field_name, reference_value in custom_configuration.items():
+            value = prepared_config.__getattribute__(field_name)
+            self.assertEqual(value, reference_value)
+
+    def test_for_no_short_id_duplicates(self):
+        short_ids = set()
+        for model_id in _DEFAULT_4BIT_CONFIGS.keys():
+            short_id = model_id.split("/")[1]
+            assert short_id not in short_ids
+            short_ids.add(short_id)
+
 
 class InferRequestWrapperTest(unittest.TestCase):
     MODEL_ID = ("openai/whisper-tiny.en",)
@@ -858,12 +948,16 @@ class InferRequestWrapperTest(unittest.TestCase):
         )
         for _ in range(2):
             input_features = self._generate_random_audio_data(processor)
-            ov_model.generate(input_features)
+            ov_model.generate(input_features, max_new_tokens=10, min_new_tokens=10)
 
         data_hashes_per_key = defaultdict(list)
         data_id_per_key = defaultdict(set)
+
         for inputs_dict in calibration_data:
             for k, v in inputs_dict.items():
+                if k == "input_ids":
+                    continue
+
                 x = (v.numpy() if isinstance(v, torch.Tensor) else v).copy()
                 data_hashes_per_key[k].append(hash(x.tobytes()))
                 data_id_per_key[k].add(id(v))
@@ -872,7 +966,7 @@ class InferRequestWrapperTest(unittest.TestCase):
             self.assertTrue(any(data_hashes[0] != it for it in data_hashes))
         if apply_caching:
             # With caching, encoder hidden states tensors should be cached, resulting in only 2 tensors stored
-            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) == 2)
+            self.assertEqual(len(data_id_per_key["encoder_hidden_states"]), 2)
         else:
             # Without caching, encoder hidden states tensors will be unique for each collected input
-            self.assertTrue(len(data_id_per_key["encoder_hidden_states"]) > 2)
+            self.assertGreater(len(data_id_per_key["encoder_hidden_states"]), 2)
