@@ -90,44 +90,31 @@ class OVCLIExportTestCase(unittest.TestCase):
     )
 
     TEST_4BIT_CONFIGURATONS = [
-        ("text-generation-with-past", "opt125m", "int4_sym_g128", 4, 72),
-        ("text-generation-with-past", "opt125m", "int4_asym_g128", 4, 144),
-        ("text-generation-with-past", "opt125m", "int4_sym_g64", 4, 72),
-        ("text-generation-with-past", "opt125m", "int4_asym_g64", 4, 144),
-        (
-            "text-generation-with-past",
-            "llama_awq",
-            "int4 --ratio 1.0 --sym --group-size 8 --all-layers",
-            0,
-            16,
-        ),
+        ("text-generation-with-past", "opt125m", "int4 --sym --group-size 128", {"int8": 4, "int4": 72}),
+        ("text-generation-with-past", "opt125m", "int4 --group-size 64", {"int8": 4, "int4": 144}),
+        ("text-generation-with-past", "opt125m", "mxfp4", {"int8": 4, "f4e2m1": 72, "f8e8m0": 72}),
+        ("text-generation-with-past", "llama_awq", "int4 --ratio 1.0 --sym --group-size 8 --all-layers", {"int4": 16}),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --awq --dataset wikitext2 --num-samples 100 "
             "--sensitivity-metric max_activation_variance",
-            4,
-            14,
+            {"int8": 4, "int4": 14},
         ),
         (
             "text-generation-with-past",
             "llama_awq",
             "int4 --ratio 1.0 --sym --group-size 16 --scale-estimation --dataset wikitext2 --num-samples 100 ",
-            4,
-            14,
+            {"int8": 4, "int4": 14},
         ),
     ]
 
-    def _openvino_export(
-        self, model_name: str, task: str, compression_option: str = None, compression_ratio: float = None
-    ):
+    def _openvino_export(self, model_name: str, task: str):
         with TemporaryDirectory() as tmpdir:
             main_export(
                 model_name_or_path=model_name,
                 output=tmpdir,
                 task=task,
-                compression_option=compression_option,
-                compression_ratio=compression_ratio,
             )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -220,8 +207,8 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
             for i, model in enumerate(models):
-                _, num_int8, _ = get_num_quantized_nodes(model)
-                self.assertEqual(expected_int8[i], num_int8)
+                _, num_weight_nodes = get_num_quantized_nodes(model)
+                self.assertEqual(expected_int8[i], num_weight_nodes["int8"])
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)
     def test_exporters_cli_hybrid_quantization(self, model_type: str, exp_num_fq: int, exp_num_int8: int):
@@ -232,12 +219,12 @@ class OVCLIExportTestCase(unittest.TestCase):
                 check=True,
             )
             model = eval(_HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]).from_pretrained(tmpdir)
-            num_fq, num_int8, _ = get_num_quantized_nodes(model.unet)
-            self.assertEqual(exp_num_int8, num_int8)
+            num_fq, num_weight_nodes = get_num_quantized_nodes(model.unet)
+            self.assertEqual(exp_num_int8, num_weight_nodes["int8"])
             self.assertEqual(exp_num_fq, num_fq)
 
     @parameterized.expand(TEST_4BIT_CONFIGURATONS)
-    def test_exporters_cli_int4(self, task: str, model_type: str, option: str, expected_int8: int, expected_int4: int):
+    def test_exporters_cli_int4(self, task: str, model_type: str, option: str, expected_num_weight_nodes: dict):
         with TemporaryDirectory() as tmpdir:
             result = subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
@@ -252,9 +239,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            _, num_int8, num_int4 = get_num_quantized_nodes(model)
-            self.assertEqual(expected_int8, num_int8)
-            self.assertEqual(expected_int4, num_int4)
+            _, num_weight_nodes = get_num_quantized_nodes(model)
+            expected_num_weight_nodes.update({k: 0 for k in set(num_weight_nodes) - set(expected_num_weight_nodes)})
+            self.assertEqual(expected_num_weight_nodes, num_weight_nodes)
             self.assertTrue("--awq" not in option or b"Applying AWQ" in result.stdout)
             self.assertTrue("--scale-estimation" not in option or b"Applying Scale Estimation" in result.stdout)
 

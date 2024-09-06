@@ -17,6 +17,7 @@ import os
 import tempfile
 import time
 import unittest
+from pathlib import Path
 from typing import Dict
 
 import numpy as np
@@ -26,6 +27,7 @@ import timm
 import torch
 from datasets import load_dataset
 from evaluate import evaluator
+from huggingface_hub import HfApi
 from parameterized import parameterized
 from PIL import Image
 from transformers import (
@@ -57,6 +59,7 @@ from transformers.onnx.utils import get_preprocessor
 from transformers.testing_utils import slow
 from utils_tests import MODEL_NAMES
 
+from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.intel import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
@@ -84,6 +87,7 @@ from optimum.intel.openvino.modeling_timm import TimmImageProcessor
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import is_openvino_version, is_transformers_version
+from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
     DIFFUSION_MODEL_UNET_SUBFOLDER,
@@ -253,14 +257,64 @@ class OVModelIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     def test_load_model_from_hub_private_with_token(self):
+        model_id = "optimum-internal-testing/tiny-random-phi-private"
         token = os.environ.get("HF_HUB_READ_TOKEN", None)
         if token is None:
             self.skipTest("Test requires a token `HF_HUB_READ_TOKEN` in the environment variable")
 
-        model = OVModelForCausalLM.from_pretrained(
-            "optimum-internal-testing/tiny-random-phi-private", token=token, revision="openvino"
-        )
+        model = OVModelForCausalLM.from_pretrained(model_id, token=token, revision="openvino")
         self.assertIsInstance(model.config, PretrainedConfig)
+        self.assertTrue(model.stateful)
+
+    def test_infer_export_when_loading(self):
+        model_id = MODEL_NAMES["phi"]
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            model.save_pretrained(Path(tmpdirname) / "original")
+            # Load original model and convert
+            model = OVModelForCausalLM.from_pretrained(Path(tmpdirname) / "original")
+            model.save_pretrained(Path(tmpdirname) / "openvino")
+            # Load openvino model
+            model = OVModelForCausalLM.from_pretrained(Path(tmpdirname) / "openvino")
+        del model
+        gc.collect()
+
+    def test_find_files_matching_pattern(self):
+        model_id = "echarlaix/tiny-random-PhiForCausalLM"
+        pattern = r"(.*)?openvino(.*)?\_model.xml"
+        # hub model
+        for revision in ("main", "ov", "itrex"):
+            ov_files = _find_files_matching_pattern(
+                model_id, pattern=pattern, revision=revision, subfolder="openvino" if revision == "itrex" else ""
+            )
+            self.assertTrue(len(ov_files) == 0 if revision == "main" else len(ov_files) > 0)
+
+        # local model
+        api = HfApi()
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            for revision in ("main", "ov", "itrex"):
+                local_dir = Path(tmpdirname) / revision
+                api.snapshot_download(repo_id=model_id, local_dir=local_dir, revision=revision)
+                ov_files = _find_files_matching_pattern(
+                    local_dir, pattern=pattern, revision=revision, subfolder="openvino" if revision == "itrex" else ""
+                )
+                self.assertTrue(len(ov_files) == 0 if revision == "main" else len(ov_files) > 0)
+
+    @parameterized.expand(("stable-diffusion", "stable-diffusion-openvino"))
+    def test_find_files_matching_pattern_sd(self, model_arch):
+        pattern = r"(.*)?openvino(.*)?\_model.xml"
+        model_id = MODEL_NAMES[model_arch]
+        # hub model
+        ov_files = _find_files_matching_pattern(model_id, pattern=pattern)
+        self.assertTrue(len(ov_files) > 0 if "openvino" in model_id else len(ov_files) == 0)
+
+        # local model
+        api = HfApi()
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            local_dir = Path(tmpdirname) / "model"
+            api.snapshot_download(repo_id=model_id, local_dir=local_dir)
+            ov_files = _find_files_matching_pattern(local_dir, pattern=pattern)
+            self.assertTrue(len(ov_files) > 0 if "openvino" in model_id else len(ov_files) == 0)
 
 
 class PipelineTest(unittest.TestCase):
@@ -350,7 +404,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSequenceClassification.from_pretrained(model_id, export=True, compile=False)
+        model = OVModelForSequenceClassification.from_pretrained(model_id, compile=False)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
@@ -433,7 +487,7 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForQuestionAnswering.from_pretrained(model_id, export=True)
+        model = OVModelForQuestionAnswering.from_pretrained(model_id)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("question-answering", model=model, tokenizer=tokenizer)
@@ -509,7 +563,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForTokenClassification.from_pretrained(model_id, export=True)
+        model = OVModelForTokenClassification.from_pretrained(model_id)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("token-classification", model=model, tokenizer=tokenizer)
@@ -586,7 +640,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForFeatureExtraction.from_pretrained(model_id, export=True)
+        model = OVModelForFeatureExtraction.from_pretrained(model_id)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("feature-extraction", model=model, tokenizer=tokenizer)
@@ -662,6 +716,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     if is_transformers_version(">=", "4.40.0"):
         SUPPORTED_ARCHITECTURES += (
             "gemma",
+            "gemma2",
             "olmo",
             "stablelm",
             "starcoder2",
@@ -743,7 +798,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertTrue(torch.allclose(ov_outputs.logits, transformers_outputs.logits, equal_nan=True, atol=1e-4))
 
         # Qwen tokenizer does not support padding
-        if model_arch == "qwen":
+
+        if model_arch in ["qwen"]:
             return
 
         if model_arch not in ["chatglm", "glm4", "persimmon"]:
@@ -768,7 +824,16 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         )
 
         ov_outputs = ov_model.generate(**tokens, generation_config=gen_config)
-        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+        additional_inputs = {}
+        # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache,
+        # align cache representation in torch model
+        if model_arch == "gemma2":
+            patch_update_causal_mask(transformers_model, "4.43.0")
+            transformers_model._supports_cache_class = True
+            from transformers.cache_utils import DynamicCache
+
+            additional_inputs = {"past_key_values": DynamicCache()}
+        transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config, **additional_inputs)
         self.assertTrue(torch.allclose(ov_outputs, transformers_outputs))
 
         del transformers_model
@@ -792,9 +857,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         if model_arch == "qwen":
             tokenizer._convert_tokens_to_ids = lambda x: 0
 
-        model = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=False, compile=False, **model_kwargs
-        )
+        model = OVModelForCausalLM.from_pretrained(model_id, use_cache=False, compile=False, **model_kwargs)
         model.eval()
         model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
@@ -936,8 +999,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 "config": AutoConfig.from_pretrained(model_id, trust_remote_code=True),
                 "trust_remote_code": True,
             }
-        # Qwen tokenizer does not support padding, chatgm testing model produces nan that incompatible with beam search
-        if model_arch in ["qwen", "chatglm"]:
+        # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search
+        if model_arch in ["qwen", "chatglm", "glm4"]:
             return
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in self.REMOTE_CODE_MODELS)
@@ -1003,6 +1066,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         if model_arch == "arctic":
             transformers_model.to(torch.float32)
+        additional_inputs = {}
+        # gemma2 does not support dynamic cache, it is unfair to compare dynamic cache result vs hybrid cache, align cache representation in torch model
+        if model_arch == "gemma2":
+            patch_update_causal_mask(transformers_model, "4.43.0")
+            transformers_model._supports_cache_class = True
+            from transformers.cache_utils import DynamicCache
         tokenizer.pad_token_id = tokenizer.eos_token_id
         tokens = tokenizer(["Today is a nice day and I am longer", "This is me"], return_tensors="pt", padding=True)
         tokens.pop("token_type_ids", None)
@@ -1017,7 +1086,12 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             if gen_config.do_sample and model_arch in ["baichuan2-13b", "olmo"]:
                 continue
             set_seed(SEED)
-            transformers_outputs = transformers_model.generate(**tokens, generation_config=gen_config)
+
+            if model_arch == "gemma2":
+                additional_inputs = {"past_key_values": DynamicCache()}
+            transformers_outputs = transformers_model.generate(
+                **tokens, generation_config=gen_config, **additional_inputs
+            )
             set_seed(SEED)
             ov_stateful_outputs = ov_model_stateful.generate(**tokens, generation_config=gen_config)
             self.assertTrue(
@@ -1108,7 +1182,7 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
-        model = OVModelForMaskedLM.from_pretrained(model_id, export=True)
+        model = OVModelForMaskedLM.from_pretrained(model_id)
         model.eval()
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         pipe = pipeline("fill-mask", model=model, tokenizer=tokenizer)
@@ -1177,7 +1251,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForImageClassification.from_pretrained(model_id, export=True)
+        model = OVModelForImageClassification.from_pretrained(model_id)
         model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("image-classification", model=model, feature_extractor=preprocessor)
@@ -1284,7 +1358,7 @@ class OVModelForSeq2SeqLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a test"
-        model = OVModelForSeq2SeqLM.from_pretrained(model_id, export=True, compile=False)
+        model = OVModelForSeq2SeqLM.from_pretrained(model_id, compile=False)
         model.eval()
         model.half()
         model.to("cpu")
@@ -1425,7 +1499,7 @@ class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForAudioClassification.from_pretrained(model_id, export=True)
+        model = OVModelForAudioClassification.from_pretrained(model_id)
         model.eval()
         preprocessor = AutoFeatureExtractor.from_pretrained(model_id)
         pipe = pipeline("audio-classification", model=model, feature_extractor=preprocessor)
@@ -1745,8 +1819,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True)
-
+        model = OVModelForSpeechSeq2Seq.from_pretrained(model_id)
         processor = get_preprocessor(model_id)
         pipe = pipeline(
             "automatic-speech-recognition",
@@ -1853,7 +1926,7 @@ class OVModelForVision2SeqIntegrationTest(unittest.TestCase):
     def test_pipeline(self, model_arch: str):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        ov_model = OVModelForVision2Seq.from_pretrained(model_id, export=True, compile=False)
+        ov_model = OVModelForVision2Seq.from_pretrained(model_id, compile=False)
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
         ov_model.reshape(1, -1)
         ov_model.compile()
