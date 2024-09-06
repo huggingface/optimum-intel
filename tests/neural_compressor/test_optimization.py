@@ -468,7 +468,6 @@ class TrainingOptimizationTest(INCTestMixin):
 class WeightOnlyQuantizationTest(INCTestMixin):
     WEIGHT_ONLY_CONFIG = (
         ("rtn", "int4_clip"),
-        ("rtn", "int8"),
         ("gptq", "int4_clip"),
     )
 
@@ -478,7 +477,7 @@ class WeightOnlyQuantizationTest(INCTestMixin):
 
         from neural_compressor.transformers import GPTQConfig, RtnConfig
 
-        bits = 4 if "4" in weight_dtype else 8
+        bits = 4
         if methodology == "gptq":
             # max_input_length can be removed after neural-compressor > v2.5.1
             quantization_config = GPTQConfig(bits=bits, sym=True, damp_percent=0.01)

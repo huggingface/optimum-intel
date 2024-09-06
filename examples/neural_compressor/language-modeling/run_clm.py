@@ -204,7 +204,7 @@ class OptimizationArguments:
     )
     bits: str = field(
         default=4,
-        metadata={"help": "Bits number of weight for weight only quantization. 4 or 8 bits."},
+        metadata={"help": "Bits number of weight for weight only quantization. only support 4 bits now."},
     )
     group_size: int = field(
         default=-1,
