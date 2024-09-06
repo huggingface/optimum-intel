@@ -24,6 +24,7 @@ from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.utils import EntryNotFoundError
 from neural_compressor.transformers import GPTQConfig, RtnConfig
+from neural_compressor.transformers.models.modeling_auto import _BaseINCAutoModelClass
 from neural_compressor.utils.pytorch import load
 from transformers import (
     AutoConfig,
@@ -115,26 +116,54 @@ class INCModel(OptimizedModel):
         trust_remote_code: bool = False,
         **kwargs,
     ):
+        if use_auth_token is not None:
+            warnings.warn(
+                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
+                FutureWarning,
+            )
+            if token is not None:
+                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
+            token = use_auth_token
+
         quantization_config = kwargs.pop("quantization_config", None)
+        model_path = Path(model_id)
+        is_local = model_path.is_dir()
+
+        # ITREX compatibility
+        quantization_config_path = None
+        if is_local:
+            quantization_config_path = model_path / subfolder / QUANTIZATION_CONFIG_NAME
+        else:
+            try:
+                quantization_config_path = hf_hub_download(
+                    repo_id=model_id,
+                    filename=QUANTIZATION_CONFIG_NAME,
+                    subfolder=subfolder,
+                    token=token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
+            except EntryNotFoundError:
+                pass
+        if quantization_config_path and Path(quantization_config_path).is_file():
+            algorithm = getattr(quantization_config, "quant_method", None)
+            if algorithm in {"rtn", "gptq", "awq", "autoround"}:
+                raise ValueError(
+                    "This model was obtained through ITREX quantization, support for ITREX models is deprecated since neural-compressor v3.0. "
+                    "To load this model please downgrade both optimum-intel and neural-compressor."
+                )
+                # quantization_config = PretrainedConfig.from_pretrained(quantization_config_path)
+                # config.quantization_config = quantization_config.to_dict()
 
         if hasattr(config, "quantization_config"):
             if config.quantization_config is None:
-                logger.warning(
-                    "Quantization_config loading failed. If you want to load saved "
-                    "low bit model, please check your quantizate_config.json."
+                raise ValueError(
+                    "The loading of `quantization_config` failed, to load this model please make sure the config is compatible"
                 )
             else:
-                logger.info("quantization_config: {}".format(config.quantization_config))
-
                 try:
-                    from neural_compressor.transformers.models.modeling_auto import (
-                        _BaseINCAutoModelClass,
-                    )
-
-                    warnings.warn(
-                        "Weight only quantization model loading provided by intel_extension_for_transformers is deprecated and it is provided by INC now.",
-                        DeprecationWarning,
-                    )
                     logger.info(
                         "The weight only quantized model loading only supports the same format as GPTQ, such as https://huggingface.co/TheBloke/Llama-2-7B-Chat-GPTQ/tree/main."
                     )
@@ -156,10 +185,6 @@ class INCModel(OptimizedModel):
                 except Exception as e:
                     raise RuntimeError(f"The quantized model cannot be loaded. Detailed error: {e}")
         if isinstance(quantization_config, (RtnConfig, GPTQConfig)):
-            warnings.warn(
-                "Weight only quantization provided by intel_extension_for_transformers is deprecated and it is provided by INC now.",
-                DeprecationWarning,
-            )
             logger.info(
                 "The quantized model parameters will be saved in the same format as GPTQ, here is the sample model https://huggingface.co/TheBloke/Llama-2-7B-Chat-GPTQ/tree/main for details."
             )
@@ -179,17 +204,6 @@ class INCModel(OptimizedModel):
 
             return cls(model, config=config, model_save_dir=None, **kwargs).model
 
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
-        model_path = Path(model_id)
-        is_local = model_path.is_dir()
         model_cache_path = None
         inc_config = None
         msg = None

@@ -148,7 +148,6 @@ class INCModelingTest(unittest.TestCase):
 
     def test_saving_loading_inc_woq_model(self):
         model_name = "TheBloke/TinyLlama-1.1B-Chat-v1.0-GPTQ"
-        subfolder = "inc_woq"
         model = INCModelForCausalLM.from_pretrained(model_name, revision="main")
         tokenizer = AutoTokenizer.from_pretrained(model_name, revision="main")
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
@@ -158,7 +157,7 @@ class INCModelingTest(unittest.TestCase):
             outputs = model(**tokens)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            model_save_dir = Path(tmp_dir) / subfolder
+            model_save_dir = Path(tmp_dir) / "inc_woq"
             model.save_pretrained(model_save_dir)
             folder_contents = os.listdir(model_save_dir)
             self.assertIn(SAFE_WEIGHTS_NAME, folder_contents)

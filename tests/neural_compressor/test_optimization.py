@@ -33,6 +33,7 @@ from neural_compressor.config import (
     TuningCriterion,
     WeightPruningConfig,
 )
+from neural_compressor.transformers import GPTQConfig, RtnConfig
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -474,9 +475,6 @@ class WeightOnlyQuantizationTest(INCTestMixin):
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
     def test_weight_only_quantization(self, methodology, bits):
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
-
-        from neural_compressor.transformers import GPTQConfig, RtnConfig
-
         if methodology == "gptq":
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             quantization_config = GPTQConfig(
@@ -496,11 +494,10 @@ class WeightOnlyQuantizationTest(INCTestMixin):
 
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        tokens = tokenizer("This is a sample output", return_tensors="pt")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             quantized_model = INCModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
-
-        tokens = tokenizer("This is a sample output", return_tensors="pt")
 
         with torch.no_grad():
             quantizer_outputs = quantized_model(**tokens)
