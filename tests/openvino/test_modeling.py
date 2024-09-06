@@ -668,7 +668,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
             OVSentenceTransformer.from_pretrained(model_id, export=True).save_pretrained(save_dir)
             with self.assertRaises(Exception) as context:
                 OVModelForFeatureExtraction.from_pretrained(save_dir)
-            self.assertIn("Please use OVSentenceTransformer", str(context.exception))
+            self.assertIn("Please use `OVSentenceTransformer`", str(context.exception))
 
 
 class OVModelForCausalLMIntegrationTest(unittest.TestCase):
