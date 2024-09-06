@@ -39,10 +39,7 @@ from neural_compressor import (
     QuantizationAwareTrainingConfig,
     WeightPruningConfig,
 )
-from neural_compressor.transformers import (
-    GPTQConfig,
-    RtnConfig,
-)
+from neural_compressor.transformers import GPTQConfig, RtnConfig
 from transformers import (
     CONFIG_MAPPING,
     MODEL_FOR_CAUSAL_LM_MAPPING,

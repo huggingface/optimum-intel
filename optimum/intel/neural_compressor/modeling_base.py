@@ -48,22 +48,14 @@ from transformers.utils.generic import ContextManagers
 from optimum.intel.generation import BaseModelForCausalLM
 
 from ...modeling_base import OptimizedModel
-from ..utils.import_utils import (
-    _torch_version,
-    is_torch_version,
-)
+from ..utils.import_utils import _torch_version, is_torch_version
 from .configuration import INCConfig
-from .quantization import weight_only_quantization
+from .quantization import _weight_only_quantization
 from .utils import QUANTIZATION_CONFIG_NAME
 
 
 logger = logging.getLogger(__name__)
-handler = logging.StreamHandler()
-formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
-handler.setFormatter(formatter)
-logger.propagate = False
-logger.addHandler(handler)
-logger.setLevel(logging.INFO)
+
 
 MODEL_START_DOCSTRING = r"""
     This model check the superclass documentation for the generic methods the
@@ -171,18 +163,17 @@ class INCModel(OptimizedModel):
             logger.info(
                 "The quantized model parameters will be saved in the same format as GPTQ, here is the sample model https://huggingface.co/TheBloke/Llama-2-7B-Chat-GPTQ/tree/main for details."
             )
-            model = weight_only_quantization(
+            model = _weight_only_quantization(
                 cls.auto_model_class,
                 model_id,
                 quantization_config=quantization_config,
-                subfolder=subfolder,
-                revision=revision,
-                cache_dir=cache_dir,
                 token=token,
-                local_files_only=local_files_only,
+                revision=revision,
                 force_download=force_download,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+                subfolder=subfolder,
                 trust_remote_code=trust_remote_code,
-                config=config,
                 **kwargs,
             )
 

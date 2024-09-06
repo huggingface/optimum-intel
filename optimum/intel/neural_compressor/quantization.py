@@ -335,94 +335,69 @@ class INCQuantizer(OptimumQuantizer):
         return dataset.remove_columns(ignored_columns)
 
 
-def weight_only_quantization(
+def _weight_only_quantization(
     model_class,
     model_id: Union[str, Path],
     quantization_config: Union[RtnConfig, GPTQConfig],
-    config: PretrainedConfig,
-    use_auth_token: Optional[Union[bool, str]] = None,
     token: Optional[Union[bool, str]] = None,
     revision: Optional[str] = None,
     force_download: bool = False,
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
-    file_name: str = WEIGHTS_NAME,
     local_files_only: bool = False,
     subfolder: str = "",
     trust_remote_code: bool = False,
     **kwargs,
 ):
-    device_map = kwargs.get("device_map", "xpu" if (hasattr(torch, "xpu") and torch.xpu.is_available()) else "cpu")
-    use_xpu = True if device_map == torch.device("xpu") or device_map == "xpu" else False
+    device_map = kwargs.get("device_map", None)
+    if device_map is None:
+        device_map = "xpu" if (hasattr(torch, "xpu") and torch.xpu.is_available()) else "cpu"
+    else:
+        device_map = device_map.type if isinstance(device_map, torch.device) else device_map
+
+    use_xpu = device_map == torch.device("xpu") or device_map == "xpu"
+    if use_xpu and (not hasattr(torch, "xpu") or not torch.xpu.is_available()):
+        raise AssertionError("There is no xpu device in this system!")
 
     if is_neural_compressor_version("<=", "3.0"):
-        raise AssertionError("Please use neural_compressor version > 3.0.")
+        raise AssertionError("Please install neural_compressor > v3.0")
     if is_ipex_version("<", "2.3.1") and use_xpu:
-        raise AssertionError("Please use intel_extension_for_pytorch version >= 2.3.1.")
+        raise AssertionError("Please install intel_extension_for_pytorch >= v2.3.1.")
 
+    loading_kwargs = {
+        "subfolder": subfolder,
+        "revision": revision,
+        "cache_dir": cache_dir,
+        "token": token,
+        "local_files_only": local_files_only,
+        "force_download": force_download,
+        "trust_remote_code": trust_remote_code,
+    }
+
+    low_cpu_mem_usage = True
     if use_xpu:
-        # TODO: if low_cpu_mem_uasge is True, gptj will have accuracy issue on CPU device.
-        kwargs["low_cpu_mem_usage"] = True
-        kwargs["device_map"] = "cpu"
         try:
+            # TODO: if low_cpu_mem_uasge is True, gptj will have accuracy issue on CPU device.
             model = model_class.from_pretrained(
-                model_id,
-                subfolder=subfolder,
-                revision=revision,
-                cache_dir=cache_dir,
-                token=token,
-                local_files_only=local_files_only,
-                force_download=force_download,
-                trust_remote_code=trust_remote_code,
-                config=config,
-                **kwargs,
+                model_id, low_cpu_mem_usage=low_cpu_mem_usage, device_map="cpu", **loading_kwargs
             )
-            model.config.update({"low_cpu_mem_usage": True})
         except NotImplementedError:
             logger.info(
-                "Failed to load models with `low_cpu_mem_usage` specified, "
-                "will fall to traditional load method with higher memory consumption."
+                "Failed to load models with `low_cpu_mem_usage=True`, will fall to traditional load method resulting in higher memory consumption."
             )
-            kwargs["low_cpu_mem_usage"] = False
-            model = model_class.from_pretrained(
-                model_id,
-                subfolder=subfolder,
-                revision=revision,
-                cache_dir=cache_dir,
-                token=token,
-                local_files_only=local_files_only,
-                force_download=force_download,
-                trust_remote_code=trust_remote_code,
-                config=config,
-                **kwargs,
-            )
-            model.config.update({"low_cpu_mem_usage": False})
+            low_cpu_mem_usage = False
+            model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
+            quantization_config.update(**{"device": "xpu"})
             quantization_config.post_init_xpu()
     else:
-        kwargs["low_cpu_mem_usage"] = True
-        model = model_class.from_pretrained(
-            model_id,
-            subfolder=subfolder,
-            revision=revision,
-            cache_dir=cache_dir,
-            token=token,
-            local_files_only=local_files_only,
-            force_download=force_download,
-            trust_remote_code=trust_remote_code,
-            config=config,
-            **kwargs,
-        )
-        model.config.update({"low_cpu_mem_usage": True})
+        model = model_class.from_pretrained(model_id, low_cpu_mem_usage=low_cpu_mem_usage, **loading_kwargs)
         quantization_config.post_init_cpu()
+
+    model.config.update({"low_cpu_mem_usage": low_cpu_mem_usage})
     model.eval()
 
-    if use_xpu:
-        assert hasattr(torch, "xpu") and torch.xpu.is_available(), "There is no xpu device in this system!"
-        quantization_config.update(**{"device": "xpu"})
-        quantization_config.post_init_xpu()
-    if (
-        not torch.cuda.is_available() or device_map == "cpu" or device_map == torch.device("cpu")
-    ) and model.config.model_type == "chatglm":
+    if (not torch.cuda.is_available() or device_map == "cpu") and model.config.model_type == "chatglm":
         model = model.float()
+
     model = convert_to_quantized_model(model, quantization_config, device=device_map)
     quantization_config.remove_redundant_parameters()
     model.config.quantization_config = quantization_config
@@ -430,4 +405,5 @@ def weight_only_quantization(
     model.device_map = device_map
     model.quantization_config = quantization_config
     model.save_pretrained = types.MethodType(save_low_bit, model)
+
     return model

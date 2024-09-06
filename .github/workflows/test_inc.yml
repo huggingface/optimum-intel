@@ -36,8 +36,8 @@ jobs:
         pip install cmake
         pip install py-cpuinfo
         pip install torch==2.3.0 torchaudio==2.3.0 torchvision==0.18 --index-url https://download.pytorch.org/whl/cpu
+        pip install intel-extension-for-pytorch==2.3.0
         pip install .[neural-compressor,diffusers,tests]
-        pip install intel_extension_for_pytorch==2.3.0
         pip install peft
 
     - name: Test with Pytest
@@ -45,6 +45,5 @@ jobs:
         pytest tests/neural_compressor/ --ignore tests/neural_compressor/test_ipex.py --durations=0
     - name: Test IPEX
       run: |
-        pip install intel-extension-for-pytorch==2.3.0
         pytest tests/neural_compressor/test_ipex.py
 
