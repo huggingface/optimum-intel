@@ -33,7 +33,6 @@ from neural_compressor.config import (
     TuningCriterion,
     WeightPruningConfig,
 )
-from neural_compressor.transformers import GPTQConfig, RtnConfig
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -474,6 +473,8 @@ class WeightOnlyQuantizationTest(INCTestMixin):
 
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
     def test_weight_only_quantization(self, methodology, bits):
+        from neural_compressor.transformers import GPTQConfig, RtnConfig
+
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
         if methodology == "gptq":
             tokenizer = AutoTokenizer.from_pretrained(model_name)
