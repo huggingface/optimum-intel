@@ -15,7 +15,12 @@
 import logging
 import warnings
 
-from ..utils.import_utils import is_accelerate_available, is_diffusers_available, is_nncf_available
+from ..utils.import_utils import (
+    is_accelerate_available,
+    is_diffusers_available,
+    is_nncf_available,
+    is_sentence_transformers_available,
+)
 from .utils import (
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
@@ -81,3 +86,7 @@ if is_diffusers_available():
         OVStableDiffusionXLImg2ImgPipeline,
         OVStableDiffusionXLPipeline,
     )
+
+
+if is_sentence_transformers_available():
+    from .modeling_sentence_transformers import OVSentenceTransformer
