@@ -16,6 +16,7 @@ import importlib
 import logging
 import os
 import shutil
+from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
@@ -23,12 +24,19 @@ from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import openvino
-import PIL
+import PIL.Image
 import torch
 from diffusers import (
+    AutoPipelineForImage2Image,
+    AutoPipelineForInpainting,
+    AutoPipelineForText2Image,
+    ConfigMixin,
     DDIMScheduler,
+    LatentConsistencyModelPipeline,
     LMSDiscreteScheduler,
     PNDMScheduler,
+    StableDiffusionImg2ImgPipeline,
+    StableDiffusionInpaintPipeline,
     StableDiffusionPipeline,
     StableDiffusionXLImg2ImgPipeline,
     StableDiffusionXLPipeline,
@@ -38,6 +46,7 @@ from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available
 from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from huggingface_hub.utils import validate_hf_hub_args
 from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
@@ -77,7 +86,6 @@ logger = logging.getLogger(__name__)
 class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
     auto_model_class = StableDiffusionPipeline
     config_name = "model_index.json"
-    export_feature = "text-to-image"
 
     def __init__(
         self,
@@ -363,7 +371,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
-            task=cls.export_feature,
             do_validation=False,
             no_post_process=True,
             revision=revision,
@@ -634,8 +641,9 @@ class OVModelTextEncoder(OVModelPart):
         parent_model: OVBaseModel,
         ov_config: Optional[Dict[str, str]] = None,
         model_name: str = "text_encoder",
+        model_dir: str = None,
     ):
-        super().__init__(model, parent_model, ov_config, model_name)
+        super().__init__(model, parent_model, ov_config, model_name, model_dir)
 
     def __call__(self, input_ids: np.ndarray):
         self._compile()
@@ -643,15 +651,21 @@ class OVModelTextEncoder(OVModelPart):
         inputs = {
             "input_ids": input_ids,
         }
+
         outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
 
 
 class OVModelUnet(OVModelPart):
     def __init__(
-        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+        self,
+        model: openvino.runtime.Model,
+        parent_model: OVBaseModel,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_name: str = "unet",
+        model_dir: str = None,
     ):
-        super().__init__(model, parent_model, ov_config, "unet")
+        super().__init__(model, parent_model, ov_config, model_name, model_dir)
 
     def __call__(
         self,
@@ -683,9 +697,14 @@ class OVModelUnet(OVModelPart):
 
 class OVModelVaeDecoder(OVModelPart):
     def __init__(
-        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+        self,
+        model: openvino.runtime.Model,
+        parent_model: OVBaseModel,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_name: str = "vae_decoder",
+        model_dir: str = None,
     ):
-        super().__init__(model, parent_model, ov_config, "vae_decoder")
+        super().__init__(model, parent_model, ov_config, model_name, model_dir)
 
     def __call__(self, latent_sample: np.ndarray):
         self._compile()
@@ -693,6 +712,7 @@ class OVModelVaeDecoder(OVModelPart):
         inputs = {
             "latent_sample": latent_sample,
         }
+
         outputs = self.request(inputs, share_inputs=True)
         return list(outputs.values())
 
@@ -704,9 +724,14 @@ class OVModelVaeDecoder(OVModelPart):
 
 class OVModelVaeEncoder(OVModelPart):
     def __init__(
-        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
+        self,
+        model: openvino.runtime.Model,
+        parent_model: OVBaseModel,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_name: str = "vae_encoder",
+        model_dir: str = None,
     ):
-        super().__init__(model, parent_model, ov_config, "vae_encoder")
+        super().__init__(model, parent_model, ov_config, model_name, model_dir)
 
     def __call__(self, sample: np.ndarray):
         self._compile()
@@ -724,6 +749,8 @@ class OVModelVaeEncoder(OVModelPart):
 
 
 class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPipelineMixin):
+    auto_model_class = StableDiffusionPipeline
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
@@ -737,9 +764,10 @@ class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPi
     ):
         height = height or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
         width = width or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
+
+        expected_batch_size = self._batch_size
         _height = self.height
         _width = self.width
-        expected_batch_size = self._batch_size
 
         if _height != -1 and height != _height:
             logger.warning(
@@ -779,7 +807,7 @@ class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPi
 
 
 class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiffusionImg2ImgPipelineMixin):
-    export_feature = "image-to-image"
+    auto_model_class = StableDiffusionImg2ImgPipeline
 
     def __call__(
         self,
@@ -823,7 +851,7 @@ class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiff
 
 
 class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiffusionInpaintPipelineMixin):
-    export_feature = "inpainting"
+    auto_model_class = StableDiffusionInpaintPipeline
 
     def __call__(
         self,
@@ -895,8 +923,6 @@ class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiff
 
 
 class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
-    auto_model_class = StableDiffusionXLPipeline
-
     def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -915,6 +941,8 @@ class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
 
 
 class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLPipelineMixin):
+    auto_model_class = StableDiffusionXLPipeline
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
@@ -971,7 +999,6 @@ class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusi
 
 class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLImg2ImgPipelineMixin):
     auto_model_class = StableDiffusionXLImg2ImgPipeline
-    export_feature = "image-to-image"
 
     def __call__(
         self,
@@ -1015,6 +1042,8 @@ class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, Stable
 
 
 class OVLatentConsistencyModelPipeline(OVStableDiffusionPipelineBase, LatentConsistencyPipelineMixin):
+    auto_model_class = LatentConsistencyModelPipeline
+
     def __call__(
         self,
         prompt: Optional[Union[str, List[str]]] = None,
@@ -1083,6 +1112,139 @@ class OVLatentConsistencyModelPipeline(OVStableDiffusionPipelineBase, LatentCons
             image = image.transpose(0, 3, 1, 2)
 
         return image, has_nsfw_concept
+
+
+SUPPORTED_OV_PIPELINES = [
+    OVStableDiffusionPipeline,
+    OVStableDiffusionImg2ImgPipeline,
+    OVStableDiffusionInpaintPipeline,
+    OVLatentConsistencyModelPipeline,
+    OVStableDiffusionXLPipeline,
+    OVStableDiffusionXLImg2ImgPipeline,
+]
+
+
+def _get_pipeline_class(pipeline_class_name: str, throw_error_if_not_exist: bool = True):
+    for ort_pipeline_class in SUPPORTED_OV_PIPELINES:
+        if (
+            ort_pipeline_class.__name__ == pipeline_class_name
+            or ort_pipeline_class.auto_model_class.__name__ == pipeline_class_name
+        ):
+            return ort_pipeline_class
+
+    if throw_error_if_not_exist:
+        raise ValueError(f"OVDiffusionPipeline can't find a pipeline linked to {pipeline_class_name}")
+
+
+class OVDiffusionPipeline(ConfigMixin):
+    config_name = "model_index.json"
+
+    @classmethod
+    @validate_hf_hub_args
+    def from_pretrained(cls, pretrained_model_or_path, **kwargs):
+        load_config_kwargs = {
+            "force_download": kwargs.get("force_download", False),
+            "resume_download": kwargs.get("resume_download", None),
+            "local_files_only": kwargs.get("local_files_only", False),
+            "cache_dir": kwargs.get("cache_dir", None),
+            "revision": kwargs.get("revision", None),
+            "proxies": kwargs.get("proxies", None),
+            "token": kwargs.get("token", None),
+        }
+
+        config = cls.load_config(pretrained_model_or_path, **load_config_kwargs)
+        config = config[0] if isinstance(config, tuple) else config
+        class_name = config["_class_name"]
+
+        ort_pipeline_class = _get_pipeline_class(class_name)
+
+        return ort_pipeline_class.from_pretrained(pretrained_model_or_path, **kwargs)
+
+
+OV_TEXT2IMAGE_PIPELINES_MAPPING = OrderedDict(
+    [
+        ("stable-diffusion", OVStableDiffusionPipeline),
+        ("stable-diffusion-xl", OVStableDiffusionXLPipeline),
+        ("latent-consistency", OVLatentConsistencyModelPipeline),
+    ]
+)
+
+OV_IMAGE2IMAGE_PIPELINES_MAPPING = OrderedDict(
+    [
+        ("stable-diffusion", OVStableDiffusionImg2ImgPipeline),
+        ("stable-diffusion-xl", OVStableDiffusionXLImg2ImgPipeline),
+    ]
+)
+
+OV_INPAINT_PIPELINES_MAPPING = OrderedDict(
+    [
+        ("stable-diffusion", OVStableDiffusionInpaintPipeline),
+    ]
+)
+
+SUPPORTED_OV_PIPELINES_MAPPINGS = [
+    OV_TEXT2IMAGE_PIPELINES_MAPPING,
+    OV_IMAGE2IMAGE_PIPELINES_MAPPING,
+    OV_INPAINT_PIPELINES_MAPPING,
+]
+
+
+def _get_task_class(mapping, pipeline_class_name):
+    def _get_model_name(pipeline_class_name):
+        for ort_pipelines_mapping in SUPPORTED_OV_PIPELINES_MAPPINGS:
+            for model_name, ort_pipeline_class in ort_pipelines_mapping.items():
+                if (
+                    ort_pipeline_class.__name__ == pipeline_class_name
+                    or ort_pipeline_class.auto_model_class.__name__ == pipeline_class_name
+                ):
+                    return model_name
+
+    model_name = _get_model_name(pipeline_class_name)
+
+    if model_name is not None:
+        task_class = mapping.get(model_name, None)
+        if task_class is not None:
+            return task_class
+
+    raise ValueError(f"OVPipelineForTask can't find a pipeline linked to {pipeline_class_name} for {model_name}")
+
+
+class OVPipelineForTask(ConfigMixin):
+    config_name = "model_index.json"
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_or_path, **kwargs):
+        load_config_kwargs = {
+            "force_download": kwargs.get("force_download", False),
+            "resume_download": kwargs.get("resume_download", None),
+            "local_files_only": kwargs.get("local_files_only", False),
+            "cache_dir": kwargs.get("cache_dir", None),
+            "revision": kwargs.get("revision", None),
+            "proxies": kwargs.get("proxies", None),
+            "token": kwargs.get("token", None),
+        }
+        config = cls.load_config(pretrained_model_or_path, **load_config_kwargs)
+        config = config[0] if isinstance(config, tuple) else config
+        class_name = config["_class_name"]
+
+        ort_pipeline_class = _get_task_class(cls.ort_pipelines_mapping, class_name)
+
+        return ort_pipeline_class.from_pretrained(pretrained_model_or_path, **kwargs)
+
+
+class OVPipelineForText2Image(OVPipelineForTask):
+    auto_model_class = AutoPipelineForText2Image
+    ort_pipelines_mapping = OV_TEXT2IMAGE_PIPELINES_MAPPING
+
+
+class OVPipelineForImage2Image(OVPipelineForTask):
+    auto_model_class = AutoPipelineForImage2Image
+    ort_pipelines_mapping = OV_IMAGE2IMAGE_PIPELINES_MAPPING
+
+
+class OVPipelineForInpainting(OVPipelineForTask):
+    auto_model_class = AutoPipelineForInpainting
+    ort_pipelines_mapping = OV_INPAINT_PIPELINES_MAPPING
 
 
 def _raise_invalid_batch_size(
