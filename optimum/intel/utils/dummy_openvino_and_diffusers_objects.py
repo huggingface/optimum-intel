@@ -80,6 +80,7 @@ class OVLatentConsistencyModelPipeline(metaclass=DummyObject):
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["openvino", "diffusers"])
 
+
 class OVDiffusionPipeline(metaclass=DummyObject):
     _backends = ["openvino", "diffusers"]
 
@@ -89,6 +90,7 @@ class OVDiffusionPipeline(metaclass=DummyObject):
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["openvino", "diffusers"])
+
 
 class OVPipelineForText2Image(metaclass=DummyObject):
     _backends = ["openvino", "diffusers"]
@@ -100,6 +102,7 @@ class OVPipelineForText2Image(metaclass=DummyObject):
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["openvino", "diffusers"])
 
+
 class OVPipelineForImage2Image(metaclass=DummyObject):
     _backends = ["openvino", "diffusers"]
 
@@ -109,6 +112,7 @@ class OVPipelineForImage2Image(metaclass=DummyObject):
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
         requires_backends(cls, ["openvino", "diffusers"])
+
 
 class OVPipelineForInpainting(metaclass=DummyObject):
     _backends = ["openvino", "diffusers"]
