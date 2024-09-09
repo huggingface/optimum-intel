@@ -23,6 +23,8 @@ import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.utils import EntryNotFoundError
+from neural_compressor.transformers import GPTQConfig, RtnConfig
+from neural_compressor.transformers.models.modeling_auto import _BaseINCAutoModelClass
 from neural_compressor.utils.pytorch import load
 from transformers import (
     AutoConfig,
@@ -47,8 +49,9 @@ from transformers.utils.generic import ContextManagers
 from optimum.intel.generation import BaseModelForCausalLM
 
 from ...modeling_base import OptimizedModel
-from ..utils.import_utils import _torch_version, is_itrex_available, is_torch_version
+from ..utils.import_utils import _torch_version, is_torch_version
 from .configuration import INCConfig
+from .quantization import _weight_only_quantization
 from .utils import QUANTIZATION_CONFIG_NAME
 
 
@@ -122,8 +125,85 @@ class INCModel(OptimizedModel):
                 raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
             token = use_auth_token
 
+        quantization_config = kwargs.pop("quantization_config", None)
         model_path = Path(model_id)
         is_local = model_path.is_dir()
+
+        # ITREX compatibility
+        quantization_config_path = None
+        if is_local:
+            quantization_config_path = model_path / subfolder / QUANTIZATION_CONFIG_NAME
+        else:
+            try:
+                quantization_config_path = hf_hub_download(
+                    repo_id=model_id,
+                    filename=QUANTIZATION_CONFIG_NAME,
+                    subfolder=subfolder,
+                    token=token,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                )
+            except EntryNotFoundError:
+                pass
+        if quantization_config_path and Path(quantization_config_path).is_file():
+            algorithm = getattr(quantization_config, "quant_method", None)
+            if algorithm in {"rtn", "gptq", "awq", "autoround"}:
+                raise ValueError(
+                    "This model was obtained through ITREX quantization, support for ITREX models is deprecated since neural-compressor v3.0. "
+                    "To load this model please downgrade both optimum-intel and neural-compressor."
+                )
+                # quantization_config = PretrainedConfig.from_pretrained(quantization_config_path)
+                # config.quantization_config = quantization_config.to_dict()
+
+        if hasattr(config, "quantization_config"):
+            if config.quantization_config is None:
+                raise ValueError(
+                    "The loading of `quantization_config` failed, to load this model please make sure the config is compatible"
+                )
+            else:
+                try:
+                    logger.info(
+                        "The weight only quantized model loading only supports the same format as GPTQ, such as https://huggingface.co/TheBloke/Llama-2-7B-Chat-GPTQ/tree/main."
+                    )
+                    _BaseINCAutoModelClass.ORIG_MODEL = cls.auto_model_class
+                    model = _BaseINCAutoModelClass.load_low_bit(
+                        model_id,
+                        subfolder=subfolder,
+                        revision=revision,
+                        cache_dir=cache_dir,
+                        token=token,
+                        local_files_only=local_files_only,
+                        force_download=force_download,
+                        trust_remote_code=trust_remote_code,
+                        config=config,
+                        **kwargs,
+                    )
+                    logger.info("Saved low bit model loading successfully. Other input args " "will be ignored.")
+                    return model
+                except Exception as e:
+                    raise RuntimeError(f"The quantized model cannot be loaded. Detailed error: {e}")
+        if isinstance(quantization_config, (RtnConfig, GPTQConfig)):
+            logger.info(
+                "The quantized model parameters will be saved in the same format as GPTQ, here is the sample model https://huggingface.co/TheBloke/Llama-2-7B-Chat-GPTQ/tree/main for details."
+            )
+            model = _weight_only_quantization(
+                cls.auto_model_class,
+                model_id,
+                quantization_config=quantization_config,
+                token=token,
+                revision=revision,
+                force_download=force_download,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+                subfolder=subfolder,
+                trust_remote_code=trust_remote_code,
+                **kwargs,
+            )
+
+            return cls(model, config=config, model_save_dir=None, **kwargs).model
+
         model_cache_path = None
         inc_config = None
         msg = None
@@ -164,52 +244,6 @@ class INCModel(OptimizedModel):
                 )
 
         model_save_dir = Path(model_cache_path).parent
-
-        if is_itrex_available():
-            quantization_config_path = None
-            if is_local:
-                quantization_config_path = model_path / subfolder / QUANTIZATION_CONFIG_NAME
-            else:
-                try:
-                    quantization_config_path = hf_hub_download(
-                        repo_id=model_id,
-                        filename=QUANTIZATION_CONFIG_NAME,
-                        subfolder=subfolder,
-                        token=token,
-                        revision=revision,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                    )
-                except EntryNotFoundError:
-                    pass
-
-            if quantization_config_path and Path(quantization_config_path).is_file():
-                quantization_config = PretrainedConfig.from_pretrained(quantization_config_path)
-                algorithm = getattr(quantization_config, "quant_method", None)
-                if algorithm in {"rtn", "gptq", "awq", "autoround"}:
-                    from intel_extension_for_transformers.transformers.modeling.modeling_auto import (
-                        _BaseQBitsAutoModelClass,
-                    )
-
-                    _BaseQBitsAutoModelClass.ORIG_MODEL = cls.auto_model_class
-
-                    model = _BaseQBitsAutoModelClass.from_pretrained(
-                        pretrained_model_name_or_path=model_id,
-                        token=token,
-                        revision=revision,
-                        force_download=force_download,
-                        cache_dir=cache_dir,
-                        local_files_only=local_files_only,
-                        subfolder=subfolder,
-                        trust_remote_code=trust_remote_code,
-                        use_neural_speed=False,
-                        **kwargs,
-                    )
-
-                    return cls(
-                        model, config=config, model_save_dir=model_save_dir, q_config=quantization_config, **kwargs
-                    )
 
         try:
             inc_config = INCConfig.from_pretrained(model_id, subfolder=subfolder, revision=revision)
@@ -254,7 +288,7 @@ class INCModel(OptimizedModel):
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
         if isinstance(self.model, torch.nn.Module):
-            # For ITREX model
+            # For INC weight only model
             if isinstance(self._q_config, PretrainedConfig):
                 self._q_config.to_json_file(os.path.join(save_directory, QUANTIZATION_CONFIG_NAME))
                 self.model.save_pretrained(save_directory)
