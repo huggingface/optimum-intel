@@ -37,6 +37,7 @@ jobs:
         pip install py-cpuinfo
         pip install torch==2.3.0 torchaudio==2.3.0 torchvision==0.18 --index-url https://download.pytorch.org/whl/cpu
         pip install intel-extension-for-pytorch==2.3.0
+        pip install datasets==2.19.0
         pip install .[neural-compressor,diffusers,tests]
         pip install peft
 
