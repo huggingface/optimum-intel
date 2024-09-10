@@ -805,7 +805,7 @@ class OVTrainerAudioClassificationTrainingTest(OVTrainerBaseTrainingTest):
         self.run_ovtrainer_training_checks(desc)
 
     def prepare_model_and_dataset(self, desc: OVTrainerTestDescriptor):
-        self.dataset = load_dataset("anton-l/superb_dummy", "ks")
+        self.dataset = load_dataset("anton-l/superb_dummy", "ks", trust_remote_code=True)
         self.num_labels = len(self.dataset["test"].features["label"].names)
 
         self.feature_extractor = AutoFeatureExtractor.from_pretrained(desc.model_id)
