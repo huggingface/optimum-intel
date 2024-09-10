@@ -179,7 +179,7 @@ class IPEXModel(OptimizedModel):
             self._device = torch.device("cpu")
 
         # CPU only support jit model for now.
-        if export:
+        if export and self._device.type == "cpu":
             if isinstance(model, torch.jit.RecursiveScriptModule):
                 logger.warning("The model has been exported already.")
             else:
@@ -291,7 +291,7 @@ class IPEXModel(OptimizedModel):
             logger.warning("Detect torchscript is false. Convert to torchscript model!")
 
             if is_torch_version("<", "2.1.0"):
-                raise ImportError("`torch>=2.0.0` is needed to trace your model")
+                raise ImportError("`torch>=2.1.0` is needed to trace your model")
 
             task = cls.export_feature
             config.torch_dtype = torch_dtype
@@ -304,6 +304,15 @@ class IPEXModel(OptimizedModel):
                 _commit_hash=commit_hash,
                 **model_kwargs,
             )
+            if is_torch_xpu_available(check_device=True):
+                model.to("xpu:0")
+                if _is_patched_with_ipex(model, task):
+                    model = _patch_model(model)
+            else:
+                use_cache = kwargs.get("use_cache", True)
+                model = ipex_jit_trace(model, task, use_cache)
+                config.torchscript = True
+                config.torch_dtype = torch_dtype
 
             return cls(model, config=config, export=True, **kwargs)
 
@@ -529,7 +538,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
         except AttributeError:
             self.model_cls = get_model_class(self.config, AutoModelForCausalLM._model_mapping)
 
-        if self._is_ipex_exported:
+        if self._is_ipex_exported and self._device.type == "cpu":
             self._reorder_cache = _ipex_reorder_cache
         else:
             # Check if _reorder_cache is a static method
@@ -646,7 +655,7 @@ class IPEXModelForCausalLM(IPEXModel, GenerationMixin):
             inputs["position_ids"] = position_ids
 
         if self.use_cache:
-            if past_key_values is None:
+            if past_key_values is None and self._device.type == "cpu":
                 past_key_values = self._prepare_past_key_values(input_ids)
 
             inputs["past_key_values"] = past_key_values
@@ -760,6 +769,19 @@ def _ipex_prepare_inputs_for_generation(
     return model_inputs
 
 
+def _ipex_crop_past_key_values(model, past_key_values, max_length):
+    if isinstance(model, IPEXModel) and _is_patched_with_ipex(model, "text-generation"):
+        new_past_key_values = []
+        for i in range(len(past_key_values)):
+            pkv = []
+            pkv.append(past_key_values[i][0][:, :max_length, :max_length, :])
+            pkv += [past_key_values[i][_] for _ in range(1, 4)]
+            new_past_key_values.append(tuple(pkv))
+        new_past_key_values = tuple(new_past_key_values)
+        return new_past_key_values
+    return _crop_past_key_values(model, past_key_values, max_length)
+
+
 def _ipex_reorder_cache(
     past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
 ) -> Tuple[Tuple[torch.Tensor]]:
@@ -778,16 +800,3 @@ def _ipex_reorder_cache(
             tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
             for layer_past in past_key_values
         )
-
-
-def _ipex_crop_past_key_values(model, past_key_values, max_length):
-    if isinstance(model, IPEXModel) and _is_patched_with_ipex(model, "text-generation"):
-        new_past_key_values = []
-        for i in range(len(past_key_values)):
-            pkv = []
-            pkv.append(past_key_values[i][0][:, :max_length, :max_length, :])
-            pkv += [past_key_values[i][_] for _ in range(1, 4)]
-            new_past_key_values.append(tuple(pkv))
-        new_past_key_values = tuple(new_past_key_values)
-        return new_past_key_values
-    return _crop_past_key_values(model, past_key_values, max_length)
