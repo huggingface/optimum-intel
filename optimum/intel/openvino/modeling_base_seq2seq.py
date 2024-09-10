@@ -193,14 +193,12 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     os.path.join(model_id, encoder_file_name),
                     kwargs.get("device", "CPU"),
                     kwargs.get("ov_config"),
-                    True,
                     model_save_dir,
                 )
                 decoder = cls._compile_model(
                     os.path.join(model_id, decoder_file_name),
                     kwargs.get("device", "CPU"),
                     kwargs.get("ov_config"),
-                    True,
                     model_save_dir,
                 )
                 if use_cache:
@@ -208,7 +206,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                         os.path.join(model_id, decoder_with_past_file_name),
                         kwargs.get("device", "CPU"),
                         kwargs.get("ov_config"),
-                        True,
                         model_save_dir,
                     )
 
@@ -253,7 +250,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                         file_names["decoder_with_past"],
                         kwargs.get("device", "CPU"),
                         kwargs.get("ov_config"),
-                        True,
                         model_save_dir,
                     )
         try:
@@ -394,8 +390,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                 The sequence length.
         """
         if self.compile_only:
-            logger.warning("`reshape()` does not supported in `compile_only` mode")
-            return
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
         logger.warning("Some part of the model's decoder do not support static shapes and will be kept dynamic.")
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.encoder_model = self._reshape(self.encoder_model, batch_size, sequence_length, is_decoder=False)
@@ -408,8 +405,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
         if self.compile_only:
-            logger.warning("`half()` does not supported in `compile_only` mode")
-            return self
+            raise ValueError(
+                "`half()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
         apply_moc_transformations(self.encoder_model, cf=False)
         apply_moc_transformations(self.decoder_model, cf=False)
         compress_model_transformation(self.encoder_model)

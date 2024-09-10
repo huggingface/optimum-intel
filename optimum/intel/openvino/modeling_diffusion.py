@@ -177,7 +177,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 The directory where to save the model files
         """
         if self.compile_only:
-            raise ValueError("`save_pretrained()` is not supported in `compile_only` mode, please intialize model without this option")
+            raise ValueError(
+                "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
 
         save_directory = Path(save_directory)
 
@@ -312,11 +314,11 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             vae_ov_conifg = {**ov_config}
             if "GPU" in device.upper() and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg:
                 vae_ov_conifg["INFERENCE_PRECISION_HINT"] = "f32"
-            unet = cls._compile_model(unet_path, device, ov_config, True, model_save_dir)
+            unet = cls._compile_model(unet_path, device, ov_config, True, Path(model_save_dir) / "unet")
             for key, value in components.items():
                 components[key] = (
                     cls._compile_model(
-                        value, device, ov_config if "vae" not in key else vae_ov_conifg, True, model_save_dir
+                        value, device, ov_config if "vae" not in key else vae_ov_conifg, Path(model_save_dir) / key
                     )
                     if value.is_file()
                     else None
@@ -426,9 +428,10 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         )
 
     def to(self, device: str):
-        if self.compile_only:
-            logger.warning("`to()` does not support `compile_only` mode")
-            return self
+        if self.compile_only and not isinstance(device, str):
+            raise ValueError(
+                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
 
         if isinstance(device, str):
             self._device = device.upper()
@@ -552,8 +555,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         num_images_per_prompt: int = -1,
     ):
         if self.compile_only:
-            logger.warning("`reshape()` not support `compile_only` mode")
-            return self
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
 
         self.is_dynamic = -1 in {batch_size, height, width, num_images_per_prompt}
         self.vae_decoder.model = self._reshape_vae_decoder(self.vae_decoder.model, height, width)
@@ -588,8 +592,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
         if self.compile_only:
-            logger.warning("`half()` does not support `compile_only` mode")
-            return self
+            raise ValueError(
+                "`half()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
 
         compress_model_transformation(self.vae_decoder.model)
         compress_model_transformation(self.unet.model)
@@ -601,8 +606,10 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
     def clear_requests(self):
         if self.compile_only:
-            logger.warning("`clear_requests()` does not support in `compile_only` mode")
-            return
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
         self.vae_decoder.request = None
         self.unet.request = None
         for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:

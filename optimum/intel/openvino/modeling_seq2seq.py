@@ -343,7 +343,9 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
 
     def to(self, device: str):
         if self.compile_only and isinstance(device, str):
-            raise ValueError("`to()` is not supported in `compile_only` mode, please intialize model without this option")
+            raise ValueError(
+                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
 
         if isinstance(device, str):
             self._device = device.upper()
@@ -448,7 +450,9 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
                 The sequence length.
         """
         if self.compile_only:
-            raise ValueError("`reshape()` is not supported in `compile_only` mode, please intialize model without this option")
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
         super().reshape(batch_size, sequence_length)
         self.clear_requests()
         return self
@@ -463,7 +467,9 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
 
     def clear_requests(self):
         if self.compile_only:
-            raise ValueError("`clear_requests()` is not supported in `compile_only` mode, please intialize model without this option")
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
         self.encoder.request = None
         self.decoder.request = None
         if self.use_cache:

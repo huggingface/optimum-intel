@@ -135,7 +135,9 @@ class OVModel(OVBaseModel):
         be in upper or lower case. To speed up first inference, call `.compile()` after `.to()`.
         """
         if self.compile_only and isinstance(device, str):
-            raise ValueError("`to()` is not supported in `compile_only` mode, please intialize model without this option")
+            raise ValueError(
+                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
 
         if isinstance(device, str):
             self._device = device.upper()

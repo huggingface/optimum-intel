@@ -23,7 +23,7 @@ import openvino
 import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from openvino import Core, convert_model, CompiledModel
+from openvino import CompiledModel, Core, Model, convert_model
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
@@ -81,7 +81,7 @@ class OVBaseModel(OptimizedModel):
                 "`compile_only` mode does not support disabling compilation."
                 "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
             )
-        
+
         if self.compile_only and not isinstance(self.model, CompiledModel):
             raise ValueError("`compile_only` expect that already compiled model will be provided")
 
@@ -201,10 +201,9 @@ class OVBaseModel(OptimizedModel):
 
     @staticmethod
     def _compile_model(
-        file_name: Union[str, Path],
+        model: Union[str, Path, Model],
         device: Optional[str] = None,
         ov_config: Optional[Dict[str, str]] = None,
-        allow_set_cache_dir=False,
         model_save_dir: Union[str, Path] = None,
     ):
         logger.info(f"Compiling the model to {device} ...")
@@ -215,17 +214,14 @@ class OVBaseModel(OptimizedModel):
         if model_save_dir is None:
             model_save_dir = file_name.parent
         if "CACHE_DIR" not in ov_config.keys() and (
-            allow_set_cache_dir
-            or (not str(model_save_dir).startswith(gettempdir()) and (device is not None and "gpu" in device.lower()))
+            not str(model_save_dir).startswith(gettempdir()) and (device is not None and "gpu" in device.lower())
         ):
             # Set default CACHE_DIR only if it is not set, if the model is not in a temporary directory, and device is GPU
             cache_dir = Path(model_save_dir).joinpath("model_cache")
             ov_config["CACHE_DIR"] = str(cache_dir)
             logger.info(f"Setting OpenVINO CACHE_DIR to {str(cache_dir)}")
 
-        compiled_model = core.compile_model(
-            file_name, device.upper() if device is not None else device, config=ov_config
-        )
+        compiled_model = core.compile_model(model, device.upper() if device is not None else device, config=ov_config)
         if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
             logger.info(f"{device if device is not None else 'AUTO'} SUPPORTED_PROPERTIES:")
             _print_compiled_model_properties(compiled_model)
@@ -242,7 +238,9 @@ class OVBaseModel(OptimizedModel):
         """
 
         if self.compile_only:
-            raise ValueError("`save_pretrained()` is not supported in `compile_only` mode, please intialize model without this option")
+            raise ValueError(
+                "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(self.model, dst_path, compress_to_fp16=False)
         generation_config = getattr(self, "generation_config", None)
@@ -335,7 +333,6 @@ class OVBaseModel(OptimizedModel):
                 model_cache_path,
                 kwargs.get("device"),
                 kwargs.get("ov_config"),
-                allow_set_cache_dir=True,
                 model_save_dir=model_cache_path.parent,
             )
 
@@ -628,22 +625,9 @@ class OVBaseModel(OptimizedModel):
 
     def compile(self):
         if self.request is None:
-            logger.info(f"Compiling the model to {self._device} ...")
             ov_config = {**self.ov_config}
-            if (
-                "CACHE_DIR" not in self.ov_config.keys()
-                and not str(self.model_save_dir).startswith(gettempdir())
-                and "gpu" in self._device.lower()
-            ):
-                # Set default CACHE_DIR only if it is not set, if the model is not in a temporary directory, and device is GPU
-                cache_dir = Path(self.model_save_dir).joinpath("model_cache")
-                ov_config["CACHE_DIR"] = str(cache_dir)
-                logger.info(f"Setting OpenVINO CACHE_DIR to {str(cache_dir)}")
-            self.request = core.compile_model(self.model, self._device, ov_config)
-            # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
-            if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
-                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(self.request)
+            logger.info(f"Compiling the model to {self._device} ...")
+            self.request = self._compile_model(self.model, self._device, ov_config, self.model_save_dir)
 
     def _reshape(
         self,
@@ -680,7 +664,9 @@ class OVBaseModel(OptimizedModel):
                 The image width.
         """
         if self.compile_only:
-            raise ValueError("`reshape()` is not supported in `compile_only` mode, please intialize model without this option")
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
 
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
@@ -692,7 +678,9 @@ class OVBaseModel(OptimizedModel):
         Converts all the model weights to FP16
         """
         if self.compile_only:
-            raise ValueError("`reshape()` is not supported in `compile_only` mode, please intialize model without this option")
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)
         self.request = None

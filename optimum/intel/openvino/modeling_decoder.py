@@ -237,7 +237,9 @@ class OVBaseDecoderModel(OVModel):
         """
 
         if self.compile_only:
-            raise ValueError("`save_pretrained()` is not supported in `compile_only` mode, please intialize model without this option")
+            raise ValueError(
+                "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
         model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
@@ -345,7 +347,9 @@ class OVBaseDecoderModel(OVModel):
         width: int = None,
     ):
         if self.compile_only:
-            raise ValueError("`reshape()` is not supported in `compile_only` mode, please intialize model without this option")
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
 
         if height is not None:
             logger.warning(f"`height` set to `{height}` will be ignored during reshaping operation.")
@@ -799,7 +803,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             model = cls.load_model(model_cache_path)
         else:
             model = cls._compile_model(
-                model_cache_path, kwargs.get("device", "CPU"), kwargs.get("ov_config"), True, model_cache_path.parent
+                model_cache_path, kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_cache_path.parent
             )
 
         model_type = config.model_type.replace("_", "-")
@@ -854,7 +858,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 )
 
             if compile_only:
-                raise ValueError("quantization is not supported in `compile_only` mode, please intialize model without this option")
+                raise ValueError(
+                    "quantization is not supported with `compile_only` mode, please intialize model without this option"
+                )
 
             from optimum.intel.openvino.quantization import OVQuantizer
 
