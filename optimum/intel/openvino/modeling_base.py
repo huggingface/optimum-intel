@@ -23,7 +23,7 @@ import openvino
 import torch
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-from openvino import Core, convert_model
+from openvino import Core, convert_model, CompiledModel
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
 from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
@@ -81,6 +81,9 @@ class OVBaseModel(OptimizedModel):
                 "`compile_only` mode does not support disabling compilation."
                 "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
             )
+        
+        if self.compile_only and not isinstance(self.model, CompiledModel):
+            raise ValueError("`compile_only` expect that already compiled model will be provided")
 
         if self.is_dynamic and not self.compile_only:
             height = -1 if self.export_feature == "image-classification" else None
@@ -239,10 +242,7 @@ class OVBaseModel(OptimizedModel):
         """
 
         if self.compile_only:
-            logger.warning(
-                "`compile_only` does not support model saving on disk, you already should have preconverted model"
-            )
-            return
+            raise ValueError("`save_pretrained()` is not supported in `compile_only` mode, please intialize model without this option")
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(self.model, dst_path, compress_to_fp16=False)
         generation_config = getattr(self, "generation_config", None)
@@ -680,8 +680,8 @@ class OVBaseModel(OptimizedModel):
                 The image width.
         """
         if self.compile_only:
-            logger.warning("`reshape()` does not support `compile_only` mode")
-            return self
+            raise ValueError("`reshape()` is not supported in `compile_only` mode, please intialize model without this option")
+
         self.is_dynamic = True if batch_size == -1 and sequence_length == -1 else False
         self.model = self._reshape(self.model, batch_size, sequence_length, height, width)
         self.request = None
@@ -692,8 +692,7 @@ class OVBaseModel(OptimizedModel):
         Converts all the model weights to FP16
         """
         if self.compile_only:
-            logger.warning("`half()` does not support `compile_only` mode")
-            return self
+            raise ValueError("`reshape()` is not supported in `compile_only` mode, please intialize model without this option")
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)
         self.request = None

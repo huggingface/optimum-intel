@@ -177,10 +177,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 The directory where to save the model files
         """
         if self.compile_only:
-            logger.warning(
-                "`compile_only` does not support model saving on disk, you already should have preconverted model"
-            )
-            return
+            raise ValueError("`save_pretrained()` is not supported in `compile_only` mode, please intialize model without this option")
 
         save_directory = Path(save_directory)
 

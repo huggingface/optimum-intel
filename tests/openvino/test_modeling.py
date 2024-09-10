@@ -156,10 +156,6 @@ class OVModelIntegrationTest(unittest.TestCase):
         current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
         # compile_only get model from cache
         self.assertGreaterEqual(current_num_blobs, num_blobs)
-        device = compile_only_model._device
-        # to() method can not change device for compile only
-        compile_only_model.to("TEST")
-        self.assertEqual(compile_only_model._device, device)
         self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
         self.assertIsInstance(compile_only_model.request, ov.runtime.CompiledModel)
         outputs = compile_only_model(**tokens)
@@ -204,10 +200,6 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertEqual(model.use_cache, use_cache)
 
             compile_only_model = OVModelForCausalLM.from_pretrained(tmpdirname, compile_only=True, use_cache=use_cache)
-            device = compile_only_model._device
-            # to() method can not change device for compile only
-            compile_only_model.to("TEST")
-            self.assertEqual(compile_only_model._device, device)
             self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_model.request, ov.runtime.InferRequest)
             outputs = compile_only_model(**tokens)
@@ -242,10 +234,6 @@ class OVModelIntegrationTest(unittest.TestCase):
             model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, device="cpu")
             # compile only
             compile_only_model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, compile_only=True)
-            device = compile_only_model._device
-            # to() method can not change device for compile only
-            compile_only_model.to("TEST")
-            self.assertEqual(compile_only_model._device, device)
             self.assertIsInstance(compile_only_model.encoder.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_model.decoder.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_model.decoder_with_past.model, ov.runtime.CompiledModel)
@@ -294,10 +282,6 @@ class OVModelIntegrationTest(unittest.TestCase):
                 self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
 
             compile_only_pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname, compile_only=True)
-            device = compile_only_pipeline._device
-            # to() method can not change device for compile only
-            compile_only_pipeline.to("TEST")
-            self.assertEqual(compile_only_pipeline._device, device)
             self.assertIsInstance(compile_only_pipeline.unet.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.runtime.CompiledModel)
             self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)

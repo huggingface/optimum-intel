@@ -237,10 +237,7 @@ class OVBaseDecoderModel(OVModel):
         """
 
         if self.compile_only:
-            logger.warning(
-                "`compile_only` does not support model saving on disk, you already should have preconverted model"
-            )
-            return
+            raise ValueError("`save_pretrained()` is not supported in `compile_only` mode, please intialize model without this option")
         model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
@@ -348,8 +345,7 @@ class OVBaseDecoderModel(OVModel):
         width: int = None,
     ):
         if self.compile_only:
-            logger.warning("model reshaping does not support `compile_only` mode")
-            return model
+            raise ValueError("`reshape()` is not supported in `compile_only` mode, please intialize model without this option")
 
         if height is not None:
             logger.warning(f"`height` set to `{height}` will be ignored during reshaping operation.")
@@ -858,10 +854,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 )
 
             if compile_only:
-                logger.warning(
-                    "Quantization is not available for `compile_only` mode, quantization config will be ignored"
-                )
-                return causal_model
+                raise ValueError("quantization is not supported in `compile_only` mode, please intialize model without this option")
 
             from optimum.intel.openvino.quantization import OVQuantizer
 
