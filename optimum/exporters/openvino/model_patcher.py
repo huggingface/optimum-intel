@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import functools
 import inspect
 import logging as log
 import math
@@ -23,7 +24,7 @@ import torch.nn.functional as F
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import is_tf_available
 
-from optimum.exporters.onnx.model_patcher import DecoderModelPatcher
+from optimum.exporters.onnx.model_patcher import DecoderModelPatcher, override_arguments
 from optimum.intel.utils.import_utils import (
     _openvino_version,
     _torch_version,
@@ -103,7 +104,18 @@ def patch_model_with_bettertransformer(model):
 
 def patch_update_causal_mask(model, transformers_version):
     if is_transformers_version(">=", transformers_version):
-        model.model._update_causal_mask = types.MethodType(_llama_gemma_update_causal_mask, model.model)
+        inner_model = getattr(model, "model", getattr(model, "transformer", None))
+        if inner_model is not None:
+            inner_model._update_causal_mask = types.MethodType(_llama_gemma_update_causal_mask, inner_model)
+
+
+# initialization of sin/cos cached in bf16/fp16 leads to accuracy loss
+# reinitialize them to save in float32 before export
+def _reinitialize_cos_sin_cached_fp32(rotary_emb):
+    if rotary_emb.cos_cached.dtype != torch.float32:
+        rotary_emb._set_cos_sin_cache(
+            seq_len=rotary_emb.max_position_embeddings, device=rotary_emb.inv_freq.device, dtype=torch.float32
+        )
 
 
 def _mixtral_sparse_moe_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -156,6 +168,7 @@ class MixtralModelPatcher(DecoderModelPatcher):
             layer.block_sparse_moe.forward = types.MethodType(
                 _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
             )
+            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -296,10 +309,9 @@ def _chatglm2_core_attention_forward(self, query_layer, key_layer, value_layer, 
 
 
 def _glm4_core_attention_forward(self, query_layer, key_layer, value_layer, attention_mask):
-    attention_mask = ~attention_mask
-    context_layer = torch.nn.functional.scaled_dot_product_attention(
-        query_layer, key_layer, value_layer, attention_mask.to(torch.float32)
-    )
+    causal_mask = torch.zeros_like(attention_mask, dtype=torch.float32)
+    causal_mask.masked_fill_(attention_mask, float("-inf"))
+    context_layer = torch.nn.functional.scaled_dot_product_attention(query_layer, key_layer, value_layer, causal_mask)
     context_layer = context_layer.transpose(1, 2).contiguous()
     new_context_layer_shape = context_layer.size()[:-2] + (self.hidden_size_per_partition,)
     context_layer = context_layer.reshape(*new_context_layer_shape)
@@ -563,8 +575,9 @@ class LlamaModelPatcher(DecoderModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        if hasattr(self._model.model, "_orig_update_causal_mask"):
-            self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+        inner_model = getattr(self._model, "model", getattr(self._model, "transformer", None))
+        if hasattr(inner_model, "_orig_update_causal_mask"):
+            inner_model._update_causal_mask = inner_model._orig_update_causal_mask
 
 
 # copied from https://github.com/huggingface/transformers/commit/57d7594a79a9f5d835abf2d4d384db0e4818e548 to unblock export with transformers 4.42
@@ -685,6 +698,10 @@ class MistralModelPatcher(DecoderModelPatcher):
             # apply fix https://github.com/huggingface/transformers/commit/57d7594a79a9f5d835abf2d4d384db0e4818e548
             self._model.model._orig_update_causal_mask = self._model.model._update_causal_mask
             self._model.model._update_causal_mask = types.MethodType(_mistral_update_causal_mask, self._model.model)
+
+        else:
+            for layer in self._model.model.layers:
+                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -2221,6 +2238,7 @@ class PersimmonModelPatcher(DecoderModelPatcher):
                 orig_self_attn_fwd = layer.self_attn.forward
                 layer.self_attn.forward = types.MethodType(_persimmon_self_attn_sdpa_forward, layer.self_attn)
                 layer.self_attn._orig_forward = orig_self_attn_fwd
+            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -2356,8 +2374,96 @@ class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
         patch_update_causal_mask(self._model, "4.42.0")
+        if hasattr(self._model.model.layers[0].self_attn.rotary_emb, "_set_cos_sin_cache"):
+            for layer in self._model.model.layers:
+                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         if hasattr(self._model.model, "_orig_update_causal_mask"):
             self._model.model._update_causal_mask = self._model.model._orig_update_causal_mask
+
+
+class RotaryEmbPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.model.layers:
+            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+
+
+class FalconModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.transformer.h:
+            _reinitialize_cos_sin_cached_fp32(layer.self_attention.rotary_emb)
+
+
+class GptNeoxModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.gpt_neox.layers:
+            _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
+
+
+class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.gpt_neox_japanese.layers:
+            _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
+
+
+class Gemma2ModelPatcher(LlamaModelPatcher):
+    def __init__(
+        self,
+        config: "OnnxConfig",
+        model: Union["PreTrainedModel", "TFPreTrainedModel"],
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+
+        @functools.wraps(self.orig_forward)
+        def patched_forward(*args, **kwargs):
+            from transformers.cache_utils import DynamicCache
+
+            signature = inspect.signature(self.orig_forward)
+            args, kwargs = override_arguments(args, kwargs, signature, model_kwargs=self.model_kwargs)
+
+            return_legacy_cache = False
+            pkv_in_args = False
+            legacy_pkv = None
+            if "past_key_values" in kwargs:
+                legacy_pkv = kwargs.pop("past_key_values", None)
+            sign_names = list(signature.parameters.keys())
+            pkv_argument_index = sign_names.index("past_key_values")
+            cache_position_index = sign_names.index("cache_position") if "cache_position" in sign_names else -1
+            input_ids_index = sign_names.index("input_ids" if "input_ids" in sign_names else "inputs_embeds")
+            if legacy_pkv is None and len(args) > pkv_argument_index:
+                legacy_pkv = args[pkv_argument_index]
+                pkv_in_args = True
+            if legacy_pkv is not None:
+                pkv = DynamicCache.from_legacy_cache(legacy_pkv)
+                return_legacy_cache = True
+                if not pkv_in_args:
+                    kwargs["past_key_values"] = pkv
+                else:
+                    args[pkv_argument_index] = pkv
+
+            if (
+                return_legacy_cache
+                and cache_position_index != -1
+                and (cache_position_index > len(args) and "cache_position" not in kwargs)
+            ):
+                past_seen_tokens = legacy_pkv[0][0].shape[-2]
+                input_ids = args[input_ids_index]
+                cache_position = torch.arange(
+                    past_seen_tokens, past_seen_tokens + input_ids.shape[1], device=input_ids.device
+                )
+                kwargs["cache_position"] = cache_position
+
+            outputs = self.orig_forward(*args, **kwargs)
+            if return_legacy_cache:
+                outputs.past_key_values = outputs.past_key_values.to_legacy_cache()
+
+            return outputs
+
+        self.patched_forward = patched_forward

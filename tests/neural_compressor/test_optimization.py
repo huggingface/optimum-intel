@@ -45,7 +45,7 @@ from transformers import (
     set_seed,
 )
 from utils_tests import MODEL_NAMES, SEED, INCTestMixin, _generate_dataset
-from optimum.intel.utils.import_utils import is_torch_version, is_itrex_available
+from optimum.intel.utils.import_utils import is_torch_version
 
 from optimum.intel import (
     INCConfig,
@@ -467,50 +467,49 @@ class TrainingOptimizationTest(INCTestMixin):
 
 class WeightOnlyQuantizationTest(INCTestMixin):
     WEIGHT_ONLY_CONFIG = (
-        ("rtn", "int4_clip"),
-        ("rtn", "int8"),
-        ("gptq", "int4_clip"),
+        ("rtn", 4),
+        ("gptq", 4),
     )
 
     @parameterized.expand(WEIGHT_ONLY_CONFIG)
-    @unittest.skipIf(not is_itrex_available(), reason="ITREX not available")
-    def test_weight_only_quantization(self, methodology, weight_dtype):
+    def test_weight_only_quantization(self, methodology, bits):
+        from neural_compressor.transformers import GPTQConfig, RtnConfig
+
         model_name = "hf-internal-testing/tiny-random-GPTNeoForCausalLM"
-
-        from intel_extension_for_transformers.transformers.utils.config import GPTQConfig, RtnConfig
-
-        bits = 4 if "4" in weight_dtype else 8
         if methodology == "gptq":
-            # max_input_length can be removed after neural-compressor > v2.5.1
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
             quantization_config = GPTQConfig(
-                bits=bits, sym=True, damp_percent=0.01, weight_dtype=weight_dtype, max_input_length=128
+                bits=bits,
+                sym=True,
+                damp_percent=0.01,
+                desc_act=True,
+                tokenizer=tokenizer,
+                n_samples=20,
+                group_size=8,
+                batch_size=5,
+                seq_len=32,
+                block_size=16,
             )
         else:
-            quantization_config = RtnConfig(bits=bits, weight_dtype=weight_dtype)
+            quantization_config = RtnConfig(bits=bits, group_size=8)
 
-        model = AutoModelForCausalLM.from_pretrained(model_name)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        quantizer = INCQuantizer.from_pretrained(copy.deepcopy(model), task="text-generation")
-        calibration_dataset = _generate_dataset(quantizer, tokenizer, num_samples=2)
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            quantizer.quantize(
-                quantization_config=quantization_config,
-                calibration_dataset=calibration_dataset,
-                save_directory=tmp_dir,
-            )
-            loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir)
-
         tokens = tokenizer("This is a sample output", return_tensors="pt")
 
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            quantized_model = INCModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
+
+        with torch.no_grad():
+            quantizer_outputs = quantized_model(**tokens)
+        quantized_model.save_pretrained(tmp_dir)
+        loaded_model = INCModelForCausalLM.from_pretrained(tmp_dir)
         with torch.no_grad():
             loaded_outputs = loaded_model(**tokens)
-            # quantizer_outputs = model(**tokens)
 
         self.assertTrue("logits" in loaded_outputs)
         self.assertIsInstance(loaded_outputs.logits, torch.Tensor)
         self.assertTrue("past_key_values" in loaded_outputs)
         self.assertIsInstance(loaded_outputs.past_key_values, tuple)
 
-        # self.assertTrue(torch.allclose(quantizer_outputs.logits, loaded_outputs.logits, equal_nan=True, atol=1e-4))
+        self.assertTrue(torch.allclose(quantizer_outputs.logits, loaded_outputs.logits, equal_nan=True, atol=1e-4))

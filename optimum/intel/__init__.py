@@ -24,6 +24,7 @@ from .utils import (
     is_neural_compressor_available,
     is_nncf_available,
     is_openvino_available,
+    is_sentence_transformers_available,
 )
 from .version import __version__
 
@@ -44,7 +45,6 @@ except OptionalDependencyNotAvailable:
     ]
 else:
     _import_structure["ipex"] = [
-        "inference_mode",
         "IPEXModelForCausalLM",
         "IPEXModelForSequenceClassification",
         "IPEXModelForMaskedLM",
@@ -180,6 +180,21 @@ else:
     _import_structure["neural_compressor"].append("INCStableDiffusionPipeline")
 
 
+try:
+    if not (is_openvino_available() and is_sentence_transformers_available()):
+        raise OptionalDependencyNotAvailable()
+except OptionalDependencyNotAvailable:
+    _import_structure["utils.dummy_openvino_and_sentence_transformers_objects"] = [
+        "OVSentenceTransformer",
+    ]
+else:
+    _import_structure["openvino"].extend(
+        [
+            "OVSentenceTransformer",
+        ]
+    )
+
+
 if TYPE_CHECKING:
     try:
         if not is_ipex_available():
@@ -196,7 +211,6 @@ if TYPE_CHECKING:
             IPEXModelForQuestionAnswering,
             IPEXModelForSequenceClassification,
             IPEXModelForTokenClassification,
-            inference_mode,
         )
 
     try:
@@ -303,6 +317,18 @@ if TYPE_CHECKING:
         from .utils.dummy_neural_compressor_and_diffusers_objects import INCStableDiffusionPipeline
     else:
         from .neural_compressor import INCStableDiffusionPipeline
+
+    try:
+        if not (is_openvino_available() and is_sentence_transformers_available()):
+            raise OptionalDependencyNotAvailable()
+    except OptionalDependencyNotAvailable:
+        from .utils.dummy_openvino_and_sentence_transformers_objects import (
+            OVSentenceTransformer,
+        )
+    else:
+        from .openvino import (
+            OVSentenceTransformer,
+        )
 
 else:
     import sys

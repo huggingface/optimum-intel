@@ -16,7 +16,6 @@ import importlib
 import logging
 import os
 import shutil
-import warnings
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
@@ -79,6 +78,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
     auto_model_class = StableDiffusionPipeline
     config_name = "model_index.json"
     export_feature = "text-to-image"
+    _library_name = "diffusers"
 
     def __init__(
         self,
@@ -210,7 +210,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         cls,
         model_id: Union[str, Path],
         config: Dict[str, Any],
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
@@ -226,15 +225,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
         vae_decoder_file_name = vae_decoder_file_name or default_file_name
         text_encoder_file_name = text_encoder_file_name or default_file_name
@@ -349,7 +339,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         cls,
         model_id: str,
         config: Dict[str, Any],
-        use_auth_token: Optional[Union[bool, str]] = None,
         token: Optional[Union[bool, str]] = None,
         revision: Optional[str] = None,
         force_download: bool = False,
@@ -363,15 +352,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if use_auth_token is not None:
-            warnings.warn(
-                "The `use_auth_token` argument is deprecated and will be removed soon. Please use the `token` argument instead.",
-                FutureWarning,
-            )
-            if token is not None:
-                raise ValueError("You cannot use both `use_auth_token` and `token` arguments at the same time.")
-            token = use_auth_token
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
 
@@ -393,6 +373,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             local_files_only=local_files_only,
             force_download=force_download,
             ov_config=ov_config,
+            library_name=cls._library_name,
         )
 
         return cls._from_pretrained(
@@ -718,7 +699,7 @@ class OVModelVaeDecoder(OVModelPart):
         return list(outputs.values())
 
     def _compile(self):
-        if "GPU" in self._device:
+        if "GPU" in self._device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
         super()._compile()
 
@@ -739,7 +720,7 @@ class OVModelVaeEncoder(OVModelPart):
         return list(outputs.values())
 
     def _compile(self):
-        if "GPU" in self._device:
+        if "GPU" in self._device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
             self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
         super()._compile()
 

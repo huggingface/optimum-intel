@@ -29,7 +29,6 @@ from transformers import (
     ImageToTextPipeline,
     Pipeline,
     PreTrainedTokenizer,
-    PreTrainedTokenizerFast,
     QuestionAnsweringPipeline,
     SummarizationPipeline,
     Text2TextGenerationPipeline,
@@ -49,7 +48,6 @@ from optimum.intel.utils.import_utils import (
     is_ipex_available,
     is_openvino_available,
 )
-from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 
 
 if is_ipex_available():
@@ -229,20 +227,9 @@ def load_openvino_model(
     model_kwargs = model_kwargs or {}
     ov_model_class = SUPPORTED_TASKS[targeted_task]["class"][0]
 
-    if model is None:
-        model_id = SUPPORTED_TASKS[targeted_task]["default"]
-        model = ov_model_class.from_pretrained(model_id, export=True, **hub_kwargs, **model_kwargs)
-    elif isinstance(model, str):
-        model_id = model
-        pattern = r"(.*)?openvino(.*)?\_model.xml"
-        ov_files = _find_files_matching_pattern(
-            model,
-            pattern,
-            use_auth_token=hub_kwargs.get("token", None),
-            revision=hub_kwargs.get("revision", None),
-        )
-        export = len(ov_files) == 0
-        model = ov_model_class.from_pretrained(model, export=export, **hub_kwargs, **model_kwargs)
+    if isinstance(model, str) or model is None:
+        model_id = model or SUPPORTED_TASKS[targeted_task]["default"]
+        model = ov_model_class.from_pretrained(model_id, **hub_kwargs, **model_kwargs)
     elif isinstance(model, OVBaseModel):
         model_id = model.model_save_dir
     else:
