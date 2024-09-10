@@ -12,15 +12,17 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-from typing import Any, Dict, List, Tuple, Union
 import inspect
+from collections import namedtuple
+from typing import Any, Dict, List, Tuple, Union
+
 from transformers.utils import is_torch_available
 
 from openvino.runtime import Dimension, PartialShape, Symbol
 from openvino.runtime.utils.types import get_element_type
-from optimum.utils import is_diffusers_available
 from optimum.exporters.onnx.base import OnnxConfig
-from collections import namedtuple
+from optimum.utils import is_diffusers_available
+
 
 InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
 

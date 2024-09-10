@@ -14,7 +14,6 @@
 
 import functools
 import gc
-import inspect
 import logging
 import os
 from pathlib import Path
@@ -23,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Un
 import onnx
 from transformers.utils import is_tf_available, is_torch_available
 
-from openvino.runtime import Model, PartialShape, save_model
+from openvino.runtime import Model, save_model
 from openvino.runtime.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters import TasksManager
