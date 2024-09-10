@@ -375,7 +375,7 @@ def export_pytorch(
                 ov_model = convert_model(
                     model,
                     example_input=dummy_inputs,
-                    input=list(map(lambda item: (item.shape, item.type), input_info)),
+                    input=[(item.shape, item.type) for item in input_info],
                 )
 
         except Exception as ex:
@@ -414,7 +414,7 @@ def export_pytorch(
             if idx < len(output_names):
                 out_tensor.get_tensor().set_names({output_names[idx]})
 
-        input_names = list(map(lambda item: item.name, input_info))
+        input_names = [item.name for item in input_info]
         for idx, inp_tensor in enumerate(ov_model.inputs):
             input_name = input_names[idx]
             inp_tensor.get_tensor().set_names({input_name})

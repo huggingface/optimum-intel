@@ -86,9 +86,9 @@ def get_input_info(
         ordered_dummy_inputs = dummy_inputs
     ordered_input_names = list(inputs)
     flatten_inputs = flattenize_inputs(ordered_dummy_inputs.values())
-    input_info = list()
+    input_info = []
 
-    name_to_symbol = dict()
+    name_to_symbol = {}
 
     for i in range(len(ordered_input_names)):
         name = ordered_input_names[i]
