@@ -76,7 +76,7 @@ def flattenize_inputs(inputs: List[Any]):
     return flatten_inputs
 
 
-def get_input_info(
+def _get_input_info(
     model: Union["PreTrainedModel", "ModelMixin"], config: OnnxConfig, dummy_inputs: Dict[str, Any]
 ) -> List[InputInfo]:
     sig = inspect.signature(model.forward) if hasattr(model, "forward") else inspect.signature(model.call)

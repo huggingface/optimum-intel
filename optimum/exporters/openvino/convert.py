@@ -48,8 +48,8 @@ from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_export_task_support_stateful, ensure_stateful_is_available, patch_stateful
 from .utils import (
     OV_XML_FILE_NAME,
+    _get_input_info,
     clear_class_registry,
-    get_input_info,
     remove_none_from_dummy_inputs,
 )
 
@@ -371,7 +371,7 @@ def export_pytorch(
 
                     __make_16bit_traceable(model)
                 check_dummy_inputs_are_allowed(model, dummy_inputs)
-                input_info = get_input_info(model, config, dummy_inputs)
+                input_info = _get_input_info(model, config, dummy_inputs)
                 ov_model = convert_model(
                     model,
                     example_input=dummy_inputs,
