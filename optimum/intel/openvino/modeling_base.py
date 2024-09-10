@@ -85,9 +85,9 @@ class OVBaseModel(OptimizedModel):
         for idx, key in enumerate(model.inputs):
             names = tuple(key.get_names())
             input_names[next((name for name in names if "/" not in name), names[0])] = idx
-            input_dtypes[
-                next((name for name in names if "/" not in name), names[0])
-            ] = key.get_element_type().get_type_name()
+            input_dtypes[next((name for name in names if "/" not in name), names[0])] = (
+                key.get_element_type().get_type_name()
+            )
         self.input_names = input_names
         self.input_dtypes = input_dtypes
 
@@ -96,9 +96,9 @@ class OVBaseModel(OptimizedModel):
         for idx, key in enumerate(model.outputs):
             names = tuple(key.get_names())
             output_names[next((name for name in names if "/" not in name), names[0])] = idx
-            output_dtypes[
-                next((name for name in names if "/" not in name), names[0])
-            ] = key.get_element_type().get_type_name()
+            output_dtypes[next((name for name in names if "/" not in name), names[0])] = (
+                key.get_element_type().get_type_name()
+            )
 
         self.output_names = output_names
         self.output_dtypes = output_dtypes
