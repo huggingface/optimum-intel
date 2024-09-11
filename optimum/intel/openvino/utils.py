@@ -23,8 +23,9 @@ from typing import Tuple, Type, Union
 import numpy as np
 import torch
 from huggingface_hub import model_info
-from openvino.runtime import Core, properties
+from openvino.runtime import Core, Model, properties
 from openvino.runtime import Type as OVType
+from packaging.version import Version
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
@@ -201,3 +202,17 @@ def _print_compiled_model_properties(compiled_model):
             logger.info(f"  {device}: {Core().get_property(device, 'FULL_DEVICE_NAME')}")
     except Exception:
         logger.error("[error] Get FULL_DEVICE_NAME failed")
+
+
+def get_export_transformers_version(model, config):
+    version_str = None
+
+    if isinstance(model, Model):
+        if "optimum" in model.rt_info:
+            version_str = model.rt_info["optimum"]["transformers_version"].value
+    if version_str is None:
+        version_str = getattr(config, "transformers_version", "0.0.0")
+
+    version_str = version_str or "0.0.0"
+
+    return Version(version_str)
