@@ -213,9 +213,7 @@ class OVTrainer(Trainer):
         ov_config: Optional[OVConfig] = None,
         task: Optional[str] = None,
     ):
-        logger.warning(
-            "OVTrainer is deprecated and will be removed in optimum-intel v1.22.0. "
-        )
+        logger.warning("OVTrainer is deprecated and will be removed in optimum-intel v1.22.0.")
 
         self.neftune_noise_alpha = None
 
