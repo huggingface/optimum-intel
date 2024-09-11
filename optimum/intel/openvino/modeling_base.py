@@ -241,7 +241,7 @@ class OVBaseModel(OptimizedModel):
 
         if self.compile_only:
             raise ValueError(
-                "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`save_pretrained()` is not supported with `compile_only=True` mode, to save your model please initialize your model with compile_only=False"
             )
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(self.model, dst_path, compress_to_fp16=False)
@@ -681,7 +681,7 @@ class OVBaseModel(OptimizedModel):
         """
         if self.compile_only:
             raise ValueError(
-                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+                "`half()` is not supported with `compile_only=True` mode, to use this option please initialize your model with compile_only=False"
             )
         apply_moc_transformations(self.model, cf=False)
         compress_model_transformation(self.model)

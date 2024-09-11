@@ -240,10 +240,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     decoder_with_past = cls.load_model(file_names["decoder_with_past"], quantization_config)
             else:
                 encoder = cls._compile_model(
-                    file_names["encoder"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), True, model_save_dir
+                    file_names["encoder"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_save_dir
                 )
                 decoder = cls._compile_model(
-                    file_names["decoder"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), True, model_save_dir
+                    file_names["decoder"], kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_save_dir
                 )
                 if use_cache:
                     decoder_with_past = cls._compile_model(
