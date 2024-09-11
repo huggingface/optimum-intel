@@ -46,7 +46,14 @@ from .configuration import (
     get_default_int4_config,
 )
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, STR_TO_OV_TYPE, get_export_transformers_version
+from .utils import (
+    ONNX_WEIGHTS_NAME,
+    OV_TO_NP_TYPE,
+    OV_XML_FILE_NAME,
+    STR_TO_OV_TYPE,
+    get_export_transformers_version,
+    model_has_dynamic_inputs,
+)
 
 
 if TYPE_CHECKING:
@@ -120,7 +127,7 @@ class OVBaseDecoderModel(OVModel):
             model,
             config,
             device=device,
-            dynamic_shapes=False,
+            dynamic_shapes=False if not compile_only else model_has_dynamic_inputs(model),
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
