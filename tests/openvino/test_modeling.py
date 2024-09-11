@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict
 
 import numpy as np
+import openvino as ov
 import pytest
 import requests
 import timm
@@ -139,11 +140,27 @@ class OVModelIntegrationTest(unittest.TestCase):
         ov_config = {"CACHE_DIR": str(manual_openvino_cache_dir), "PERFORMANCE_HINT": "THROUGHPUT"}
         loaded_model = OVModelForSequenceClassification.from_pretrained(self.OV_MODEL_ID, ov_config=ov_config)
         self.assertTrue(manual_openvino_cache_dir.is_dir())
-        self.assertGreaterEqual(len(list(manual_openvino_cache_dir.glob("*.blob"))), 1)
+        num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
+        self.assertGreaterEqual(num_blobs, 1)
         if is_openvino_version("<", "2023.3"):
             self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT").name, "THROUGHPUT")
         else:
             self.assertEqual(loaded_model.request.get_property("PERFORMANCE_HINT"), "THROUGHPUT")
+
+        # Test compile only
+
+        compile_only_model = OVModelForSequenceClassification.from_pretrained(
+            self.OV_MODEL_ID, ov_config=ov_config, compile_only=True
+        )
+        self.assertTrue(manual_openvino_cache_dir.is_dir())
+        current_num_blobs = len(list(manual_openvino_cache_dir.glob("*.blob")))
+        # compile_only get model from cache
+        self.assertGreaterEqual(current_num_blobs, num_blobs)
+        self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
+        self.assertIsInstance(compile_only_model.request, ov.runtime.CompiledModel)
+        outputs = compile_only_model(**tokens)
+        self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+        del compile_only_model
 
         with tempfile.TemporaryDirectory() as tmpdirname:
             loaded_model.save_pretrained(tmpdirname)
@@ -182,6 +199,13 @@ class OVModelIntegrationTest(unittest.TestCase):
             model = OVModelForCausalLM.from_pretrained(tmpdirname, use_cache=use_cache)
             self.assertEqual(model.use_cache, use_cache)
 
+            compile_only_model = OVModelForCausalLM.from_pretrained(tmpdirname, compile_only=True, use_cache=use_cache)
+            self.assertIsInstance(compile_only_model.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.request, ov.runtime.InferRequest)
+            outputs = compile_only_model(**tokens)
+            self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
+            del compile_only_model
+
         outputs = model(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs.logits, outputs.logits))
         del loaded_model
@@ -208,6 +232,14 @@ class OVModelIntegrationTest(unittest.TestCase):
             self.assertTrue(OV_DECODER_NAME in folder_contents)
             self.assertTrue(OV_DECODER_WITH_PAST_NAME in folder_contents)
             model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, device="cpu")
+            # compile only
+            compile_only_model = OVModelForSeq2SeqLM.from_pretrained(tmpdirname, compile_only=True)
+            self.assertIsInstance(compile_only_model.encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.decoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_model.decoder_with_past.model, ov.runtime.CompiledModel)
+            outputs = compile_only_model.generate(**tokens)
+            self.assertTrue(torch.equal(loaded_model_outputs, outputs))
+            del compile_only_model
 
         outputs = model.generate(**tokens)
         self.assertTrue(torch.equal(loaded_model_outputs, outputs))
@@ -248,6 +280,17 @@ class OVModelIntegrationTest(unittest.TestCase):
                 folder_contents = os.listdir(os.path.join(tmpdirname, subfoler))
                 self.assertIn(OV_XML_FILE_NAME, folder_contents)
                 self.assertIn(OV_XML_FILE_NAME.replace(".xml", ".bin"), folder_contents)
+
+            compile_only_pipeline = OVStableDiffusionPipeline.from_pretrained(tmpdirname, compile_only=True)
+            self.assertIsInstance(compile_only_pipeline.unet.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.text_encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_encoder.model, ov.runtime.CompiledModel)
+            self.assertIsInstance(compile_only_pipeline.vae_decoder.model, ov.runtime.CompiledModel)
+            np.random.seed(0)
+            outputs = compile_only_pipeline(**inputs).images
+            self.assertTrue(np.array_equal(pipeline_outputs, outputs))
+            del compile_only_pipeline
+
         np.random.seed(0)
         outputs = pipeline(**inputs).images
         self.assertTrue(np.array_equal(pipeline_outputs, outputs))

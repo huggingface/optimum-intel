@@ -134,6 +134,11 @@ class OVModel(OVBaseModel):
         Use the specified `device` for inference. For example: "cpu" or "gpu". `device` can
         be in upper or lower case. To speed up first inference, call `.compile()` after `.to()`.
         """
+        if self._compile_only and isinstance(device, str):
+            raise ValueError(
+                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
         if isinstance(device, str):
             self._device = device.upper()
             self.request = None
@@ -435,6 +440,14 @@ class OVModelForFeatureExtraction(OVModel):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
+        compile_only = kwargs.get("compile_only", False)
+        if compile_only:
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
+            compile_only = False
+
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
@@ -469,6 +482,7 @@ class OVModelForFeatureExtraction(OVModel):
             config=config,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
+            compile_only=compile_only,
             **kwargs,
         )
 

@@ -24,7 +24,6 @@ import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino.preprocess import PrePostProcessor
 from openvino.runtime import Core, Tensor, Type
-from packaging.version import Version
 from transformers import AutoModelForCausalLM, PretrainedConfig
 from transformers.file_utils import add_start_docstrings, add_start_docstrings_to_model_forward
 from transformers.generation import GenerationMixin
@@ -47,7 +46,14 @@ from .configuration import (
     get_default_int4_config,
 )
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
-from .utils import ONNX_WEIGHTS_NAME, OV_TO_NP_TYPE, OV_XML_FILE_NAME, STR_TO_OV_TYPE
+from .utils import (
+    ONNX_WEIGHTS_NAME,
+    OV_TO_NP_TYPE,
+    OV_XML_FILE_NAME,
+    STR_TO_OV_TYPE,
+    get_export_transformers_version,
+    model_has_dynamic_inputs,
+)
 
 
 if TYPE_CHECKING:
@@ -108,14 +114,20 @@ class OVBaseDecoderModel(OVModel):
                 "`dynamic_shapes` was set to `False` but static shapes are not supported for causal language model. Please set `dynamic_shapes=True`."
             )
 
+        compile_only = kwargs.get("compile_only", False)
         enable_compilation = kwargs.get("compile", True)
-        kwargs["compile"] = False  # avoid extra compilation in the base class
+        kwargs["compile"] = False or compile_only  # avoid extra compilation in the base class
+        if compile_only and not enable_compilation:
+            raise ValueError(
+                "`compile_only` mode does not support disabling compilation."
+                "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
+            )
 
         super().__init__(
             model,
             config,
             device=device,
-            dynamic_shapes=False,
+            dynamic_shapes=False if not compile_only else model_has_dynamic_inputs(model),
             ov_config=ov_config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
@@ -131,14 +143,16 @@ class OVBaseDecoderModel(OVModel):
         self.num_pkv = 2
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
         self.key_value_output_names = [key for key in self.output_names if "present" in key]
-        self._original_model = self.model.clone()  # keep original model for serialization
+        self._original_model = (
+            self.model.clone() if not compile_only else None
+        )  # keep original model for serialization
         self._pkv_precision = Type.f32
         self.next_beam_idx = None
         self._past_length = 0
         self._first_iter_beam_search = False
         self._second_iter_beam_search = False
         self.update_pkv_precision()
-        if self.is_dynamic:
+        if self.is_dynamic and not self._compile_only:
             self.model = self._reshape(self.model, -1, -1)
         is_stateful_supported = ensure_stateful_is_available(warn=False)
 
@@ -175,11 +189,14 @@ class OVBaseDecoderModel(OVModel):
         if use_cache ^ self.use_cache:
             raise_error(self.use_cache, use_cache, "use_cache")
 
-        if enable_compilation:
+        if self._compile_only:
+            self.request = self.model.create_infer_request()
+
+        if not self._compile_only and enable_compilation:
             self.compile()
 
     def update_pkv_precision(self, force_fp32=False):
-        if not self.use_cache or self.stateful:
+        if not self.use_cache or self.stateful or self._compile_only:
             return
 
         pkv_precision = Type.f32
@@ -224,6 +241,11 @@ class OVBaseDecoderModel(OVModel):
             save_directory (`str` or `Path`):
                 The directory where to save the model files.
         """
+
+        if self._compile_only:
+            raise ValueError(
+                "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
         model_to_save = self.model if self._pkv_precision == Type.f32 else self._original_model
         dst_path = os.path.join(save_directory, OV_XML_FILE_NAME)
         openvino.save_model(model_to_save, dst_path, compress_to_fp16=False)
@@ -261,6 +283,14 @@ class OVBaseDecoderModel(OVModel):
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
         cls._model_save_dir_tempdirectory_instance = save_dir
+
+        compile_only = kwargs.pop("compile_only", False)
+        if compile_only:
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
+            compile_only = False
 
         if task is None:
             task = cls.export_feature
@@ -310,6 +340,7 @@ class OVBaseDecoderModel(OVModel):
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
             trust_remote_code=trust_remote_code,
+            compile_only=compile_only,
             **kwargs,
         )
 
@@ -321,6 +352,11 @@ class OVBaseDecoderModel(OVModel):
         height: int = None,
         width: int = None,
     ):
+        if self._compile_only:
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
         if height is not None:
             logger.warning(f"`height` set to `{height}` will be ignored during reshaping operation.")
 
@@ -359,6 +395,8 @@ class OVBaseDecoderModel(OVModel):
 
     def compile(self):
         if self.request is None:
+            if self._compile_only:
+                self.request = self.model.create_infer_request()
             super().compile()
             self.request = self.request.create_infer_request()
 
@@ -395,9 +433,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         **kwargs,
     ) -> Dict:
         batch_size = input_ids.shape[0]
-        model_transformers_version = Version(
-            self.model.rt_info["optimum"]["transformers_version"].value if "optimum" in self.model.rt_info else "0.0.0"
-        )
+        model_transformers_version = get_export_transformers_version(self.model, self.config)
         if self.config.model_type == "bloom" and compare_versions(model_transformers_version, "<", "4.44"):
             batch_size *= self.config.num_attention_heads
 
@@ -605,6 +641,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         unique_input_ids, indicies, reverse_indicies = np.unique(
             input_ids, axis=0, return_index=True, return_inverse=True
         )
+        export_transformers_version = get_export_transformers_version(self.model, self.config)
         for input_name, input_tensor in model_inputs.items():
             if input_name not in ["input_ids", "beam_idx"]:
                 if input_name not in self.key_value_input_names:
@@ -613,7 +650,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     shape = input_tensor.shape if isinstance(input_tensor, Tensor) else list(input_tensor.shape)
                     dtype = input_tensor.element_type if isinstance(input_tensor, Tensor) else Type(input_tensor.dtype)
                     upd_batch_size = indicies.shape[0]
-                    export_transformers_version = Version(self.model.rt_info["optimum"]["transformers_version"].value)
                     if self.config.model_type == "bloom" and compare_versions(
                         export_transformers_version, "<", "4.44"
                     ):
@@ -628,7 +664,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                     upd_model_inputs[input_name] = Tensor(dtype, shape)
         upd_model_inputs["input_ids"] = unique_input_ids
         if "beam_idx" in model_inputs:
-            export_transformers_version = Version(self.model.rt_info["optimum"]["transformers_version"].value)
             beam_range = (
                 unique_input_ids.shape[0] * self.config.num_attention_heads
                 if (self.config.model_type == "bloom" and compare_versions(export_transformers_version, "<", "4.44"))
@@ -748,6 +783,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         from_onnx: bool = False,
         local_files_only: bool = False,
         load_in_8bit: bool = False,
+        compile_only: bool = False,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
@@ -766,12 +802,15 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             local_files_only=local_files_only,
         )
 
-        model = cls.load_model(model_cache_path)
+        if not compile_only:
+            model = cls.load_model(model_cache_path)
+        else:
+            model = cls._compile_model(
+                model_cache_path, kwargs.get("device", "CPU"), kwargs.get("ov_config"), model_cache_path.parent
+            )
 
         model_type = config.model_type.replace("_", "-")
-        export_transformers_version = Version(
-            model.rt_info["optimum"]["transformers_version"].value if "optimum" in model.rt_info else "0.0.0"
-        )
+        export_transformers_version = get_export_transformers_version(model, config)
         if model_type == "bloom" and compare_versions(export_transformers_version, "<", "4.44"):
             init_cls = OVBloomForCausalLM
         elif model_type == "gpt-bigcode":
@@ -808,6 +847,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             config=config,
             model_save_dir=model_cache_path.parent,
             compile=enable_compilation,
+            compile_only=compile_only,
             quantization_config=quantization_config,
             **kwargs,
         )
@@ -816,6 +856,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             if not is_nncf_available():
                 raise ImportError(
                     "Quantization of the weights requires nncf, please install it with `pip install nncf`"
+                )
+
+            if compile_only:
+                raise ValueError(
+                    "quantization is not supported with `compile_only` mode, please intialize model without this option"
                 )
 
             from optimum.intel.openvino.quantization import OVQuantizer
