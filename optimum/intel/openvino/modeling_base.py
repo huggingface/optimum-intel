@@ -82,7 +82,7 @@ class OVBaseModel(OptimizedModel):
                 "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
             )
 
-        if self.compile_only and not isinstance(self.model, CompiledModel):
+        if self.compile_only and not isinstance(model, CompiledModel):
             raise ValueError("`compile_only` expect that already compiled model will be provided")
 
         if self.is_dynamic and not self.compile_only:
@@ -207,14 +207,16 @@ class OVBaseModel(OptimizedModel):
         model_save_dir: Union[str, Path] = None,
     ):
         logger.info(f"Compiling the model to {device} ...")
-        if isinstance(file_name, str):
-            file_name = Path(file_name)
+        if isinstance(model, str):
+            model = Path(model)
         ov_config = ov_config or {}
 
-        if model_save_dir is None:
-            model_save_dir = file_name.parent
+        if model_save_dir is None and isinstance(model, Path):
+            model_save_dir = model.parent
         if "CACHE_DIR" not in ov_config.keys() and (
-            not str(model_save_dir).startswith(gettempdir()) and (device is not None and "gpu" in device.lower())
+            model_save_dir is not None
+            and not str(model_save_dir).startswith(gettempdir())
+            and (device is not None and "gpu" in device.lower())
         ):
             # Set default CACHE_DIR only if it is not set, if the model is not in a temporary directory, and device is GPU
             cache_dir = Path(model_save_dir).joinpath("model_cache")

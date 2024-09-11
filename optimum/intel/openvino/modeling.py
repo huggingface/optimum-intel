@@ -440,6 +440,7 @@ class OVModelForFeatureExtraction(OVModel):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
+        compile_only = kwargs.get("compile_only", False)
         if compile_only:
             logger.warning(
                 "`compile_only` mode will be disabled because it does not support model export."

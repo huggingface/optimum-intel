@@ -314,7 +314,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             vae_ov_conifg = {**ov_config}
             if "GPU" in device.upper() and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg:
                 vae_ov_conifg["INFERENCE_PRECISION_HINT"] = "f32"
-            unet = cls._compile_model(unet_path, device, ov_config, True, Path(model_save_dir) / "unet")
+            unet = cls._compile_model(unet_path, device, ov_config, Path(model_save_dir) / "unet")
             for key, value in components.items():
                 components[key] = (
                     cls._compile_model(
