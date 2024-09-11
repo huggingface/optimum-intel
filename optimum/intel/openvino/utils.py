@@ -216,3 +216,12 @@ def get_export_transformers_version(model, config):
     version_str = version_str or "0.0.0"
 
     return Version(version_str)
+
+
+def model_has_dynamic_inputs(model):
+    is_dynamic = False
+    for input in model.inputs:
+        is_dynamic = input.get_partial_shape().is_dynamic
+        if is_dynamic:
+            return is_dynamic
+    return is_dynamic

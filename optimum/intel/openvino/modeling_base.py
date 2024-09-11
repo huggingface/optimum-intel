@@ -37,7 +37,13 @@ from ...exporters.openvino import export, main_export
 from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
-from .utils import ONNX_WEIGHTS_NAME, OV_TO_PT_TYPE, OV_XML_FILE_NAME, _print_compiled_model_properties
+from .utils import (
+    ONNX_WEIGHTS_NAME,
+    OV_TO_PT_TYPE,
+    OV_XML_FILE_NAME,
+    _print_compiled_model_properties,
+    model_has_dynamic_inputs,
+)
 
 
 core = Core()
@@ -73,19 +79,26 @@ class OVBaseModel(OptimizedModel):
         self.is_dynamic = dynamic_shapes
         self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
-        self.compile_only = kwargs.get("compile_only", False)
+        self._compile_only = kwargs.get("compile_only", False)
         enable_compilation = kwargs.get("compile", True)
 
-        if self.compile_only and not enable_compilation:
-            raise ValueError(
-                "`compile_only` mode does not support disabling compilation."
-                "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
-            )
+        if self._compile_only:
+            if not enable_compilation:
+                raise ValueError(
+                    "`compile_only` mode does not support disabling compilation."
+                    "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
+                )
 
-        if self.compile_only and not isinstance(model, CompiledModel):
-            raise ValueError("`compile_only` expect that already compiled model will be provided")
+            if not isinstance(model, CompiledModel):
+                raise ValueError("`compile_only` expect that already compiled model will be provided")
 
-        if self.is_dynamic and not self.compile_only:
+            model_dynamic_shapes = model_has_dynamic_inputs(model)
+            if dynamic_shapes ^ model_dynamic_shapes:
+                raise ValueError(
+                    f"Provided compiled model with {'dynamic' if model_dynamic_shapes else 'static'} shapes but requested to use {'dynamic' if dynamic_shapes else 'static'}. Please set `compile_only=False` or `dynamic_shapes`={model_dynamic_shapes}"
+                )
+
+        if self.is_dynamic and not self._compile_only:
             height = -1 if self.export_feature == "image-classification" else None
             width = -1 if self.export_feature == "image-classification" else None
             model = self._reshape(model, -1, -1, height, width)
@@ -114,7 +127,7 @@ class OVBaseModel(OptimizedModel):
         self.output_dtypes = output_dtypes
 
         self.model = model
-        self.request = None if not self.compile_only else self.model
+        self.request = None if not self._compile_only else self.model
         if self.can_generate():
             self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
         else:
@@ -125,7 +138,7 @@ class OVBaseModel(OptimizedModel):
             self._openvino_config = OVConfig(quantization_config=quantization_config)
         self._set_ov_config_parameters()
 
-        if not self.compile_only and enable_compilation:
+        if not self._compile_only and enable_compilation:
             self.compile()
 
     @property
@@ -239,7 +252,7 @@ class OVBaseModel(OptimizedModel):
                 The directory where to save the model files.
         """
 
-        if self.compile_only:
+        if self._compile_only:
             raise ValueError(
                 "`save_pretrained()` is not supported with `compile_only=True` mode, to save your model please initialize your model with compile_only=False"
             )
@@ -665,7 +678,7 @@ class OVBaseModel(OptimizedModel):
             width (`int`, *optional*):
                 The image width.
         """
-        if self.compile_only:
+        if self._compile_only:
             raise ValueError(
                 "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
             )
@@ -679,7 +692,7 @@ class OVBaseModel(OptimizedModel):
         """
         Converts all the model weights to FP16
         """
-        if self.compile_only:
+        if self._compile_only:
             raise ValueError(
                 "`half()` is not supported with `compile_only=True` mode, to use this option please initialize your model with compile_only=False"
             )

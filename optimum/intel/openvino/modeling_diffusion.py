@@ -105,7 +105,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self.ov_config = {} if ov_config is None else {**ov_config}
-        self.compile_only = kwargs.get("compile_only", False)
+        self._compile_only = kwargs.get("compile_only", False)
 
         # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
         # would end-up removing the directory containing the underlying OpenVINO model
@@ -142,7 +142,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         self.safety_checker = safety_checker
         self.preprocessors = []
 
-        if self.is_dynamic and not self.compile_only:
+        if self.is_dynamic and not self._compile_only:
             self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
 
         sub_models = {
@@ -164,7 +164,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             self._openvino_config = OVConfig(quantization_config=quantization_config)
         self._set_ov_config_parameters()
 
-        if compile and not self.compile_only:
+        if compile and not self._compile_only:
             self.compile()
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
@@ -176,7 +176,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             save_directory (`str` or `Path`):
                 The directory where to save the model files
         """
-        if self.compile_only:
+        if self._compile_only:
             raise ValueError(
                 "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
             )
@@ -428,7 +428,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         )
 
     def to(self, device: str):
-        if self.compile_only and not isinstance(device, str):
+        if self._compile_only and not isinstance(device, str):
             raise ValueError(
                 "`to()` is not supported with `compile_only` mode, please intialize model without this option"
             )
@@ -554,7 +554,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         width: int,
         num_images_per_prompt: int = -1,
     ):
-        if self.compile_only:
+        if self._compile_only:
             raise ValueError(
                 "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
             )
@@ -591,7 +591,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        if self.compile_only:
+        if self._compile_only:
             raise ValueError(
                 "`half()` is not supported with `compile_only` mode, please intialize model without this option"
             )
@@ -605,7 +605,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         return self
 
     def clear_requests(self):
-        if self.compile_only:
+        if self._compile_only:
             raise ValueError(
                 "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
             )
@@ -650,8 +650,8 @@ class OVModelPart:
             for inputs in self.model.inputs
         }
         self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self.compile_only = parent_model.compile_only
-        self.request = None if not self.compile_only else self.model
+        self._compile_only = parent_model.compile_only
+        self.request = None if not self._compile_only else self.model
         self._model_name = model_name
         self._model_dir = Path(model_dir or parent_model._model_save_dir)
         config_path = self._model_dir / model_name / self.CONFIG_NAME

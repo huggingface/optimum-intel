@@ -342,7 +342,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             pass
 
     def to(self, device: str):
-        if self.compile_only and isinstance(device, str):
+        if self._compile_only and isinstance(device, str):
             raise ValueError(
                 "`to()` is not supported with `compile_only` mode, please intialize model without this option"
             )
@@ -449,7 +449,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
             sequence_length (`int`):
                 The sequence length.
         """
-        if self.compile_only:
+        if self._compile_only:
             raise ValueError(
                 "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
             )
@@ -466,7 +466,7 @@ class OVModelForSeq2SeqLM(OVBaseModelForSeq2SeqLM, GenerationMixin):
         return self
 
     def clear_requests(self):
-        if self.compile_only:
+        if self._compile_only:
             raise ValueError(
                 "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
             )
@@ -582,7 +582,7 @@ class OVDecoder:
     def __init__(self, model: openvino.runtime.Model, parent_model: OVModelForSeq2SeqLM):
         self.model = model
         self.parent_model = parent_model
-        self.compile_only = parent_model.compile_only
+        self._compile_only = parent_model.compile_only
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
         self.input_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.inputs}
         self.key_value_input_names = [key for key in self.input_names if "key_values" in key]
@@ -598,7 +598,7 @@ class OVDecoder:
             self.use_past = False
             self.num_pkv = 4
 
-        self.request = None if not self.compile_only else self.model.create_infer_request()
+        self.request = None if not self._compile_only else self.model.create_infer_request()
 
     @property
     def _device(self) -> str:

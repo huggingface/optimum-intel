@@ -145,7 +145,7 @@ class OVBaseDecoderModel(OVModel):
         self._first_iter_beam_search = False
         self._second_iter_beam_search = False
         self.update_pkv_precision()
-        if self.is_dynamic and not self.compile_only:
+        if self.is_dynamic and not self._compile_only:
             self.model = self._reshape(self.model, -1, -1)
         is_stateful_supported = ensure_stateful_is_available(warn=False)
 
@@ -182,14 +182,14 @@ class OVBaseDecoderModel(OVModel):
         if use_cache ^ self.use_cache:
             raise_error(self.use_cache, use_cache, "use_cache")
 
-        if self.compile_only:
+        if self._compile_only:
             self.request = self.model.create_infer_request()
 
-        if not self.compile_only and enable_compilation:
+        if not self._compile_only and enable_compilation:
             self.compile()
 
     def update_pkv_precision(self, force_fp32=False):
-        if not self.use_cache or self.stateful or self.compile_only:
+        if not self.use_cache or self.stateful or self._compile_only:
             return
 
         pkv_precision = Type.f32
@@ -235,7 +235,7 @@ class OVBaseDecoderModel(OVModel):
                 The directory where to save the model files.
         """
 
-        if self.compile_only:
+        if self._compile_only:
             raise ValueError(
                 "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
             )
@@ -345,7 +345,7 @@ class OVBaseDecoderModel(OVModel):
         height: int = None,
         width: int = None,
     ):
-        if self.compile_only:
+        if self._compile_only:
             raise ValueError(
                 "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
             )
@@ -388,7 +388,7 @@ class OVBaseDecoderModel(OVModel):
 
     def compile(self):
         if self.request is None:
-            if self.compile_only:
+            if self._compile_only:
                 self.request = self.model.create_infer_request()
             super().compile()
             self.request = self.request.create_infer_request()
