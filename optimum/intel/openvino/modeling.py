@@ -15,8 +15,7 @@
 import logging
 import os
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Dict, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 import openvino
@@ -53,9 +52,7 @@ from transformers.modeling_outputs import (
 
 from optimum.exporters import TasksManager
 
-from ...exporters.openvino import main_export
 from ..utils.import_utils import is_timm_available, is_timm_version
-from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import _is_timm_ov_dir
 
