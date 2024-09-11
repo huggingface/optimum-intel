@@ -214,7 +214,7 @@ class OVTrainer(Trainer):
         task: Optional[str] = None,
     ):
         logger.warning(
-            "Quantization aware training capabilities are deprecated and will be removed in optimum-intel v1.19.0. "
+            "OVTrainer is deprecated and will be removed in optimum-intel v1.22.0. "
         )
 
         self.neftune_noise_alpha = None
