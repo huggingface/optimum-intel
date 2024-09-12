@@ -19,21 +19,25 @@ limitations under the License.
 
 🤗 Optimum Intel is the interface between the 🤗 Transformers and Diffusers libraries and the different tools and libraries provided by Intel to accelerate end-to-end pipelines on Intel architectures.
 
-[Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/#introduction) (IPEX) is an open-source library which provides optimizations for both eager mode and graph mode, however, compared to eager mode, graph mode in PyTorch* normally yields better performance from optimization techniques, such as operation fusion.
-
 [Intel Neural Compressor](https://www.intel.com/content/www/us/en/developer/tools/oneapi/neural-compressor.html) is an open-source library enabling the usage of the most popular compression techniques such as quantization, pruning and knowledge distillation. It supports automatic accuracy-driven tuning strategies in order for users to easily generate quantized model. The users can easily apply static, dynamic and aware-training quantization approaches while giving an expected accuracy criteria. It also supports different weight pruning techniques enabling the creation of pruned model giving a predefined sparsity target.
 
 [OpenVINO](https://docs.openvino.ai) is an open-source toolkit that enables high performance inference capabilities for Intel CPUs, GPUs, and special DL inference accelerators ([see](https://docs.openvino.ai/2024/about-openvino/compatibility-and-support/supported-devices.html) the full list of supported devices). It is supplied with a set of tools to optimize your models with compression techniques such as quantization, pruning and knowledge distillation. Optimum Intel provides a simple interface to optimize your Transformers and Diffusers models, convert them to the OpenVINO Intermediate Representation (IR) format and run inference using OpenVINO Runtime.
 
+[Intel Extension for PyTorch](https://intel.github.io/intel-extension-for-pytorch/#introduction) (IPEX) is an open-source library which provides optimizations for both eager mode and graph mode, however, compared to eager mode, graph mode in PyTorch* normally yields better performance from optimization techniques, such as operation fusion.
+
 <div class="mt-10">
-  <div class="w-full flex flex-col space-x-4 md:grid md:grid-cols-2 md:gap-x-5">
+  <div class="w-full flex flex-col space-x-4 md:grid md:grid-cols-3 md:gap-x-5">
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="neural_compressor/optimization"
       ><div class="w-full text-center bg-gradient-to-br from-blue-400 to-blue-500 rounded-lg py-1.5 font-semibold mb-5 text-white text-lg leading-relaxed">Neural Compressor</div>
-      <p class="text-gray-700">Learn how to apply compression techniques such as quantization, pruning and knowledge distillation to speed up inference with Intel Neural Compressor.</p>
+      <p class="text-gray-700">Learn how to apply compression techniques such as quantization, pruning and knowledge distillation to speed up inference.</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="openvino/export"
       ><div class="w-full text-center bg-gradient-to-br from-purple-400 to-purple-500 rounded-lg py-1.5 font-semibold mb-5 text-white text-lg leading-relaxed">OpenVINO</div>
-      <p class="text-gray-700">Learn how to run inference with OpenVINO Runtime and to apply quantization, pruning and knowledge distillation on your model to further speed up inference.</p>
+      <p class="text-gray-700">Learn how to run inference with OpenVINO Runtime and to apply quantization to further speed up inference.</p>
+    </a>
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="ipex/inference"
+      ><div class="w-full text-center bg-gradient-to-br from-indigo-400 to-indigo-500 rounded-lg py-1.5 font-semibold mb-5 text-white text-lg leading-relaxed">IPEX</div>
+      <p class="text-gray-700">Learn how to optimize your model with IPEX.</p>
     </a>
   </div>
 </div>
