@@ -282,10 +282,7 @@ class OVBaseModel(OptimizedModel):
         Saves a model configuration into a directory, so that it can be re-loaded using the
         [`from_pretrained`] class method.
         """
-        try:
-            self.config.save_pretrained(save_directory)
-        except Exception:
-            save_config(save_directory, self.config)
+        save_config(save_directory, self.config)
 
     @classmethod
     def _from_pretrained(
@@ -592,10 +589,7 @@ class OVBaseModel(OptimizedModel):
             ov_config=ov_config,
             library_name=cls._library_name,
         )
-        try:
-            config.save_pretrained(save_dir_path)
-        except Exception:
-            save_config(save_dir_path, config)
+        save_config(save_dir_path, config)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,

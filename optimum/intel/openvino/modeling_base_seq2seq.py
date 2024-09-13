@@ -352,11 +352,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
         )
-
-        try:
-            config.save_pretrained(save_dir_path)
-        except Exception:
-            save_config(config)
+        save_config(save_dir_path, config)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,

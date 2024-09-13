@@ -611,10 +611,7 @@ def export_from_model(
 
     if library_name != "diffusers":
         # Saving the model config and preprocessor as this is needed sometimes.
-        try:
-            model.config.save_pretrained(output)
-        except Exception:
-            save_config(output, model.config)
+        save_config(output, model.config)
 
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:

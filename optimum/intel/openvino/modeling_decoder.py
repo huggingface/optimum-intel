@@ -332,10 +332,7 @@ class OVBaseDecoderModel(OVModel):
 
         config.is_decoder = True
         config.is_encoder_decoder = False
-        try:
-            config.save_pretrained(save_dir_path)
-        except Exception:
-            save_config(save_dir_path, config)
+        save_config(save_dir_path, config)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
