@@ -144,7 +144,7 @@ _numa_available = importlib.util.find_spec("numa") is not None
 
 if _numa_available:
     try:
-        importlib_metadata.version("numa")
+        importlib_metadata.version("py-libnuma")
     except importlib_metadata.PackageNotFoundError:
         _numa_available = False
 
