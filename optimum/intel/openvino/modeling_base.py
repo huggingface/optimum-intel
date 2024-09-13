@@ -219,7 +219,6 @@ class OVBaseModel(OptimizedModel):
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Union[str, Path] = None,
     ):
-        logger.info(f"Compiling the model to {device} ...")
         if isinstance(model, str):
             model = Path(model)
         ov_config = ov_config or {}
