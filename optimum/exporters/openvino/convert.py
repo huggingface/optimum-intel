@@ -46,12 +46,7 @@ from optimum.utils.save_utils import maybe_save_preprocessors
 from ...intel.utils.import_utils import is_nncf_available
 from .model_patcher import patch_model_with_bettertransformer
 from .stateful import ensure_export_task_support_stateful, ensure_stateful_is_available, patch_stateful
-from .utils import (
-    OV_XML_FILE_NAME,
-    _get_input_info,
-    clear_class_registry,
-    remove_none_from_dummy_inputs,
-)
+from .utils import OV_XML_FILE_NAME, _get_input_info, clear_class_registry, remove_none_from_dummy_inputs, save_config
 
 
 logger = logging.getLogger(__name__)
@@ -616,7 +611,11 @@ def export_from_model(
 
     if library_name != "diffusers":
         # Saving the model config and preprocessor as this is needed sometimes.
-        model.config.save_pretrained(output)
+        try:
+            model.config.save_pretrained(output)
+        except Exception:
+            save_config(output, model.config)
+
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
             try:

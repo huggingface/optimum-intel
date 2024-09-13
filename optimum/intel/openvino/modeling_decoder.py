@@ -37,6 +37,7 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
+from ...exporters.openvino.utils import save_config
 from ..utils.import_utils import compare_versions, is_nncf_available, is_transformers_version
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
@@ -331,7 +332,10 @@ class OVBaseDecoderModel(OVModel):
 
         config.is_decoder = True
         config.is_encoder_decoder = False
-        config.save_pretrained(save_dir_path)
+        try:
+            config.save_pretrained(save_dir_path)
+        except Exception:
+            save_config(save_dir_path, config)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,

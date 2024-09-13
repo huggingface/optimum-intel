@@ -26,6 +26,7 @@ from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from ...exporters.openvino import main_export
+from ...exporters.openvino.utils import save_config
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
@@ -352,7 +353,10 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             ov_config=ov_config,
         )
 
-        config.save_pretrained(save_dir_path)
+        try:
+            config.save_pretrained(save_dir_path)
+        except Exception:
+            save_config(config)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,

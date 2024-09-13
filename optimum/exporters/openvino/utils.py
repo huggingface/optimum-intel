@@ -14,6 +14,7 @@
 
 import inspect
 from collections import namedtuple
+from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
 
 from transformers.utils import is_torch_available
@@ -158,3 +159,10 @@ def clear_class_registry():
     torch._C._jit_clear_class_registry()
     torch.jit._recursive.concrete_type_store = torch.jit._recursive.ConcreteTypeStore()
     torch.jit._state._clear_class_state()
+
+
+def save_config(save_dir, config):
+    save_dir = Path(save_dir)
+    save_dir.mkdir(exist_ok=True)
+    output_config_file = Path(save_dir / "config.json")
+    config.to_json_file(output_config_file, use_diff=True)

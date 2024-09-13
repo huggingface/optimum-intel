@@ -34,6 +34,7 @@ from optimum.exporters.onnx import OnnxConfig
 from optimum.modeling_base import FROM_PRETRAINED_START_DOCSTRING, OptimizedModel
 
 from ...exporters.openvino import export, main_export
+from ...exporters.openvino.utils import save_config
 from ..utils.import_utils import is_nncf_available
 from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import OVConfig, OVDynamicQuantizationConfig, OVWeightQuantizationConfig
@@ -275,6 +276,16 @@ class OVBaseModel(OptimizedModel):
                 self._openvino_config.quantization_config.dataset = None
 
             self._openvino_config.save_pretrained(save_directory)
+
+    def _save_config(self, save_directory):
+        """
+        Saves a model configuration into a directory, so that it can be re-loaded using the
+        [`from_pretrained`] class method.
+        """
+        try:
+            self.config.save_pretrained(save_directory)
+        except Exception:
+            save_config(save_directory, self.config)
 
     @classmethod
     def _from_pretrained(
@@ -581,8 +592,10 @@ class OVBaseModel(OptimizedModel):
             ov_config=ov_config,
             library_name=cls._library_name,
         )
-
-        config.save_pretrained(save_dir_path)
+        try:
+            config.save_pretrained(save_dir_path)
+        except Exception:
+            save_config(save_dir_path, config)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
