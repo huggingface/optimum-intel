@@ -39,6 +39,7 @@ from optimum.intel.utils.import_utils import (
     _torch_version,
     _transformers_version,
     compare_versions,
+    is_transformers_version,
 )
 from optimum.utils import DEFAULT_DUMMY_SHAPES, is_diffusers_available
 from optimum.utils.save_utils import maybe_save_preprocessors
@@ -615,6 +616,18 @@ def export_from_model(
     logging.disable(logging.NOTSET)
 
     if library_name != "diffusers":
+        if is_transformers_version(">=", "4.44.99"):
+            misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
+            if model.can_generate() and len(misplaced_generation_parameters) > 0:
+                logger.warning(
+                    "Moving the following attributes in the config to the generation config: "
+                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                    "generation parameters in the model config, as opposed to in the generation config.",
+                )
+                for param_name, param_value in misplaced_generation_parameters.items():
+                    setattr(model.generation_config, param_name, param_value)
+                    setattr(model.config, param_name, None)
+
         # Saving the model config and preprocessor as this is needed sometimes.
         model.config.save_pretrained(output)
         generation_config = getattr(model, "generation_config", None)

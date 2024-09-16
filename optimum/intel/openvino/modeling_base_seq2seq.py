@@ -26,6 +26,7 @@ from transformers import GenerationConfig, PretrainedConfig
 from transformers.file_utils import add_start_docstrings
 
 from ...exporters.openvino import main_export
+from ..utils.import_utils import is_transformers_version
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .utils import (
@@ -78,10 +79,21 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.encoder_model = encoder
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
-        if self.can_generate():
-            self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
-        else:
-            self.generation_config = None
+
+        self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
+
+        if is_transformers_version(">=", "4.44.99"):
+            misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
+            if len(misplaced_generation_parameters) > 0:
+                logger.warning(
+                    "Moving the following attributes in the config to the generation config: "
+                    f"{misplaced_generation_parameters}. You are seeing this warning because you've set "
+                    "generation parameters in the model config, as opposed to in the generation config.",
+                )
+                for param_name, param_value in misplaced_generation_parameters.items():
+                    setattr(self.generation_config, param_name, param_value)
+                    setattr(self.config, param_name, None)
+
         self._openvino_config = None
         if quantization_config:
             self._openvino_config = OVConfig(quantization_config=quantization_config)
@@ -166,6 +178,9 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             local_files_only(`bool`, *optional*, defaults to `False`):
                 Whether or not to only look at local files (i.e., do not try to download the model).
         """
+        generation_config = kwargs.pop("generation_config", None)
+        subfolder = kwargs.pop("subfolder", "")
+
         default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else OV_ENCODER_NAME
         default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else OV_DECODER_NAME
         default_decoder_with_past_file_name = ONNX_DECODER_WITH_PAST_NAME if from_onnx else OV_DECODER_WITH_PAST_NAME
@@ -229,6 +244,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                     cache_dir=cache_dir,
                     force_download=force_download,
                     local_files_only=local_files_only,
+                    subfolder=subfolder,
                 )
                 file_names[name] = model_cache_path
 
@@ -252,18 +268,24 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
                         kwargs.get("ov_config"),
                         model_save_dir,
                     )
-        try:
-            generation_config = GenerationConfig.from_pretrained(
-                model_id,
-                token=token,
-                revision=revision,
-                cache_dir=cache_dir,
-                force_download=force_download,
-                local_files_only=local_files_only,
-            )
-            kwargs["generation_config"] = generation_config
-        except Exception:
-            pass
+
+        if generation_config is None:
+            try:
+                generation_config = GenerationConfig.from_pretrained(
+                    model_id,
+                    cache_dir=cache_dir,
+                    force_download=force_download,
+                    local_files_only=local_files_only,
+                    token=token,
+                    revision=revision,
+                    subfolder=subfolder,
+                )
+                if getattr(generation_config, "cache_implementation", None) is not None:
+                    generation_config.cache_implementation = None
+            except OSError:
+                logger.info(
+                    "Generation config file not found, using a generation config created from the model config."
+                )
 
         return cls(
             encoder=encoder,
@@ -272,6 +294,7 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
+            generation_config=generation_config,
             **kwargs,
         )
 
