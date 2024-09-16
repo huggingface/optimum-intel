@@ -20,13 +20,12 @@ import re
 from pathlib import Path
 from typing import List, Optional, Union
 
-import psutil
 import torch
 from huggingface_hub import HfApi, HfFolder
 
 from optimum.exporters import TasksManager
 
-from .import_utils import is_numa_available
+from .import_utils import is_numa_available, is_psutil_available
 
 
 MULTI_QUERY_ATTN_MODELS = {"gpt_bigcode"}
@@ -190,6 +189,11 @@ def bind_cores_for_best_perf():
     if platform.system() != "Linux":
         logger.error("bind_cores_for_best_perf: OS not supported, this function can only be run on Linux systems.")
         raise OSError("bind_cores_for_best_perf: OS not supported, this function can only be run on Linux systems.")
+    if not is_psutil_available():
+        logger.error("`psutil` module not found")
+        raise ImportError("'psutil' module not found, install with 'pip install psutil'")
+    import psutil
+
     if not is_numa_available():
         logger.error("'numa' module not found")
         raise ImportError("'numa' module not found, install with 'pip install numa'")
