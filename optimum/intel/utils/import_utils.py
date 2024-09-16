@@ -149,6 +149,15 @@ if _numa_available:
         _numa_available = False
 
 
+_psutil_available = importlib.util.find_spec("psutil") is not None
+
+if _psutil_available:
+    try:
+        importlib_metadata.version("psutil")
+    except importlib_metadata.PackageNotFoundError:
+        _psutil_available = False
+
+
 _sentence_transformers_available = importlib.util.find_spec("sentence_transformers") is not None
 _sentence_transformers_available = "N/A"
 
@@ -282,6 +291,10 @@ def is_sentence_transformers_available():
 
 def is_numa_available():
     return _numa_available
+
+
+def is_psutil_available():
+    return _psutil_available
 
 
 # This function was copied from: https://github.com/huggingface/accelerate/blob/874c4967d94badd24f893064cc3bef45f57cadf7/src/accelerate/utils/versions.py#L319
