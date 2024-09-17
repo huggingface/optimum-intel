@@ -15,7 +15,6 @@
 import unittest
 
 import numpy as np
-import pytest
 import torch
 from diffusers import (
     AutoPipelineForImage2Image,
@@ -25,7 +24,6 @@ from diffusers import (
 )
 from diffusers.utils import load_image
 from parameterized import parameterized
-from transformers.testing_utils import require_torch_gpu
 from utils_tests import MODEL_NAMES, SEED
 
 from optimum.intel.openvino import (
@@ -34,7 +32,7 @@ from optimum.intel.openvino import (
     OVPipelineForInpainting,
     OVPipelineForText2Image,
 )
-from optimum.utils.testing_utils import grid_parameters, require_diffusers
+from optimum.utils.testing_utils import require_diffusers
 
 
 def get_generator(framework, seed):
@@ -110,16 +108,14 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_num_images_per_prompt(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        self.assertEqual(pipeline.vae_scale_factor, 2)
-        self.assertEqual(pipeline.vae_decoder.config["latent_channels"], 4)
-        self.assertEqual(pipeline.unet.config["in_channels"], 4)
 
-        height, width, batch_size = 64, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-
-        for num_images in [1, 3]:
-            outputs = pipeline(**inputs, num_images_per_prompt=num_images).images
-            self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+        for batch_size in [1, 3]:
+            for height in [64, 128]:
+                for width in [64, 128]:
+                    for num_images_per_prompt in [1, 3]:
+                        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+                        outputs = pipeline(**inputs, num_images_per_prompt=num_images_per_prompt).images
+                        self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -279,16 +275,14 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_num_images_per_prompt(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        self.assertEqual(pipeline.vae_scale_factor, 2)
-        self.assertEqual(pipeline.vae_decoder.config["latent_channels"], 4)
-        self.assertEqual(pipeline.unet.config["in_channels"], 4)
 
-        batch_size, height = 1, 32
-        for width in [64, 32]:
-            inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-            for num_images in [1, 3]:
-                outputs = pipeline(**inputs, num_images_per_prompt=num_images).images
-                self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+        for batch_size in [1, 3]:
+            for height in [64, 128]:
+                for width in [64, 128]:
+                    for num_images_per_prompt in [1, 3]:
+                        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+                        outputs = pipeline(**inputs, num_images_per_prompt=num_images_per_prompt).images
+                        self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -420,16 +414,14 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @require_diffusers
     def test_num_images_per_prompt(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        self.assertEqual(pipeline.vae_scale_factor, 2)
-        self.assertEqual(pipeline.vae_decoder.config["latent_channels"], 4)
-        self.assertEqual(pipeline.unet.config["in_channels"], 4)
 
-        batch_size, height = 1, 32
-        for width in [64, 32]:
-            inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-            for num_images in [1, 3]:
-                outputs = pipeline(**inputs, num_images_per_prompt=num_images).images
-                self.assertEqual(outputs.shape, (batch_size * num_images, height, width, 3))
+        for batch_size in [1, 3]:
+            for height in [64, 128]:
+                for width in [64, 128]:
+                    for num_images_per_prompt in [1, 3]:
+                        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
+                        outputs = pipeline(**inputs, num_images_per_prompt=num_images_per_prompt).images
+                        self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
