@@ -689,7 +689,7 @@ class VaeEncoderOpenVINOConfig(VaeEncoderOnnxConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
-            "latent_sample": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
+            "latent_parameters": {0: "batch_size", 2: "height_latent", 3: "width_latent"},
         }
 
 

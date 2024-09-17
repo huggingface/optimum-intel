@@ -201,3 +201,37 @@ def _print_compiled_model_properties(compiled_model):
             logger.info(f"  {device}: {Core().get_property(device, 'FULL_DEVICE_NAME')}")
     except Exception:
         logger.error("[error] Get FULL_DEVICE_NAME failed")
+
+
+def np_to_pt(np_object, device):
+    if isinstance(np_object, np.random.RandomState):
+        return torch.Generator(device=device).manual_seed(int(np_object.get_state()[1][0]))
+    elif isinstance(np_object, np.random.Generator):
+        return torch.Generator(device=device).manual_seed(int(np_object.bit_generator.state[1][0]))
+    elif isinstance(np_object, list) and isinstance(np_object[0], (np.random.RandomState, np.random.Generator)):
+        return [np_to_pt(a, device) for a in np_object]
+    elif isinstance(np_object, dict) and isinstance(
+        next(iter(np_object.values())), (np.random.RandomState, np.random.Generator)
+    ):
+        return {k: np_to_pt(v, device) for k, v in np_object.items()}
+    else:
+        return np_object
+
+
+def _raise_invalid_batch_size(
+    expected_batch_size: int, batch_size: int, num_images_per_prompt: int, guidance_scale: float
+):
+    current_batch_size = batch_size * num_images_per_prompt * (1 if guidance_scale <= 1 else 2)
+
+    if expected_batch_size != current_batch_size:
+        msg = ""
+        if guidance_scale is not None and guidance_scale <= 1:
+            msg = f"`guidance_scale` was set to {guidance_scale}, static shapes are currently only supported for `guidance_scale` > 1 "
+
+        raise ValueError(
+            "The model was statically reshaped and the pipeline inputs do not match the expected shapes. "
+            f"The `batch_size`, `num_images_per_prompt` and `guidance_scale` were respectively set to {batch_size}, {num_images_per_prompt} and {guidance_scale}. "
+            f"The static model expects an input of size equal to {expected_batch_size} and got the following value instead : {current_batch_size}. "
+            f"To fix this, please either provide a different inputs to your model so that `batch_size` * `num_images_per_prompt` * 2 is equal to {expected_batch_size} "
+            "or reshape it again accordingly using the `.reshape()` method by setting `batch_size` to -1. " + msg
+        )

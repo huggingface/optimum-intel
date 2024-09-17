@@ -16,32 +16,33 @@ import importlib
 import logging
 import os
 import shutil
+from abc import abstractmethod
 from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import openvino
-import PIL.Image
 import torch
-from diffusers import (
+from diffusers.configuration_utils import ConfigMixin, FrozenDict
+from diffusers.image_processor import VaeImageProcessor
+from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
+from diffusers.pipelines import (
     AutoPipelineForImage2Image,
     AutoPipelineForInpainting,
     AutoPipelineForText2Image,
-    ConfigMixin,
-    DDIMScheduler,
+    LatentConsistencyModelImg2ImgPipeline,
     LatentConsistencyModelPipeline,
-    LMSDiscreteScheduler,
-    PNDMScheduler,
     StableDiffusionImg2ImgPipeline,
     StableDiffusionInpaintPipeline,
     StableDiffusionPipeline,
     StableDiffusionXLImg2ImgPipeline,
+    StableDiffusionXLInpaintPipeline,
     StableDiffusionXLPipeline,
 )
-from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
+from diffusers.schedulers import SchedulerMixin
 from diffusers.schedulers.scheduling_utils import SCHEDULER_CONFIG_NAME
 from diffusers.utils import CONFIG_NAME, is_invisible_watermark_available
 from huggingface_hub import snapshot_download
@@ -50,14 +51,8 @@ from huggingface_hub.utils import validate_hf_hub_args
 from openvino._offline_transformations import compress_model_transformation
 from openvino.runtime import Core
 from transformers import CLIPFeatureExtractor, CLIPTokenizer
+from transformers.modeling_outputs import ModelOutput
 
-from optimum.pipelines.diffusers.pipeline_latent_consistency import LatentConsistencyPipelineMixin
-from optimum.pipelines.diffusers.pipeline_stable_diffusion import StableDiffusionPipelineMixin
-from optimum.pipelines.diffusers.pipeline_stable_diffusion_img2img import StableDiffusionImg2ImgPipelineMixin
-from optimum.pipelines.diffusers.pipeline_stable_diffusion_inpaint import StableDiffusionInpaintPipelineMixin
-from optimum.pipelines.diffusers.pipeline_stable_diffusion_xl import StableDiffusionXLPipelineMixin
-from optimum.pipelines.diffusers.pipeline_stable_diffusion_xl_img2img import StableDiffusionXLImg2ImgPipelineMixin
-from optimum.pipelines.diffusers.pipeline_utils import VaeImageProcessor
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
     DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
@@ -72,10 +67,15 @@ from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
-    OV_TO_NP_TYPE,
+    OV_TO_PT_TYPE,
     OV_XML_FILE_NAME,
     _print_compiled_model_properties,
+    np_to_pt,
 )
+
+
+if is_invisible_watermark_available():
+    from diffusers.pipelines.stable_diffusion_xl.watermark import StableDiffusionXLWatermarker
 
 
 core = Core()
@@ -83,92 +83,84 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
-class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
-    auto_model_class = StableDiffusionPipeline
+class OVPipeline(OVBaseModel):
+    auto_model_class = None
+
     config_name = "model_index.json"
+    sub_component_config_name = "config.json"
+
+    _library_name = "diffusers"
 
     def __init__(
         self,
-        unet: openvino.runtime.Model,
         config: Dict[str, Any],
-        scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"],
-        vae_decoder: Optional[openvino.runtime.Model] = None,
+        scheduler: SchedulerMixin,
+        unet: openvino.runtime.Model,
         vae_encoder: Optional[openvino.runtime.Model] = None,
+        vae_decoder: Optional[openvino.runtime.Model] = None,
         text_encoder: Optional[openvino.runtime.Model] = None,
         text_encoder_2: Optional[openvino.runtime.Model] = None,
         tokenizer: Optional["CLIPTokenizer"] = None,
         tokenizer_2: Optional["CLIPTokenizer"] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
-        safety_checker: Optional["StableDiffusionSafetyChecker"] = None,
         device: str = "CPU",
-        dynamic_shapes: bool = True,
         compile: bool = True,
+        dynamic_shapes: bool = True,
         ov_config: Optional[Dict[str, str]] = None,
         model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
-        self._internal_dict = config
         self._device = device.upper()
         self.is_dynamic = dynamic_shapes
+        self.model_save_dir = model_save_dir
         self.ov_config = {} if ov_config is None else {**ov_config}
+        self._openvino_config = OVConfig(quantization_config=quantization_config) if quantization_config else None
 
-        # This attribute is needed to keep one reference on the temporary directory, since garbage collecting
-        # would end-up removing the directory containing the underlying OpenVINO model
-        self._model_save_dir_tempdirectory_instance = None
-        if isinstance(model_save_dir, TemporaryDirectory):
-            self._model_save_dir_tempdirectory_instance = model_save_dir
-            self._model_save_dir = Path(model_save_dir.name)
-        elif isinstance(model_save_dir, str):
-            self._model_save_dir = Path(model_save_dir)
-        else:
-            self._model_save_dir = model_save_dir
-
-        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self)
         self.unet = OVModelUnet(unet, self)
-        self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
-        self.text_encoder_2 = (
-            OVModelTextEncoder(text_encoder_2, self, model_name=DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER)
-            if text_encoder_2 is not None
-            else None
-        )
         self.vae_encoder = OVModelVaeEncoder(vae_encoder, self) if vae_encoder is not None else None
+        self.vae_decoder = OVModelVaeDecoder(vae_decoder, self) if vae_decoder is not None else None
+        self.text_encoder = OVModelTextEncoder(text_encoder, self) if text_encoder is not None else None
+        self.text_encoder_2 = OVModelTextEncoder(text_encoder_2, self) if text_encoder_2 is not None else None
 
-        if "block_out_channels" in self.vae_decoder.config:
-            self.vae_scale_factor = 2 ** (len(self.vae_decoder.config["block_out_channels"]) - 1)
+        # We create VAE encoder & decoder and wrap them in one object to
+        # be used by the pipeline mixins with minimal code changes (simulating the diffusers API)
+        self.vae = OVModelVae(self.vae_encoder, self.vae_decoder, self)
+
+        self.scheduler = scheduler
+        self.tokenizer = tokenizer
+        self.tokenizer_2 = tokenizer_2
+        self.feature_extractor = feature_extractor
+        self.safety_checker = kwargs.get("safety_checker", None)
+
+        if hasattr(self.vae.config, "block_out_channels"):
+            self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
         else:
             self.vae_scale_factor = 8
 
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
-
-        self.tokenizer = tokenizer
-        self.tokenizer_2 = tokenizer_2
-        self.scheduler = scheduler
-        self.feature_extractor = feature_extractor
-        self.safety_checker = safety_checker
-        self.preprocessors = []
-
-        if self.is_dynamic:
-            self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
+        self.mask_processor = VaeImageProcessor(
+            vae_scale_factor=self.vae_scale_factor, do_normalize=False, do_binarize=True, do_convert_grayscale=True
+        )
 
         sub_models = {
-            DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER: self.text_encoder,
             DIFFUSION_MODEL_UNET_SUBFOLDER: self.unet,
-            DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER: self.vae_decoder,
             DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER: self.vae_encoder,
+            DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER: self.vae_decoder,
+            DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER: self.text_encoder,
             DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER: self.text_encoder_2,
         }
         for name in sub_models.keys():
-            self._internal_dict[name] = (
+            config[name] = (
                 ("optimum", sub_models[name].__class__.__name__) if sub_models[name] is not None else (None, None)
             )
 
-        self._internal_dict.pop("vae", None)
+        self._internal_dict = FrozenDict(config)
 
-        self._openvino_config = None
-        if quantization_config:
-            self._openvino_config = OVConfig(quantization_config=quantization_config)
         self._set_ov_config_parameters()
+
+        if self.is_dynamic:
+            self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
 
         if compile:
             self.compile()
@@ -186,8 +178,8 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
 
         sub_models_to_save = {
             self.unet: DIFFUSION_MODEL_UNET_SUBFOLDER,
-            self.vae_decoder: DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
             self.vae_encoder: DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
+            self.vae_decoder: DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
             self.text_encoder: DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
             self.text_encoder_2: DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
         }
@@ -198,11 +190,12 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 openvino.save_model(ov_model.model, dst_path, compress_to_fp16=False)
                 model_dir = ov_model.config.get("_name_or_path", None) or ov_model._model_dir / ov_model._model_name
-                config_path = Path(model_dir) / ov_model.CONFIG_NAME
+                config_path = Path(model_dir) / ov_model.config_name
                 if config_path.is_file():
-                    shutil.copyfile(config_path, dst_path.parent / ov_model.CONFIG_NAME)
+                    shutil.copyfile(config_path, dst_path.parent / ov_model.config_name)
 
         self.scheduler.save_pretrained(save_directory / "scheduler")
+
         if self.feature_extractor is not None:
             self.feature_extractor.save_pretrained(save_directory / "feature_extractor")
         if self.tokenizer is not None:
@@ -233,11 +226,13 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         **kwargs,
     ):
         default_file_name = ONNX_WEIGHTS_NAME if from_onnx else OV_XML_FILE_NAME
+
+        unet_file_name = unet_file_name or default_file_name
+        vae_encoder_file_name = vae_encoder_file_name or default_file_name
         vae_decoder_file_name = vae_decoder_file_name or default_file_name
         text_encoder_file_name = text_encoder_file_name or default_file_name
         text_encoder_2_file_name = text_encoder_2_file_name or default_file_name
-        unet_file_name = unet_file_name or default_file_name
-        vae_encoder_file_name = vae_encoder_file_name or default_file_name
+
         model_id = str(model_id)
         patterns = set(config.keys())
         sub_models_names = patterns.intersection({"feature_extractor", "tokenizer", "tokenizer_2", "scheduler"})
@@ -352,7 +347,7 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         cache_dir: str = HUGGINGFACE_HUB_CACHE,
         local_files_only: bool = False,
         tokenizer: Optional["CLIPTokenizer"] = None,
-        scheduler: Union["DDIMScheduler", "PNDMScheduler", "LMSDiscreteScheduler"] = None,
+        scheduler: Optional[SchedulerMixin] = None,
         feature_extractor: Optional["CLIPFeatureExtractor"] = None,
         tokenizer_2: Optional["CLIPTokenizer"] = None,
         load_in_8bit: Optional[bool] = None,
@@ -406,7 +401,9 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
             self._device = device.upper()
             self.clear_requests()
         else:
-            logger.debug(f"device must be of type {str} but got {type(device)} instead")
+            raise ValueError(
+                "The `device` argument should be a string representing the device on which the model should be loaded."
+            )
 
         return self
 
@@ -524,16 +521,23 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         num_images_per_prompt: int = -1,
     ):
         self.is_dynamic = -1 in {batch_size, height, width, num_images_per_prompt}
-        self.vae_decoder.model = self._reshape_vae_decoder(self.vae_decoder.model, height, width)
+
         if self.tokenizer is None and self.tokenizer_2 is None:
             tokenizer_max_len = -1
         else:
             tokenizer_max_len = (
                 self.tokenizer.model_max_length if self.tokenizer is not None else self.tokenizer_2.model_max_length
             )
+
         self.unet.model = self._reshape_unet(
             self.unet.model, batch_size, height, width, num_images_per_prompt, tokenizer_max_len
         )
+
+        if self.vae_encoder is not None:
+            self.vae_encoder.model = self._reshape_vae_encoder(self.vae_encoder.model, batch_size, height, width)
+
+        if self.vae_decoder is not None:
+            self.vae_decoder.model = self._reshape_vae_decoder(self.vae_decoder.model, height, width)
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
@@ -545,9 +549,6 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
                 self.text_encoder_2.model, batch_size, self.tokenizer_2.model_max_length
             )
 
-        if self.vae_encoder is not None:
-            self.vae_encoder.model = self._reshape_vae_encoder(self.vae_encoder.model, batch_size, height, width)
-
         self.clear_requests()
         return self
 
@@ -555,25 +556,22 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
-        compress_model_transformation(self.vae_decoder.model)
-        compress_model_transformation(self.unet.model)
-        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
+        components = {self.unet, self.vae_encoder, self.vae_decoder, self.text_encoder, self.text_encoder_2}
+        for component in components:
             if component is not None:
                 compress_model_transformation(component.model)
         self.clear_requests()
         return self
 
     def clear_requests(self):
-        self.vae_decoder.request = None
-        self.unet.request = None
-        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
+        components = {self.unet, self.vae_encoder, self.vae_decoder, self.text_encoder, self.text_encoder_2}
+        for component in components:
             if component is not None:
                 component.request = None
 
     def compile(self):
-        self.vae_decoder._compile()
-        self.unet._compile()
-        for component in {self.text_encoder, self.text_encoder_2, self.vae_encoder}:
+        components = {self.unet, self.vae_encoder, self.vae_decoder, self.text_encoder, self.text_encoder_2}
+        for component in components:
             if component is not None:
                 component._compile()
 
@@ -584,47 +582,37 @@ class OVStableDiffusionPipelineBase(OVBaseModel, OVTextualInversionLoaderMixin):
     def _save_config(self, save_directory):
         self.save_config(save_directory)
 
+    @property
+    def _execution_device(self):
+        return self.device
+
+    def __call__(self, *args, **kwargs):
+        device = self._execution_device
+
+        for i in range(len(args)):
+            args[i] = np_to_pt(args[i], device)
+
+        for k, v in kwargs.items():
+            kwargs[k] = np_to_pt(v, device)
+
+        return self.auto_model_class.__call__(self, *args, **kwargs)
+
 
 class OVModelPart:
-    CONFIG_NAME = "config.json"
+    model_part_folder: str = None
+    config_name: str = "config.json"
 
     def __init__(
-        self,
-        model: openvino.runtime.Model,
-        parent_model: OVBaseModel,
-        ov_config: Optional[Dict[str, str]] = None,
-        model_name: str = "encoder",
-        model_dir: str = None,
+        self, model: openvino.runtime.Model, parent_model: OVBaseModel, ov_config: Optional[Dict[str, str]] = None
     ):
         self.model = model
         self.parent_model = parent_model
-        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.inputs)}
-        self.input_dtype = {
-            inputs.get_any_name(): OV_TO_NP_TYPE[inputs.get_element_type().get_type_name()]
-            for inputs in self.model.inputs
-        }
+
+        config_path = self.model_save_dir / self.config_name
+        self.config = FrozenDict(parent_model._dict_from_json_file(config_path) if config_path.is_file() else {})
+
         self.ov_config = ov_config or {**self.parent_model.ov_config}
         self.request = None
-        self._model_name = model_name
-        self._model_dir = Path(model_dir or parent_model._model_save_dir)
-        config_path = self._model_dir / model_name / self.CONFIG_NAME
-        self.config = self.parent_model._dict_from_json_file(config_path) if config_path.is_file() else {}
-
-    def _compile(self):
-        if self.request is None:
-            if (
-                "CACHE_DIR" not in self.ov_config.keys()
-                and not str(self._model_dir).startswith(gettempdir())
-                and "GPU" in self._device
-            ):
-                self.ov_config["CACHE_DIR"] = os.path.join(self._model_dir, self._model_name, "model_cache")
-
-            logger.info(f"Compiling the {self._model_name} to {self._device} ...")
-            self.request = core.compile_model(self.model, self._device, self.ov_config)
-            # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
-            if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
-                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
-                _print_compiled_model_properties(self.request)
 
     @property
     def _device(self) -> str:
@@ -634,114 +622,168 @@ class OVModelPart:
     def device(self) -> torch.device:
         return self.parent_model.device
 
+    @property
+    def dtype(self) -> torch.dtype:
+        return OV_TO_PT_TYPE[self.ov_config.get("dtype", "f32")]
+
+    @property
+    def model_save_dir(self) -> Optional[Union[str, Path, TemporaryDirectory]]:
+        if isinstance(self.parent_model.model_save_dir, TemporaryDirectory):
+            return Path(self.parent_model.model_save_dir.name) / self.model_part_folder
+        else:
+            return Path(self.parent_model.model_save_dir) / self.model_part_folder
+
+    def _compile(self):
+        if self.request is None:
+            if (
+                "CACHE_DIR" not in self.ov_config.keys()
+                and not str(self.model_save_dir).startswith(gettempdir())
+                and "GPU" in self._device
+            ):
+                self.ov_config["CACHE_DIR"] = os.path.join(self.model_save_dir, self.model_part_folder, "model_cache")
+
+            logger.info(f"Compiling the {self.model_save_dir} to {self._device} ...")
+            self.request = core.compile_model(self.model, self._device, self.ov_config)
+            # OPENVINO_LOG_LEVEL can be found in https://docs.openvino.ai/2023.2/openvino_docs_OV_UG_supported_plugins_AUTO_debugging.html
+            if "OPENVINO_LOG_LEVEL" in os.environ and int(os.environ["OPENVINO_LOG_LEVEL"]) > 2:
+                logger.info(f"{self._device} SUPPORTED_PROPERTIES:")
+                _print_compiled_model_properties(self.request)
+
+    @abstractmethod
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def to(self, *args, device: Union[str, torch.device], dtype: torch.dtype, **kwargs):
+        for arg in args:
+            if isinstance(arg, str):
+                device = arg.upper()
+            elif isinstance(arg, torch.device):
+                device = arg.type.upper()
+            elif isinstance(arg, torch.dtype):
+                dtype = arg
+
+        if device is not None and isinstance(device, str):
+            self._device = device.upper()
+            self.request = None
+        elif device is not None:
+            raise ValueError(
+                "The `device` argument should be a string representing the device on which the model should be loaded."
+            )
+
+        if dtype is not None and dtype != self.dtype:
+            raise NotImplementedError(
+                f"Cannot change the dtype of the model from {self.dtype} to {dtype}. "
+                f"Please export the model with the desired dtype."
+            )
+
 
 class OVModelTextEncoder(OVModelPart):
-    def __init__(
-        self,
-        model: openvino.runtime.Model,
-        parent_model: OVBaseModel,
-        ov_config: Optional[Dict[str, str]] = None,
-        model_name: str = "text_encoder",
-        model_dir: str = None,
-    ):
-        super().__init__(model, parent_model, ov_config, model_name, model_dir)
+    model_part_folder: str = "text_encoder"
 
-    def __call__(self, input_ids: np.ndarray):
+    def forward(
+        self,
+        input_ids: Union[np.ndarray, torch.Tensor],
+        attention_mask: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: bool = False,
+    ):
         self._compile()
 
-        inputs = {
-            "input_ids": input_ids,
-        }
+        model_inputs = {"input_ids": input_ids}
 
-        outputs = self.request(inputs, share_inputs=True)
-        return list(outputs.values())
+        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
+
+        model_outputs = {}
+        for key, value in ov_outputs.items():
+            model_outputs[next(iter(key.names))] = torch.from_numpy(value)
+
+        if output_hidden_states:
+            model_outputs["hidden_states"] = []
+            for i in range(self.config.num_hidden_layers):
+                model_outputs["hidden_states"].append(model_outputs.pop(f"hidden_states.{i}"))
+            model_outputs["hidden_states"].append(model_outputs.get("last_hidden_state"))
+
+        if return_dict:
+            return model_outputs
+
+        return ModelOutput(**model_outputs)
 
 
 class OVModelUnet(OVModelPart):
-    def __init__(
-        self,
-        model: openvino.runtime.Model,
-        parent_model: OVBaseModel,
-        ov_config: Optional[Dict[str, str]] = None,
-        model_name: str = "unet",
-        model_dir: str = None,
-    ):
-        super().__init__(model, parent_model, ov_config, model_name, model_dir)
+    model_part_folder: str = "unet"
 
-    def __call__(
+    def forward(
         self,
-        sample: np.ndarray,
-        timestep: np.ndarray,
-        encoder_hidden_states: np.ndarray,
-        text_embeds: Optional[np.ndarray] = None,
-        time_ids: Optional[np.ndarray] = None,
-        timestep_cond: Optional[np.ndarray] = None,
+        sample: Union[np.ndarray, torch.Tensor],
+        timestep: Union[np.ndarray, torch.Tensor],
+        encoder_hidden_states: Union[np.ndarray, torch.Tensor],
+        text_embeds: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        time_ids: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        timestep_cond: Optional[Union[np.ndarray, torch.Tensor]] = None,
+        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+        added_cond_kwargs: Optional[Dict[str, Any]] = None,
+        return_dict: bool = False,
     ):
         self._compile()
 
-        inputs = {
+        model_inputs = {
             "sample": sample,
             "timestep": timestep,
             "encoder_hidden_states": encoder_hidden_states,
         }
 
         if text_embeds is not None:
-            inputs["text_embeds"] = text_embeds
+            model_inputs["text_embeds"] = text_embeds
         if time_ids is not None:
-            inputs["time_ids"] = time_ids
+            model_inputs["time_ids"] = time_ids
         if timestep_cond is not None:
-            inputs["timestep_cond"] = timestep_cond
+            model_inputs["timestep_cond"] = timestep_cond
+        if cross_attention_kwargs is not None:
+            model_inputs.update(cross_attention_kwargs)
+        if added_cond_kwargs is not None:
+            model_inputs.update(added_cond_kwargs)
 
-        outputs = self.request(inputs, share_inputs=True)
-        return list(outputs.values())
+        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
+        model_outputs = {}
+        for key, value in ov_outputs.items():
+            model_outputs[next(iter(key.names))] = torch.from_numpy(value)
 
-class OVModelVaeDecoder(OVModelPart):
-    def __init__(
-        self,
-        model: openvino.runtime.Model,
-        parent_model: OVBaseModel,
-        ov_config: Optional[Dict[str, str]] = None,
-        model_name: str = "vae_decoder",
-        model_dir: str = None,
-    ):
-        super().__init__(model, parent_model, ov_config, model_name, model_dir)
+        if return_dict:
+            return model_outputs
 
-    def __call__(self, latent_sample: np.ndarray):
-        self._compile()
-
-        inputs = {
-            "latent_sample": latent_sample,
-        }
-
-        outputs = self.request(inputs, share_inputs=True)
-        return list(outputs.values())
-
-    def _compile(self):
-        if "GPU" in self._device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
-            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
-        super()._compile()
+        return ModelOutput(**model_outputs)
 
 
 class OVModelVaeEncoder(OVModelPart):
-    def __init__(
-        self,
-        model: openvino.runtime.Model,
-        parent_model: OVBaseModel,
-        ov_config: Optional[Dict[str, str]] = None,
-        model_name: str = "vae_encoder",
-        model_dir: str = None,
-    ):
-        super().__init__(model, parent_model, ov_config, model_name, model_dir)
+    model_part_folder: str = "vae_encoder"
 
-    def __call__(self, sample: np.ndarray):
+    def forward(self, sample: Union[np.ndarray, torch.Tensor], return_dict: bool = False):
         self._compile()
 
-        inputs = {
-            "sample": sample,
-        }
-        outputs = self.request(inputs, share_inputs=True)
-        return list(outputs.values())
+        model_inputs = {"sample": sample}
+
+        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
+
+        model_outputs = {}
+        for key, value in ov_outputs.items():
+            model_outputs[next(iter(key.names))] = torch.from_numpy(value)
+
+        if "latent_sample" in model_outputs:
+            model_outputs["latents"] = model_outputs.pop("latent_sample")
+
+        if "latent_parameters" in model_outputs:
+            model_outputs["latent_dist"] = DiagonalGaussianDistribution(
+                parameters=model_outputs.pop("latent_parameters")
+            )
+
+        if return_dict:
+            return model_outputs
+
+        return ModelOutput(**model_outputs)
 
     def _compile(self):
         if "GPU" in self._device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
@@ -749,379 +791,242 @@ class OVModelVaeEncoder(OVModelPart):
         super()._compile()
 
 
-class OVStableDiffusionPipeline(OVStableDiffusionPipelineBase, StableDiffusionPipelineMixin):
+class OVModelVaeDecoder(OVModelPart):
+    model_part_folder: str = "vae_decoder"
+
+    def forward(
+        self,
+        latent_sample: Union[np.ndarray, torch.Tensor],
+        generator: Optional[torch.Generator] = None,
+        return_dict: bool = False,
+    ):
+        self._compile()
+
+        model_inputs = {
+            "latent_sample": latent_sample,
+        }
+
+        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
+
+        model_outputs = {}
+        for key, value in ov_outputs.items():
+            model_outputs[next(iter(key.names))] = torch.from_numpy(value)
+
+        if return_dict:
+            return model_outputs
+
+        return ModelOutput(**model_outputs)
+
+    def _compile(self):
+        if "GPU" in self._device and "INFERENCE_PRECISION_HINT" not in self.ov_config:
+            self.ov_config.update({"INFERENCE_PRECISION_HINT": "f32"})
+        super()._compile()
+
+
+class OVModelVae(OVModelPart):
+    model_part_folder: str = "vae_decoder"
+
+    def __init__(self, vae_encoder: OVModelVaeEncoder, vae_decoder: OVModelVaeDecoder, parent_model: OVPipeline):
+        super().__init__(vae_decoder.model, parent_model)
+
+        self.encode = vae_encoder.forward
+        self.decode = vae_decoder.forward
+
+
+class OVStableDiffusionPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionPipeline):
+    """
+    OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion#diffusers.StableDiffusionPipeline).
+    """
+
+    main_input_name = "prompt"
     auto_model_class = StableDiffusionPipeline
 
-    def __call__(
-        self,
-        prompt: Optional[Union[str, List[str]]] = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
-        num_inference_steps: int = 50,
-        guidance_scale: float = 7.5,
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        num_images_per_prompt: int = 1,
-        **kwargs,
-    ):
-        height = height or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
-        width = width or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
 
-        expected_batch_size = self._batch_size
-        _height = self.height
-        _width = self.width
+class OVStableDiffusionImg2ImgPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionImg2ImgPipeline):
+    """
+    OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_img2img#diffusers.StableDiffusionImg2ImgPipeline).
+    """
 
-        if _height != -1 and height != _height:
-            logger.warning(
-                f"`height` was set to {height} but the static model will output images of height {_height}."
-                "To fix the height, please reshape your model accordingly using the `.reshape()` method."
-            )
-            height = _height
-
-        if _width != -1 and width != _width:
-            logger.warning(
-                f"`width` was set to {width} but the static model will output images of width {_width}."
-                "To fix the width, please reshape your model accordingly using the `.reshape()` method."
-            )
-            width = _width
-
-        if expected_batch_size != -1:
-            if isinstance(prompt, str):
-                batch_size = 1
-            elif isinstance(prompt, list):
-                batch_size = len(prompt)
-            else:
-                batch_size = kwargs.get("prompt_embeds").shape[0]
-
-            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
-
-        return StableDiffusionPipelineMixin.__call__(
-            self,
-            prompt=prompt,
-            height=height,
-            width=width,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=num_images_per_prompt,
-            **kwargs,
-        )
-
-
-class OVStableDiffusionImg2ImgPipeline(OVStableDiffusionPipelineBase, StableDiffusionImg2ImgPipelineMixin):
+    main_input_name = "image"
     auto_model_class = StableDiffusionImg2ImgPipeline
 
-    def __call__(
-        self,
-        prompt: Optional[Union[str, List[str]]] = None,
-        image: Union[np.ndarray, PIL.Image.Image] = None,
-        strength: float = 0.8,
-        num_inference_steps: int = 50,
-        guidance_scale: float = 7.5,
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        num_images_per_prompt: int = 1,
-        **kwargs,
-    ):
-        _height = self.height
-        _width = self.width
-        expected_batch_size = self._batch_size
 
-        if _height != -1 and _width != -1:
-            image = self.image_processor.preprocess(image, height=_height, width=_width).transpose(0, 2, 3, 1)
+class OVStableDiffusionInpaintPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionInpaintPipeline):
+    """
+    OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionInpaintPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_inpaint#diffusers.StableDiffusionInpaintPipeline).
+    """
 
-        if expected_batch_size != -1:
-            if isinstance(prompt, str):
-                batch_size = 1
-            elif isinstance(prompt, list):
-                batch_size = len(prompt)
-            else:
-                batch_size = kwargs.get("prompt_embeds").shape[0]
-
-            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
-
-        return StableDiffusionImg2ImgPipelineMixin.__call__(
-            self,
-            prompt=prompt,
-            image=image,
-            strength=strength,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=num_images_per_prompt,
-            **kwargs,
-        )
-
-
-class OVStableDiffusionInpaintPipeline(OVStableDiffusionPipelineBase, StableDiffusionInpaintPipelineMixin):
+    main_input_name = "image"
     auto_model_class = StableDiffusionInpaintPipeline
 
-    def __call__(
-        self,
-        prompt: Optional[Union[str, List[str]]],
-        image: PIL.Image.Image,
-        mask_image: PIL.Image.Image,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
-        num_inference_steps: int = 50,
-        guidance_scale: float = 7.5,
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        num_images_per_prompt: int = 1,
-        **kwargs,
-    ):
-        height = height or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
-        width = width or self.unet.config.get("sample_size", 64) * self.vae_scale_factor
-        _height = self.height
-        _width = self.width
-        expected_batch_size = self._batch_size
 
-        if _height != -1 and _width != -1:
-            if height != _height:
-                logger.warning(
-                    f"`height` was set to {height} but the static model will output images of height {_height}."
-                    "To fix the height, please reshape your model accordingly using the `.reshape()` method."
-                )
-                height = _height
+class OVStableDiffusionXLPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLPipeline):
+    """
+    OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionXLPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLPipeline).
+    """
 
-            if width != _width:
-                logger.warning(
-                    f"`width` was set to {width} but the static model will output images of width {_width}."
-                    "To fix the width, please reshape your model accordingly using the `.reshape()` method."
-                )
-                width = _width
+    main_input_name = "prompt"
+    auto_model_class = StableDiffusionXLPipeline
 
-            if isinstance(image, list):
-                image = [self.image_processor.resize(i, _height, _width) for i in image]
-            else:
-                image = self.image_processor.resize(image, _height, _width)
-
-            if isinstance(mask_image, list):
-                mask_image = [self.image_processor.resize(i, _height, _width) for i in mask_image]
-            else:
-                mask_image = self.image_processor.resize(mask_image, _height, _width)
-
-        if expected_batch_size != -1:
-            if isinstance(prompt, str):
-                batch_size = 1
-            elif isinstance(prompt, list):
-                batch_size = len(prompt)
-            else:
-                batch_size = kwargs.get("prompt_embeds").shape[0]
-
-            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
-
-        return StableDiffusionInpaintPipelineMixin.__call__(
-            self,
-            prompt=prompt,
-            image=image,
-            mask_image=mask_image,
-            height=height,
-            width=width,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=num_images_per_prompt,
-            **kwargs,
-        )
-
-
-class OVStableDiffusionXLPipelineBase(OVStableDiffusionPipelineBase):
     def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
         super().__init__(*args, **kwargs)
+
+        requires_aesthetics_score = kwargs.get("requires_aesthetics_score", False)
+        force_zeros_for_empty_prompt = kwargs.get("force_zeros_for_empty_prompt", True)
+        self.register_to_config(force_zeros_for_empty_prompt=force_zeros_for_empty_prompt)
+        self.register_to_config(requires_aesthetics_score=requires_aesthetics_score)
 
         add_watermarker = add_watermarker if add_watermarker is not None else is_invisible_watermark_available()
 
         if add_watermarker:
-            if not is_invisible_watermark_available():
-                raise ImportError(
-                    "`add_watermarker` requires invisible-watermark to be installed, which can be installed with `pip install invisible-watermark`."
-                )
-            from optimum.pipelines.diffusers.watermark import StableDiffusionXLWatermarker
-
             self.watermark = StableDiffusionXLWatermarker()
         else:
             self.watermark = None
 
-
-class OVStableDiffusionXLPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLPipelineMixin):
-    auto_model_class = StableDiffusionXLPipeline
-
-    def __call__(
-        self,
-        prompt: Optional[Union[str, List[str]]] = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
-        num_inference_steps: int = 50,
-        guidance_scale: float = 5.0,
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        num_images_per_prompt: int = 1,
-        **kwargs,
+    # Adapted from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl.StableDiffusionXLPipeline._get_add_time_ids
+    def _get_add_time_ids(
+        self, original_size, crops_coords_top_left, target_size, dtype, text_encoder_projection_dim=None
     ):
-        height = height or self.unet.config["sample_size"] * self.vae_scale_factor
-        width = width or self.unet.config["sample_size"] * self.vae_scale_factor
-        _height = self.height
-        _width = self.width
-        expected_batch_size = self._batch_size
+        add_time_ids = list(original_size + crops_coords_top_left + target_size)
 
-        if _height != -1 and height != _height:
-            logger.warning(
-                f"`height` was set to {height} but the static model will output images of height {_height}."
-                "To fix the height, please reshape your model accordingly using the `.reshape()` method."
-            )
-            height = _height
+        add_time_ids = torch.tensor([add_time_ids], dtype=dtype)
 
-        if _width != -1 and width != _width:
-            logger.warning(
-                f"`width` was set to {width} but the static model will output images of width {_width}."
-                "To fix the width, please reshape your model accordingly using the `.reshape()` method."
-            )
-            width = _width
-
-        if expected_batch_size != -1:
-            if isinstance(prompt, str):
-                batch_size = 1
-            elif isinstance(prompt, list):
-                batch_size = len(prompt)
-            else:
-                batch_size = kwargs.get("prompt_embeds").shape[0]
-
-            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
-
-        return StableDiffusionXLPipelineMixin.__call__(
-            self,
-            prompt=prompt,
-            height=height,
-            width=width,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=num_images_per_prompt,
-            **kwargs,
-        )
+        return add_time_ids
 
 
-class OVStableDiffusionXLImg2ImgPipeline(OVStableDiffusionXLPipelineBase, StableDiffusionXLImg2ImgPipelineMixin):
+class OVStableDiffusionXLImg2ImgPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLImg2ImgPipeline):
+    """
+    OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionXLImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLImg2ImgPipeline).
+    """
+
+    main_input_name = "image"
     auto_model_class = StableDiffusionXLImg2ImgPipeline
 
-    def __call__(
+    def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        requires_aesthetics_score = kwargs.get("requires_aesthetics_score", False)
+        force_zeros_for_empty_prompt = kwargs.get("force_zeros_for_empty_prompt", True)
+        self.register_to_config(force_zeros_for_empty_prompt=force_zeros_for_empty_prompt)
+        self.register_to_config(requires_aesthetics_score=requires_aesthetics_score)
+
+        add_watermarker = add_watermarker if add_watermarker is not None else is_invisible_watermark_available()
+
+        if add_watermarker:
+            self.watermark = StableDiffusionXLWatermarker()
+        else:
+            self.watermark = None
+
+    # Adapted from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl_inpaint.StableDiffusionXLInpaintPipeline._get_add_time_ids
+    def _get_add_time_ids(
         self,
-        prompt: Optional[Union[str, List[str]]] = None,
-        image: Union[np.ndarray, PIL.Image.Image] = None,
-        strength: float = 0.3,
-        num_inference_steps: int = 50,
-        guidance_scale: float = 5.0,
-        negative_prompt: Optional[Union[str, List[str]]] = None,
-        num_images_per_prompt: int = 1,
-        **kwargs,
+        original_size,
+        crops_coords_top_left,
+        target_size,
+        aesthetic_score,
+        negative_aesthetic_score,
+        negative_original_size,
+        negative_crops_coords_top_left,
+        negative_target_size,
+        dtype,
+        text_encoder_projection_dim=None,
     ):
-        _height = self.height
-        _width = self.width
-        expected_batch_size = self._batch_size
+        if self.config.requires_aesthetics_score:
+            add_time_ids = list(original_size + crops_coords_top_left + (aesthetic_score,))
+            add_neg_time_ids = list(
+                negative_original_size + negative_crops_coords_top_left + (negative_aesthetic_score,)
+            )
+        else:
+            add_time_ids = list(original_size + crops_coords_top_left + target_size)
+            add_neg_time_ids = list(negative_original_size + crops_coords_top_left + negative_target_size)
 
-        if _height != -1 and _width != -1:
-            image = self.image_processor.preprocess(image, height=_height, width=_width).transpose(0, 2, 3, 1)
+        add_time_ids = torch.tensor([add_time_ids], dtype=dtype)
+        add_neg_time_ids = torch.tensor([add_neg_time_ids], dtype=dtype)
 
-        if expected_batch_size != -1:
-            if isinstance(prompt, str):
-                batch_size = 1
-            elif isinstance(prompt, list):
-                batch_size = len(prompt)
-            else:
-                batch_size = kwargs.get("prompt_embeds").shape[0]
-
-            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale)
-
-        return StableDiffusionXLImg2ImgPipelineMixin.__call__(
-            self,
-            prompt=prompt,
-            image=image,
-            strength=strength,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=num_images_per_prompt,
-            **kwargs,
-        )
+        return add_time_ids, add_neg_time_ids
 
 
-class OVLatentConsistencyModelPipeline(OVStableDiffusionPipelineBase, LatentConsistencyPipelineMixin):
+class OVStableDiffusionXLInpaintPipeline(OVPipeline, OVTextualInversionLoaderMixin, StableDiffusionXLInpaintPipeline):
+    """
+    OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.StableDiffusionXLInpaintPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/stable_diffusion_xl#diffusers.StableDiffusionXLInpaintPipeline).
+    """
+
+    main_input_name = "image"
+    auto_model_class = StableDiffusionXLInpaintPipeline
+
+    def __init__(self, *args, add_watermarker: Optional[bool] = None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        requires_aesthetics_score = kwargs.get("requires_aesthetics_score", False)
+        force_zeros_for_empty_prompt = kwargs.get("force_zeros_for_empty_prompt", True)
+        self.register_to_config(force_zeros_for_empty_prompt=force_zeros_for_empty_prompt)
+        self.register_to_config(requires_aesthetics_score=requires_aesthetics_score)
+
+        add_watermarker = add_watermarker if add_watermarker is not None else is_invisible_watermark_available()
+
+        if add_watermarker:
+            self.watermark = StableDiffusionXLWatermarker()
+        else:
+            self.watermark = None
+
+    # Adapted from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl_inpaint.StableDiffusionXLInpaintPipeline._get_add_time_ids
+    def _get_add_time_ids(
+        self,
+        original_size,
+        crops_coords_top_left,
+        target_size,
+        aesthetic_score,
+        negative_aesthetic_score,
+        negative_original_size,
+        negative_crops_coords_top_left,
+        negative_target_size,
+        dtype,
+        text_encoder_projection_dim=None,
+    ):
+        if self.config.requires_aesthetics_score:
+            add_time_ids = list(original_size + crops_coords_top_left + (aesthetic_score,))
+            add_neg_time_ids = list(
+                negative_original_size + negative_crops_coords_top_left + (negative_aesthetic_score,)
+            )
+        else:
+            add_time_ids = list(original_size + crops_coords_top_left + target_size)
+            add_neg_time_ids = list(negative_original_size + crops_coords_top_left + negative_target_size)
+
+        add_time_ids = torch.tensor([add_time_ids], dtype=dtype)
+        add_neg_time_ids = torch.tensor([add_neg_time_ids], dtype=dtype)
+
+        return add_time_ids, add_neg_time_ids
+
+
+class OVLatentConsistencyModelPipeline(OVPipeline, OVTextualInversionLoaderMixin, LatentConsistencyModelPipeline):
+    """
+    OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.LatentConsistencyModelPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/latent_consistency#diffusers.LatentConsistencyModelPipeline).
+    """
+
+    main_input_name = "prompt"
     auto_model_class = LatentConsistencyModelPipeline
 
-    def __call__(
-        self,
-        prompt: Optional[Union[str, List[str]]] = None,
-        height: Optional[int] = None,
-        width: Optional[int] = None,
-        num_inference_steps: int = 4,
-        original_inference_steps: int = None,
-        guidance_scale: float = 8.5,
-        num_images_per_prompt: int = 1,
-        **kwargs,
-    ):
-        height = height or self.unet.config["sample_size"] * self.vae_scale_factor
-        width = width or self.unet.config["sample_size"] * self.vae_scale_factor
-        _height = self.height
-        _width = self.width
-        expected_batch_size = self._batch_size
 
-        if _height != -1 and height != _height:
-            logger.warning(
-                f"`height` was set to {height} but the static model will output images of height {_height}."
-                "To fix the height, please reshape your model accordingly using the `.reshape()` method."
-            )
-            height = _height
+class OVLatentConsistencyModelImg2ImgPipeline(
+    OVPipeline, OVTextualInversionLoaderMixin, LatentConsistencyModelImg2ImgPipeline
+):
+    """
+    OpenVINO-powered stable diffusion pipeline corresponding to [diffusers.LatentConsistencyModelImg2ImgPipeline](https://huggingface.co/docs/diffusers/api/pipelines/stable_diffusion/latent_consistency_img2img#diffusers.LatentConsistencyModelImg2ImgPipeline).
+    """
 
-        if _width != -1 and width != _width:
-            logger.warning(
-                f"`width` was set to {width} but the static model will output images of width {_width}."
-                "To fix the width, please reshape your model accordingly using the `.reshape()` method."
-            )
-            width = _width
-
-        if expected_batch_size != -1:
-            if isinstance(prompt, str):
-                batch_size = 1
-            elif isinstance(prompt, list):
-                batch_size = len(prompt)
-            else:
-                batch_size = kwargs.get("prompt_embeds").shape[0]
-
-            _raise_invalid_batch_size(expected_batch_size, batch_size, num_images_per_prompt, guidance_scale=0.0)
-
-        return LatentConsistencyPipelineMixin.__call__(
-            self,
-            prompt=prompt,
-            height=height,
-            width=width,
-            num_inference_steps=num_inference_steps,
-            original_inference_steps=original_inference_steps,
-            guidance_scale=guidance_scale,
-            num_images_per_prompt=num_images_per_prompt,
-            **kwargs,
-        )
-
-    def run_safety_checker(self, image: np.ndarray):
-        if self.safety_checker is None:
-            has_nsfw_concept = None
-        else:
-            # Transpose the image to NHWC
-            image = image.transpose(0, 2, 3, 1)
-
-            feature_extractor_input = self.image_processor.numpy_to_pil(image)
-            safety_checker_input = self.feature_extractor(feature_extractor_input, return_tensors="pt")
-            image, has_nsfw_concept = self.safety_checker(images=image, clip_input=safety_checker_input.pixel_values)
-
-            # Transpose the image back to NCHW
-            image = image.transpose(0, 3, 1, 2)
-
-        return image, has_nsfw_concept
+    main_input_name = "image"
+    auto_model_class = LatentConsistencyModelImg2ImgPipeline
 
 
 SUPPORTED_OV_PIPELINES = [
     OVStableDiffusionPipeline,
     OVStableDiffusionImg2ImgPipeline,
     OVStableDiffusionInpaintPipeline,
-    OVLatentConsistencyModelPipeline,
     OVStableDiffusionXLPipeline,
     OVStableDiffusionXLImg2ImgPipeline,
+    OVStableDiffusionXLInpaintPipeline,
+    OVLatentConsistencyModelPipeline,
+    OVLatentConsistencyModelImg2ImgPipeline,
 ]
 
 
@@ -1174,12 +1079,14 @@ OV_IMAGE2IMAGE_PIPELINES_MAPPING = OrderedDict(
     [
         ("stable-diffusion", OVStableDiffusionImg2ImgPipeline),
         ("stable-diffusion-xl", OVStableDiffusionXLImg2ImgPipeline),
+        ("latent-consistency", OVLatentConsistencyModelImg2ImgPipeline),
     ]
 )
 
 OV_INPAINT_PIPELINES_MAPPING = OrderedDict(
     [
         ("stable-diffusion", OVStableDiffusionInpaintPipeline),
+        ("stable-diffusion-xl", OVStableDiffusionXLInpaintPipeline),
     ]
 )
 
@@ -1214,6 +1121,7 @@ class OVPipelineForTask(ConfigMixin):
     config_name = "model_index.json"
 
     @classmethod
+    @validate_hf_hub_args
     def from_pretrained(cls, pretrained_model_or_path, **kwargs):
         load_config_kwargs = {
             "force_download": kwargs.get("force_download", False),
@@ -1246,22 +1154,3 @@ class OVPipelineForImage2Image(OVPipelineForTask):
 class OVPipelineForInpainting(OVPipelineForTask):
     auto_model_class = AutoPipelineForInpainting
     ort_pipelines_mapping = OV_INPAINT_PIPELINES_MAPPING
-
-
-def _raise_invalid_batch_size(
-    expected_batch_size: int, batch_size: int, num_images_per_prompt: int, guidance_scale: float
-):
-    current_batch_size = batch_size * num_images_per_prompt * (1 if guidance_scale <= 1 else 2)
-
-    if expected_batch_size != current_batch_size:
-        msg = ""
-        if guidance_scale is not None and guidance_scale <= 1:
-            msg = f"`guidance_scale` was set to {guidance_scale}, static shapes are currently only supported for `guidance_scale` > 1 "
-
-        raise ValueError(
-            "The model was statically reshaped and the pipeline inputs do not match the expected shapes. "
-            f"The `batch_size`, `num_images_per_prompt` and `guidance_scale` were respectively set to {batch_size}, {num_images_per_prompt} and {guidance_scale}. "
-            f"The static model expects an input of size equal to {expected_batch_size} and got the following value instead : {current_batch_size}. "
-            f"To fix this, please either provide a different inputs to your model so that `batch_size` * `num_images_per_prompt` * 2 is equal to {expected_batch_size} "
-            "or reshape it again accordingly using the `.reshape()` method by setting `batch_size` to -1. " + msg
-        )
