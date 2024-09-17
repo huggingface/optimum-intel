@@ -61,7 +61,7 @@ def _generate_images(height=128, width=128, batch_size=1, channel=3, input_type=
             "/in_paint/overture-creations-5sI6fQgYIuo.png"
         ).resize((width, height))
     elif input_type == "np":
-        image = np.random.rand(channel, height, width)
+        image = np.random.rand(height, width, channel)
     elif input_type == "pt":
         image = torch.rand((channel, height, width))
 
@@ -166,17 +166,20 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_shape(self, model_arch: str):
-        height, width, batch_size = 128, 64, 1
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+
+        height, width, batch_size = 128, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
 
-        for output_type in ["np", "pil", "latent"]:
+        for output_type in ["pil", "np", "pt", "latent"]:
             inputs["output_type"] = output_type
             outputs = pipeline(**inputs).images
             if output_type == "pil":
                 self.assertEqual((len(outputs), outputs[0].height, outputs[0].width), (batch_size, height, width))
             elif output_type == "np":
                 self.assertEqual(outputs.shape, (batch_size, height, width, 3))
+            elif output_type == "pt":
+                self.assertEqual(outputs.shape, (batch_size, 3, height, width))
             else:
                 self.assertEqual(
                     outputs.shape,
@@ -186,10 +189,10 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_image_reproducibility(self, model_arch: str):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         for generator_framework in ["np", "pt"]:
             ort_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
@@ -316,18 +319,21 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_shape(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        height, width, batch_size = 32, 64, 1
 
-        for input_type in ["np", "pil", "pt"]:
+        height, width, batch_size = 128, 64, 1
+
+        for input_type in ["pil", "np", "pt"]:
             inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, input_type=input_type)
 
-            for output_type in ["np", "pil", "latent"]:
+            for output_type in ["pil", "np", "pt", "latent"]:
                 inputs["output_type"] = output_type
                 outputs = pipeline(**inputs).images
                 if output_type == "pil":
                     self.assertEqual((len(outputs), outputs[0].height, outputs[0].width), (batch_size, height, width))
                 elif output_type == "np":
                     self.assertEqual(outputs.shape, (batch_size, height, width, 3))
+                elif output_type == "pt":
+                    self.assertEqual(outputs.shape, (batch_size, 3, height, width))
                 else:
                     self.assertEqual(
                         outputs.shape,
@@ -354,10 +360,10 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_image_reproducibility(self, model_arch: str):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         for generator_framework in ["np", "pt"]:
             ort_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
@@ -377,17 +383,14 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     TASK = "inpainting"
 
     def generate_inputs(self, height=128, width=128, batch_size=1, channel=3, input_type="pil"):
-        assert batch_size == 1, "Inpainting models only support batch_size=1"
-        assert input_type == "pil", "Inpainting models only support input_type='pil'"
-
         inputs = _generate_prompts(batch_size=batch_size)
 
         inputs["image"] = _generate_images(
             height=height, width=width, batch_size=batch_size, channel=channel, input_type=input_type
-        )[0]
+        )
         inputs["mask_image"] = _generate_images(
-            height=height, width=width, batch_size=batch_size, channel=channel, input_type=input_type
-        )[0]
+            height=height, width=width, batch_size=batch_size, channel=1, input_type=input_type
+        )
 
         inputs["strength"] = 0.75
         inputs["height"] = height
@@ -455,18 +458,21 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @require_diffusers
     def test_shape(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
-        height, width, batch_size = 32, 64, 1
 
-        for input_type in ["pil"]:
+        height, width, batch_size = 128, 64, 1
+
+        for input_type in ["pil", "np", "pt"]:
             inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, input_type=input_type)
 
-            for output_type in ["np", "pil", "latent"]:
+            for output_type in ["pil", "np", "pt", "latent"]:
                 inputs["output_type"] = output_type
                 outputs = pipeline(**inputs).images
                 if output_type == "pil":
                     self.assertEqual((len(outputs), outputs[0].height, outputs[0].width), (batch_size, height, width))
                 elif output_type == "np":
                     self.assertEqual(outputs.shape, (batch_size, height, width, 3))
+                elif output_type == "pt":
+                    self.assertEqual(outputs.shape, (batch_size, 3, height, width))
                 else:
                     self.assertEqual(
                         outputs.shape,
@@ -493,10 +499,10 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
     def test_image_reproducibility(self, model_arch: str):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+
         height, width, batch_size = 64, 64, 1
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
 
         for generator_framework in ["np", "pt"]:
             ort_outputs_1 = pipeline(**inputs, generator=get_generator(generator_framework, SEED))
