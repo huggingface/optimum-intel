@@ -45,7 +45,7 @@ if TYPE_CHECKING:
         from transformers.modeling_tf_utils import TFPreTrainedModel
 
 
-BETTERTRANSFORMER_IGNORE = ("codegen",)
+BETTERTRANSFORMER_IGNORE = ("codegen", "gpt_neo")
 
 
 def patch_model_with_bettertransformer(model):
@@ -57,7 +57,7 @@ def patch_model_with_bettertransformer(model):
         return model
 
     if is_transformers_version("<", "4.36") or is_torch_version("<", "2.1.1"):
-        log.warn(
+        log.warning(
             COLOR_RED
             + "[WARNING] For good performance with stateful models, transformers>=4.36.2 and PyTorch>=2.1.1 are required. "
             f"This Python environment has Transformers {_transformers_version} and PyTorch {_torch_version}. "
@@ -75,7 +75,7 @@ def patch_model_with_bettertransformer(model):
         display_version = (
             _openvino_version.split("-")[0] if is_openvino_version("<=", "2024.0.0-14509") else _openvino_version
         )
-        log.warn(
+        log.warning(
             COLOR_RED
             + f"[WARNING] Stateful models are not supported for Llama, Gemma and GPTBigCode with Transformers "
             f"{_transformers_version} and OpenVINO {display_version}. For good performance, consider using a nightly OpenVINO build: "
@@ -93,7 +93,7 @@ def patch_model_with_bettertransformer(model):
     try:
         model = model.to_bettertransformer()
     except Exception as e:
-        log.warn(
+        log.warning(
             f"Cannot apply model.to_bettertransformer because of the exception:\n{e}."
             " Usage model with stateful=True may be non-effective if model does not contain torch.functional.scaled_dot_product_attention"
         )
@@ -168,7 +168,8 @@ class MixtralModelPatcher(DecoderModelPatcher):
             layer.block_sparse_moe.forward = types.MethodType(
                 _mixtral_sparse_moe_block_forward, layer.block_sparse_moe
             )
-            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+            if is_transformers_version("<", "4.44.99"):
+                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -2238,7 +2239,8 @@ class PersimmonModelPatcher(DecoderModelPatcher):
                 orig_self_attn_fwd = layer.self_attn.forward
                 layer.self_attn.forward = types.MethodType(_persimmon_self_attn_sdpa_forward, layer.self_attn)
                 layer.self_attn._orig_forward = orig_self_attn_fwd
-            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+            if is_transformers_version("<", "4.44.99"):
+                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -2387,29 +2389,33 @@ class UpdateCausalMaskModelPatcher(DecoderModelPatcher):
 class RotaryEmbPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.model.layers:
-            _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.model.layers:
+                _reinitialize_cos_sin_cached_fp32(layer.self_attn.rotary_emb)
 
 
 class FalconModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.transformer.h:
-            _reinitialize_cos_sin_cached_fp32(layer.self_attention.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.transformer.h:
+                _reinitialize_cos_sin_cached_fp32(layer.self_attention.rotary_emb)
 
 
 class GptNeoxModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.gpt_neox.layers:
-            _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.gpt_neox.layers:
+                _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
 
 
 class GptNeoxJapaneseModelPatcher(DecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
-        for layer in self._model.gpt_neox_japanese.layers:
-            _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
+        if is_transformers_version("<", "4.44.99"):
+            for layer in self._model.gpt_neox_japanese.layers:
+                _reinitialize_cos_sin_cached_fp32(layer.attention.rotary_emb)
 
 
 class Gemma2ModelPatcher(LlamaModelPatcher):

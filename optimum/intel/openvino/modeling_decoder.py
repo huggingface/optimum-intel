@@ -122,7 +122,7 @@ class OVBaseDecoderModel(OVModel):
                 "`compile_only` mode does not support disabling compilation."
                 "Please provide `compile=True` if you want to use `compile_only=True` or set `compile_only=False`"
             )
-
+        config.is_encoder_decoder = False
         super().__init__(
             model,
             config,
