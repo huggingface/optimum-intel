@@ -70,7 +70,7 @@ from .utils import (
     OV_TO_PT_TYPE,
     OV_XML_FILE_NAME,
     _print_compiled_model_properties,
-    np_to_pt,
+    np_to_pt_generators,
 )
 
 
@@ -648,10 +648,10 @@ class OVPipeline(OVBaseModel):
         device = self._execution_device
 
         for i in range(len(args)):
-            args[i] = np_to_pt(args[i], device)
+            args[i] = np_to_pt_generators(args[i], device)
 
         for k, v in kwargs.items():
-            kwargs[k] = np_to_pt(v, device)
+            kwargs[k] = np_to_pt_generators(v, device)
 
         return self.auto_model_class.__call__(self, *args, **kwargs)
 
