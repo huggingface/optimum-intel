@@ -25,6 +25,8 @@ from optimum.intel.utils.import_utils import _openvino_version, is_openvino_vers
 
 
 def model_has_state(ov_model: ov.Model):
+    if isinstance(ov_model, ov.runtime.CompiledModel):
+        return len(ov_model.query_state()) > 0
     # TODO: Provide a better way based on the variables availability, but OV Python API doesn't expose required methods
     return len(ov_model.get_sinks()) > 0
 

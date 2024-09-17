@@ -23,8 +23,9 @@ from typing import Tuple, Type, Union
 import numpy as np
 import torch
 from huggingface_hub import model_info
-from openvino.runtime import Core, properties
+from openvino.runtime import Core, Model, properties
 from openvino.runtime import Type as OVType
+from packaging.version import Version
 from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
 from transformers.onnx.utils import ParameterFormat, compute_serialized_parameters_size
 
@@ -235,3 +236,27 @@ def _raise_invalid_batch_size(
             f"To fix this, please either provide a different inputs to your model so that `batch_size` * `num_images_per_prompt` * 2 is equal to {expected_batch_size} "
             "or reshape it again accordingly using the `.reshape()` method by setting `batch_size` to -1. " + msg
         )
+
+
+def get_export_transformers_version(model, config):
+    version_str = None
+
+    if isinstance(model, Model):
+        if "optimum" in model.rt_info:
+            version_str = model.rt_info["optimum"]["transformers_version"].value
+    if version_str is None:
+        version_str = getattr(config, "transformers_version", "0.0.0")
+
+    version_str = version_str or "0.0.0"
+
+    return Version(version_str)
+
+
+def model_has_dynamic_inputs(model):
+    is_dynamic = False
+    for input in model.inputs:
+        is_dynamic = input.get_partial_shape().is_dynamic
+        if is_dynamic:
+            return is_dynamic
+    return is_dynamic
+

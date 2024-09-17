@@ -115,7 +115,7 @@ class OVPipeline(OVBaseModel):
         self.is_dynamic = dynamic_shapes
         self.model_save_dir = model_save_dir
         self.ov_config = {} if ov_config is None else {**ov_config}
-        self._openvino_config = OVConfig(quantization_config=quantization_config) if quantization_config else None
+        self._compile_only = kwargs.get("compile_only", False)
 
         self.unet = OVModelUnet(unet, self)
         self.vae_encoder = OVModelVaeEncoder(vae_encoder, self) if vae_encoder is not None else None
@@ -159,10 +159,10 @@ class OVPipeline(OVBaseModel):
 
         self._set_ov_config_parameters()
 
-        if self.is_dynamic:
+        if self.is_dynamic and not self._compile_only:
             self.reshape(batch_size=-1, height=-1, width=-1, num_images_per_prompt=-1)
 
-        if compile:
+        if compile and not self._compile_only:
             self.compile()
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
@@ -174,6 +174,11 @@ class OVPipeline(OVBaseModel):
             save_directory (`str` or `Path`):
                 The directory where to save the model files
         """
+        if self._compile_only:
+            raise ValueError(
+                "`save_pretrained()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
         save_directory = Path(save_directory)
 
         sub_models_to_save = {
@@ -236,7 +241,6 @@ class OVPipeline(OVBaseModel):
         model_id = str(model_id)
         patterns = set(config.keys())
         sub_models_names = patterns.intersection({"feature_extractor", "tokenizer", "tokenizer_2", "scheduler"})
-
         if not os.path.isdir(model_id):
             patterns.update({"vae_encoder", "vae_decoder"})
             allow_patterns = {os.path.join(k, "*") for k in patterns if not k.startswith("_")}
@@ -295,14 +299,31 @@ class OVPipeline(OVBaseModel):
             "text_encoder_2": new_model_save_dir / DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER / text_encoder_2_file_name,
         }
 
+        compile_only = kwargs.get("compile_only", False)
+
         if model_save_dir is None:
             model_save_dir = new_model_save_dir
 
         quantization_config = cls._prepare_weight_quantization_config(quantization_config, load_in_8bit)
-        if quantization_config is None or quantization_config.dataset is None:
+        if (quantization_config is None or quantization_config.dataset is None) and not compile_only:
             unet = cls.load_model(unet_path, quantization_config)
             for key, value in components.items():
                 components[key] = cls.load_model(value, quantization_config) if value.is_file() else None
+        elif compile_only:
+            ov_config = kwargs.get("ov_config", {})
+            device = kwargs.get("device", "CPU")
+            vae_ov_conifg = {**ov_config}
+            if "GPU" in device.upper() and "INFERENCE_PRECISION_HINT" not in vae_ov_conifg:
+                vae_ov_conifg["INFERENCE_PRECISION_HINT"] = "f32"
+            unet = cls._compile_model(unet_path, device, ov_config, Path(model_save_dir) / "unet")
+            for key, value in components.items():
+                components[key] = (
+                    cls._compile_model(
+                        value, device, ov_config if "vae" not in key else vae_ov_conifg, Path(model_save_dir) / key
+                    )
+                    if value.is_file()
+                    else None
+                )
         else:
             # Load uncompressed models to apply hybrid quantization further
             unet = cls.load_model(unet_path)
@@ -363,6 +384,15 @@ class OVPipeline(OVBaseModel):
         else:
             ov_config = OVConfig(dtype="fp32")
 
+        compile_only = kwargs.pop("compile_only", False)
+
+        if compile_only:
+            logger.warning(
+                "`compile_only` mode will be disabled because it does not support model export."
+                "Please provide openvino model obtained using optimum-cli or saved on disk using `save_pretrained`"
+            )
+            compile_only = False
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -393,10 +423,16 @@ class OVPipeline(OVBaseModel):
             feature_extractor=feature_extractor,
             load_in_8bit=load_in_8bit,
             quantization_config=quantization_config,
+            compile_only=compile_only,
             **kwargs,
         )
 
     def to(self, device: str):
+        if self._compile_only and not isinstance(device, str):
+            raise ValueError(
+                "`to()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
         if isinstance(device, str):
             self._device = device.upper()
             self.clear_requests()
@@ -520,6 +556,11 @@ class OVPipeline(OVBaseModel):
         width: int,
         num_images_per_prompt: int = -1,
     ):
+        if self._compile_only:
+            raise ValueError(
+                "`reshape()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
         self.is_dynamic = -1 in {batch_size, height, width, num_images_per_prompt}
 
         if self.tokenizer is None and self.tokenizer_2 is None:
@@ -556,14 +597,26 @@ class OVPipeline(OVBaseModel):
         """
         Converts all the model weights to FP16 for more efficient inference on GPU.
         """
+        if self._compile_only:
+            raise ValueError(
+                "`half()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
         components = {self.unet, self.vae_encoder, self.vae_decoder, self.text_encoder, self.text_encoder_2}
         for component in components:
             if component is not None:
                 compress_model_transformation(component.model)
+
         self.clear_requests()
+
         return self
 
     def clear_requests(self):
+        if self._compile_only:
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please intialize model without this option"
+            )
+
         components = {self.unet, self.vae_encoder, self.vae_decoder, self.text_encoder, self.text_encoder_2}
         for component in components:
             if component is not None:
@@ -612,7 +665,8 @@ class OVModelPart:
         self.config = FrozenDict(parent_model._dict_from_json_file(config_path) if config_path.is_file() else {})
 
         self.ov_config = ov_config or {**self.parent_model.ov_config}
-        self.request = None
+        self._compile_only = parent_model._compile_only
+        self.request = None if not self._compile_only else self.model
 
     @property
     def _device(self) -> str:
