@@ -314,7 +314,7 @@ class OVQuantizer(OptimumQuantizer):
         **kwargs,
     ):
         if is_diffusers_available():
-            from optimum.intel.openvino.modeling_diffusion import OVStableDiffusionPipelineBase
+            from optimum.intel.openvino.modeling_diffusion import OVPipeline
 
         if save_directory is not None:
             save_directory = Path(save_directory)
@@ -324,7 +324,7 @@ class OVQuantizer(OptimumQuantizer):
         if calibration_dataset is not None:
             # Process custom calibration dataset
 
-            if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+            if is_diffusers_available() and isinstance(self.model, OVPipeline):
                 calibration_dataset = self._prepare_unet_dataset(
                     quantization_config.num_samples, dataset=calibration_dataset
                 )
@@ -361,7 +361,7 @@ class OVQuantizer(OptimumQuantizer):
 
                 if isinstance(self.model, OVModelForCausalLM):
                     calibration_dataset = self._prepare_causal_lm_dataset(quantization_config)
-                elif is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+                elif is_diffusers_available() and isinstance(self.model, OVPipeline):
                     if not isinstance(quantization_config.dataset, str):
                         raise ValueError("Please provide dataset as one of the accepted dataset labels.")
                     calibration_dataset = self._prepare_unet_dataset(
@@ -375,7 +375,7 @@ class OVQuantizer(OptimumQuantizer):
             if quantization_config.quant_method == OVQuantizationMethod.HYBRID:
                 if calibration_dataset is None:
                     raise ValueError("Calibration dataset is required to run hybrid quantization.")
-                if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+                if is_diffusers_available() and isinstance(self.model, OVPipeline):
                     # Apply weight-only quantization to all SD submodels except UNet
                     quantization_config_copy = copy.deepcopy(quantization_config)
                     quantization_config_copy.dataset = None
@@ -393,7 +393,7 @@ class OVQuantizer(OptimumQuantizer):
                     # The model may be for example OVModelForImageClassification, OVModelForAudioClassification, etc.
                     self.model.model = _hybrid_quantization(self.model.model, quantization_config, calibration_dataset)
             else:
-                if is_diffusers_available() and isinstance(self.model, OVStableDiffusionPipelineBase):
+                if is_diffusers_available() and isinstance(self.model, OVPipeline):
                     sub_model_names = ["vae_encoder", "vae_decoder", "text_encoder", "text_encoder_2", "unet"]
                     sub_models = filter(lambda x: x, (getattr(self.model, name) for name in sub_model_names))
                     for sub_model in sub_models:
