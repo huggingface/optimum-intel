@@ -96,12 +96,12 @@ init_model_configs()
 
 
 if TYPE_CHECKING:
-    from transformers.modeling_utils import PreTrainedModel
+    from transformers.modeling_utils import PreTrainedModel  # noqa: F811
 
-    from optimum.exporters.onnx.model_patcher import ModelPatcher
+    from optimum.exporters.onnx.model_patcher import ModelPatcher  # noqa: F811
 
     if is_tf_available():
-        from transformers.modeling_tf_utils import TFPreTrainedModel
+        from transformers.modeling_tf_utils import TFPreTrainedModel  # noqa: F811
 
 
 register_in_tasks_manager = TasksManager.create_register("openvino", overwrite_existing=True)

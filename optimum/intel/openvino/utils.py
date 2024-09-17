@@ -259,4 +259,3 @@ def model_has_dynamic_inputs(model):
         if is_dynamic:
             return is_dynamic
     return is_dynamic
-

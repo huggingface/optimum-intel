@@ -91,9 +91,7 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True)
 
-        self.assertIn(
-            f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception)
-        )
+        self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -294,9 +292,7 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True)
 
-        self.assertIn(
-            f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception)
-        )
+        self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
     @parameterized.expand(list(SUPPORTED_ARCHITECTURES))
     @require_diffusers
@@ -464,9 +460,7 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
         with self.assertRaises(Exception) as context:
             _ = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["bert"], export=True)
 
-        self.assertIn(
-            f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception)
-        )
+        self.assertIn(f"does not appear to have a file named {self.OVMODEL_CLASS.config_name}", str(context.exception))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
