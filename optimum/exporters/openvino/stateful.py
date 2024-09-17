@@ -23,6 +23,8 @@ from openvino.runtime import opset13
 from optimum.exporters import TasksManager
 from optimum.intel.utils.import_utils import _openvino_version, is_openvino_version, is_transformers_version
 
+from .utils import MULTI_MODAL_TEXT_GENERATION_MODELS
+
 
 def model_has_state(ov_model: ov.Model):
     if isinstance(ov_model, ov.runtime.CompiledModel):
@@ -47,7 +49,11 @@ def model_has_input_output_name(ov_model: ov.Model, name: str):
 
 
 def fuse_cache_reorder(
-    ov_model: ov.Model, not_kv_inputs: List[str], key_value_input_names: List[str], gather_dim: int, main_input_name: str = "input_ids"
+    ov_model: ov.Model,
+    not_kv_inputs: List[str],
+    key_value_input_names: List[str],
+    gather_dim: int,
+    main_input_name: str = "input_ids",
 ):
     """
     Fuses reored_cache during generate cycle into ov.Model. Used with stateful models, because we can not modify model state directly.
@@ -118,7 +124,7 @@ def make_stateful(
     batch_dim: int,
     num_attention_heads: int,
     num_beams_and_batch: int = None,
-    main_input_name: str = "input_ids"
+    main_input_name: str = "input_ids",
 ):
     """
     Hides kv-cache inputs and outputs inside the model as variables.
@@ -187,10 +193,14 @@ def ensure_stateful_is_available(warn=True):
 
 def ensure_export_task_support_stateful(task: str):
     task = TasksManager.map_from_synonym(task)
-    return task == "text-generation-with-past"
+    return task in ["text-generation-with-past"]
 
 
-def patch_stateful(config: PretrainedConfig, ov_model: ov.Model, main_input_name:str = "input_ids"):
+def ensure_model_type_support_stateful(model_type: str):
+    return model_type.replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS
+
+
+def patch_stateful(config: PretrainedConfig, ov_model: ov.Model, main_input_name: str = "input_ids"):
     """
     Apply stateful transformation to model to hide key values inputs inside model.
     Select transformation parameters based on model architecture
@@ -219,10 +229,17 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model, main_input_name
     # TODO: Deduce from a model via ordinal reshape (?) and topology
     batch_dim = 1 if config.model_type == "chatglm" and not hasattr(config, "rope_ratio") else 0
 
-    fuse_cache_reorder(ov_model, not_kv_inputs, key_value_input_names, batch_dim)
+    fuse_cache_reorder(ov_model, not_kv_inputs, key_value_input_names, batch_dim, main_input_name=main_input_name)
     num_attention_heads = (
         config.num_attention_heads if (config.model_type == "bloom" and is_transformers_version("<", "4.44")) else 1
     )
     make_stateful(
-        ov_model, not_kv_inputs, key_value_input_names, key_value_output_names, batch_dim, num_attention_heads, None, main_input_name
+        ov_model,
+        not_kv_inputs,
+        key_value_input_names,
+        key_value_output_names,
+        batch_dim,
+        num_attention_heads,
+        None,
+        main_input_name,
     )

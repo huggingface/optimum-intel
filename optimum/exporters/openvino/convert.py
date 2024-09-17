@@ -31,7 +31,7 @@ from optimum.exporters.onnx.base import OnnxConfig
 from optimum.exporters.onnx.convert import check_dummy_inputs_are_allowed
 from optimum.exporters.onnx.convert import export_pytorch as export_pytorch_to_onnx
 from optimum.exporters.onnx.convert import export_tensorflow as export_tensorflow_onnx
-from optimum.exporters.utils import _get_submodels_and_export_configs as _default_get_submodels_and_export_configs, get_decoder_models_for_export
+from optimum.exporters.utils import _get_submodels_and_export_configs as _default_get_submodels_and_export_configs
 from optimum.intel.utils.import_utils import (
     _nncf_version,
     _open_clip_version,
@@ -49,15 +49,20 @@ from optimum.utils.save_utils import maybe_save_preprocessors
 from ...intel.utils.import_utils import is_nncf_available
 from ...intel.utils.modeling_utils import _infer_library_from_model_or_model_class
 from .model_patcher import patch_model_with_bettertransformer
-from .stateful import ensure_export_task_support_stateful, ensure_stateful_is_available, patch_stateful
+from .stateful import (
+    ensure_export_task_support_stateful,
+    ensure_model_type_support_stateful,
+    ensure_stateful_is_available,
+    patch_stateful,
+)
 from .utils import (
+    MULTI_MODAL_TEXT_GENERATION_MODELS,
     OV_XML_FILE_NAME,
     _get_input_info,
     _get_open_clip_submodels_fn_and_export_configs,
     clear_class_registry,
     remove_none_from_dummy_inputs,
 )
-from .model_configs import InputEmbedOpenvVINOConfig, LMInputEmbedsConfigHelper, LLavaMultimodalProjectorOpenVINOConfig
 
 
 logger = logging.getLogger(__name__)
@@ -484,6 +489,7 @@ def export_models(
         )
 
     for i, model_name in enumerate(models_and_export_configs.keys()):
+        logger.warning(model_name)
         submodel, sub_export_config = models_and_export_configs[model_name]
         output_name = output_names[i] if output_names is not None else Path(model_name + ".xml")
         output_path = output_dir / output_name
@@ -562,7 +568,11 @@ def export_from_model(
 
         logger.info(f"Automatic task detection to: {task}.")
 
-    stateful = stateful and ensure_export_task_support_stateful(task) or getattr(getattr(model, "config", {}), "model_type", None) in ["llava", "llava_next"]
+    stateful = (
+        stateful
+        and ensure_export_task_support_stateful(task)
+        or ensure_model_type_support_stateful(getattr(getattr(model, "config", {}), "model_type", ""))
+    )
     # TODO: support onnx_config.py in the model repo
     if custom_architecture and custom_export_configs is None:
         raise ValueError(
@@ -612,7 +622,7 @@ def export_from_model(
         _variant="default",
         legacy=False,
         exporter="openvino",
-        stateful=stateful
+        stateful=stateful,
     )
     logging.disable(logging.NOTSET)
 
@@ -782,30 +792,31 @@ def _add_version_info_to_model(model: Model, library_name: Optional[str] = None)
     return model
 
 
-def _get_llava_submodels_and_export_configs(model: Union["PreTrainedModel", "TFPreTrainedModel"], task: str, library_name:str, int_dtype:str, float_dtype:str, preprocessors: Optional[List[Any]] = None, model_kwargs: Optional[Dict] = None, stateful:bool=True):
+def _get_multi_modal_submodels_and_export_configs(
+    model: Union["PreTrainedModel", "TFPreTrainedModel"],
+    task: str,
+    library_name: str,
+    int_dtype: str,
+    float_dtype: str,
+    preprocessors: Optional[List[Any]] = None,
+    model_kwargs: Optional[Dict] = None,
+    stateful: bool = True,
+):
     models_for_export = {}
-    
-    vision_tower = model.vision_tower
-    text_embedding = model.get_input_embeddings()
-    multimodal_projector = model.multi_modal_projector
-    language_model = model.language_model
-    text_embedding.config = language_model.config
-
-    lm_export_config_constructor = TasksManager.get_exporter_config_constructor(model=language_model, exporter="openvino", task="text-generation-with-past", library_name=library_name)
-    lm_export_config = lm_export_config_constructor(language_model.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors, legacy=False)
-    decoder = get_decoder_models_for_export(language_model, lm_export_config)
-    vision_tower.config.output_hidden_states = True
-    vision_export_config_constructor = TasksManager.get_exporter_config_constructor(model=vision_tower, exporter="openvino", task="feature-extraction", library_name=library_name)
-    vision_export_config = vision_export_config_constructor(vision_tower.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors, legacy=False)
-    lm_export_config = LMInputEmbedsConfigHelper(decoder["model"][1])
-    models_for_export["language_model"] = (decoder["model"][0], lm_export_config)
-    InputEmbedOpenvVINOConfig.NORMALIZED_CONFIG_CLASS = lm_export_config.orig_export_config.NORMALIZED_CONFIG_CLASS
-    text_embedding_export_config = InputEmbedOpenvVINOConfig(language_model.config)
-    models_for_export["text_embeddings_model"] = (text_embedding, text_embedding_export_config)
-    models_for_export["vision_embeddings_model"] = (vision_tower, vision_export_config)
-    models_for_export["multi_modal_projector_model"] = (multimodal_projector, LLavaMultimodalProjectorOpenVINOConfig(vision_tower.config, int_dtype=int_dtype, float_dtype=float_dtype))
-    return models_for_export["language_model"][1], models_for_export, [stateful, False, False, False]
-
+    stateful_parts = []
+    main_config_cls = TasksManager.get_exporter_config_constructor(
+        model=model, task=task, exporter="openvino", library_name=library_name
+    )
+    main_config = main_config_cls(
+        model.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
+    )
+    for behavior in main_config.SUPPORTED_BEHAVIORS:
+        model_id = f"{behavior}_model"
+        model_part_config = main_config.with_behavior(behavior)
+        model_part = main_config.get_model_for_behaviour(model, behavior)
+        models_for_export[model_id] = (model_part, model_part_config)
+        stateful_parts.append(stateful if getattr(model_part_config, "use_past", False) else False)
+    return main_config, models_for_export, stateful_parts
 
 
 def _get_submodels_and_export_configs(
@@ -823,11 +834,32 @@ def _get_submodels_and_export_configs(
     legacy: bool = False,
     model_kwargs: Optional[Dict] = None,
     exporter: str = "openvino",
-    stateful:bool = False
+    stateful: bool = False,
 ):
-    if not custom_architecture and library_name == "transformers" and model.config.model_type in ["llava", "llava_next"]:
-        return _get_llava_submodels_and_export_configs(model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful)
-    
-    export_config, models_for_export =  _default_get_submodels_and_export_configs(model, task, monolith, custom_export_configs, custom_architecture, _variant, library_name, int_dtype, float_dtype, fn_get_submodels, preprocessors, legacy, model_kwargs, exporter)
+    if (
+        not custom_architecture
+        and library_name == "transformers"
+        and model.config.model_type.replace("_", "-") in MULTI_MODAL_TEXT_GENERATION_MODELS
+    ):
+        return _get_multi_modal_submodels_and_export_configs(
+            model, task, library_name, int_dtype, float_dtype, preprocessors, model_kwargs, stateful
+        )
+
+    export_config, models_for_export = _default_get_submodels_and_export_configs(
+        model,
+        task,
+        monolith,
+        custom_export_configs,
+        custom_architecture,
+        _variant,
+        library_name,
+        int_dtype,
+        float_dtype,
+        fn_get_submodels,
+        preprocessors,
+        legacy,
+        model_kwargs,
+        exporter,
+    )
     stateful_per_model = [stateful] * len(models_for_export)
     return export_config, models_for_export, stateful_per_model
