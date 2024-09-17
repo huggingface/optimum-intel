@@ -328,9 +328,6 @@ class OVBaseDecoderModel(OVModel):
             library_name=cls._library_name,
         )
 
-        config.is_decoder = True
-        config.is_encoder_decoder = False
-        config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,

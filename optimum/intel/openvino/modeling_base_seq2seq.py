@@ -375,7 +375,6 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
             ov_config=ov_config,
         )
 
-        config.save_pretrained(save_dir_path)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
