@@ -115,6 +115,7 @@ class OVPipeline(OVBaseModel):
         self.is_dynamic = dynamic_shapes
         self.model_save_dir = model_save_dir
         self.ov_config = {} if ov_config is None else {**ov_config}
+        self._openvino_config = OVConfig(quantization_config=quantization_config) if quantization_config else None
         self._compile_only = kwargs.get("compile_only", False)
 
         self.unet = OVModelUnet(unet, self)
@@ -710,12 +711,10 @@ class OVModelPart:
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
-    def to(self, *args, device: Union[str, torch.device], dtype: torch.dtype, **kwargs):
+    def to(self, *args, device: Optional[Union[str]] = None, dtype: Optional[torch.dtype] = None, **kwargs):
         for arg in args:
             if isinstance(arg, str):
-                device = arg.upper()
-            elif isinstance(arg, torch.device):
-                device = arg.type.upper()
+                device = arg
             elif isinstance(arg, torch.dtype):
                 dtype = arg
 

@@ -240,33 +240,6 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
 
         np.testing.assert_allclose(images_1, images_2, atol=1e-4, rtol=1e-2)
 
-    @parameterized.expand(
-        grid_parameters(
-            {
-                "model_arch": SUPPORTED_ARCHITECTURES,
-                "provider": ["CUDAExecutionProvider", "ROCMExecutionProvider", "TensorrtExecutionProvider"],
-            }
-        )
-    )
-    @pytest.mark.rocm_ep_test
-    @pytest.mark.cuda_ep_test
-    @pytest.mark.trt_ep_test
-    @require_torch_gpu
-    @require_diffusers
-    def test_pipeline_on_gpu(self, test_name: str, model_arch: str, provider: str):
-        model_args = {"test_name": test_name, "model_arch": model_arch}
-        self._setup(model_args)
-
-        height, width, batch_size = 32, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-
-        pipeline = self.OVMODEL_CLASS.from_pretrained(self.onnx_model_dirs[test_name], provider=provider)
-
-        outputs = pipeline(**inputs).images
-
-        self.assertIsInstance(outputs, np.ndarray)
-        self.assertEqual(outputs.shape, (batch_size, height, width, 3))
-
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = ["stable-diffusion", "stable-diffusion-xl", "latent-consistency"]
@@ -399,33 +372,6 @@ class OVPipelineForImage2ImageTest(unittest.TestCase):
 
             self.assertFalse(np.array_equal(ort_outputs_1.images[0], ort_outputs_3.images[0]))
             np.testing.assert_allclose(ort_outputs_1.images[0], ort_outputs_2.images[0], atol=1e-4, rtol=1e-2)
-
-    @parameterized.expand(
-        grid_parameters(
-            {
-                "model_arch": SUPPORTED_ARCHITECTURES,
-                "provider": ["CUDAExecutionProvider", "ROCMExecutionProvider", "TensorrtExecutionProvider"],
-            }
-        )
-    )
-    @pytest.mark.rocm_ep_test
-    @pytest.mark.cuda_ep_test
-    @pytest.mark.trt_ep_test
-    @require_torch_gpu
-    @require_diffusers
-    def test_pipeline_on_gpu(self, test_name: str, model_arch: str, provider: str):
-        model_args = {"test_name": test_name, "model_arch": model_arch}
-        self._setup(model_args)
-
-        height, width, batch_size = 32, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-
-        pipeline = self.OVMODEL_CLASS.from_pretrained(self.onnx_model_dirs[test_name], provider=provider)
-        self.assertEqual(pipeline.device.type, "cuda")
-
-        outputs = pipeline(**inputs).images
-        self.assertIsInstance(outputs, np.ndarray)
-        self.assertEqual(outputs.shape, (batch_size, height, width, 3))
 
 
 class OVPipelineForInpaintingTest(unittest.TestCase):
@@ -567,30 +513,3 @@ class OVPipelineForInpaintingTest(unittest.TestCase):
 
             self.assertFalse(np.array_equal(ort_outputs_1.images[0], ort_outputs_3.images[0]))
             np.testing.assert_allclose(ort_outputs_1.images[0], ort_outputs_2.images[0], atol=1e-4, rtol=1e-2)
-
-    @parameterized.expand(
-        grid_parameters(
-            {
-                "model_arch": SUPPORTED_ARCHITECTURES,
-                "provider": ["CUDAExecutionProvider", "ROCMExecutionProvider", "TensorrtExecutionProvider"],
-            }
-        )
-    )
-    @pytest.mark.rocm_ep_test
-    @pytest.mark.cuda_ep_test
-    @pytest.mark.trt_ep_test
-    @require_torch_gpu
-    @require_diffusers
-    def test_pipeline_on_gpu(self, test_name: str, model_arch: str, provider: str):
-        model_args = {"test_name": test_name, "model_arch": model_arch}
-        self._setup(model_args)
-
-        height, width, batch_size = 32, 64, 1
-        inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size)
-
-        pipeline = self.OVMODEL_CLASS.from_pretrained(self.onnx_model_dirs[test_name], provider=provider)
-        self.assertEqual(pipeline.device, "cuda")
-
-        outputs = pipeline(**inputs).images
-        self.assertIsInstance(outputs, np.ndarray)
-        self.assertEqual(outputs.shape, (batch_size, height, width, 3))
