@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 import onnx
+from transformers.generation import GenerationMixin
 from transformers.utils import is_tf_available, is_torch_available
 
 from openvino.runtime import Model, save_model
@@ -618,7 +619,7 @@ def export_from_model(
     if library_name != "diffusers":
         if is_transformers_version(">=", "4.44.99"):
             misplaced_generation_parameters = model.config._get_non_default_generation_parameters()
-            if model.can_generate() and len(misplaced_generation_parameters) > 0:
+            if isinstance(model, GenerationMixin) and len(misplaced_generation_parameters) > 0:
                 logger.warning(
                     "Moving the following attributes in the config to the generation config: "
                     f"{misplaced_generation_parameters}. You are seeing this warning because you've set "

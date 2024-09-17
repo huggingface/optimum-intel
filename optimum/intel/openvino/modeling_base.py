@@ -710,9 +710,7 @@ class OVBaseModel(OptimizedModel):
         """
         Returns whether this model can generate sequences with `.generate()`.
         """
-        if isinstance(self, GenerationMixin):
-            return True
-        return False
+        return isinstance(self, GenerationMixin)
 
     def _inference(self, inputs):
         try:

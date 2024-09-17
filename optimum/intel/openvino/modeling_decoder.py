@@ -764,10 +764,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 )
             return tuple(np.take(past_state, beam_idx, 0) for past_state in past_key_values)
 
-    def can_generate(self):
-        """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
-        return True
-
     @classmethod
     def _from_pretrained(
         cls,
