@@ -80,7 +80,8 @@ class OVBaseModelForSeq2SeqLM(OVBaseModel):
         self.decoder_model = decoder
         self.decoder_with_past_model = decoder_with_past
 
-        self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
+        generation_config = kwargs.get("generation_config", None)
+        self.generation_config = generation_config or GenerationConfig.from_model_config(config)
 
         if is_transformers_version(">=", "4.44.99"):
             misplaced_generation_parameters = self.config._get_non_default_generation_parameters()
