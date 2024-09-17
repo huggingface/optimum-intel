@@ -139,6 +139,7 @@ else:
             "OVModelForSeq2SeqLM",
             "OVModelForSpeechSeq2Seq",
             "OVModelForVision2Seq",
+            "OVModelForVisualCausalLM",
             "OVModelForSequenceClassification",
             "OVModelForTokenClassification",
             "OVConfig",
@@ -292,6 +293,7 @@ if TYPE_CHECKING:
             OVModelOpenCLIPForZeroShotImageClassification,
             OVModelOpenCLIPText,
             OVModelOpenCLIPVisual,
+            OVModelForVisualCausalLM,
         )
 
     try:

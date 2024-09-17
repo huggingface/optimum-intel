@@ -15,6 +15,7 @@ from transformers import AutoConfig, GenerationConfig, GenerationMixin, Pretrain
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 
 from ...exporters.openvino import main_export
+from ...exporters.openvino.stateful import ensure_stateful_is_available
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel
 from .modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
@@ -152,7 +153,6 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             inputs_embeds=inputs_embeds,
             **kwargs,
         )
-
         # Run inference
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
@@ -238,19 +238,23 @@ class OVVisionEmbedding(OVModelPart):
         super().__init__(model, parent_model, model_name=self._model_name)
         self.output_dtypes = {key.get_any_name(): key.get_element_type().get_type_name() for key in self.model.outputs}
         self.output_names = {key.get_any_name(): idx for idx, key in enumerate(self.model.outputs)}
-        self.hidden_states_output_names = [key for key in self.output_names if "hidden_states" in key]
+        self.hidden_states_output_names = []
+        if len(self.model.outputs) > 2:
+            self.hidden_states_output_names = [
+                key.get_any_name() for key in self.model.outputs[2:] if "hidden_states" in key.get_any_name()
+            ]
 
     def forward(self, pixel_values, **kwargs):
         result = self.request({"pixel_values": pixel_values})
-        pooled_out = result[0]
-        last_hidden_state = result[1]
+        last_hidden_state = result[0]
+        pooler_out = result[1]
         hidden_states = None
         if self.hidden_states_output_names:
             hidden_states = []
             for out in self.hidden_states_output_names:
                 hidden_states.append(result[out])
         return BaseModelOutputWithPooling(
-            pooler_output=pooled_out, last_hidden_state=last_hidden_state, hidden_states=hidden_states
+            pooler_output=pooler_out, last_hidden_state=last_hidden_state, hidden_states=hidden_states
         )
 
 
@@ -577,6 +581,8 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         else:
             ov_config = OVConfig(dtype="fp32")
 
+        stateful = kwargs.pop("stateful", ensure_stateful_is_available(warn=False) and use_cache)
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -589,6 +595,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             force_download=force_download,
             trust_remote_code=trust_remote_code,
             ov_config=ov_config,
+            stateful=stateful,
         )
 
         config.save_pretrained(save_dir_path)
@@ -711,7 +718,6 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
 
         position_ids = kwargs.get("position_ids", None)
         if attention_mask is not None and position_ids is None:
-            # create position_ids on the fly for batch gllavaenerationsubset_siz
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids.masked_fill_(attention_mask == 0, 1)
             if past_key_values:

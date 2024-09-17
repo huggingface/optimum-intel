@@ -1345,8 +1345,8 @@ class LlavaConfigBehavior(str, enum.Enum):
     """
 
     LANGUAGE = "language"
-    VISION_EMBEDDING = "vision_embedding"
-    TEXT_EMBEDDING = "text_embedding"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
     MULTI_MODAL_PROJECTOR = "multi_modal_projector"
 
 
@@ -1395,7 +1395,7 @@ class LlavaOpenVINOConfig(OnnxConfig):
         if isinstance(behavior, str) and not isinstance(behavior, LlavaConfigBehavior):
             behavior = LlavaConfigBehavior(behavior)
 
-        if behavior == LlavaConfigBehavior.TEXT_EMBEDDING:
+        if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
             model_type = self._config.text_config.model_type
             model_type = model_type.replace("_", "-")
             if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
@@ -1462,9 +1462,10 @@ class LlavaOpenVINOConfig(OnnxConfig):
             export_config._normalized_config = internal_export_config._normalized_config
             return export_config
 
-        if behavior == LlavaConfigBehavior.VISION_EMBEDDING:
+        if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
             model_type = self._config.vision_config.model_type
             model_type = model_type.replace("_", "-")
+            self._config.vision_config.output_hidden_states = True
 
             if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
                 raise ValueError(
@@ -1493,18 +1494,21 @@ class LlavaOpenVINOConfig(OnnxConfig):
         if behavior == LlavaConfigBehavior.LANGUAGE:
             return model.language_model
 
-        if behavior == LlavaConfigBehavior.VISION_EMBEDDING:
+        if behavior == LlavaConfigBehavior.VISION_EMBEDDINGS:
             vision_embedding = model.vision_tower
             vision_embedding.config.output_hidden_states = True
+            vision_embedding.vision_model.config.output_hidden_states = True
             return vision_embedding
 
-        if behavior == LlavaConfigBehavior.TEXT_EMBEDDING:
+        if behavior == LlavaConfigBehavior.TEXT_EMBEDDINGS:
             text_embedding = model.get_input_embeddings()
             text_embedding.config = model.config.text_config
             return text_embedding
 
         if behavior == LlavaConfigBehavior.MULTI_MODAL_PROJECTOR:
-            return model.multi_modal_projector
+            mm_projector = model.multi_modal_projector
+            mm_projector.config = model.config.vision_config
+            return mm_projector
 
 
 @register_in_tasks_manager("llava-next", *["image-text-to-text"], library_name="transformers")

@@ -489,7 +489,6 @@ def export_models(
         )
 
     for i, model_name in enumerate(models_and_export_configs.keys()):
-        logger.warning(model_name)
         submodel, sub_export_config = models_and_export_configs[model_name]
         output_name = output_names[i] if output_names is not None else Path(model_name + ".xml")
         output_path = output_dir / output_name
@@ -568,9 +567,8 @@ def export_from_model(
 
         logger.info(f"Automatic task detection to: {task}.")
 
-    stateful = (
-        stateful
-        and ensure_export_task_support_stateful(task)
+    stateful = stateful and (
+        ensure_export_task_support_stateful(task)
         or ensure_model_type_support_stateful(getattr(getattr(model, "config", {}), "model_type", ""))
     )
     # TODO: support onnx_config.py in the model repo
