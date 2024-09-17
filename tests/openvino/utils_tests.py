@@ -76,6 +76,7 @@ MODEL_NAMES = {
     "llama_awq": "HuggingFaceH4/tiny-random-LlamaForCausalLM",
     "llama_gptq": "hf-internal-testing/TinyLlama-1.1B-Chat-v0.3-GPTQ",
     "llava": "trl-internal-testing/tiny-random-LlavaForConditionalGeneration",
+    "llava_next": "katuni4ka/tiny-random-llava-next",
     "m2m_100": "hf-internal-testing/tiny-random-m2m_100",
     "opt": "hf-internal-testing/tiny-random-OPTModel",
     "opt125m": "facebook/opt-125m",

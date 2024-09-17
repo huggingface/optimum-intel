@@ -1826,10 +1826,7 @@ class OVModelForPix2StructIntegrationTest(unittest.TestCase):
 
 
 class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = []
-
-    if is_transformers_version(">=", "4.40.0"):
-        SUPPORTED_ARCHITECTURES += ("llava",)
+    SUPPORTED_ARCHITECTURES = ("llava", "llava_next")
     TASK = "image-text-to-text"
 
     IMAGE = Image.open(
@@ -1844,6 +1841,10 @@ class OVModelForVisualCausalLMIntegrationTest(unittest.TestCase):
             from transformers import LlavaForConditionalGeneration
 
             return LlavaForConditionalGeneration
+        if model_arch == "llava_next":
+            from transformers import LlavaNextForConditionalGeneration
+
+            return LlavaNextForConditionalGeneration
         return None
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)

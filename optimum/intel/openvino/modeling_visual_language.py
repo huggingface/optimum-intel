@@ -597,8 +597,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             ov_config=ov_config,
             stateful=stateful,
         )
-
-        config.save_pretrained(save_dir_path)
+        config = AutoConfig.from_pretrained(save_dir_path)
         return cls._from_pretrained(
             model_id=save_dir_path,
             config=config,
@@ -982,7 +981,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
                 raise ValueError(f"pixel_values of shape {pixel_values.shape}, expect to be of 4 or 5 dimensions")
             vision_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, **kwargs)
             if vision_embeds is not None:
-                image_newline = torch.zeros(self.config.text_config.hidden_size, dtype=torch.float32)
+                image_newline = torch.tensor(self.config.image_newline)
                 image_features = torch.split(torch.from_numpy(vision_embeds), image_num_patches, dim=0)
                 image_features, feature_lens = self.pack_image_features(
                     image_features,
@@ -999,7 +998,7 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
                     **kwargs,
                 )
 
-        if pixel_values is not None and past_key_values is not None:
+        if pixel_values is not None and past_key_values is not None and input_ids.shape[1] == 1:
             attention_mask, position_ids = self._filter_unattended_tokens(input_ids, attention_mask, past_key_values)
 
         return inputs_embeds, attention_mask, position_ids
@@ -1027,6 +1026,8 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
                     left_padding = True
                 elif not _left_padding and _right_padding:
                     left_padding = False
+                elif not _left_padding and not _right_padding:
+                    left_padding = True
                 else:
                     # invalid attention_mask
                     raise ValueError(f"both side of attention_mask has zero, invalid. {attention_mask}")
@@ -1125,6 +1126,11 @@ class _OVLlavaNextForCausalLM(_OVLlavaForCausalLM):
         position_ids = (final_attention_mask.cumsum(-1) - 1).masked_fill_((final_attention_mask == 0), 1)
 
         return final_embedding, final_attention_mask, position_ids
+
+    def get_text_embeddings(self, input_ids, **kwargs):
+        for_inputs_embeds_ids = input_ids.clone()
+        for_inputs_embeds_ids[(input_ids == self.config.image_token_index)] = 0
+        return super().get_text_embeddings(for_inputs_embeds_ids, **kwargs)
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {"llava": _OVLlavaForCausalLM, "llava_next": _OVLlavaNextForCausalLM}
