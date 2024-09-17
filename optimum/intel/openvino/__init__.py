@@ -76,6 +76,7 @@ from .modeling_seq2seq import OVModelForPix2Struct, OVModelForSeq2SeqLM, OVModel
 if is_diffusers_available():
     from .modeling_diffusion import (
         OVDiffusionPipeline,
+        OVLatentConsistencyModelImg2ImgPipeline,
         OVLatentConsistencyModelPipeline,
         OVPipelineForImage2Image,
         OVPipelineForInpainting,
@@ -84,6 +85,7 @@ if is_diffusers_available():
         OVStableDiffusionInpaintPipeline,
         OVStableDiffusionPipeline,
         OVStableDiffusionXLImg2ImgPipeline,
+        OVStableDiffusionXLInpaintPipeline,
         OVStableDiffusionXLPipeline,
     )
 

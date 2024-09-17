@@ -667,7 +667,7 @@ class OVModelPart:
         self.parent_model = parent_model
 
         config_path = self.model_save_dir / self.config_name
-        self.config = FrozenDict(parent_model._dict_from_json_file(config_path) if config_path.is_file() else {})
+        self.config = FrozenDict(parent_model._dict_from_json_file(config_path))
 
         self.ov_config = ov_config or {**self.parent_model.ov_config}
         self._compile_only = parent_model._compile_only
